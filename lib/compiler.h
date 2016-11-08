@@ -28,6 +28,7 @@
 #  define _FALLTHROUGH __attribute__((fallthrough));
 #endif
 # define _CONSTRUCTOR(x)  constructor(x)
+# define _DEPRECATED(x) deprecated(x)
 #elif defined(__GNUC__)
 #if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 9)
 #  define _RET_NONNULL    , returns_nonnull
@@ -36,6 +37,9 @@
 #  define _CONSTRUCTOR(x) constructor(x)
 #  define _DESTRUCTOR(x)  destructor(x)
 #  define _ALLOC_SIZE(x)  alloc_size(x)
+#endif
+#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
+#  define _DEPRECATED(x) deprecated(x)
 #endif
 #if __GNUC__ >= 7
 #  define _FALLTHROUGH __attribute__((fallthrough));
@@ -63,6 +67,9 @@
 #endif
 #ifndef _FALLTHROUGH
 #define _FALLTHROUGH
+#endif
+#ifndef _DEPRECATED
+#define _DEPRECATED(x) deprecated
 #endif
 
 /* for helper functions defined inside macros */
