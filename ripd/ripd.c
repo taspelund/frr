@@ -22,6 +22,7 @@
 
 #include <zebra.h>
 
+#include "vrf.h"
 #include "if.h"
 #include "command.h"
 #include "prefix.h"
@@ -43,6 +44,8 @@
 
 #include "ripd/ripd.h"
 #include "ripd/rip_debug.h"
+
+DEFINE_QOBJ_TYPE(rip)
 
 /* UDP receive buffer size */
 #define RIP_UDP_RCV_BUF 41600
@@ -333,11 +336,11 @@ rip_filter (int rip_distribute, struct prefix_ipv4 *p, struct rip_interface *ri)
 	  if (IS_RIP_DEBUG_PACKET)
 	    zlog_debug ("%s/%d filtered by distribute %s",
                         inet_ntoa (p->prefix), p->prefixlen, inout);
-	  return -1;
-	}
-    }
+		  return -1;
+		}
+	    }
   if (ri->prefix[rip_distribute])
-    {
+{
       if (prefix_list_apply (ri->prefix[rip_distribute],
 			     (struct prefix *) p) == PREFIX_DENY)
 	{
@@ -355,7 +358,7 @@ rip_filter (int rip_distribute, struct prefix_ipv4 *p, struct rip_interface *ri)
       if (dist->list[distribute])
 	{
 	  alist = access_list_lookup (AFI_IP, dist->list[distribute]);
-
+	    
 	  if (alist)
 	    {
 	      if (access_list_apply (alist, (struct prefix *) p) == FILTER_DENY)
@@ -370,7 +373,7 @@ rip_filter (int rip_distribute, struct prefix_ipv4 *p, struct rip_interface *ri)
       if (dist->prefix[distribute])
 	{
 	  plist = prefix_list_lookup (AFI_IP, dist->prefix[distribute]);
-
+	  
 	  if (plist)
 	    {
 	      if (prefix_list_apply (plist,
@@ -399,7 +402,8 @@ rip_nexthop_check (struct in_addr *addr)
 
   /* If nexthop address matches local configured address then it is
      invalid nexthop. */
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     {
       for (ALL_LIST_ELEMENTS_RO (ifp->connected, cnode, ifc))
 	{	    
@@ -746,9 +750,9 @@ rip_packet_dump (struct rip_packet *packet, int size, const char *sndrcv)
 		  zlog_debug ("  family 0x%X type %d (MD5 data)",
 			     ntohs (rte->family), ntohs (rte->tag));
 		  zlog_debug ("    MD5: %02X%02X%02X%02X%02X%02X%02X%02X"
-			     "%02X%02X%02X%02X%02X%02X%02X",
+			     "%02X%02X%02X%02X%02X%02X%02X%02X",
                              p[0], p[1], p[2], p[3], p[4], p[5], p[6],
-                             p[7], p[9], p[10], p[11], p[12], p[13],
+                             p[7], p[8], p[9], p[10], p[11], p[12], p[13],
                              p[14], p[15]);
 		}
 	      else
@@ -758,17 +762,18 @@ rip_packet_dump (struct rip_packet *packet, int size, const char *sndrcv)
 		}
             }
 	  else
-	    zlog_debug ("  %s/%d -> %s family %d tag %d metric %ld",
+	    zlog_debug ("  %s/%d -> %s family %d tag %"ROUTE_TAG_PRI" metric %ld",
                        inet_ntop (AF_INET, &rte->prefix, pbuf, BUFSIZ),
                        netmask, inet_ntop (AF_INET, &rte->nexthop, nbuf,
                                            BUFSIZ), ntohs (rte->family),
-                       ntohs (rte->tag), (u_long) ntohl (rte->metric));
+                       (route_tag_t)ntohs (rte->tag),
+                       (u_long) ntohl (rte->metric));
 	}
       else
 	{
-	  zlog_debug ("  %s family %d tag %d metric %ld", 
+	  zlog_debug ("  %s family %d tag %"ROUTE_TAG_PRI" metric %ld", 
 		     inet_ntop (AF_INET, &rte->prefix, pbuf, BUFSIZ),
-		     ntohs (rte->family), ntohs (rte->tag),
+		     ntohs (rte->family), (route_tag_t)ntohs (rte->tag),
 		     (u_long)ntohl (rte->metric));
 	}
     }
@@ -809,7 +814,15 @@ rip_auth_simple_password (struct rte *rte, struct sockaddr_in *from,
 			  struct interface *ifp)
 {
   struct rip_interface *ri;
-  char *auth_str;
+  char *auth_str = (char *) &rte->prefix;
+  int i;
+
+  /* reject passwords with zeros in the middle of the string */
+  for (i = strlen (auth_str); i < 16; i++)
+    {
+      if (auth_str[i] != '\0')
+	return 0;
+    }
 
   if (IS_RIP_DEBUG_EVENT)
     zlog_debug ("RIPv2 simple password authentication from %s",
@@ -824,8 +837,6 @@ rip_auth_simple_password (struct rte *rte, struct sockaddr_in *from,
   /* Simple password authentication. */
   if (ri->auth_str)
     {
-      auth_str = (char *) &rte->prefix;
-	  
       if (strncmp (auth_str, ri->auth_str, 16) == 0)
 	return 1;
     }
@@ -838,7 +849,7 @@ rip_auth_simple_password (struct rte *rte, struct sockaddr_in *from,
       if (keychain == NULL)
 	return 0;
 
-      key = key_match_for_accept (keychain, (char *) &rte->prefix);
+      key = key_match_for_accept (keychain, auth_str);
       if (key)
 	return 1;
     }
@@ -1118,7 +1129,7 @@ rip_response_process (struct rip_packet *packet, int size,
   /* The datagram's IPv4 source address should be checked to see
      whether the datagram is from a valid neighbor; the source of the
      datagram must be on a directly connected network (RFC2453 - Sec. 3.9.2) */
-  if (if_lookup_address(from->sin_addr) == NULL) 
+  if (if_lookup_address((void *)&from->sin_addr, AF_INET) == NULL)
     {
       zlog_info ("This datagram doesn't came from a valid neighbor: %s",
 		 inet_ntoa (from->sin_addr));
@@ -1204,7 +1215,7 @@ rip_response_process (struct rip_packet *packet, int size,
 	      continue;
 	    }
 
-	  if (! if_lookup_address (rte->nexthop))
+	  if (! if_lookup_address ((void *)&rte->nexthop, AF_INET))
 	    {
 	      struct route_node *rn;
 	      struct rip_info *rinfo;
@@ -1330,30 +1341,23 @@ rip_response_process (struct rip_packet *packet, int size,
 
 /* Make socket for RIP protocol. */
 static int 
-rip_create_socket (struct sockaddr_in *from)
+rip_create_socket (void)
 {
   int ret;
   int sock;
   struct sockaddr_in addr;
   
   memset (&addr, 0, sizeof (struct sockaddr_in));
-  
-  if (!from)
-    {
-      addr.sin_family = AF_INET;
-      addr.sin_addr.s_addr = INADDR_ANY;
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = INADDR_ANY;
 #ifdef HAVE_STRUCT_SOCKADDR_IN_SIN_LEN
-      addr.sin_len = sizeof (struct sockaddr_in);
+  addr.sin_len = sizeof (struct sockaddr_in);
 #endif /* HAVE_STRUCT_SOCKADDR_IN_SIN_LEN */
-    } else {
-      memcpy(&addr, from, sizeof(addr));
-    }
-  
   /* sending port must always be the RIP port */
   addr.sin_port = htons (RIP_PORT_DEFAULT);
   
   /* Make datagram socket. */
-  sock = socket (AF_INET, SOCK_DGRAM, 0);
+  sock = socket (AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (sock < 0) 
     {
       zlog_err("Cannot create UDP socket: %s", safe_strerror(errno));
@@ -1363,6 +1367,7 @@ rip_create_socket (struct sockaddr_in *from)
   sockopt_broadcast (sock);
   sockopt_reuseaddr (sock);
   sockopt_reuseport (sock);
+  setsockopt_ipv4_multicast_loop (sock, 0);
 #ifdef RIP_RECVMSG
   setsockopt_pktinfo (sock);
 #endif /* RIP_RECVMSG */
@@ -1403,7 +1408,7 @@ static int
 rip_send_packet (u_char * buf, int size, struct sockaddr_in *to,
                  struct connected *ifc)
 {
-  int ret, send_sock;
+  int ret;
   struct sockaddr_in sin;
   
   assert (ifc != NULL);
@@ -1459,38 +1464,16 @@ rip_send_packet (u_char * buf, int size, struct sockaddr_in *to,
     {
       sin.sin_port = to->sin_port;
       sin.sin_addr = to->sin_addr;
-      send_sock = rip->sock;
     }
   else
     {
-      struct sockaddr_in from;
-      
       sin.sin_port = htons (RIP_PORT_DEFAULT);
       sin.sin_addr.s_addr = htonl (INADDR_RIP_GROUP);
-      
-      /* multicast send should bind to local interface address */
-      memset (&from, 0, sizeof (from));
-      from.sin_family = AF_INET;
-      from.sin_port = htons (RIP_PORT_DEFAULT);
-      from.sin_addr = ifc->address->u.prefix4;
-#ifdef HAVE_STRUCT_SOCKADDR_IN_SIN_LEN
-      from.sin_len = sizeof (struct sockaddr_in);
-#endif /* HAVE_STRUCT_SOCKADDR_IN_SIN_LEN */
-      
-      /*
-       * we have to open a new socket for each packet because this
-       * is the most portable way to bind to a different source
-       * ipv4 address for each packet. 
-       */
-      if ( (send_sock = rip_create_socket (&from)) < 0)
-        {
-          zlog_warn("rip_send_packet could not create socket.");
-          return -1;
-        }
-      rip_interface_multicast_set (send_sock, ifc);
+
+      rip_interface_multicast_set (rip->sock, ifc);
     }
 
-  ret = sendto (send_sock, buf, size, 0, (struct sockaddr *)&sin,
+  ret = sendto (rip->sock, buf, size, 0, (struct sockaddr *)&sin,
 		sizeof (struct sockaddr_in));
 
   if (IS_RIP_DEBUG_EVENT)
@@ -1500,9 +1483,6 @@ rip_send_packet (u_char * buf, int size, struct sockaddr_in *to,
   if (ret < 0)
     zlog_warn ("can't send packet : %s", safe_strerror (errno));
 
-  if (!to)
-    close(send_sock);
-
   return ret;
 }
 
@@ -1510,7 +1490,8 @@ rip_send_packet (u_char * buf, int size, struct sockaddr_in *to,
 void
 rip_redistribute_add (int type, int sub_type, struct prefix_ipv4 *p, 
 		      ifindex_t ifindex, struct in_addr *nexthop,
-                      unsigned int metric, unsigned char distance)
+                      unsigned int metric, unsigned char distance,
+                      route_tag_t tag)
 {
   int ret;
   struct route_node *rp = NULL;
@@ -1531,6 +1512,8 @@ rip_redistribute_add (int type, int sub_type, struct prefix_ipv4 *p,
   newinfo.metric = 1;
   newinfo.external_metric = metric;
   newinfo.distance = distance;
+  if (tag <= UINT16_MAX) /* RIP only supports 16 bit tags */
+    newinfo.tag = tag;
   newinfo.rp = rp;
   if (nexthop)
     newinfo.nexthop = *nexthop;
@@ -1675,6 +1658,9 @@ rip_request_process (struct rip_packet *packet, int size,
     }
   else
     {
+      if (ntohs (rte->family) != AF_INET)
+	return;
+
       /* Examine the list of RTEs in the Request one by one.  For each
 	 entry, look up the destination in the router's routing
 	 database and, if there is a route, put that route's metric in
@@ -1797,9 +1783,10 @@ rip_read (struct thread *t)
   int len;
   int vrecv;
   socklen_t fromlen;
-  struct interface *ifp;
+  struct interface *ifp = NULL;
   struct connected *ifc;
   struct rip_interface *ri;
+  struct prefix p;
 
   /* Fetch socket then register myself. */
   sock = THREAD_FD (t);
@@ -1829,8 +1816,10 @@ rip_read (struct thread *t)
     }
 
   /* Which interface is this packet comes from. */
-  ifp = if_lookup_address (from.sin_addr);
-  
+  ifc = if_lookup_address ((void *)&from.sin_addr, AF_INET);
+  if (ifc)
+    ifp = ifc->ifp;
+
   /* RIP packet received */
   if (IS_RIP_DEBUG_EVENT)
     zlog_debug ("RECV packet from %s port %d on %s",
@@ -1844,8 +1833,12 @@ rip_read (struct thread *t)
 		 inet_ntoa(from.sin_addr), ntohs (from.sin_port));
       return -1;
     }
-  
-  ifc = connected_lookup_address (ifp, from.sin_addr);
+
+  p.family = AF_INET;
+  p.u.prefix4 = from.sin_addr;
+  p.prefixlen = IPV4_MAX_BITLEN;
+
+  ifc = connected_lookup_prefix (ifp, &p);
   
   if (ifc == NULL)
     {
@@ -1917,15 +1910,9 @@ rip_read (struct thread *t)
   /* RIP Version check. RFC2453, 4.6 and 5.1 */
   vrecv = ((ri->ri_receive == RI_RIP_UNSPEC) ?
            rip->version_recv : ri->ri_receive);
-  if ((packet->version == RIPv1) && !(vrecv & RIPv1))
-    {
-      if (IS_RIP_DEBUG_PACKET)
-        zlog_debug ("  packet's v%d doesn't fit to if version spec", 
-                   packet->version);
-      rip_peer_bad_packet (&from);
-      return -1;
-    }
-  if ((packet->version == RIPv2) && !(vrecv & RIPv2))
+  if (vrecv == RI_RIP_VERSION_NONE ||
+      ((packet->version == RIPv1) && !(vrecv & RIPv1)) ||
+      ((packet->version == RIPv2) && !(vrecv & RIPv2)))
     {
       if (IS_RIP_DEBUG_PACKET)
         zlog_debug ("  packet's v%d doesn't fit to if version spec", 
@@ -2361,14 +2348,12 @@ rip_output_process (struct connected *ifc, struct sockaddr_in *to,
 	  struct rip_info *tmp_rinfo = NULL;
 
 	  for (ALL_LIST_ELEMENTS_RO (list, listnode, tmp_rinfo))
-            {
-	      if (tmp_rinfo->type == ZEBRA_ROUTE_RIP  &&
-	          tmp_rinfo->ifindex == ifc->ifp->ifindex)
-	        rinfo->metric_out = RIP_METRIC_INFINITY;
-	      if (tmp_rinfo->type == ZEBRA_ROUTE_CONNECT &&
-                prefix_match((struct prefix *)p, ifc->address))
-	        rinfo->metric_out = RIP_METRIC_INFINITY;
-            }
+	    if (tmp_rinfo->type == ZEBRA_ROUTE_RIP  &&
+	        tmp_rinfo->ifindex == ifc->ifp->ifindex)
+	      rinfo->metric_out = RIP_METRIC_INFINITY;
+	  if (tmp_rinfo->type == ZEBRA_ROUTE_CONNECT &&
+              prefix_match((struct prefix *)p, ifc->address))
+	    rinfo->metric_out = RIP_METRIC_INFINITY;
 	}
 	
 	/* Prepare preamble, auth headers, if needs be */
@@ -2425,20 +2410,22 @@ rip_output_process (struct connected *ifc, struct sockaddr_in *to,
 static void
 rip_update_interface (struct connected *ifc, u_char version, int route_type)
 {
+  struct interface *ifp = ifc->ifp;
+  struct rip_interface *ri = ifp->info;
   struct sockaddr_in to;
 
   /* When RIP version is 2 and multicast enable interface. */
-  if (version == RIPv2 && if_is_multicast (ifc->ifp)) 
+  if (version == RIPv2 && !ri->v2_broadcast && if_is_multicast (ifp))
     {
       if (IS_RIP_DEBUG_EVENT)
-	zlog_debug ("multicast announce on %s ", ifc->ifp->name);
+	zlog_debug ("multicast announce on %s ", ifp->name);
 
       rip_output_process (ifc, NULL, route_type, version);
       return;
     }
   
   /* If we can't send multicast packet, send it with unicast. */
-  if (if_is_broadcast (ifc->ifp) || if_is_pointopoint (ifc->ifp))
+  if (if_is_broadcast (ifp) || if_is_pointopoint (ifp))
     {
       if (ifc->address->family == AF_INET)
         {
@@ -2460,7 +2447,7 @@ rip_update_interface (struct connected *ifc, u_char version, int route_type)
           if (IS_RIP_DEBUG_EVENT)
             zlog_debug("%s announce to %s on %s",
 		       CONNECTED_PEER(ifc) ? "unicast" : "broadcast",
-		       inet_ntoa (to.sin_addr), ifc->ifp->name);
+		       inet_ntoa (to.sin_addr), ifp->name);
 
           rip_output_process (ifc, &to, route_type, version);
         }
@@ -2478,10 +2465,10 @@ rip_update_process (int route_type)
   struct rip_interface *ri;
   struct route_node *rp;
   struct sockaddr_in to;
-  struct prefix_ipv4 *p;
+  struct prefix *p;
 
   /* Send RIP update to each interface. */
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     {
       if (if_is_loopback (ifp))
 	continue;
@@ -2528,26 +2515,19 @@ rip_update_process (int route_type)
   for (rp = route_top (rip->neighbor); rp; rp = route_next (rp))
     if (rp->info != NULL)
       {
-	p = (struct prefix_ipv4 *) &rp->p;
+	p = &rp->p;
 
-	ifp = if_lookup_address (p->prefix);
-	if (! ifp)
+	connected = if_lookup_address (&p->u.prefix4, AF_INET);
+	if (! connected)
 	  {
 	    zlog_warn ("Neighbor %s doesnt have connected interface!",
-		       inet_ntoa (p->prefix));
+		       inet_ntoa (p->u.prefix4));
 	    continue;
 	  }
         
-        if ( (connected = connected_lookup_address (ifp, p->prefix)) == NULL)
-          {
-            zlog_warn ("Neighbor %s doesnt have connected network",
-                       inet_ntoa (p->prefix));
-            continue;
-          }
-        
 	/* Set destination address and port */
 	memset (&to, 0, sizeof (struct sockaddr_in));
-	to.sin_addr = p->prefix;
+	to.sin_addr = p->u.prefix4;
 	to.sin_port = htons (RIP_PORT_DEFAULT);
 
 	/* RIP version is rip's configuration. */
@@ -2570,11 +2550,7 @@ rip_update (struct thread *t)
 
   /* Triggered updates may be suppressed if a regular update is due by
      the time the triggered update would be sent. */
-  if (rip->t_triggered_interval)
-    {
-      thread_cancel (rip->t_triggered_interval);
-      rip->t_triggered_interval = NULL;
-    }
+  RIP_TIMER_OFF (rip->t_triggered_interval);
   rip->trigger = 0;
 
   /* Register myself. */
@@ -2628,11 +2604,7 @@ rip_triggered_update (struct thread *t)
   rip->t_triggered_update = NULL;
 
   /* Cancel interval timer. */
-  if (rip->t_triggered_interval)
-    {
-      thread_cancel (rip->t_triggered_interval);
-      rip->t_triggered_interval = NULL;
-    }
+  RIP_TIMER_OFF (rip->t_triggered_interval);
   rip->trigger = 0;
 
   /* Logging triggered update. */
@@ -2720,13 +2692,15 @@ rip_create (void)
   rip->obuf = stream_new (1500);
 
   /* Make socket. */
-  rip->sock = rip_create_socket (NULL);
+  rip->sock = rip_create_socket ();
   if (rip->sock < 0)
     return rip->sock;
 
   /* Create read and timer thread. */
   rip_event (RIP_READ, rip->sock);
   rip_event (RIP_UPDATE_EVENT, 1);
+
+  QOBJ_REG (rip, rip);
 
   return 0;
 }
@@ -2794,7 +2768,7 @@ rip_update_jitter (unsigned long time)
   if (jitter_input < JITTER_BOUND)
     jitter_input = JITTER_BOUND;
   
-  jitter = (((random () % ((jitter_input * 2) + 1)) - jitter_input));  
+  jitter = (((random () % ((jitter_input * 2) + 1)) - jitter_input));
 
   return jitter/JITTER_BOUND;
 }
@@ -2810,11 +2784,7 @@ rip_event (enum rip_event event, int sock)
       rip->t_read = thread_add_read (master, rip_read, NULL, sock);
       break;
     case RIP_UPDATE_EVENT:
-      if (rip->t_update)
-	{
-	  thread_cancel (rip->t_update);
-	  rip->t_update = NULL;
-	}
+      RIP_TIMER_OFF (rip->t_update);
       jitter = rip_update_jitter (rip->update_time);
       rip->t_update = 
 	thread_add_timer (master, rip_update, NULL, 
@@ -2850,8 +2820,7 @@ DEFUN (router_rip,
 	  return CMD_WARNING;
 	}
     }
-  vty->node = RIP_NODE;
-  vty->index = rip;
+  VTY_PUSH_CONTEXT(RIP_NODE, rip);
 
   return CMD_SUCCESS;
 }
@@ -2870,13 +2839,14 @@ DEFUN (no_router_rip,
 
 DEFUN (rip_version,
        rip_version_cmd,
-       "version <1-2>",
+       "version (1-2)",
        "Set routing protocol version\n"
        "version\n")
 {
+  int idx_number = 1;
   int version;
 
-  version = atoi (argv[0]);
+  version = atoi (argv[idx_number]->arg);
   if (version != RIPv1 && version != RIPv2)
     {
       vty_out (vty, "invalid rip version %d%s", version,
@@ -2887,27 +2857,22 @@ DEFUN (rip_version,
   rip->version_recv = version;
 
   return CMD_SUCCESS;
-} 
+}
 
 DEFUN (no_rip_version,
        no_rip_version_cmd,
-       "no version",
+       "no version [(1-2)]",
        NO_STR
-       "Set routing protocol version\n")
+       "Set routing protocol version\n"
+       "Version\n")
 {
   /* Set RIP version to the default. */
   rip->version_send = RI_RIP_VERSION_2;
   rip->version_recv = RI_RIP_VERSION_1_AND_2;
 
   return CMD_SUCCESS;
-} 
+}
 
-ALIAS (no_rip_version,
-       no_rip_version_val_cmd,
-       "no version <1-2>",
-       NO_STR
-       "Set routing protocol version\n"
-       "version\n")
 
 DEFUN (rip_route,
        rip_route_cmd,
@@ -2915,11 +2880,12 @@ DEFUN (rip_route,
        "RIP static route configuration\n"
        "IP prefix <network>/<length>\n")
 {
+  int idx_ipv4_prefixlen = 1;
   int ret;
   struct prefix_ipv4 p;
   struct route_node *node;
 
-  ret = str2prefix_ipv4 (argv[0], &p);
+  ret = str2prefix_ipv4 (argv[idx_ipv4_prefixlen]->arg, &p);
   if (ret < 0)
     {
       vty_out (vty, "Malformed address%s", VTY_NEWLINE);
@@ -2937,9 +2903,9 @@ DEFUN (rip_route,
       return CMD_WARNING;
     }
 
-  node->info = (char *)"static";
+  node->info = (void *)1;
 
-  rip_redistribute_add (ZEBRA_ROUTE_RIP, RIP_ROUTE_STATIC, &p, 0, NULL, 0, 0);
+  rip_redistribute_add (ZEBRA_ROUTE_RIP, RIP_ROUTE_STATIC, &p, 0, NULL, 0, 0, 0);
 
   return CMD_SUCCESS;
 }
@@ -2951,11 +2917,12 @@ DEFUN (no_rip_route,
        "RIP static route configuration\n"
        "IP prefix <network>/<length>\n")
 {
+  int idx_ipv4_prefixlen = 2;
   int ret;
   struct prefix_ipv4 p;
   struct route_node *node;
 
-  ret = str2prefix_ipv4 (argv[0], &p);
+  ret = str2prefix_ipv4 (argv[idx_ipv4_prefixlen]->arg, &p);
   if (ret < 0)
     {
       vty_out (vty, "Malformed address%s", VTY_NEWLINE);
@@ -2967,7 +2934,7 @@ DEFUN (no_rip_route,
   node = route_node_lookup (rip->route, (struct prefix *) &p);
   if (! node)
     {
-      vty_out (vty, "Can't find route %s.%s", argv[0],
+      vty_out (vty, "Can't find route %s.%s", argv[idx_ipv4_prefixlen]->arg,
 	       VTY_NEWLINE);
       return CMD_WARNING;
     }
@@ -3000,13 +2967,14 @@ rip_update_default_metric (void)
 
 DEFUN (rip_default_metric,
        rip_default_metric_cmd,
-       "default-metric <1-16>",
+       "default-metric (1-16)",
        "Set a metric of redistribute routes\n"
        "Default metric\n")
 {
+  int idx_number = 1;
   if (rip)
     {
-      rip->default_metric = atoi (argv[0]);
+      rip->default_metric = atoi (argv[idx_number]->arg);
       /* rip_update_default_metric (); */
     }
   return CMD_SUCCESS;
@@ -3014,7 +2982,7 @@ DEFUN (rip_default_metric,
 
 DEFUN (no_rip_default_metric,
        no_rip_default_metric_cmd,
-       "no default-metric",
+       "no default-metric [(1-16)]",
        NO_STR
        "Set a metric of redistribute routes\n"
        "Default metric\n")
@@ -3027,22 +2995,19 @@ DEFUN (no_rip_default_metric,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_rip_default_metric,
-       no_rip_default_metric_val_cmd,
-       "no default-metric <1-16>",
-       NO_STR
-       "Set a metric of redistribute routes\n"
-       "Default metric\n")
 
 DEFUN (rip_timers,
        rip_timers_cmd,
-       "timers basic <5-2147483647> <5-2147483647> <5-2147483647>",
+       "timers basic (5-2147483647) (5-2147483647) (5-2147483647)",
        "Adjust routing timers\n"
        "Basic routing protocol update timers\n"
        "Routing table update timer value in second. Default is 30.\n"
        "Routing information timeout timer. Default is 180.\n"
        "Garbage collection timer. Default is 120.\n")
 {
+  int idx_number = 2;
+  int idx_number_2 = 3;
+  int idx_number_3 = 4;
   unsigned long update;
   unsigned long timeout;
   unsigned long garbage;
@@ -3050,21 +3015,21 @@ DEFUN (rip_timers,
   unsigned long RIP_TIMER_MAX = 2147483647;
   unsigned long RIP_TIMER_MIN = 5;
 
-  update = strtoul (argv[0], &endptr, 10);
+  update = strtoul (argv[idx_number]->arg, &endptr, 10);
   if (update > RIP_TIMER_MAX || update < RIP_TIMER_MIN || *endptr != '\0')  
     {
       vty_out (vty, "update timer value error%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
   
-  timeout = strtoul (argv[1], &endptr, 10);
+  timeout = strtoul (argv[idx_number_2]->arg, &endptr, 10);
   if (timeout > RIP_TIMER_MAX || timeout < RIP_TIMER_MIN || *endptr != '\0') 
     {
       vty_out (vty, "timeout timer value error%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
   
-  garbage = strtoul (argv[2], &endptr, 10);
+  garbage = strtoul (argv[idx_number_3]->arg, &endptr, 10);
   if (garbage > RIP_TIMER_MAX || garbage < RIP_TIMER_MIN || *endptr != '\0') 
     {
       vty_out (vty, "garbage timer value error%s", VTY_NEWLINE);
@@ -3084,10 +3049,13 @@ DEFUN (rip_timers,
 
 DEFUN (no_rip_timers,
        no_rip_timers_cmd,
-       "no timers basic",
+       "no timers basic [(0-65535) (0-65535) (0-65535)]",
        NO_STR
        "Adjust routing timers\n"
-       "Basic routing protocol update timers\n")
+       "Basic routing protocol update timers\n"
+       "Routing table update timer value in second. Default is 30.\n"
+       "Routing information timeout timer. Default is 180.\n"
+       "Garbage collection timer. Default is 120.\n")
 {
   /* Set each timer value to the default. */
   rip->update_time = RIP_UPDATE_TIMER_DEFAULT;
@@ -3100,15 +3068,6 @@ DEFUN (no_rip_timers,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_rip_timers,
-       no_rip_timers_val_cmd,
-       "no timers basic <0-65535> <0-65535> <0-65535>",
-       NO_STR
-       "Adjust routing timers\n"
-       "Basic routing protocol update timers\n"
-       "Routing table update timer value in second. Default is 30.\n"
-       "Routing information timeout timer. Default is 180.\n"
-       "Garbage collection timer. Default is 120.\n")
 
 
 struct route_table *rip_distance_table;
@@ -3309,17 +3268,18 @@ rip_distance_show (struct vty *vty)
 
 DEFUN (rip_distance,
        rip_distance_cmd,
-       "distance <1-255>",
+       "distance (1-255)",
        "Administrative distance\n"
        "Distance value\n")
 {
-  rip->distance = atoi (argv[0]);
+  int idx_number = 1;
+  rip->distance = atoi (argv[idx_number]->arg);
   return CMD_SUCCESS;
 }
 
 DEFUN (no_rip_distance,
        no_rip_distance_cmd,
-       "no distance <1-255>",
+       "no distance (1-255)",
        NO_STR
        "Administrative distance\n"
        "Distance value\n")
@@ -3330,49 +3290,59 @@ DEFUN (no_rip_distance,
 
 DEFUN (rip_distance_source,
        rip_distance_source_cmd,
-       "distance <1-255> A.B.C.D/M",
+       "distance (1-255) A.B.C.D/M",
        "Administrative distance\n"
        "Distance value\n"
        "IP source prefix\n")
 {
-  rip_distance_set (vty, argv[0], argv[1], NULL);
+  int idx_number = 1;
+  int idx_ipv4_prefixlen = 2;
+  rip_distance_set (vty, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, NULL);
   return CMD_SUCCESS;
 }
 
 DEFUN (no_rip_distance_source,
        no_rip_distance_source_cmd,
-       "no distance <1-255> A.B.C.D/M",
+       "no distance (1-255) A.B.C.D/M",
        NO_STR
        "Administrative distance\n"
        "Distance value\n"
        "IP source prefix\n")
 {
-  rip_distance_unset (vty, argv[0], argv[1], NULL);
+  int idx_number = 2;
+  int idx_ipv4_prefixlen = 3;
+  rip_distance_unset (vty, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, NULL);
   return CMD_SUCCESS;
 }
 
 DEFUN (rip_distance_source_access_list,
        rip_distance_source_access_list_cmd,
-       "distance <1-255> A.B.C.D/M WORD",
+       "distance (1-255) A.B.C.D/M WORD",
        "Administrative distance\n"
        "Distance value\n"
        "IP source prefix\n"
        "Access list name\n")
 {
-  rip_distance_set (vty, argv[0], argv[1], argv[2]);
+  int idx_number = 1;
+  int idx_ipv4_prefixlen = 2;
+  int idx_word = 3;
+  rip_distance_set (vty, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, argv[idx_word]->arg);
   return CMD_SUCCESS;
 }
 
 DEFUN (no_rip_distance_source_access_list,
        no_rip_distance_source_access_list_cmd,
-       "no distance <1-255> A.B.C.D/M WORD",
+       "no distance (1-255) A.B.C.D/M WORD",
        NO_STR
        "Administrative distance\n"
        "Distance value\n"
        "IP source prefix\n"
        "Access list name\n")
 {
-  rip_distance_unset (vty, argv[0], argv[1], argv[2]);
+  int idx_number = 2;
+  int idx_ipv4_prefixlen = 3;
+  int idx_word = 4;
+  rip_distance_unset (vty, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, argv[idx_word]->arg);
   return CMD_SUCCESS;
 }
 
@@ -3546,13 +3516,13 @@ DEFUN (show_ip_rip,
 	    (rinfo->sub_type == RIP_ROUTE_RTE))
 	  {
 	    vty_out (vty, "%-15s ", inet_ntoa (rinfo->from));
-	    vty_out (vty, "%3d ", rinfo->tag);
+	    vty_out (vty, "%3"ROUTE_TAG_PRI" ", (route_tag_t)rinfo->tag);
 	    rip_vty_out_uptime (vty, rinfo);
 	  }
 	else if (rinfo->metric == RIP_METRIC_INFINITY)
 	  {
 	    vty_out (vty, "self            ");
-	    vty_out (vty, "%3d ", rinfo->tag);
+	    vty_out (vty, "%3"ROUTE_TAG_PRI" ", (route_tag_t)rinfo->tag);
 	    rip_vty_out_uptime (vty, rinfo);
 	  }
 	else
@@ -3568,7 +3538,7 @@ DEFUN (show_ip_rip,
 	      }
 	    else
 	      vty_out (vty, "self            ");
-	    vty_out (vty, "%3d", rinfo->tag);
+	    vty_out (vty, "%3"ROUTE_TAG_PRI, (route_tag_t)rinfo->tag);
 	  }
 
 	vty_out (vty, "%s", VTY_NEWLINE);
@@ -3627,7 +3597,7 @@ DEFUN (show_ip_rip_status,
 
   vty_out (vty, "    Interface        Send  Recv   Key-chain%s", VTY_NEWLINE);
 
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     {
       ri = ifp->info;
 
@@ -3659,7 +3629,7 @@ DEFUN (show_ip_rip_status,
 
   {
     int found_passive = 0;
-    for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+    for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
       {
 	ri = ifp->info;
 
@@ -3862,7 +3832,7 @@ rip_distribute_update_all (struct prefix_list *notused)
   struct interface *ifp;
   struct listnode *node, *nnode;
 
-  for (ALL_LIST_ELEMENTS (iflist, node, nnode, ifp))
+  for (ALL_LIST_ELEMENTS (vrf_iflist (VRF_DEFAULT), node, nnode, ifp))
     rip_distribute_update_interface (ifp);
 }
 /* ARGSUSED */
@@ -3884,6 +3854,8 @@ rip_clean (void)
 
   if (rip)
     {
+      QOBJ_UNREG (rip);
+
       /* Clear RIP routes */
       for (rp = route_top (rip->table); rp; rp = route_next (rp))
         if ((list = rp->info) != NULL)
@@ -3909,11 +3881,7 @@ rip_clean (void)
       RIP_TIMER_OFF (rip->t_triggered_interval);
 
       /* Cancel read thread. */
-      if (rip->t_read)
-	{
-	  thread_cancel (rip->t_read);
-	  rip->t_read = NULL;
-	}
+      THREAD_READ_OFF (rip->t_read);
 
       /* Close RIP socket. */
       if (rip->sock >= 0)
@@ -4056,7 +4024,7 @@ rip_routemap_update (const char *notused)
   struct interface *ifp;
   struct listnode *node, *nnode;
 
-  for (ALL_LIST_ELEMENTS (iflist, node, nnode, ifp))
+  for (ALL_LIST_ELEMENTS (vrf_iflist (VRF_DEFAULT), node, nnode, ifp))
     rip_if_rmap_update_interface (ifp);
 
   rip_routemap_update_redistribute ();
@@ -4081,13 +4049,10 @@ rip_init (void)
   install_default (RIP_NODE);
   install_element (RIP_NODE, &rip_version_cmd);
   install_element (RIP_NODE, &no_rip_version_cmd);
-  install_element (RIP_NODE, &no_rip_version_val_cmd);
   install_element (RIP_NODE, &rip_default_metric_cmd);
   install_element (RIP_NODE, &no_rip_default_metric_cmd);
-  install_element (RIP_NODE, &no_rip_default_metric_val_cmd);
   install_element (RIP_NODE, &rip_timers_cmd);
   install_element (RIP_NODE, &no_rip_timers_cmd);
-  install_element (RIP_NODE, &no_rip_timers_val_cmd);
   install_element (RIP_NODE, &rip_route_cmd);
   install_element (RIP_NODE, &no_rip_route_cmd);
   install_element (RIP_NODE, &rip_distance_cmd);

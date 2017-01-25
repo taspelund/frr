@@ -27,11 +27,17 @@
 
 #include "log.h"
 #include "rib.h"
+#include "vty.h"
+#include "prefix.h"
 
-#include "rt_netlink.h"
+#include "zebra/zserv.h"
+#include "zebra/zebra_ns.h"
+#include "zebra/zebra_vrf.h"
+#include "zebra/kernel_netlink.h"
+#include "zebra/rt_netlink.h"
 #include "nexthop.h"
 
-#include "zebra_fpm_private.h"
+#include "zebra/zebra_fpm_private.h"
 
 /*
  * addr_to_a
@@ -49,14 +55,13 @@ addr_to_a (u_char af, void *addr)
 
     case AF_INET:
       return inet_ntoa (*((struct in_addr *) addr));
-
-#ifdef HAVE_IPV6
+      break;
     case AF_INET6:
       return inet6_ntoa (*((struct in6_addr *) addr));
-#endif
-
+      break;
     default:
       return "<Addr in unknown AF>";
+      break;
     }
 }
 
@@ -88,12 +93,10 @@ af_addr_size (u_char af)
 
     case AF_INET:
       return 4;
-
-#ifdef HAVE_IPV6
+      break;
     case AF_INET6:
       return 16;
-#endif
-
+      break;
     default:
       assert(0);
       return 16;
@@ -176,17 +179,13 @@ netlink_route_info_add_nh (netlink_route_info_t *ri, struct nexthop *nexthop,
 	src = &nexthop->src;
     }
 
-#ifdef HAVE_IPV6
   if (nexthop->type == NEXTHOP_TYPE_IPV6
-      || nexthop->type == NEXTHOP_TYPE_IPV6_IFNAME
       || nexthop->type == NEXTHOP_TYPE_IPV6_IFINDEX)
     {
       nhi.gateway = &nexthop->gate;
     }
-#endif /* HAVE_IPV6 */
 
-  if (nexthop->type == NEXTHOP_TYPE_IFINDEX
-      || nexthop->type == NEXTHOP_TYPE_IFNAME)
+  if (nexthop->type == NEXTHOP_TYPE_IFINDEX)
     {
       if (nexthop->src.ipv4.s_addr)
 	src = &nexthop->src;
@@ -245,7 +244,7 @@ netlink_route_info_fill (netlink_route_info_t *ri, int cmd,
   ri->af = rib_dest_af (dest);
 
   ri->nlmsg_type = cmd;
-  ri->rtm_table = rib_dest_vrf (dest)->vrf_id;
+  ri->rtm_table = zvrf_id (rib_dest_vrf (dest));
   ri->rtm_protocol = RTPROT_UNSPEC;
 
   /*
@@ -253,10 +252,15 @@ netlink_route_info_fill (netlink_route_info_t *ri, int cmd,
    * particularly in our communication with the FPM.
    */
   if (cmd == RTM_DELROUTE && !rib)
-    goto skip;
+    return 1;
 
-  if (rib)
-    ri->rtm_protocol = netlink_proto_from_route_type (rib->type);
+  if (!rib)
+    {
+      zfpm_debug ("%s: Expected non-NULL rib pointer", __PRETTY_FUNCTION__);
+      return 0;
+    }
+
+  ri->rtm_protocol = netlink_proto_from_route_type (rib->type);
 
   if ((rib->flags & ZEBRA_FLAG_BLACKHOLE) || (rib->flags & ZEBRA_FLAG_REJECT))
     discard = 1;
@@ -281,9 +285,7 @@ netlink_route_info_fill (netlink_route_info_t *ri, int cmd,
   ri->metric = &rib->metric;
 
   if (discard)
-    {
-      goto skip;
-    }
+    return 1;
 
   for (ALL_NEXTHOPS_RO(rib->nexthop, nexthop, tnexthop, recursing))
     {
@@ -309,7 +311,6 @@ netlink_route_info_fill (netlink_route_info_t *ri, int cmd,
       return 0;
     }
 
- skip:
   return 1;
 }
 

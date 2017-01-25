@@ -1,5 +1,4 @@
-/* $QuaggaId: Format:%an, %ai, %h$ $
- *
+/*
  * BGP Multipath
  * Copyright (C) 2010 Google Inc.
  *
@@ -28,6 +27,7 @@
 #include "linklist.h"
 #include "sockunion.h"
 #include "memory.h"
+#include "queue.h"
 #include "filter.h"
 
 #include "bgpd/bgpd.h"
@@ -40,33 +40,6 @@
 #include "bgpd/bgp_ecommunity.h"
 #include "bgpd/bgp_mpath.h"
 
-bool
-bgp_mpath_is_configured_sort (struct bgp *bgp, bgp_peer_sort_t sort,
-                              afi_t afi, safi_t safi)
-{
-  struct bgp_maxpaths_cfg *cfg = &bgp->maxpaths[afi][safi];
-
-  /* XXX: BGP_DEFAULT_MAXPATHS is 1, and this test only seems to make sense
-   * if if it stays 1, so not sure the DEFAULT define is that useful.
-   */
-  switch (sort)
-    {
-      case BGP_PEER_IBGP:
-        return cfg->maxpaths_ibgp != BGP_DEFAULT_MAXPATHS;
-      case BGP_PEER_EBGP:
-        return cfg->maxpaths_ebgp != BGP_DEFAULT_MAXPATHS;
-      default:
-        return false;
-    }
-}
-
-bool
-bgp_mpath_is_configured (struct bgp *bgp, afi_t afi, safi_t safi)
-{
-  return bgp_mpath_is_configured_sort (bgp, BGP_PEER_IBGP, afi, safi)
-         || bgp_mpath_is_configured_sort (bgp, BGP_PEER_EBGP, afi, safi);
-}
-
 /*
  * bgp_maximum_paths_set
  *
@@ -74,7 +47,7 @@ bgp_mpath_is_configured (struct bgp *bgp, afi_t afi, safi_t safi)
  */
 int
 bgp_maximum_paths_set (struct bgp *bgp, afi_t afi, safi_t safi,
-                       int peertype, u_int16_t maxpaths)
+                       int peertype, u_int16_t maxpaths, u_int16_t options)
 {
   if (!bgp || (afi >= AFI_MAX) || (safi >= SAFI_MAX))
     return -1;
@@ -83,6 +56,7 @@ bgp_maximum_paths_set (struct bgp *bgp, afi_t afi, safi_t safi,
     {
     case BGP_PEER_IBGP:
       bgp->maxpaths[afi][safi].maxpaths_ibgp = maxpaths;
+      bgp->maxpaths[afi][safi].ibgp_flags |= options;
       break;
     case BGP_PEER_EBGP:
       bgp->maxpaths[afi][safi].maxpaths_ebgp = maxpaths;
@@ -109,10 +83,11 @@ bgp_maximum_paths_unset (struct bgp *bgp, afi_t afi, safi_t safi,
   switch (peertype)
     {
     case BGP_PEER_IBGP:
-      bgp->maxpaths[afi][safi].maxpaths_ibgp = BGP_DEFAULT_MAXPATHS;
+      bgp->maxpaths[afi][safi].maxpaths_ibgp = MULTIPATH_NUM;
+      bgp->maxpaths[afi][safi].ibgp_flags = 0;
       break;
     case BGP_PEER_EBGP:
-      bgp->maxpaths[afi][safi].maxpaths_ebgp = BGP_DEFAULT_MAXPATHS;
+      bgp->maxpaths[afi][safi].maxpaths_ebgp = MULTIPATH_NUM;
       break;
     default:
       return -1;
@@ -128,7 +103,7 @@ bgp_maximum_paths_unset (struct bgp *bgp, afi_t afi, safi_t safi,
  * or greater than zero if bi1 is respectively less than, equal to,
  * or greater than bi2.
  */
-static int
+int
 bgp_info_nexthop_cmp (struct bgp_info *bi1, struct bgp_info *bi2)
 {
   struct attr_extra *ae1, *ae2;
@@ -138,23 +113,23 @@ bgp_info_nexthop_cmp (struct bgp_info *bi1, struct bgp_info *bi2)
   ae2 = bi2->attr->extra;
 
   compare = IPV4_ADDR_CMP (&bi1->attr->nexthop, &bi2->attr->nexthop);
-
   if (!compare && ae1 && ae2)
     {
       if (ae1->mp_nexthop_len == ae2->mp_nexthop_len)
         {
           switch (ae1->mp_nexthop_len)
             {
-            case 4:
-            case 12:
+            case BGP_ATTR_NHLEN_IPV4:
+            case BGP_ATTR_NHLEN_VPNV4:
               compare = IPV4_ADDR_CMP (&ae1->mp_nexthop_global_in,
                                        &ae2->mp_nexthop_global_in);
               break;
-            case 16:
+            case BGP_ATTR_NHLEN_IPV6_GLOBAL:
+            case BGP_ATTR_NHLEN_VPNV6_GLOBAL:
               compare = IPV6_ADDR_CMP (&ae1->mp_nexthop_global,
                                        &ae2->mp_nexthop_global);
               break;
-            case 32:
+            case BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL:
               compare = IPV6_ADDR_CMP (&ae1->mp_nexthop_global,
                                        &ae2->mp_nexthop_global);
               if (!compare)
@@ -167,7 +142,8 @@ bgp_info_nexthop_cmp (struct bgp_info *bi1, struct bgp_info *bi2)
       /* This can happen if one IPv6 peer sends you global and link-local
        * nexthops but another IPv6 peer only sends you global
        */
-      else if (ae1->mp_nexthop_len == 16 || ae1->mp_nexthop_len == 32)
+      else if (ae1->mp_nexthop_len == BGP_ATTR_NHLEN_IPV6_GLOBAL ||
+               ae1->mp_nexthop_len == BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL)
         {
           compare = IPV6_ADDR_CMP (&ae1->mp_nexthop_global,
                                    &ae2->mp_nexthop_global);
@@ -208,7 +184,16 @@ bgp_info_mpath_cmp (void *val1, void *val2)
   compare = bgp_info_nexthop_cmp (bi1, bi2);
 
   if (!compare)
-    compare = sockunion_cmp (bi1->peer->su_remote, bi2->peer->su_remote);
+    {
+      if (!bi1->peer->su_remote && !bi2->peer->su_remote)
+        compare = 0;
+      else if (!bi1->peer->su_remote)
+        compare = 1;
+      else if (!bi2->peer->su_remote)
+        compare = -1;
+      else
+        compare = sockunion_cmp (bi1->peer->su_remote, bi2->peer->su_remote);
+    }
 
   return compare;
 }
@@ -440,31 +425,29 @@ bgp_info_mpath_attr_set (struct bgp_info *binfo, struct attr *attr)
 void
 bgp_info_mpath_update (struct bgp_node *rn, struct bgp_info *new_best,
                        struct bgp_info *old_best, struct list *mp_list,
-                        afi_t afi, safi_t safi)
+                       struct bgp_maxpaths_cfg *mpath_cfg)
 {
   u_int16_t maxpaths, mpath_count, old_mpath_count;
   struct listnode *mp_node, *mp_next_node;
   struct bgp_info *cur_mpath, *new_mpath, *next_mpath, *prev_mpath;
   int mpath_changed, debug;
-  char pfx_buf[INET6_ADDRSTRLEN], nh_buf[2][INET6_ADDRSTRLEN];
-  struct bgp_maxpaths_cfg *mpath_cfg = NULL;
+  char pfx_buf[PREFIX2STR_BUFFER], nh_buf[2][INET6_ADDRSTRLEN];
+  char path_buf[PATH_ADDPATH_STR_BUFFER];
 
   mpath_changed = 0;
-  maxpaths = BGP_DEFAULT_MAXPATHS;
+  maxpaths = MULTIPATH_NUM;
   mpath_count = 0;
   cur_mpath = NULL;
   old_mpath_count = 0;
   prev_mpath = new_best;
   mp_node = listhead (mp_list);
-
-  debug = BGP_DEBUG (events, EVENTS);
+  debug = bgp_debug_bestpath(&rn->p);
 
   if (debug)
     prefix2str (&rn->p, pfx_buf, sizeof (pfx_buf));
 
   if (new_best)
     {
-      mpath_cfg = &new_best->peer->bgp->maxpaths[afi][safi];
       mpath_count++;
       if (new_best != old_best)
         bgp_info_mpath_dequeue (new_best);
@@ -480,6 +463,11 @@ bgp_info_mpath_update (struct bgp_node *rn, struct bgp_info *new_best,
       bgp_info_mpath_dequeue (old_best);
     }
 
+  if (debug)
+    zlog_debug("%s: starting mpath update, newbest %s num candidates %d old-mpath-count %d",
+               pfx_buf, new_best ? new_best->peer->host : "NONE",
+               listcount (mp_list), old_mpath_count);
+
   /*
    * We perform an ordered walk through both lists in parallel.
    * The reason for the ordered walk is that if there are paths
@@ -493,6 +481,8 @@ bgp_info_mpath_update (struct bgp_node *rn, struct bgp_info *new_best,
    */
   while (mp_node || cur_mpath)
     {
+      struct bgp_info *tmp_info;
+
       /*
        * We can bail out of this loop if all existing paths on the
        * multipath list have been visited (for cleanup purposes) and
@@ -503,6 +493,12 @@ bgp_info_mpath_update (struct bgp_node *rn, struct bgp_info *new_best,
 
       mp_next_node = mp_node ? listnextnode (mp_node) : NULL;
       next_mpath = cur_mpath ? bgp_info_mpath_next (cur_mpath) : NULL;
+      tmp_info = mp_node ? listgetdata (mp_node) : NULL;
+
+      if (debug)
+        zlog_debug("%s: comparing candidate %s with existing mpath %s",
+                   pfx_buf, tmp_info ? tmp_info->peer->host : "NONE",
+                   cur_mpath ? cur_mpath->peer->host : "NONE");
 
       /*
        * If equal, the path was a multipath and is still a multipath.
@@ -518,16 +514,25 @@ bgp_info_mpath_update (struct bgp_node *rn, struct bgp_info *new_best,
               bgp_info_mpath_enqueue (prev_mpath, cur_mpath);
               prev_mpath = cur_mpath;
               mpath_count++;
+              if (debug)
+                {
+                  bgp_info_path_with_addpath_rx_str(cur_mpath, path_buf);
+                  zlog_debug("%s: %s is still multipath, cur count %d",
+                             pfx_buf, path_buf, mpath_count);
+                }
             }
           else
             {
               mpath_changed = 1;
               if (debug)
-                zlog_debug ("%s remove mpath nexthop %s peer %s", pfx_buf,
-                            inet_ntop (AF_INET, &cur_mpath->attr->nexthop,
-                                       nh_buf[0], sizeof (nh_buf[0])),
-                            sockunion2str (cur_mpath->peer->su_remote,
-                                           nh_buf[1], sizeof (nh_buf[1])));
+                {
+                  bgp_info_path_with_addpath_rx_str(cur_mpath, path_buf);
+                  zlog_debug ("%s: remove mpath %s nexthop %s, cur count %d",
+                              pfx_buf, path_buf,
+                              inet_ntop (AF_INET, &cur_mpath->attr->nexthop,
+                                         nh_buf[0], sizeof (nh_buf[0])),
+                              mpath_count);
+                }
             }
           mp_node = mp_next_node;
           cur_mpath = next_mpath;
@@ -547,11 +552,14 @@ bgp_info_mpath_update (struct bgp_node *rn, struct bgp_info *new_best,
           bgp_info_mpath_dequeue (cur_mpath);
           mpath_changed = 1;
           if (debug)
-            zlog_debug ("%s remove mpath nexthop %s peer %s", pfx_buf,
-                        inet_ntop (AF_INET, &cur_mpath->attr->nexthop,
-                                   nh_buf[0], sizeof (nh_buf[0])),
-                        sockunion2str (cur_mpath->peer->su_remote,
-                                       nh_buf[1], sizeof (nh_buf[1])));
+            {
+              bgp_info_path_with_addpath_rx_str(cur_mpath, path_buf);
+              zlog_debug ("%s: remove mpath %s nexthop %s, cur count %d",
+                          pfx_buf, path_buf,
+                          inet_ntop (AF_INET, &cur_mpath->attr->nexthop,
+                                     nh_buf[0], sizeof (nh_buf[0])),
+                          mpath_count);
+            }
           cur_mpath = next_mpath;
         }
       else
@@ -573,7 +581,7 @@ bgp_info_mpath_update (struct bgp_node *rn, struct bgp_info *new_best,
               bgp_info_nexthop_cmp (prev_mpath, new_mpath))
             {
               if (new_mpath == next_mpath)
-                next_mpath = bgp_info_mpath_next (new_mpath);
+                bgp_info_mpath_next (new_mpath);
               bgp_info_mpath_dequeue (new_mpath);
 
               bgp_info_mpath_enqueue (prev_mpath, new_mpath);
@@ -581,11 +589,14 @@ bgp_info_mpath_update (struct bgp_node *rn, struct bgp_info *new_best,
               mpath_changed = 1;
               mpath_count++;
               if (debug)
-                zlog_debug ("%s add mpath nexthop %s peer %s", pfx_buf,
-                            inet_ntop (AF_INET, &new_mpath->attr->nexthop,
-                                       nh_buf[0], sizeof (nh_buf[0])),
-                            sockunion2str (new_mpath->peer->su_remote,
-                                           nh_buf[1], sizeof (nh_buf[1])));
+                {
+                  bgp_info_path_with_addpath_rx_str(new_mpath, path_buf);
+                  zlog_debug ("%s: add mpath %s nexthop %s, cur count %d",
+                              pfx_buf, path_buf,
+                              inet_ntop (AF_INET, &new_mpath->attr->nexthop,
+                                         nh_buf[0], sizeof (nh_buf[0])),
+                              mpath_count);
+                }
             }
           mp_node = mp_next_node;
         }
@@ -593,6 +604,10 @@ bgp_info_mpath_update (struct bgp_node *rn, struct bgp_info *new_best,
 
   if (new_best)
     {
+      if (debug)
+        zlog_debug("%s: New mpath count (incl newbest) %d mpath-change %s",
+                   pfx_buf, mpath_count, mpath_changed ? "YES" : "NO");
+
       bgp_info_mpath_count_set (new_best, mpath_count-1);
       if (mpath_changed || (bgp_info_mpath_count (new_best) != old_mpath_count))
         SET_FLAG (new_best->flags, BGP_INFO_MULTIPATH_CHG);
@@ -644,7 +659,7 @@ bgp_info_mpath_aggregate_update (struct bgp_info *new_best,
   struct aspath *aspath;
   struct aspath *asmerge;
   struct attr *new_attr, *old_attr;
-  u_char origin, attr_chg;
+  u_char origin;
   struct community *community, *commerge;
   struct ecommunity *ecomm, *ecommerge;
   struct attr_extra *ae;
@@ -671,102 +686,76 @@ bgp_info_mpath_aggregate_update (struct bgp_info *new_best,
       return;
     }
 
-  /*
-   * Bail out here if the following is true:
-   * - MULTIPATH_CHG bit is not set on new_best, and
-   * - No change in bestpath, and
-   * - ATTR_CHANGED bit is not set on new_best or any of the multipaths
-   */
-  if (!CHECK_FLAG (new_best->flags, BGP_INFO_MULTIPATH_CHG) &&
-      (old_best == new_best))
-    {
-      attr_chg = 0;
-
-      if (CHECK_FLAG (new_best->flags, BGP_INFO_ATTR_CHANGED))
-        attr_chg = 1;
-      else
-        for (mpinfo = bgp_info_mpath_first (new_best); mpinfo;
-             mpinfo = bgp_info_mpath_next (mpinfo))
-          {
-            if (CHECK_FLAG (mpinfo->flags, BGP_INFO_ATTR_CHANGED))
-              {
-                attr_chg = 1;
-                break;
-              }
-          }
-
-      if (!attr_chg)
-        {
-          assert (bgp_info_mpath_attr (new_best));
-          return;
-        }
-    }
-
   bgp_attr_dup (&attr, new_best->attr);
 
-  /* aggregate attribute from multipath constituents */
-  aspath = aspath_dup (attr.aspath);
-  origin = attr.origin;
-  community = attr.community ? community_dup (attr.community) : NULL;
-  ae = attr.extra;
-  ecomm = (ae && ae->ecommunity) ? ecommunity_dup (ae->ecommunity) : NULL;
-
-  for (mpinfo = bgp_info_mpath_first (new_best); mpinfo;
-       mpinfo = bgp_info_mpath_next (mpinfo))
+  if (new_best->peer &&
+      bgp_flag_check (new_best->peer->bgp, BGP_FLAG_MULTIPATH_RELAX_AS_SET))
     {
-      asmerge = aspath_aggregate_mpath (aspath, mpinfo->attr->aspath);
-      aspath_free (aspath);
-      aspath = asmerge;
 
-      if (origin < mpinfo->attr->origin)
-        origin = mpinfo->attr->origin;
+      /* aggregate attribute from multipath constituents */
+      aspath = aspath_dup (attr.aspath);
+      origin = attr.origin;
+      community = attr.community ? community_dup (attr.community) : NULL;
+      ae = attr.extra;
+      ecomm = (ae && ae->ecommunity) ? ecommunity_dup (ae->ecommunity) : NULL;
 
-      if (mpinfo->attr->community)
+      for (mpinfo = bgp_info_mpath_first (new_best); mpinfo;
+           mpinfo = bgp_info_mpath_next (mpinfo))
         {
-          if (community)
+          asmerge = aspath_aggregate (aspath, mpinfo->attr->aspath);
+          aspath_free (aspath);
+          aspath = asmerge;
+
+          if (origin < mpinfo->attr->origin)
+            origin = mpinfo->attr->origin;
+
+          if (mpinfo->attr->community)
             {
-              commerge = community_merge (community, mpinfo->attr->community);
-              community = community_uniq_sort (commerge);
-              community_free (commerge);
+              if (community)
+                {
+                  commerge = community_merge (community, mpinfo->attr->community);
+                  community = community_uniq_sort (commerge);
+                  community_free (commerge);
+                }
+              else
+                community = community_dup (mpinfo->attr->community);
             }
-          else
-            community = community_dup (mpinfo->attr->community);
+
+          ae = mpinfo->attr->extra;
+          if (ae && ae->ecommunity)
+            {
+              if (ecomm)
+                {
+                  ecommerge = ecommunity_merge (ecomm, ae->ecommunity);
+                  ecomm = ecommunity_uniq_sort (ecommerge);
+                  ecommunity_free (&ecommerge);
+                }
+              else
+                ecomm = ecommunity_dup (ae->ecommunity);
+            }
         }
 
-      ae = mpinfo->attr->extra;
-      if (ae && ae->ecommunity)
+      attr.aspath = aspath;
+      attr.origin = origin;
+      if (community)
         {
-          if (ecomm)
-            {
-              ecommerge = ecommunity_merge (ecomm, ae->ecommunity);
-              ecomm = ecommunity_uniq_sort (ecommerge);
-              ecommunity_free (&ecommerge);
-            }
-          else
-            ecomm = ecommunity_dup (ae->ecommunity);
+          attr.community = community;
+          attr.flag |= ATTR_FLAG_BIT (BGP_ATTR_COMMUNITIES);
         }
-    }
+      if (ecomm)
+        {
+          ae = bgp_attr_extra_get (&attr);
+          ae->ecommunity = ecomm;
+          attr.flag |= ATTR_FLAG_BIT (BGP_ATTR_EXT_COMMUNITIES);
+        }
 
-  attr.aspath = aspath;
-  attr.origin = origin;
-  if (community)
-    {
-      attr.community = community;
-      attr.flag |= ATTR_FLAG_BIT (BGP_ATTR_COMMUNITIES);
-    }
-  if (ecomm)
-    {
-      ae = bgp_attr_extra_get (&attr);
-      ae->ecommunity = ecomm;
-      attr.flag |= ATTR_FLAG_BIT (BGP_ATTR_EXT_COMMUNITIES);
-    }
+      /* Zap multipath attr nexthop so we set nexthop to self */
+      attr.nexthop.s_addr = 0;
+      if (attr.extra)
+        memset (&attr.extra->mp_nexthop_global, 0, sizeof (struct in6_addr));
 
-  /* Zap multipath attr nexthop so we set nexthop to self */
-  attr.nexthop.s_addr = 0;
-  if (attr.extra)
-    memset (&attr.extra->mp_nexthop_global, 0, sizeof (struct in6_addr));
-
-  /* TODO: should we set ATOMIC_AGGREGATE and AGGREGATOR? */
+      /* TODO: should we set ATOMIC_AGGREGATE and AGGREGATOR? */
+    }
 
   new_attr = bgp_attr_intern (&attr);
   bgp_attr_extra_free (&attr);

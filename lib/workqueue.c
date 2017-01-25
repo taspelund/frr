@@ -29,10 +29,14 @@
 #include "command.h"
 #include "log.h"
 
+DEFINE_MTYPE(LIB, WORK_QUEUE,             "Work queue")
+DEFINE_MTYPE_STATIC(LIB, WORK_QUEUE_ITEM, "Work queue item")
+DEFINE_MTYPE_STATIC(LIB, WORK_QUEUE_NAME, "Work queue name string")
+
 /* master list of work_queues */
 static struct list _work_queues;
 /* pointer primarily to avoid an otherwise harmless warning on
- * ALL_LIST_ELEMENTS_RO 
+ * ALL_LIST_ELEMENTS_RO
  */
 static struct list *work_queues = &_work_queues;
 
@@ -88,6 +92,7 @@ work_queue_new (struct thread_master *m, const char *queue_name)
 
   /* Default values, can be overriden by caller */
   new->spec.hold = WORK_QUEUE_DEFAULT_HOLD;
+  new->spec.yield = THREAD_YIELD_TIME_SLOT;
     
   return new;
 }
@@ -123,6 +128,9 @@ work_queue_schedule (struct work_queue *wq, unsigned int delay)
     {
       wq->thread = thread_add_background (wq->master, work_queue_run, 
                                           wq, delay);
+      /* set thread yield time, if needed */
+      if (wq->thread && wq->spec.yield != THREAD_YIELD_TIME_SLOT)
+        thread_set_yield_time (wq->thread, wq->spec.yield);
       return 1;
     }
   else
@@ -174,37 +182,37 @@ work_queue_item_requeue (struct work_queue *wq, struct listnode *ln)
   LISTNODE_ATTACH (wq->items, ln); /* attach to end of list */
 }
 
-DEFUN(show_work_queues,
-      show_work_queues_cmd,
-      "show work-queues",
-      SHOW_STR
-      "Work Queue information\n")
+DEFUN (show_work_queues,
+       show_work_queues_cmd,
+       "show work-queues",
+       SHOW_STR
+       "Work Queue information\n")
 {
   struct listnode *node;
   struct work_queue *wq;
   
   vty_out (vty, 
-           "%c %8s %5s %8s %21s%s",
-           ' ', "List","(ms) ","Q. Runs","Cycle Counts   ",
+           "%c %8s %5s %8s %8s %21s%s",
+           ' ', "List","(ms) ","Q. Runs","Yields","Cycle Counts   ",
            VTY_NEWLINE);
   vty_out (vty,
-           "%c %8s %5s %8s %7s %6s %6s %s%s",
+           "%c %8s %5s %8s %8s %7s %6s %8s %6s %s%s",
            'P',
            "Items",
            "Hold",
-           "Total",
-           "Best","Gran.","Avg.", 
+           "Total","Total",
+           "Best","Gran.","Total","Avg.",
            "Name", 
            VTY_NEWLINE);
  
   for (ALL_LIST_ELEMENTS_RO (work_queues, node, wq))
     {
-      vty_out (vty,"%c %8d %5d %8ld %7d %6d %6u %s%s",
+      vty_out (vty,"%c %8d %5d %8ld %8ld %7d %6d %8ld %6u %s%s",
                (CHECK_FLAG (wq->flags, WQ_UNPLUGGED) ? ' ' : 'P'),
                listcount (wq->items),
                wq->spec.hold,
-               wq->runs,
-               wq->cycles.best, wq->cycles.granularity,
+               wq->runs, wq->yields,
+               wq->cycles.best, wq->cycles.granularity, wq->cycles.total,
                  (wq->runs) ? 
                    (unsigned int) (wq->cycles.total / wq->runs) : 0,
                wq->name,
@@ -212,6 +220,12 @@ DEFUN(show_work_queues,
     }
     
   return CMD_SUCCESS;
+}
+
+void
+workqueue_cmd_init (void)
+{
+  install_element (VIEW_NODE, &show_work_queues_cmd);
 }
 
 /* 'plug' a queue: Stop it from being scheduled,
@@ -260,7 +274,8 @@ work_queue_run (struct thread *thread)
   assert (wq && wq->items);
 
   /* calculate cycle granularity:
-   * list iteration == 1 cycle
+   * list iteration == 1 run
+   * listnode processing == 1 cycle
    * granularity == # cycles between checks whether we should yield.
    *
    * granularity should be > 0, and can increase slowly after each run to
@@ -319,6 +334,14 @@ work_queue_run (struct thread *thread)
 	{
 	  item->ran--;
 	  work_queue_item_requeue (wq, node);
+      /* If a single node is being used with a meta-queue (e.g., zebra),
+       * update the next node as we don't want to exit the thread and
+       * reschedule it after every node. By definition, WQ_REQUEUE is
+       * meant to continue the processing; the yield logic will kick in
+       * to terminate the thread when time has exceeded.
+       */
+      if (nnode == NULL)
+        nnode = node;
 	  break;
 	}
       case WQ_RETRY_NOW:
@@ -356,7 +379,7 @@ stats:
   /* we yielded, check whether granularity should be reduced */
   if (yielded && (cycles < wq->cycles.granularity))
     {
-      wq->cycles.granularity = ((cycles > 0) ? cycles 
+      wq->cycles.granularity = ((cycles > 0) ? cycles
                                              : WORK_QUEUE_MIN_GRANULARITY);
     }
   /* otherwise, should granularity increase? */
@@ -364,7 +387,7 @@ stats:
     {
       if (cycles > wq->cycles.best)
         wq->cycles.best = cycles;
-      
+
       /* along with yielded check, provides hysteresis for granularity */
       if (cycles > (wq->cycles.granularity * WQ_HYSTERESIS_FACTOR
                                            * WQ_HYSTERESIS_FACTOR))
@@ -376,6 +399,8 @@ stats:
   
   wq->runs++;
   wq->cycles.total += cycles;
+  if (yielded)
+    wq->yields++;
 
 #if 0
   printf ("%s: cycles %d, new: best %d, worst %d\n",

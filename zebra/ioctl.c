@@ -29,6 +29,7 @@
 #include "log.h"
 #include "privs.h"
 
+#include "vty.h"
 #include "zebra/rib.h"
 #include "zebra/rt.h"
 #include "zebra/interface.h"
@@ -79,7 +80,6 @@ if_ioctl (u_long request, caddr_t buffer)
   return 0;
 }
 
-#ifdef HAVE_IPV6
 static int
 if_ioctl_ipv6 (u_long request, caddr_t buffer)
 {
@@ -113,7 +113,6 @@ if_ioctl_ipv6 (u_long request, caddr_t buffer)
     }
   return 0;
 }
-#endif /* HAVE_IPV6 */
 
 /*
  * get interface metric
@@ -196,6 +195,7 @@ if_set_prefix (struct interface *ifp, struct connected *ifc)
   struct prefix_ipv4 *p;
 
   p = (struct prefix_ipv4 *) ifc->address;
+  rib_lookup_and_pushup (p, ifp->vrf_id);
 
   memset (&addreq, 0, sizeof addreq);
   strncpy ((char *)&addreq.ifra_name, ifp->name, sizeof addreq.ifra_name);
@@ -435,8 +435,6 @@ if_unset_flags (struct interface *ifp, uint64_t flags)
   return 0;
 }
 
-#ifdef HAVE_IPV6
-
 #ifdef LINUX_IPV6
 #ifndef _LINUX_IN6_H
 /* linux/include/net/ipv6.h */
@@ -592,5 +590,3 @@ if_prefix_delete_ipv6 (struct interface *ifp, struct connected *ifc)
 #endif /* HAVE_STRUCT_IN6_ALIASREQ */
 
 #endif /* LINUX_IPV6 */
-
-#endif /* HAVE_IPV6 */

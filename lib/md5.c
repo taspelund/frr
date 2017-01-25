@@ -306,7 +306,7 @@ unsigned char*  text;			/* pointer to data stream */
 int             text_len;		/* length of data stream */
 unsigned char*  key;			/* pointer to authentication key */
 int             key_len;		/* length of authentication key */
-uint8_t *       digest;			/* caller digest to be filled in */
+uint8_t*        digest;		        /* caller digest to be filled in */
 
 {
     MD5_CTX context;
@@ -360,7 +360,7 @@ uint8_t *       digest;			/* caller digest to be filled in */
 					 * pass */
     MD5Update(&context, k_ipad, 64);	/* start with inner pad */
     MD5Update(&context, text, text_len); /* then text of datagram */
-    MD5Final(digest, &context);	/* finish up 1st pass */
+    MD5Final((uint8_t *)digest, &context);	/* finish up 1st pass */
     /*
      * perform outer MD5
      */
@@ -369,5 +369,5 @@ uint8_t *       digest;			/* caller digest to be filled in */
     MD5Update(&context, k_opad, 64);	/* start with outer pad */
     MD5Update(&context, digest, 16);	/* then results of 1st
 					 * hash */
-    MD5Final(digest, &context);	/* finish up 2nd pass */
+    MD5Final((uint8_t *)digest, &context);	/* finish up 2nd pass */
 }

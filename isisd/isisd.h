@@ -23,6 +23,8 @@
 #ifndef ISISD_H
 #define ISISD_H
 
+#include "vty.h"
+
 #define ISISD_VERSION "0.0.7"
 
 #include "isisd/isis_constants.h"
@@ -30,6 +32,8 @@
 #include "isisd/isis_redist.h"
 #include "isis_flags.h"
 #include "dict.h"
+#include "isis_memory.h"
+#include "qobj.h"
 
 /* uncomment if you are a developer in bug hunt */
 /* #define EXTREME_DEBUG  */
@@ -44,9 +48,7 @@ struct isis
   struct list *area_list;	/* list of IS-IS areas */
   struct list *init_circ_list;
   struct list *nexthops;	/* IPv4 next hops from this IS */
-#ifdef HAVE_IPV6
   struct list *nexthops6;	/* IPv6 next hops from this IS */
-#endif				/* HAVE_IPV6 */
   u_char max_area_addrs;	/* maximumAreaAdresses */
   struct area_addr *man_area_addrs;	/* manualAreaAddresses */
   u_int32_t debugs;		/* bitmap for debug */
@@ -54,9 +56,12 @@ struct isis
   struct thread *t_dync_clean;	/* dynamic hostname cache cleanup thread */
 
   struct route_table *ext_info[REDIST_PROTOCOL_COUNT];
+
+  QOBJ_FIELDS
 };
 
 extern struct isis *isis;
+DECLARE_QOBJ_TYPE(isis_area)
 
 struct isis_area
 {
@@ -64,10 +69,8 @@ struct isis_area
   dict_t *lspdb[ISIS_LEVELS];			  /* link-state dbs */
   struct isis_spftree *spftree[ISIS_LEVELS];	  /* The v4 SPTs */
   struct route_table *route_table[ISIS_LEVELS];	  /* IPv4 routes */
-#ifdef HAVE_IPV6
   struct isis_spftree *spftree6[ISIS_LEVELS];	  /* The v6 SPTs */
   struct route_table *route_table6[ISIS_LEVELS];  /* IPv6 routes */
-#endif
 #define DEFAULT_LSP_MTU 1497
   unsigned int lsp_mtu;				  /* Size of LSPs to generate */
   struct list *circuit_list;	/* IS-IS circuits */
@@ -117,22 +120,16 @@ struct isis_area
   int ip_circuits;
   /* logging adjacency changes? */
   u_char log_adj_changes;
-#ifdef HAVE_IPV6
   int ipv6_circuits;
-#endif				/* HAVE_IPV6 */
   /* Counters */
   u_int32_t circuit_state_changes;
   struct isis_redist redist_settings[REDIST_PROTOCOL_COUNT]
                                     [ZEBRA_ROUTE_MAX + 1][ISIS_LEVELS];
   struct route_table *ext_reach[REDIST_PROTOCOL_COUNT][ISIS_LEVELS];
 
-#ifdef TOPOLOGY_GENERATE
-  struct list *topology;
-  u_char topology_baseis[ISIS_SYS_ID_LEN];  /* IS for the first IS emulated. */
-  char *topology_basedynh;                /* Dynamic hostname base. */
-  char top_params[200];                   /* FIXME: what is reasonable? */
-#endif /* TOPOLOGY_GENERATE */
+  QOBJ_FIELDS
 };
+DECLARE_QOBJ_TYPE(isis_area)
 
 void isis_init (void);
 void isis_new(unsigned long);

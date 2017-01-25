@@ -16,8 +16,6 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-  
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
 
 #include <zebra.h>
@@ -32,19 +30,22 @@
 
 #include "memory.h"
 #include "vrf.h"
+#include "memory_vty.h"
 #include "filter.h"
 #include "vty.h"
 #include "sigevent.h"
 #include "version.h"
+#include "prefix.h"
+#include "plist.h"
+#include "vrf.h"
 
 #include "pimd.h"
 #include "pim_version.h"
 #include "pim_signals.h"
 #include "pim_zebra.h"
-
-#ifdef PIM_ZCLIENT_DEBUG
-extern int zclient_debug;
-#endif
+#include "pim_msdp.h"
+#include "pim_iface.h"
+#include "pim_rp.h"
 
 extern struct host host;
 
@@ -68,14 +69,15 @@ zebra_capabilities_t _caps_p [] =
   ZCAP_NET_ADMIN,
   ZCAP_SYS_ADMIN,
   ZCAP_NET_RAW,
+  ZCAP_BIND,
 };
 
 /* pimd privileges to run with */
 struct zebra_privs_t pimd_privs =
 {
-#if defined(QUAGGA_USER) && defined(QUAGGA_GROUP)
-  .user = QUAGGA_USER,
-  .group = QUAGGA_GROUP,
+#if defined(FRR_USER) && defined(FRR_GROUP)
+  .user = FRR_USER,
+  .group = FRR_GROUP,
 #endif
 #ifdef VTY_GROUP
   .vty_group = VTY_GROUP,
@@ -102,18 +104,9 @@ Daemon which manages PIM.\n\n\
 -A, --vty_addr       Set vty's bind address\n\
 -P, --vty_port       Set vty's port number\n\
 -v, --version        Print program version\n\
-"
-
-#ifdef PIM_ZCLIENT_DEBUG
-"\
--Z, --debug_zclient  Enable zclient debugging\n\
-"
-#endif
-
-"\
 -h, --help           Display this help and exit\n\
 \n\
-Report bugs to %s\n", progname, PIMD_BUG_ADDRESS);
+Report bugs to %s\n", progname, PACKAGE_BUGREPORT);
   }
 
   exit (status);
@@ -132,10 +125,14 @@ int main(int argc, char** argv, char** envp) {
   umask(0027);
  
   progname = ((p = strrchr(argv[0], '/')) ? ++p : argv[0]);
- 
-  zlog_default = openzlog(progname, ZLOG_PIM,
+
+  zlog_default = openzlog(progname, ZLOG_PIM, 0,
 			  LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
-     
+  zprivs_init (&pimd_privs);
+#if defined(HAVE_CUMULUS)
+  zlog_set_level (NULL, ZLOG_DEST_SYSLOG, zlog_default->default_lvl);
+#endif
+
   /* this while just reads the options */                       
   while (1) {
     int opt;
@@ -168,14 +165,9 @@ int main(int argc, char** argv, char** envp) {
       break;
     case 'v':
       printf(PIMD_PROGNAME " version %s\n", PIMD_VERSION);
-      print_version(QUAGGA_PROGNAME);
+      print_version(progname);
       exit (0);
       break;
-#ifdef PIM_ZCLIENT_DEBUG
-    case 'Z':
-      zclient_debug = 1;
-      break;
-#endif
     case 'h':
       usage (0);
       break;
@@ -188,24 +180,29 @@ int main(int argc, char** argv, char** envp) {
   master = thread_master_create();
 
   zlog_notice("Quagga %s " PIMD_PROGNAME " %s starting",
-	      QUAGGA_VERSION, PIMD_VERSION);
+	      FRR_VERSION, PIMD_VERSION);
 
   /* 
    * Initializations
    */
-  zprivs_init (&pimd_privs);
   pim_signals_init();
   cmd_init(1);
   vty_init(master);
   memory_init();
-  vrf_init();
+  vrf_init ();
   access_list_init();
+  prefix_list_init ();
+  prefix_list_add_hook (pim_rp_prefix_list_update);
+  prefix_list_delete_hook (pim_rp_prefix_list_update);
+
+  pim_route_map_init ();
   pim_init();
+  pim_msdp_init (master);
 
   /*
    * Initialize zclient "update" and "lookup" sockets
    */
-  pim_zebra_init (master, zebra_sock_path);
+  pim_zebra_init(zebra_sock_path);
 
   zlog_notice("Loading configuration - begin");
 
@@ -234,7 +231,7 @@ int main(int argc, char** argv, char** envp) {
   vty_serv_sock(vty_addr, vty_port, PIM_VTYSH_PATH);
 
   zlog_notice("Quagga %s " PIMD_PROGNAME " %s starting, VTY interface at port TCP %d",
-	      QUAGGA_VERSION, PIMD_VERSION, vty_port);
+	      FRR_VERSION, PIMD_VERSION, vty_port);
 
 #ifdef PIM_DEBUG_BYDEFAULT
   zlog_notice("PIM_DEBUG_BYDEFAULT: Enabling all debug commands");
@@ -247,11 +244,6 @@ int main(int argc, char** argv, char** envp) {
   PIM_DO_DEBUG_ZEBRA;
 #endif
 
-#ifdef PIM_ZCLIENT_DEBUG
-  zlog_notice("PIM_ZCLIENT_DEBUG: zclient debugging is supported, mode is %s (see option -Z)",
-	      zclient_debug ? "ON" : "OFF");
-#endif
-
 #ifdef PIM_CHECK_RECV_IFINDEX_SANITY
   zlog_notice("PIM_CHECK_RECV_IFINDEX_SANITY: will match sock/recv ifindex");
 #ifdef PIM_REPORT_RECV_IFINDEX_MISMATCH
@@ -261,12 +253,6 @@ int main(int argc, char** argv, char** envp) {
 
 #ifdef PIM_UNEXPECTED_KERNEL_UPCALL
   zlog_notice("PIM_UNEXPECTED_KERNEL_UPCALL: report unexpected kernel upcall");
-#endif
-
-#ifdef HAVE_CLOCK_MONOTONIC
-  zlog_notice("HAVE_CLOCK_MONOTONIC");
-#else
-  zlog_notice("!HAVE_CLOCK_MONOTONIC");
 #endif
 
   while (thread_fetch(master, &thread))

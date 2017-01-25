@@ -45,6 +45,7 @@
 #include "prefix.h"
 #include "command.h"
 #include "memory.h"
+#include "zebra_memory.h"
 #include "stream.h"
 #include "ioctl.h"
 #include "connected.h"
@@ -69,8 +70,6 @@
 
 extern struct zebra_privs_t zserv_privs;
 
-/* Master of threads. */
-extern struct zebra_t zebrad;
 struct thread *t_irdp_raw;
 
 /* Timer interval of irdp. */
@@ -305,30 +304,31 @@ void process_solicit (struct interface *ifp)
 
 void irdp_finish()
 {
-
+  struct vrf *vrf;
   struct listnode *node, *nnode;
   struct interface *ifp;
   struct zebra_if *zi;
   struct irdp_interface *irdp;
 
   zlog_info("IRDP: Received shutdown notification.");
-  
-  for (ALL_LIST_ELEMENTS (iflist, node, nnode, ifp))
-    {
-      zi = ifp->info;
-      
-      if (!zi) 
-        continue;
-      irdp = &zi->irdp;
-      if (!irdp) 
-        continue;
+ 
+  RB_FOREACH (vrf, vrf_id_head, &vrfs_by_id)
+    for (ALL_LIST_ELEMENTS (vrf->iflist, node, nnode, ifp))
+      {
+        zi = ifp->info;
 
-      if (irdp->flags & IF_ACTIVE ) 
-        {
-	  irdp->flags |= IF_SHUTDOWN;
-	  irdp_advert_off(ifp);
-        }
-    }
+        if (!zi) 
+          continue;
+        irdp = &zi->irdp;
+        if (!irdp) 
+          continue;
+
+        if (irdp->flags & IF_ACTIVE ) 
+          {
+	    irdp->flags |= IF_SHUTDOWN;
+	    irdp_advert_off(ifp);
+          }
+      }
 }
 
 #endif /* HAVE_IRDP */

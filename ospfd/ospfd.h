@@ -24,10 +24,13 @@
 #define _ZEBRA_OSPFD_H
 
 #include <zebra.h>
+#include "qobj.h"
 #include "libospf.h"
 
 #include "filter.h"
 #include "log.h"
+
+#include "ospf_memory.h"
 
 #define OSPF_VERSION            2
 
@@ -77,6 +80,12 @@
 #define OSPF_LS_REFRESH_SHIFT       (60 * 15)
 #define OSPF_LS_REFRESH_JITTER      60
 
+struct ospf_external
+{
+  u_short instance;
+  struct route_table *external_info;
+};
+
 /* OSPF master for system wide configuration and variables. */
 struct ospf_master
 {
@@ -90,20 +99,45 @@ struct ospf_master
   struct list *iflist;
 
   /* Redistributed external information. */
-  struct route_table *external_info[ZEBRA_ROUTE_MAX + 1];
-#define EXTERNAL_INFO(T)      om->external_info[T]
-
-  /* OSPF start time. */
-  time_t start_time;
+  struct list *external[ZEBRA_ROUTE_MAX + 1];
+#define EXTERNAL_INFO(E)      (E->external_info)
 
   /* Various OSPF global configuration. */
   u_char options;
 #define OSPF_MASTER_SHUTDOWN (1 << 0) /* deferred-shutdown */  
 };
 
+struct ospf_redist
+{
+  u_short instance;
+
+  /* Redistribute metric info. */
+  struct
+  {
+    int type;                   /* External metric type (E1 or E2).  */
+    int value;		        /* Value for static metric (24-bit).
+				   -1 means metric value is not set. */
+  } dmetric;
+
+  /* For redistribute route map. */
+  struct
+  {
+    char *name;
+    struct route_map *map;
+  } route_map; /* +1 is for default-information */
+#define ROUTEMAP_NAME(R)   (R->route_map.name)
+#define ROUTEMAP(R)        (R->route_map.map)
+};
+
 /* OSPF instance structure. */
 struct ospf
 {
+  /* OSPF's running state based on the '[no] router ospf [<instance>]' config. */
+  u_char  oi_running;
+
+  /* OSPF instance ID  */
+  u_short instance;
+
   /* OSPF Router ID. */
   struct in_addr router_id;		/* Configured automatically. */
   struct in_addr router_id_static;	/* Configured manually. */
@@ -215,9 +249,10 @@ struct ospf
   struct thread *t_deferred_shutdown;	/* deferred/stub-router shutdown timer*/
 
   struct thread *t_write;
+#define OSPF_WRITE_INTERFACE_COUNT_DEFAULT    20
+  int write_oi_count;         /* Num of packets sent per thread invocation */
   struct thread *t_read;
   int fd;
-  unsigned int maxsndbuflen;
   struct stream *ibuf;
   struct list *oi_write_q;
   
@@ -230,31 +265,17 @@ struct ospf
 #define DISTRIBUTE_NAME(O,T)    (O)->dlist[T].name
 #define DISTRIBUTE_LIST(O,T)    (O)->dlist[T].list
 
-  /* Redistribute metric info. */
-  struct 
-  {
-    int type;                   /* External metric type (E1 or E2).  */
-    int value;		        /* Value for static metric (24-bit).
-				   -1 means metric value is not set. */
-  } dmetric [ZEBRA_ROUTE_MAX + 1];
+  /* OSPF redistribute configuration */
+  struct list *redist[ZEBRA_ROUTE_MAX + 1];
 
   /* Redistribute tag info. */
-  route_tag_t dtag [ZEBRA_ROUTE_MAX + 1];
+  route_tag_t dtag[ZEBRA_ROUTE_MAX + 1]; //Pending: cant configure as of now
 
-  /* For redistribute route map. */
-  struct
-  {
-    char *name;
-    struct route_map *map;
-  } route_map [ZEBRA_ROUTE_MAX + 1]; /* +1 is for default-information */
-#define ROUTEMAP_NAME(O,T)   (O)->route_map[T].name
-#define ROUTEMAP(O,T)        (O)->route_map[T].map
-  
   int default_metric;		/* Default metric for redistribute. */
 
 #define OSPF_LSA_REFRESHER_GRANULARITY 10
 #define OSPF_LSA_REFRESHER_SLOTS ((OSPF_LS_REFRESH_TIME + \
-                                  OSPF_LS_REFRESH_SHIFT)/10 + 1)
+                                  OSPF_LS_REFRESH_SHIFT)/OSPF_LSA_REFRESHER_GRANULARITY + 1)
   struct
   {
     u_int16_t index;
@@ -278,8 +299,14 @@ struct ospf
   /* Statistics for LSA used for new instantiation. */
   u_int32_t rx_lsa_count;
  
+  /* Counter of "ip ospf area x.x.x.x" */
+  u_int32_t if_ospf_cli_count;
+
   struct route_table *distance_table;
+
+  QOBJ_FIELDS
 };
+DECLARE_QOBJ_TYPE(ospf)
 
 /* OSPF area structure. */
 struct ospf_area
@@ -303,10 +330,6 @@ struct ospf_area
 
   /* Configured variables. */
   int external_routing;                 /* ExternalRoutingCapability. */
-#define OSPF_AREA_DEFAULT       0
-#define OSPF_AREA_STUB          1
-#define OSPF_AREA_NSSA          2
-#define OSPF_AREA_TYPE_MAX	3
   int no_summary;                       /* Don't inject summaries into stub.*/
   int shortcut_configured;              /* Area configured as shortcut. */
 #define OSPF_SHORTCUT_DEFAULT	0
@@ -505,7 +528,9 @@ extern int ospf_zlog;
 /* Prototypes. */
 extern const char *ospf_redist_string(u_int route_type);
 extern struct ospf *ospf_lookup (void);
+extern struct ospf *ospf_lookup_instance (u_short);
 extern struct ospf *ospf_get (void);
+extern struct ospf *ospf_get_instance (u_short);
 extern void ospf_finish (struct ospf *);
 extern void ospf_router_id_update (struct ospf *ospf);
 extern int ospf_network_set (struct ospf *, struct prefix_ipv4 *,
@@ -557,12 +582,11 @@ extern struct ospf_area *ospf_area_lookup_by_area_id (struct ospf *,
 extern void ospf_area_add_if (struct ospf_area *, struct ospf_interface *);
 extern void ospf_area_del_if (struct ospf_area *, struct ospf_interface *);
 
-extern void ospf_interface_area_set (struct interface *);
-extern void ospf_interface_area_unset (struct interface *);
-
 extern void ospf_route_map_init (void);
 extern void ospf_snmp_init (void);
 
 extern void ospf_master_init (void);
 
+extern int ospf_interface_set (struct interface *ifp, struct in_addr area_id);
+extern int ospf_interface_unset (struct interface *ifp);
 #endif /* _ZEBRA_OSPFD_H */

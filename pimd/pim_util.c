@@ -16,13 +16,12 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-  
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
 
 #include <zebra.h>
 
 #include "log.h"
+#include "prefix.h"
 
 #include "pim_util.h"
 
@@ -100,23 +99,48 @@ uint16_t igmp_msg_decode8to16(uint8_t code)
 
 void pim_pkt_dump(const char *label, const uint8_t *buf, int size)
 {
-  char dump_buf[1000];
-  int i = 0;
-  int j = 0;
-
-  for (; i < size; ++i, j += 2) {
-    int left = sizeof(dump_buf) - j;
-    if (left < 4) {
-      if (left > 1) {
-	strcat(dump_buf + j, "!"); /* mark as truncated */
-      }
-      break;
-    }
-    snprintf(dump_buf + j, left, "%02x", buf[i]);
-  }
-
-  zlog_debug("%s: pkt dump size=%d: %s",
+  zlog_debug("%s: pkt dump size=%d",
 	     label,
-	     size,
-	     dump_buf);
+	     size);
+  zlog_hexdump(buf, size);
+}
+
+int
+pim_is_group_224_0_0_0_24 (struct in_addr group_addr)
+{
+  static int first = 1;
+  static struct prefix group_224;
+  struct prefix group;
+
+  if (first)
+    {
+      str2prefix ("224.0.0.0/24", &group_224);
+      first = 0;
+    }
+
+  group.family = AF_INET;
+  group.u.prefix4 = group_addr;
+  group.prefixlen = 32;
+
+  return prefix_match (&group_224, &group);
+}
+
+int
+pim_is_group_224_4 (struct in_addr group_addr)
+{
+  static int first = 1;
+  static struct prefix group_all;
+  struct prefix group;
+
+  if (first)
+    {
+      str2prefix ("224.0.0.0/4", &group_all);
+      first = 0;
+    }
+
+  group.family = AF_INET;
+  group.u.prefix4 = group_addr;
+  group.prefixlen = 32;
+
+  return prefix_match (&group_all, &group);
 }

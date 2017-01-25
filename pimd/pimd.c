@@ -16,15 +16,16 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-  
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
 
 #include <zebra.h>
 
 #include "log.h"
 #include "memory.h"
-#include "vrf.h"
+#include "if.h"
+#include "prefix.h"
+#include "vty.h"
+#include "plist.h"
 
 #include "pimd.h"
 #include "pim_cmd.h"
@@ -37,31 +38,28 @@
 #include "pim_rpf.h"
 #include "pim_ssmpingd.h"
 #include "pim_static.h"
+#include "pim_rp.h"
 
 const char *const PIM_ALL_SYSTEMS      = MCAST_ALL_SYSTEMS;
 const char *const PIM_ALL_ROUTERS      = MCAST_ALL_ROUTERS;
 const char *const PIM_ALL_PIM_ROUTERS  = MCAST_ALL_PIM_ROUTERS;
 const char *const PIM_ALL_IGMP_ROUTERS = MCAST_ALL_IGMP_ROUTERS;
 
-struct thread_master     *master = 0;
+struct thread_master     *master = NULL;
 uint32_t                  qpim_debugs = 0;
 int                       qpim_mroute_socket_fd = -1;
 int64_t                   qpim_mroute_socket_creation = 0; /* timestamp of creation */
-struct thread            *qpim_mroute_socket_reader = 0;
 int                       qpim_mroute_oif_highest_vif_index = -1;
-struct list              *qpim_channel_oil_list = 0;
 int                       qpim_t_periodic = PIM_DEFAULT_T_PERIODIC; /* Period between Join/Prune Messages */
-struct list              *qpim_upstream_list = 0;
-struct zclient           *qpim_zclient_update = 0;
-struct zclient           *qpim_zclient_lookup = 0;
+struct zclient           *qpim_zclient_update = NULL;
 struct pim_assert_metric  qpim_infinite_assert_metric;
-long                      qpim_rpf_cache_refresh_delay_msec = 10000;
-struct thread            *qpim_rpf_cache_refresher = 0;
+long                      qpim_rpf_cache_refresh_delay_msec = 50;
+struct thread            *qpim_rpf_cache_refresher = NULL;
 int64_t                   qpim_rpf_cache_refresh_requests = 0;
 int64_t                   qpim_rpf_cache_refresh_events = 0;
 int64_t                   qpim_rpf_cache_refresh_last =  0;
 struct in_addr            qpim_inaddr_any;
-struct list              *qpim_ssmpingd_list = 0;
+struct list              *qpim_ssmpingd_list = NULL;
 struct in_addr            qpim_ssmpingd_group_addr;
 int64_t                   qpim_scan_oil_events = 0;
 int64_t                   qpim_scan_oil_last = 0;
@@ -69,25 +67,40 @@ int64_t                   qpim_mroute_add_events = 0;
 int64_t                   qpim_mroute_add_last = 0;
 int64_t                   qpim_mroute_del_events = 0;
 int64_t                   qpim_mroute_del_last = 0;
-struct list              *qpim_static_route_list = 0;
+struct list              *qpim_static_route_list = NULL;
+unsigned int              qpim_keep_alive_time = PIM_KEEPALIVE_PERIOD;
+signed int                qpim_rp_keep_alive_time = 0;
+int64_t                   qpim_nexthop_lookups = 0;
+int                       qpim_packet_process = PIM_DEFAULT_PACKET_PROCESS;
+
+int32_t qpim_register_suppress_time = PIM_REGISTER_SUPPRESSION_TIME_DEFAULT;
+int32_t qpim_register_probe_time = PIM_REGISTER_PROBE_TIME_DEFAULT;
 
 static void pim_free()
 {
   pim_ssmpingd_destroy();
 
-  if (qpim_channel_oil_list)
-    list_free(qpim_channel_oil_list);
+  pim_oil_terminate ();
 
-  if (qpim_upstream_list)
-    list_free(qpim_upstream_list);
+  pim_upstream_terminate ();
 
   if (qpim_static_route_list)
      list_free(qpim_static_route_list);
+
+  pim_route_map_terminate();
+
+  pim_if_terminate ();
+  pim_rp_free ();
+  pim_route_map_terminate();
 }
 
 void pim_init()
 {
   srandom(time(NULL));
+
+  qpim_rp_keep_alive_time = PIM_RP_KEEPALIVE_PERIOD;
+
+  pim_rp_init ();
 
   if (!inet_aton(PIM_ALL_PIM_ROUTERS, &qpim_all_pim_routers_addr)) {
     zlog_err("%s %s: could not solve %s to group address: errno=%d: %s",
@@ -97,22 +110,9 @@ void pim_init()
     return;
   }
 
-  qpim_channel_oil_list = list_new();
-  if (!qpim_channel_oil_list) {
-    zlog_err("%s %s: failure: channel_oil_list=list_new()",
-	     __FILE__, __PRETTY_FUNCTION__);
-    return;
-  }
-  qpim_channel_oil_list->del = (void (*)(void *)) pim_channel_oil_free;
+  pim_oil_init ();
 
-  qpim_upstream_list = list_new();
-  if (!qpim_upstream_list) {
-    zlog_err("%s %s: failure: upstream_list=list_new()",
-	     __FILE__, __PRETTY_FUNCTION__);
-    pim_free();
-    return;
-  }
-  qpim_upstream_list->del = (void (*)(void *)) pim_upstream_free;
+  pim_upstream_init ();
 
   qpim_static_route_list = list_new();
   if (!qpim_static_route_list) {
@@ -124,9 +124,6 @@ void pim_init()
 
   qpim_mroute_socket_fd = -1; /* mark mroute as disabled */
   qpim_mroute_oif_highest_vif_index = -1;
-
-  zassert(!qpim_debugs);
-  zassert(!PIM_MROUTE_IS_ENABLED);
 
   qpim_inaddr_any.s_addr = PIM_NET_INADDR_ANY;
 
@@ -143,12 +140,12 @@ void pim_init()
   qpim_infinite_assert_metric.route_metric      = PIM_ASSERT_ROUTE_METRIC_MAX;
   qpim_infinite_assert_metric.ip_address        = qpim_inaddr_any;
 
+  pim_if_init();
   pim_cmd_init();
   pim_ssmpingd_init();
 }
 
 void pim_terminate()
 {
-  vrf_terminate();
   pim_free();
 }

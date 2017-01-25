@@ -140,6 +140,31 @@ ospf6_router_lsa_show (struct vty *vty, struct ospf6_lsa *lsa)
   return 0;
 }
 
+static void
+ospf6_router_lsa_options_set (struct ospf6_area *oa,
+			      struct ospf6_router_lsa *router_lsa)
+{
+  OSPF6_OPT_CLEAR_ALL (router_lsa->options);
+  memcpy (router_lsa->options, oa->options, 3);
+
+  if (ospf6_is_router_abr (ospf6))
+    SET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_B);
+  else
+    UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_B);
+
+  if (!IS_AREA_STUB (oa) && ospf6_asbr_is_asbr (oa->ospf6))
+    {
+      SET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_E);
+    }
+  else
+    {
+      UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_E);
+    }
+
+  UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_V);
+  UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_W);
+}
+
 int
 ospf6_router_is_stub_router (struct ospf6_lsa *lsa)
 {
@@ -194,23 +219,7 @@ ospf6_router_lsa_originate (struct thread *thread)
   router_lsa = (struct ospf6_router_lsa *)
     ((caddr_t) lsa_header + sizeof (struct ospf6_lsa_header));
 
-  OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_V6);
-  OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_E);
-  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_MC);
-  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_N);
-  OSPF6_OPT_SET (router_lsa->options, OSPF6_OPT_R);
-  OSPF6_OPT_CLEAR (router_lsa->options, OSPF6_OPT_DC);
-
-  if (ospf6_is_router_abr (ospf6))
-    SET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_B);
-  else
-    UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_B);
-  if (ospf6_asbr_is_asbr (ospf6))
-    SET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_E);
-  else
-    UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_E);
-  UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_V);
-  UNSET_FLAG (router_lsa->bits, OSPF6_ROUTER_BIT_W);
+  ospf6_router_lsa_options_set (oa, router_lsa);
 
   /* describe links for each interfaces */
   lsdesc = (struct ospf6_router_lsdesc *)
@@ -228,14 +237,14 @@ ospf6_router_lsa_originate (struct thread *thread)
       for (ALL_LIST_ELEMENTS_RO (oi->neighbor_list, j, on))
         if (on->state == OSPF6_NEIGHBOR_FULL)
           count++;
-      
+
       if (count == 0)
         continue;
 
       /* Multiple Router-LSA instance according to size limit setting */
       if ( (oa->router_lsa_size_limit != 0)
-          && ((size_t)((char *)lsdesc - buffer)
-                 + sizeof (struct ospf6_router_lsdesc)
+	   && ((size_t)((char *)lsdesc - buffer)
+	       + sizeof (struct ospf6_router_lsdesc)
                > oa->router_lsa_size_limit))
         {
           if ((caddr_t) lsdesc == (caddr_t) router_lsa +
@@ -314,7 +323,7 @@ ospf6_router_lsa_originate (struct thread *thread)
   lsa_header->adv_router = oa->ospf6->router_id;
   lsa_header->seqnum =
     ospf6_new_ls_seqnum (lsa_header->type, lsa_header->id,
-			 lsa_header->adv_router, oa->lsdb);
+                         lsa_header->adv_router, oa->lsdb);
   lsa_header->length = htons ((caddr_t) lsdesc - (caddr_t) buffer);
 
   /* LSA checksum */
@@ -331,13 +340,24 @@ ospf6_router_lsa_originate (struct thread *thread)
   /* Do premature-aging of rest, undesired Router-LSAs */
   type = ntohs (OSPF6_LSTYPE_ROUTER);
   router = oa->ospf6->router_id;
+  count = 0;
   for (lsa = ospf6_lsdb_type_router_head (type, router, oa->lsdb); lsa;
        lsa = ospf6_lsdb_type_router_next (type, router, lsa))
     {
       if (ntohl (lsa->header->id) < link_state_id)
         continue;
       ospf6_lsa_purge (lsa);
+      count++;
     }
+
+  /*
+   * Waiting till the LSA is actually removed from the database to trigger
+   * SPF delays network convergence. Unlike IPv4, for an ABR, when all
+   * interfaces associated with an area are gone, triggering an SPF right away
+   * helps convergence with inter-area routes.
+   */
+  if (count && !link_state_id)
+    ospf6_spf_schedule (oa->ospf6, OSPF6_SPF_FLAGS_ROUTER_LSA_ORIGINATED);
 
   return 0;
 }
@@ -435,7 +455,15 @@ ospf6_network_lsa_originate (struct thread *thread)
   if (oi->state != OSPF6_INTERFACE_DR)
     {
       if (old)
-        ospf6_lsa_purge (old);
+	{
+	  ospf6_lsa_purge (old);
+	    /*
+	     * Waiting till the LSA is actually removed from the database to
+	     * trigger SPF delays network convergence.
+	     */
+	  ospf6_spf_schedule (oi->area->ospf6,
+			      OSPF6_SPF_FLAGS_NETWORK_LSA_ORIGINATED);
+	}
       return 0;
     }
 
@@ -444,11 +472,11 @@ ospf6_network_lsa_originate (struct thread *thread)
 
   /* If none of neighbor is adjacent to us */
   count = 0;
-  
+
   for (ALL_LIST_ELEMENTS_RO (oi->neighbor_list, i, on))
     if (on->state == OSPF6_NEIGHBOR_FULL)
       count++;
-  
+
   if (count == 0)
     {
       if (IS_OSPF6_DEBUG_ORIGINATE (NETWORK))
@@ -854,7 +882,7 @@ ospf6_intra_prefix_lsa_originate_stub (struct thread *thread)
   struct listnode *i, *j;
   int full_count = 0;
   unsigned short prefix_num = 0;
-  char buf[BUFSIZ];
+  char buf[PREFIX2STR_BUFFER];
   struct ospf6_route_table *route_advertise;
 
   oa = (struct ospf6_area *) THREAD_ARG (thread);
@@ -1007,7 +1035,7 @@ ospf6_intra_prefix_lsa_originate_transit (struct thread *thread)
   struct ospf6_link_lsa *link_lsa;
   char *start, *end, *current;
   u_int16_t type;
-  char buf[BUFSIZ];
+  char buf[PREFIX2STR_BUFFER];
 
   oi = (struct ospf6_interface *) THREAD_ARG (thread);
   oi->thread_intra_prefix_lsa = NULL;
@@ -1054,7 +1082,7 @@ ospf6_intra_prefix_lsa_originate_transit (struct thread *thread)
   for (ALL_LIST_ELEMENTS_RO (oi->neighbor_list, i, on))
     if (on->state == OSPF6_NEIGHBOR_FULL)
       full_count++;
-  
+
   if (full_count == 0)
     {
       if (IS_OSPF6_DEBUG_ORIGINATE (INTRA_PREFIX))
@@ -1190,10 +1218,10 @@ ospf6_intra_prefix_lsa_add (struct ospf6_lsa *lsa)
   struct ospf6_intra_prefix_lsa *intra_prefix_lsa;
   struct prefix ls_prefix;
   struct ospf6_route *route, *ls_entry;
-  int i, prefix_num;
+  int prefix_num;
   struct ospf6_prefix *op;
   char *start, *current, *end;
-  char buf[64];
+  char buf[PREFIX2STR_BUFFER];
   struct interface *ifp;
   int direct_connect = 0;
 
@@ -1285,13 +1313,11 @@ ospf6_intra_prefix_lsa_add (struct ospf6_lsa *lsa)
         {
           ifp = if_lookup_prefix(&route->prefix);
           if (ifp)
-            route->nexthop[0].ifindex = ifp->ifindex;
+	    ospf6_route_add_nexthop (route, ifp->ifindex, NULL);
         }
       else
         {
-          for (i = 0; ospf6_nexthop_is_set (&ls_entry->nexthop[i]) &&
-               i < OSPF6_MULTI_PATH_LIMIT; i++)
-            ospf6_nexthop_copy (&route->nexthop[i], &ls_entry->nexthop[i]);
+	  ospf6_route_copy_nexthops (route, ls_entry);
         }
 
       if (IS_OSPF6_DEBUG_EXAMIN (INTRA_PREFIX))
@@ -1318,7 +1344,7 @@ ospf6_intra_prefix_lsa_remove (struct ospf6_lsa *lsa)
   int prefix_num;
   struct ospf6_prefix *op;
   char *start, *current, *end;
-  char buf[64];
+  char buf[PREFIX2STR_BUFFER];
 
   if (IS_OSPF6_DEBUG_EXAMIN (INTRA_PREFIX))
     zlog_debug ("%s disappearing", lsa->name);
@@ -1429,7 +1455,11 @@ ospf6_intra_route_calculation (struct ospf6_area *oa)
           if (hook_add)
             (*hook_add) (route);
         }
-
+      else
+	{
+	  /* Redo the summaries as things might have changed */
+	  ospf6_abr_originate_summary (route);
+	}
       route->flag = 0;
     }
 
@@ -1455,11 +1485,11 @@ ospf6_brouter_debug_print (struct ospf6_route *brouter)
   ospf6_linkstate_prefix2str (&brouter->prefix, destination,
                               sizeof (destination));
 
-  quagga_gettime (QUAGGA_CLK_MONOTONIC, &now);
+  monotime(&now);
   timersub (&now, &brouter->installed, &res);
   timerstring (&res, installed, sizeof (installed));
 
-  quagga_gettime (QUAGGA_CLK_MONOTONIC, &now);
+  monotime(&now);
   timersub (&now, &brouter->changed, &res);
   timerstring (&res, changed, sizeof (changed));
 
@@ -1487,7 +1517,7 @@ ospf6_brouter_debug_print (struct ospf6_route *brouter)
              id, adv_router);
   zlog_info ("  options: %s router-bits: %s metric-type: %d metric: %d/%d",
              options, capa, brouter->path.metric_type,
-             brouter->path.cost, brouter->path.cost_e2);
+             brouter->path.cost, brouter->path.u.cost_e2);
 }
 
 void
@@ -1515,7 +1545,7 @@ ospf6_intra_brouter_calculation (struct ospf6_area *oa)
       inet_ntop (AF_INET, &brouter_id, brouter_name, sizeof (brouter_name));
       if (brouter->path.area_id != oa->area_id)
         continue;
-      brouter->flag = OSPF6_ROUTE_REMOVE;
+      SET_FLAG (brouter->flag, OSPF6_ROUTE_REMOVE);
 
       if (IS_OSPF6_DEBUG_BROUTER_SPECIFIC_ROUTER_ID (brouter_id) ||
           IS_OSPF6_DEBUG_ROUTE (MEMORY))
@@ -1609,9 +1639,11 @@ ospf6_intra_brouter_calculation (struct ospf6_area *oa)
               IS_OSPF6_DEBUG_BROUTER_SPECIFIC_AREA_ID (oa->area_id))
             zlog_info ("brouter %s still exists via area %s",
                        brouter_name, oa->name);
+          /* But re-originate summaries */
+	  ospf6_abr_originate_summary (brouter);
         }
-
-      brouter->flag = 0;
+      UNSET_FLAG (brouter->flag, OSPF6_ROUTE_ADD);
+      UNSET_FLAG (brouter->flag, OSPF6_ROUTE_CHANGE);
     }
 
   if (IS_OSPF6_DEBUG_BROUTER_SPECIFIC_AREA_ID (oa->area_id))
@@ -1698,8 +1730,9 @@ DEFUN (debug_ospf6_brouter_router,
        "Specify border-router's router-id\n"
       )
 {
+  int idx_ipv4 = 4;
   u_int32_t router_id;
-  inet_pton (AF_INET, argv[0], &router_id);
+  inet_pton (AF_INET, argv[idx_ipv4]->arg, &router_id);
   OSPF6_DEBUG_BROUTER_SPECIFIC_ROUTER_ON (router_id);
   return CMD_SUCCESS;
 }
@@ -1728,8 +1761,9 @@ DEFUN (debug_ospf6_brouter_area,
        "Specify Area-ID\n"
       )
 {
+  int idx_ipv4 = 4;
   u_int32_t area_id;
-  inet_pton (AF_INET, argv[0], &area_id);
+  inet_pton (AF_INET, argv[idx_ipv4]->arg, &area_id);
   OSPF6_DEBUG_BROUTER_SPECIFIC_AREA_ON (area_id);
   return CMD_SUCCESS;
 }

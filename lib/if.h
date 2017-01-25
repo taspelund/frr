@@ -23,6 +23,11 @@ Boston, MA 02111-1307, USA.  */
 
 #include "zebra.h"
 #include "linklist.h"
+#include "memory.h"
+#include "qobj.h"
+
+DECLARE_MTYPE(IF)
+DECLARE_MTYPE(CONNECTED_LABEL)
 
 /* Interface link-layer type, if known. Derived from:
  *
@@ -141,9 +146,13 @@ struct if_stats
 #define MAX_CLASS_TYPE          8
 #define MAX_PKT_LOSS            50.331642
 
-/* Link Parameters Status: 0: unset, 1: set, */
+/*
+ * Link Parameters Status:
+ *  equal to 0: unset
+ *  different from 0: set
+ */
 #define LP_UNSET                0x0000
-#define LP_TE                   0x0001
+#define LP_TE_METRIC            0x0001
 #define LP_MAX_BW               0x0002
 #define LP_MAX_RSV_BW           0x0004
 #define LP_UNRSV_BW             0x0008
@@ -169,6 +178,7 @@ struct if_stats
 struct if_link_params {
   u_int32_t lp_status;   /* Status of Link Parameters: */
   u_int32_t te_metric;   /* Traffic Engineering metric */
+  float default_bw;
   float max_bw;          /* Maximum Bandwidth */
   float max_rsv_bw;      /* Maximum Reservable Bandwidth */
   float unrsv_bw[MAX_CLASS_TYPE];     /* Unreserved Bandwidth per Class Type (8) */
@@ -204,18 +214,20 @@ struct interface
      deleted interfaces). */
   ifindex_t ifindex;
 #define IFINDEX_INTERNAL	0
+#define IFINDEX_DELETED         INT_MAX
 
   /* Zebra internal interface status */
   u_char status;
 #define ZEBRA_INTERFACE_ACTIVE     (1 << 0)
 #define ZEBRA_INTERFACE_SUB        (1 << 1)
 #define ZEBRA_INTERFACE_LINKDETECTION (1 << 2)
-  
+#define ZEBRA_INTERFACE_VRF_LOOPBACK (1 << 3)
+
   /* Interface flags. */
   uint64_t flags;
 
   /* Interface metric */
-  int metric;
+  uint32_t metric;
 
   /* Interface MTU. */
   unsigned int mtu;    /* IPv4 MTU */
@@ -242,8 +254,14 @@ struct interface
   /* Connected address list. */
   struct list *connected;
 
+  /* Neighbor connected address list. */
+  struct list *nbr_connected;
+
   /* Daemon specific interface data pointer. */
   void *info;
+
+  char ptm_enable;             /* Should we look at ptm_status ? */
+  char ptm_status;
 
   /* Statistics fileds. */
 #ifdef HAVE_PROC_NET_DEV
@@ -253,8 +271,12 @@ struct interface
   struct if_data stats;
 #endif /* HAVE_NET_RT_IFLIST */
 
+  struct route_node *node;
   vrf_id_t vrf_id;
+
+  QOBJ_FIELDS
 };
+DECLARE_QOBJ_TYPE(interface)
 
 /* Connected address structure. */
 struct connected
@@ -299,6 +321,16 @@ struct connected
 
   /* Label for Linux 2.2.X and upper. */
   char *label;
+};
+
+/* Nbr Connected address structure. */
+struct nbr_connected
+{
+  /* Attached interface. */
+  struct interface *ifp;
+
+  /* Address of connected network. */
+  struct prefix *address;
 };
 
 /* Does the destination field contain a peer address? */
@@ -356,19 +388,21 @@ struct connected
 #endif /* IFF_VIRTUAL */
 
 /* Prototypes. */
-extern int if_cmp_func (struct interface *, struct interface *);
+extern int if_cmp_name_func (char *, char *);
 extern struct interface *if_create (const char *name, int namelen);
 extern struct interface *if_lookup_by_index (ifindex_t);
-extern struct interface *if_lookup_exact_address (struct in_addr);
-extern struct interface *if_lookup_address (struct in_addr);
+extern struct interface *if_lookup_exact_address (void *matchaddr, int family);
+extern struct connected *if_lookup_address (void *matchaddr, int family);
 extern struct interface *if_lookup_prefix (struct prefix *prefix);
 
+extern void if_update_vrf (struct interface *, const char *name, int namelen,
+                                vrf_id_t vrf_id);
 extern struct interface *if_create_vrf (const char *name, int namelen,
                                 vrf_id_t vrf_id);
 extern struct interface *if_lookup_by_index_vrf (ifindex_t, vrf_id_t vrf_id);
-extern struct interface *if_lookup_exact_address_vrf (struct in_addr,
+extern struct interface *if_lookup_exact_address_vrf (void *matchaddr, int family,
                                 vrf_id_t vrf_id);
-extern struct interface *if_lookup_address_vrf (struct in_addr,
+extern struct connected *if_lookup_address_vrf (void *matchaddr, int family,
                                 vrf_id_t vrf_id);
 extern struct interface *if_lookup_prefix_vrf (struct prefix *prefix,
                                 vrf_id_t vrf_id);
@@ -378,6 +412,7 @@ extern struct interface *if_lookup_prefix_vrf (struct prefix *prefix,
 extern struct interface *if_lookup_by_name (const char *ifname);
 extern struct interface *if_get_by_name (const char *ifname);
 
+extern struct interface *if_lookup_by_name_all_vrf (const char *ifname);
 extern struct interface *if_lookup_by_name_vrf (const char *ifname,
                                 vrf_id_t vrf_id);
 extern struct interface *if_get_by_name_vrf (const char *ifname,
@@ -393,7 +428,7 @@ extern struct interface *if_get_by_name_len(const char *ifname,size_t namelen);
 extern struct interface *if_lookup_by_name_len_vrf(const char *ifname,
                                 size_t namelen, vrf_id_t vrf_id);
 extern struct interface *if_get_by_name_len_vrf(const char *ifname,
-                                size_t namelen, vrf_id_t vrf_id);
+				size_t namelen, vrf_id_t vrf_id, int vty);
 
 
 /* Delete the interface, but do not free the structure, and leave it in the
@@ -408,13 +443,15 @@ extern void if_delete (struct interface *);
 extern int if_is_up (struct interface *);
 extern int if_is_running (struct interface *);
 extern int if_is_operative (struct interface *);
+extern int if_is_no_ptm_operative (struct interface *);
 extern int if_is_loopback (struct interface *);
 extern int if_is_broadcast (struct interface *);
 extern int if_is_pointopoint (struct interface *);
 extern int if_is_multicast (struct interface *);
 extern void if_add_hook (int, int (*)(struct interface *));
-extern void if_init (vrf_id_t, struct list **);
-extern void if_terminate (vrf_id_t, struct list **);
+extern void if_init (struct list **);
+extern void if_cmd_init (void);
+extern void if_terminate (struct list **);
 extern void if_dump_all (void);
 extern const char *if_flag_dump(unsigned long);
 extern const char *if_link_type_str (enum zebra_link_type);
@@ -440,32 +477,16 @@ extern struct connected  *connected_add_by_prefix (struct interface *,
                                             struct prefix *);
 extern struct connected  *connected_delete_by_prefix (struct interface *, 
                                                struct prefix *);
-extern struct connected  *connected_lookup_address (struct interface *, 
-                                             struct in_addr);
-
-#ifndef HAVE_IF_NAMETOINDEX
-extern ifindex_t if_nametoindex (const char *);
-#endif
-#ifndef HAVE_IF_INDEXTONAME
-extern char *if_indextoname (ifindex_t, char *);
-#endif
+extern struct connected  *connected_lookup_prefix (struct interface *,
+                                                   struct prefix *);
+extern struct connected  *connected_lookup_prefix_exact (struct interface *,
+                                                   struct prefix *);
+extern struct nbr_connected *nbr_connected_new (void);
+extern void nbr_connected_free (struct nbr_connected *);
+struct nbr_connected *nbr_connected_check (struct interface *, struct prefix *);
 
 /* link parameters */
 struct if_link_params *if_link_params_get (struct interface *);
 void if_link_params_free (struct interface *);
-
-/* Exported variables. */
-extern struct list *iflist;
-extern struct cmd_element interface_desc_cmd;
-extern struct cmd_element no_interface_desc_cmd;
-extern struct cmd_element interface_cmd;
-extern struct cmd_element no_interface_cmd;
-extern struct cmd_element interface_vrf_cmd;
-extern struct cmd_element no_interface_vrf_cmd;
-extern struct cmd_element interface_pseudo_cmd;
-extern struct cmd_element no_interface_pseudo_cmd;
-extern struct cmd_element show_address_cmd;
-extern struct cmd_element show_address_vrf_cmd;
-extern struct cmd_element show_address_vrf_all_cmd;
 
 #endif /* _ZEBRA_IF_H */

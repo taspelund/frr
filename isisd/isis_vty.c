@@ -32,10 +32,9 @@
 static struct isis_circuit *
 isis_circuit_lookup (struct vty *vty)
 {
-  struct interface *ifp;
+  struct interface *ifp = VTY_GET_CONTEXT(interface);
   struct isis_circuit *circuit;
 
-  ifp = (struct interface *) vty->index;
   if (!ifp)
     {
       vty_out (vty, "Invalid interface %s", VTY_NEWLINE);
@@ -55,20 +54,19 @@ isis_circuit_lookup (struct vty *vty)
 
 DEFUN (ip_router_isis,
        ip_router_isis_cmd,
-       "(ip|ipv6) router isis WORD",
+       "ip router isis WORD",
        "Interface Internet Protocol config commands\n"
        "IP router interface commands\n"
        "IS-IS Routing for IP\n"
        "Routing process tag\n")
 {
-  struct interface *ifp;
+  int idx_afi = 0;
+  int idx_word = 3;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct isis_circuit *circuit;
   struct isis_area *area;
-  const char *af = argv[0];
-  const char *area_tag = argv[1];
-
-  ifp = (struct interface *) vty->index;
-  assert (ifp);
+  const char *af = argv[idx_afi]->arg;
+  const char *area_tag = argv[idx_word]->arg;
 
   /* Prevent more than one area per circuit */
   circuit = circuit_scan_by_ifp (ifp);
@@ -106,33 +104,40 @@ DEFUN (ip_router_isis,
   return CMD_SUCCESS;
 }
 
-DEFUN (no_ip_router_isis,
-       no_ip_router_isis_cmd,
-       "no (ip|ipv6) router isis WORD",
-       NO_STR
+DEFUN (ip6_router_isis,
+       ip6_router_isis_cmd,
+       "ipv6 router isis WORD",
        "Interface Internet Protocol config commands\n"
        "IP router interface commands\n"
        "IS-IS Routing for IP\n"
        "Routing process tag\n")
 {
-  struct interface *ifp;
+  return ip_router_isis (self, vty, argc, argv);
+}
+
+DEFUN (no_ip_router_isis,
+       no_ip_router_isis_cmd,
+       "no <ip|ipv6> router isis WORD",
+       NO_STR
+       "Interface Internet Protocol config commands\n"
+       "IP router interface commands\n"
+       "IP router interface commands\n"
+       "IS-IS Routing for IP\n"
+       "Routing process tag\n")
+{
+  int idx_afi = 1;
+  int idx_word = 4;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct isis_area *area;
   struct isis_circuit *circuit;
-  const char *af = argv[0];
-  const char *area_tag = argv[1];
-
-  ifp = (struct interface *) vty->index;
-  if (!ifp)
-    {
-      vty_out (vty, "Invalid interface %s", VTY_NEWLINE);
-      return CMD_ERR_NO_MATCH;
-    }
+  const char *af = argv[idx_afi]->arg;
+  const char *area_tag = argv[idx_word]->arg;
 
   area = isis_area_lookup (area_tag);
   if (!area)
     {
       vty_out (vty, "Can't find ISIS instance %s%s",
-               argv[0], VTY_NEWLINE);
+               argv[idx_afi]->arg, VTY_NEWLINE);
       return CMD_ERR_NO_MATCH;
     }
 
@@ -192,19 +197,20 @@ DEFUN (no_isis_passive,
 
 DEFUN (isis_circuit_type,
        isis_circuit_type_cmd,
-       "isis circuit-type (level-1|level-1-2|level-2-only)",
+       "isis circuit-type <level-1|level-1-2|level-2-only>",
        "IS-IS commands\n"
        "Configure circuit type for interface\n"
        "Level-1 only adjacencies are formed\n"
        "Level-1-2 adjacencies are formed\n"
        "Level-2 only adjacencies are formed\n")
 {
+  int idx_level = 2;
   int is_type;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  is_type = string2circuit_t (argv[0]);
+  is_type = string2circuit_t (argv[idx_level]->arg);
   if (!is_type)
     {
       vty_out (vty, "Unknown circuit-type %s", VTY_NEWLINE);
@@ -226,7 +232,7 @@ DEFUN (isis_circuit_type,
 
 DEFUN (no_isis_circuit_type,
        no_isis_circuit_type_cmd,
-       "no isis circuit-type (level-1|level-1-2|level-2-only)",
+       "no isis circuit-type <level-1|level-1-2|level-2-only>",
        NO_STR
        "IS-IS commands\n"
        "Configure circuit type for interface\n"
@@ -298,22 +304,24 @@ DEFUN (no_isis_network,
 
 DEFUN (isis_passwd,
        isis_passwd_cmd,
-       "isis password (md5|clear) WORD",
+       "isis password <md5|clear> WORD",
        "IS-IS commands\n"
        "Configure the authentication password for a circuit\n"
        "HMAC-MD5 authentication\n"
        "Cleartext password\n"
        "Circuit password\n")
 {
+  int idx_encryption = 2;
+  int idx_word = 3;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   int rv;
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  if (argv[0][0] == 'm')
-    rv = isis_circuit_passwd_hmac_md5_set(circuit, argv[1]);
+  if (argv[idx_encryption]->arg[0] == 'm')
+    rv = isis_circuit_passwd_hmac_md5_set(circuit, argv[idx_word]->arg);
   else
-    rv = isis_circuit_passwd_cleartext_set(circuit, argv[1]);
+    rv = isis_circuit_passwd_cleartext_set(circuit, argv[idx_word]->arg);
   if (rv)
     {
       vty_out (vty, "Too long circuit password (>254)%s", VTY_NEWLINE);
@@ -325,10 +333,13 @@ DEFUN (isis_passwd,
 
 DEFUN (no_isis_passwd,
        no_isis_passwd_cmd,
-       "no isis password",
+       "no isis password [<md5|clear> WORD]",
        NO_STR
        "IS-IS commands\n"
-       "Configure the authentication password for a circuit\n")
+       "Configure the authentication password for a circuit\n"
+       "HMAC-MD5 authentication\n"
+       "Cleartext password\n"
+       "Circuit password\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
@@ -339,29 +350,21 @@ DEFUN (no_isis_passwd,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_passwd,
-       no_isis_passwd_arg_cmd,
-       "no isis password (md5|clear) WORD",
-       NO_STR
-       "IS-IS commands\n"
-       "Configure the authentication password for a circuit\n"
-       "HMAC-MD5 authentication\n"
-       "Cleartext password\n"
-       "Circuit password\n")
 
 DEFUN (isis_priority,
        isis_priority_cmd,
-       "isis priority <0-127>",
+       "isis priority (0-127)",
        "IS-IS commands\n"
        "Set priority for Designated Router election\n"
        "Priority value\n")
 {
+  int idx_number = 2;
   int prio;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  prio = atoi (argv[0]);
+  prio = atoi (argv[idx_number]->arg);
   if (prio < MIN_PRIORITY || prio > MAX_PRIORITY)
     {
       vty_out (vty, "Invalid priority %d - should be <0-127>%s",
@@ -377,10 +380,11 @@ DEFUN (isis_priority,
 
 DEFUN (no_isis_priority,
        no_isis_priority_cmd,
-       "no isis priority",
+       "no isis priority [(0-127)]",
        NO_STR
        "IS-IS commands\n"
-       "Set priority for Designated Router election\n")
+       "Set priority for Designated Router election\n"
+       "Priority value\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
@@ -392,28 +396,22 @@ DEFUN (no_isis_priority,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_priority,
-       no_isis_priority_arg_cmd,
-       "no isis priority <0-127>",
-       NO_STR
-       "IS-IS commands\n"
-       "Set priority for Designated Router election\n"
-       "Priority value\n")
 
 DEFUN (isis_priority_l1,
        isis_priority_l1_cmd,
-       "isis priority <0-127> level-1",
+       "isis priority (0-127) level-1",
        "IS-IS commands\n"
        "Set priority for Designated Router election\n"
        "Priority value\n"
        "Specify priority for level-1 routing\n")
 {
+  int idx_number = 2;
   int prio;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  prio = atoi (argv[0]);
+  prio = atoi (argv[idx_number]->arg);
   if (prio < MIN_PRIORITY || prio > MAX_PRIORITY)
     {
       vty_out (vty, "Invalid priority %d - should be <0-127>%s",
@@ -428,10 +426,11 @@ DEFUN (isis_priority_l1,
 
 DEFUN (no_isis_priority_l1,
        no_isis_priority_l1_cmd,
-       "no isis priority level-1",
+       "no isis priority [(0-127)] level-1",
        NO_STR
        "IS-IS commands\n"
        "Set priority for Designated Router election\n"
+       "Priority value\n"
        "Specify priority for level-1 routing\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -443,29 +442,22 @@ DEFUN (no_isis_priority_l1,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_priority_l1,
-       no_isis_priority_l1_arg_cmd,
-       "no isis priority <0-127> level-1",
-       NO_STR
-       "IS-IS commands\n"
-       "Set priority for Designated Router election\n"
-       "Priority value\n"
-       "Specify priority for level-1 routing\n")
 
 DEFUN (isis_priority_l2,
        isis_priority_l2_cmd,
-       "isis priority <0-127> level-2",
+       "isis priority (0-127) level-2",
        "IS-IS commands\n"
        "Set priority for Designated Router election\n"
        "Priority value\n"
        "Specify priority for level-2 routing\n")
 {
+  int idx_number = 2;
   int prio;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  prio = atoi (argv[0]);
+  prio = atoi (argv[idx_number]->arg);
   if (prio < MIN_PRIORITY || prio > MAX_PRIORITY)
     {
       vty_out (vty, "Invalid priority %d - should be <0-127>%s",
@@ -480,10 +472,11 @@ DEFUN (isis_priority_l2,
 
 DEFUN (no_isis_priority_l2,
        no_isis_priority_l2_cmd,
-       "no isis priority level-2",
+       "no isis priority [(0-127)] level-2",
        NO_STR
        "IS-IS commands\n"
        "Set priority for Designated Router election\n"
+       "Priority value\n"
        "Specify priority for level-2 routing\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -495,29 +488,22 @@ DEFUN (no_isis_priority_l2,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_priority_l2,
-       no_isis_priority_l2_arg_cmd,
-       "no isis priority <0-127> level-2",
-       NO_STR
-       "IS-IS commands\n"
-       "Set priority for Designated Router election\n"
-       "Priority value\n"
-       "Specify priority for level-2 routing\n")
 
 /* Metric command */
 DEFUN (isis_metric,
        isis_metric_cmd,
-       "isis metric <0-16777215>",
+       "isis metric (0-16777215)",
        "IS-IS commands\n"
        "Set default metric for circuit\n"
        "Default metric value\n")
 {
+  int idx_number = 2;
   int met;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  met = atoi (argv[0]);
+  met = atoi (argv[idx_number]->arg);
 
   /* RFC3787 section 5.1 */
   if (circuit->area && circuit->area->oldmetric == 1 &&
@@ -543,13 +529,15 @@ DEFUN (isis_metric,
   isis_circuit_metric_set (circuit, IS_LEVEL_2, met);
   return CMD_SUCCESS;
 }
+
 
 DEFUN (no_isis_metric,
        no_isis_metric_cmd,
-       "no isis metric",
+       "no isis metric [(0-16777215)]",
        NO_STR
        "IS-IS commands\n"
-       "Set default metric for circuit\n")
+       "Set default metric for circuit\n"
+       "Default metric value\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
@@ -560,28 +548,22 @@ DEFUN (no_isis_metric,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_metric,
-       no_isis_metric_arg_cmd,
-       "no isis metric <0-16777215>",
-       NO_STR
-       "IS-IS commands\n"
-       "Set default metric for circuit\n"
-       "Default metric value\n")
 
 DEFUN (isis_metric_l1,
        isis_metric_l1_cmd,
-       "isis metric <0-16777215> level-1",
+       "isis metric (0-16777215) level-1",
        "IS-IS commands\n"
        "Set default metric for circuit\n"
        "Default metric value\n"
        "Specify metric for level-1 routing\n")
 {
+  int idx_number = 2;
   int met;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  met = atoi (argv[0]);
+  met = atoi (argv[idx_number]->arg);
 
   /* RFC3787 section 5.1 */
   if (circuit->area && circuit->area->oldmetric == 1 &&
@@ -607,12 +589,14 @@ DEFUN (isis_metric_l1,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_isis_metric_l1,
        no_isis_metric_l1_cmd,
-       "no isis metric level-1",
+       "no isis metric [(0-16777215)] level-1",
        NO_STR
        "IS-IS commands\n"
        "Set default metric for circuit\n"
+       "Default metric value\n"
        "Specify metric for level-1 routing\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -623,29 +607,22 @@ DEFUN (no_isis_metric_l1,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_metric_l1,
-       no_isis_metric_l1_arg_cmd,
-       "no isis metric <0-16777215> level-1",
-       NO_STR
-       "IS-IS commands\n"
-       "Set default metric for circuit\n"
-       "Default metric value\n"
-       "Specify metric for level-1 routing\n")
 
 DEFUN (isis_metric_l2,
        isis_metric_l2_cmd,
-       "isis metric <0-16777215> level-2",
+       "isis metric (0-16777215) level-2",
        "IS-IS commands\n"
        "Set default metric for circuit\n"
        "Default metric value\n"
        "Specify metric for level-2 routing\n")
 {
+  int idx_number = 2;
   int met;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  met = atoi (argv[0]);
+  met = atoi (argv[idx_number]->arg);
 
   /* RFC3787 section 5.1 */
   if (circuit->area && circuit->area->oldmetric == 1 &&
@@ -671,12 +648,14 @@ DEFUN (isis_metric_l2,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_isis_metric_l2,
        no_isis_metric_l2_cmd,
-       "no isis metric level-2",
+       "no isis metric [(0-16777215)] level-2",
        NO_STR
        "IS-IS commands\n"
        "Set default metric for circuit\n"
+       "Default metric value\n"
        "Specify metric for level-2 routing\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -687,30 +666,23 @@ DEFUN (no_isis_metric_l2,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_metric_l2,
-       no_isis_metric_l2_arg_cmd,
-       "no isis metric <0-16777215> level-2",
-       NO_STR
-       "IS-IS commands\n"
-       "Set default metric for circuit\n"
-       "Default metric value\n"
-       "Specify metric for level-2 routing\n")
 /* end of metrics */
 
 DEFUN (isis_hello_interval,
        isis_hello_interval_cmd,
-       "isis hello-interval <1-600>",
+       "isis hello-interval (1-600)",
        "IS-IS commands\n"
        "Set Hello interval\n"
        "Hello interval value\n"
        "Holdtime 1 seconds, interval depends on multiplier\n")
 {
+  int idx_number = 2;
   int interval;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  interval = atoi (argv[0]);
+  interval = atoi (argv[idx_number]->arg);
   if (interval < MIN_HELLO_INTERVAL || interval > MAX_HELLO_INTERVAL)
     {
       vty_out (vty, "Invalid hello-interval %d - should be <1-600>%s",
@@ -724,12 +696,14 @@ DEFUN (isis_hello_interval,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_isis_hello_interval,
        no_isis_hello_interval_cmd,
-       "no isis hello-interval",
+       "no isis hello-interval [(1-600)]",
        NO_STR
        "IS-IS commands\n"
-       "Set Hello interval\n")
+       "Set Hello interval\n"
+       "Holdtime 1 second, interval depends on multiplier\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
@@ -741,30 +715,23 @@ DEFUN (no_isis_hello_interval,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_hello_interval,
-       no_isis_hello_interval_arg_cmd,
-       "no isis hello-interval <1-600>",
-       NO_STR
-       "IS-IS commands\n"
-       "Set Hello interval\n"
-       "Hello interval value\n"
-       "Holdtime 1 second, interval depends on multiplier\n")
 
 DEFUN (isis_hello_interval_l1,
        isis_hello_interval_l1_cmd,
-       "isis hello-interval <1-600> level-1",
+       "isis hello-interval (1-600) level-1",
        "IS-IS commands\n"
        "Set Hello interval\n"
        "Hello interval value\n"
        "Holdtime 1 second, interval depends on multiplier\n"
        "Specify hello-interval for level-1 IIHs\n")
 {
+  int idx_number = 2;
   long interval;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  interval = atoi (argv[0]);
+  interval = atoi (argv[idx_number]->arg);
   if (interval < MIN_HELLO_INTERVAL || interval > MAX_HELLO_INTERVAL)
     {
       vty_out (vty, "Invalid hello-interval %ld - should be <1-600>%s",
@@ -777,12 +744,14 @@ DEFUN (isis_hello_interval_l1,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_isis_hello_interval_l1,
        no_isis_hello_interval_l1_cmd,
-       "no isis hello-interval level-1",
+       "no isis hello-interval [(1-600)] level-1",
        NO_STR
        "IS-IS commands\n"
        "Set Hello interval\n"
+       "Holdtime 1 second, interval depends on multiplier\n"
        "Specify hello-interval for level-1 IIHs\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -794,31 +763,23 @@ DEFUN (no_isis_hello_interval_l1,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_hello_interval_l1,
-       no_isis_hello_interval_l1_arg_cmd,
-       "no isis hello-interval <1-600> level-1",
-       NO_STR
-       "IS-IS commands\n"
-       "Set Hello interval\n"
-       "Hello interval value\n"
-       "Holdtime 1 second, interval depends on multiplier\n"
-       "Specify hello-interval for level-1 IIHs\n")
 
 DEFUN (isis_hello_interval_l2,
        isis_hello_interval_l2_cmd,
-       "isis hello-interval <1-600> level-2",
+       "isis hello-interval (1-600) level-2",
        "IS-IS commands\n"
        "Set Hello interval\n"
        "Hello interval value\n"
        "Holdtime 1 second, interval depends on multiplier\n"
        "Specify hello-interval for level-2 IIHs\n")
 {
+  int idx_number = 2;
   long interval;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  interval = atoi (argv[0]);
+  interval = atoi (argv[idx_number]->arg);
   if (interval < MIN_HELLO_INTERVAL || interval > MAX_HELLO_INTERVAL)
     {
       vty_out (vty, "Invalid hello-interval %ld - should be <1-600>%s",
@@ -831,12 +792,14 @@ DEFUN (isis_hello_interval_l2,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_isis_hello_interval_l2,
        no_isis_hello_interval_l2_cmd,
-       "no isis hello-interval level-2",
+       "no isis hello-interval [(1-600)] level-2",
        NO_STR
        "IS-IS commands\n"
        "Set Hello interval\n"
+       "Holdtime 1 second, interval depends on multiplier\n"
        "Specify hello-interval for level-2 IIHs\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -848,29 +811,21 @@ DEFUN (no_isis_hello_interval_l2,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_hello_interval_l2,
-       no_isis_hello_interval_l2_arg_cmd,
-       "no isis hello-interval <1-600> level-2",
-       NO_STR
-       "IS-IS commands\n"
-       "Set Hello interval\n"
-       "Hello interval value\n"
-       "Holdtime 1 second, interval depends on multiplier\n"
-       "Specify hello-interval for level-2 IIHs\n")
 
 DEFUN (isis_hello_multiplier,
        isis_hello_multiplier_cmd,
-       "isis hello-multiplier <2-100>",
+       "isis hello-multiplier (2-100)",
        "IS-IS commands\n"
        "Set multiplier for Hello holding time\n"
        "Hello multiplier value\n")
 {
+  int idx_number = 2;
   int mult;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  mult = atoi (argv[0]);
+  mult = atoi (argv[idx_number]->arg);
   if (mult < MIN_HELLO_MULTIPLIER || mult > MAX_HELLO_MULTIPLIER)
     {
       vty_out (vty, "Invalid hello-multiplier %d - should be <2-100>%s",
@@ -883,13 +838,15 @@ DEFUN (isis_hello_multiplier,
 
   return CMD_SUCCESS;
 }
+
 
 DEFUN (no_isis_hello_multiplier,
        no_isis_hello_multiplier_cmd,
-       "no isis hello-multiplier",
+       "no isis hello-multiplier [(2-100)]",
        NO_STR
        "IS-IS commands\n"
-       "Set multiplier for Hello holding time\n")
+       "Set multiplier for Hello holding time\n"
+       "Hello multiplier value\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
@@ -901,28 +858,22 @@ DEFUN (no_isis_hello_multiplier,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_hello_multiplier,
-       no_isis_hello_multiplier_arg_cmd,
-       "no isis hello-multiplier <2-100>",
-       NO_STR
-       "IS-IS commands\n"
-       "Set multiplier for Hello holding time\n"
-       "Hello multiplier value\n")
 
 DEFUN (isis_hello_multiplier_l1,
        isis_hello_multiplier_l1_cmd,
-       "isis hello-multiplier <2-100> level-1",
+       "isis hello-multiplier (2-100) level-1",
        "IS-IS commands\n"
        "Set multiplier for Hello holding time\n"
        "Hello multiplier value\n"
        "Specify hello multiplier for level-1 IIHs\n")
 {
+  int idx_number = 2;
   int mult;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  mult = atoi (argv[0]);
+  mult = atoi (argv[idx_number]->arg);
   if (mult < MIN_HELLO_MULTIPLIER || mult > MAX_HELLO_MULTIPLIER)
     {
       vty_out (vty, "Invalid hello-multiplier %d - should be <2-100>%s",
@@ -935,12 +886,14 @@ DEFUN (isis_hello_multiplier_l1,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_isis_hello_multiplier_l1,
        no_isis_hello_multiplier_l1_cmd,
-       "no isis hello-multiplier level-1",
+       "no isis hello-multiplier [(2-100)] level-1",
        NO_STR
        "IS-IS commands\n"
        "Set multiplier for Hello holding time\n"
+       "Hello multiplier value\n"
        "Specify hello multiplier for level-1 IIHs\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -952,29 +905,22 @@ DEFUN (no_isis_hello_multiplier_l1,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_hello_multiplier_l1,
-       no_isis_hello_multiplier_l1_arg_cmd,
-       "no isis hello-multiplier <2-100> level-1",
-       NO_STR
-       "IS-IS commands\n"
-       "Set multiplier for Hello holding time\n"
-       "Hello multiplier value\n"
-       "Specify hello multiplier for level-1 IIHs\n")
 
 DEFUN (isis_hello_multiplier_l2,
        isis_hello_multiplier_l2_cmd,
-       "isis hello-multiplier <2-100> level-2",
+       "isis hello-multiplier (2-100) level-2",
        "IS-IS commands\n"
        "Set multiplier for Hello holding time\n"
        "Hello multiplier value\n"
        "Specify hello multiplier for level-2 IIHs\n")
 {
+  int idx_number = 2;
   int mult;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  mult = atoi (argv[0]);
+  mult = atoi (argv[idx_number]->arg);
   if (mult < MIN_HELLO_MULTIPLIER || mult > MAX_HELLO_MULTIPLIER)
     {
       vty_out (vty, "Invalid hello-multiplier %d - should be <2-100>%s",
@@ -987,12 +933,14 @@ DEFUN (isis_hello_multiplier_l2,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_isis_hello_multiplier_l2,
        no_isis_hello_multiplier_l2_cmd,
-       "no isis hello-multiplier level-2",
+       "no isis hello-multiplier [(2-100)] level-2",
        NO_STR
        "IS-IS commands\n"
        "Set multiplier for Hello holding time\n"
+       "Hello multiplier value\n"
        "Specify hello multiplier for level-2 IIHs\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -1004,14 +952,6 @@ DEFUN (no_isis_hello_multiplier_l2,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_isis_hello_multiplier_l2,
-       no_isis_hello_multiplier_l2_arg_cmd,
-       "no isis hello-multiplier <2-100> level-2",
-       NO_STR
-       "IS-IS commands\n"
-       "Set multiplier for Hello holding time\n"
-       "Hello multiplier value\n"
-       "Specify hello multiplier for level-2 IIHs\n")
 
 DEFUN (isis_hello_padding,
        isis_hello_padding_cmd,
@@ -1050,17 +990,18 @@ DEFUN (no_isis_hello_padding,
 
 DEFUN (csnp_interval,
        csnp_interval_cmd,
-       "isis csnp-interval <1-600>",
+       "isis csnp-interval (1-600)",
        "IS-IS commands\n"
        "Set CSNP interval in seconds\n"
        "CSNP interval value\n")
 {
+  int idx_number = 2;
   unsigned long interval;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  interval = atol (argv[0]);
+  interval = atol (argv[idx_number]->arg);
   if (interval < MIN_CSNP_INTERVAL || interval > MAX_CSNP_INTERVAL)
     {
       vty_out (vty, "Invalid csnp-interval %lu - should be <1-600>%s",
@@ -1073,13 +1014,15 @@ DEFUN (csnp_interval,
 
   return CMD_SUCCESS;
 }
+
 
 DEFUN (no_csnp_interval,
        no_csnp_interval_cmd,
-       "no isis csnp-interval",
+       "no isis csnp-interval [(1-600)]",
        NO_STR
        "IS-IS commands\n"
-       "Set CSNP interval in seconds\n")
+       "Set CSNP interval in seconds\n"
+       "CSNP interval value\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
@@ -1091,28 +1034,22 @@ DEFUN (no_csnp_interval,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_csnp_interval,
-       no_csnp_interval_arg_cmd,
-       "no isis csnp-interval <1-600>",
-       NO_STR
-       "IS-IS commands\n"
-       "Set CSNP interval in seconds\n"
-       "CSNP interval value\n")
 
 DEFUN (csnp_interval_l1,
        csnp_interval_l1_cmd,
-       "isis csnp-interval <1-600> level-1",
+       "isis csnp-interval (1-600) level-1",
        "IS-IS commands\n"
        "Set CSNP interval in seconds\n"
        "CSNP interval value\n"
        "Specify interval for level-1 CSNPs\n")
 {
+  int idx_number = 2;
   unsigned long interval;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  interval = atol (argv[0]);
+  interval = atol (argv[idx_number]->arg);
   if (interval < MIN_CSNP_INTERVAL || interval > MAX_CSNP_INTERVAL)
     {
       vty_out (vty, "Invalid csnp-interval %lu - should be <1-600>%s",
@@ -1125,12 +1062,14 @@ DEFUN (csnp_interval_l1,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_csnp_interval_l1,
        no_csnp_interval_l1_cmd,
-       "no isis csnp-interval level-1",
+       "no isis csnp-interval [(1-600)] level-1",
        NO_STR
        "IS-IS commands\n"
        "Set CSNP interval in seconds\n"
+       "CSNP interval value\n"
        "Specify interval for level-1 CSNPs\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -1142,29 +1081,22 @@ DEFUN (no_csnp_interval_l1,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_csnp_interval_l1,
-       no_csnp_interval_l1_arg_cmd,
-       "no isis csnp-interval <1-600> level-1",
-       NO_STR
-       "IS-IS commands\n"
-       "Set CSNP interval in seconds\n"
-       "CSNP interval value\n"
-       "Specify interval for level-1 CSNPs\n")
 
 DEFUN (csnp_interval_l2,
        csnp_interval_l2_cmd,
-       "isis csnp-interval <1-600> level-2",
+       "isis csnp-interval (1-600) level-2",
        "IS-IS commands\n"
        "Set CSNP interval in seconds\n"
        "CSNP interval value\n"
        "Specify interval for level-2 CSNPs\n")
 {
+  int idx_number = 2;
   unsigned long interval;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  interval = atol (argv[0]);
+  interval = atol (argv[idx_number]->arg);
   if (interval < MIN_CSNP_INTERVAL || interval > MAX_CSNP_INTERVAL)
     {
       vty_out (vty, "Invalid csnp-interval %lu - should be <1-600>%s",
@@ -1177,12 +1109,14 @@ DEFUN (csnp_interval_l2,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_csnp_interval_l2,
        no_csnp_interval_l2_cmd,
-       "no isis csnp-interval level-2",
+       "no isis csnp-interval [(1-600)] level-2",
        NO_STR
        "IS-IS commands\n"
        "Set CSNP interval in seconds\n"
+       "CSNP interval value\n"
        "Specify interval for level-2 CSNPs\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -1194,28 +1128,21 @@ DEFUN (no_csnp_interval_l2,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_csnp_interval_l2,
-       no_csnp_interval_l2_arg_cmd,
-       "no isis csnp-interval <1-600> level-2",
-       NO_STR
-       "IS-IS commands\n"
-       "Set CSNP interval in seconds\n"
-       "CSNP interval value\n"
-       "Specify interval for level-2 CSNPs\n")
 
 DEFUN (psnp_interval,
        psnp_interval_cmd,
-       "isis psnp-interval <1-120>",
+       "isis psnp-interval (1-120)",
        "IS-IS commands\n"
        "Set PSNP interval in seconds\n"
        "PSNP interval value\n")
 {
+  int idx_number = 2;
   unsigned long interval;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  interval = atol (argv[0]);
+  interval = atol (argv[idx_number]->arg);
   if (interval < MIN_PSNP_INTERVAL || interval > MAX_PSNP_INTERVAL)
     {
       vty_out (vty, "Invalid psnp-interval %lu - should be <1-120>%s",
@@ -1228,13 +1155,15 @@ DEFUN (psnp_interval,
 
   return CMD_SUCCESS;
 }
+
 
 DEFUN (no_psnp_interval,
        no_psnp_interval_cmd,
-       "no isis psnp-interval",
+       "no isis psnp-interval [(1-120)]",
        NO_STR
        "IS-IS commands\n"
-       "Set PSNP interval in seconds\n")
+       "Set PSNP interval in seconds\n"
+       "PSNP interval value\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
@@ -1246,28 +1175,22 @@ DEFUN (no_psnp_interval,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_psnp_interval,
-       no_psnp_interval_arg_cmd,
-       "no isis psnp-interval <1-120>",
-       NO_STR
-       "IS-IS commands\n"
-       "Set PSNP interval in seconds\n"
-       "PSNP interval value\n")
 
 DEFUN (psnp_interval_l1,
        psnp_interval_l1_cmd,
-       "isis psnp-interval <1-120> level-1",
+       "isis psnp-interval (1-120) level-1",
        "IS-IS commands\n"
        "Set PSNP interval in seconds\n"
        "PSNP interval value\n"
        "Specify interval for level-1 PSNPs\n")
 {
+  int idx_number = 2;
   unsigned long interval;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  interval = atol (argv[0]);
+  interval = atol (argv[idx_number]->arg);
   if (interval < MIN_PSNP_INTERVAL || interval > MAX_PSNP_INTERVAL)
     {
       vty_out (vty, "Invalid psnp-interval %lu - should be <1-120>%s",
@@ -1280,12 +1203,14 @@ DEFUN (psnp_interval_l1,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_psnp_interval_l1,
        no_psnp_interval_l1_cmd,
-       "no isis psnp-interval level-1",
+       "no isis psnp-interval [(1-120)] level-1",
        NO_STR
        "IS-IS commands\n"
        "Set PSNP interval in seconds\n"
+       "PSNP interval value\n"
        "Specify interval for level-1 PSNPs\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -1297,29 +1222,22 @@ DEFUN (no_psnp_interval_l1,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_psnp_interval_l1,
-       no_psnp_interval_l1_arg_cmd,
-       "no isis psnp-interval <1-120> level-1",
-       NO_STR
-       "IS-IS commands\n"
-       "Set PSNP interval in seconds\n"
-       "PSNP interval value\n"
-       "Specify interval for level-1 PSNPs\n")
 
 DEFUN (psnp_interval_l2,
        psnp_interval_l2_cmd,
-       "isis psnp-interval <1-120> level-2",
+       "isis psnp-interval (1-120) level-2",
        "IS-IS commands\n"
        "Set PSNP interval in seconds\n"
        "PSNP interval value\n"
        "Specify interval for level-2 PSNPs\n")
 {
+  int idx_number = 2;
   unsigned long interval;
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
   if (!circuit)
     return CMD_ERR_NO_MATCH;
 
-  interval = atol (argv[0]);
+  interval = atol (argv[idx_number]->arg);
   if (interval < MIN_PSNP_INTERVAL || interval > MAX_PSNP_INTERVAL)
     {
       vty_out (vty, "Invalid psnp-interval %lu - should be <1-120>%s",
@@ -1332,12 +1250,14 @@ DEFUN (psnp_interval_l2,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_psnp_interval_l2,
        no_psnp_interval_l2_cmd,
-       "no isis psnp-interval level-2",
+       "no isis psnp-interval [(1-120)] level-2",
        NO_STR
        "IS-IS commands\n"
        "Set PSNP interval in seconds\n"
+       "PSNP interval value\n"
        "Specify interval for level-2 PSNPs\n")
 {
   struct isis_circuit *circuit = isis_circuit_lookup (vty);
@@ -1349,14 +1269,6 @@ DEFUN (no_psnp_interval_l2,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_psnp_interval_l2,
-       no_psnp_interval_l2_arg_cmd,
-       "no isis psnp-interval <1-120> level-2",
-       NO_STR
-       "IS-IS commands\n"
-       "Set PSNP interval in seconds\n"
-       "PSNP interval value\n"
-       "Specify interval for level-2 PSNPs\n")
 
 static int
 validate_metric_style_narrow (struct vty *vty, struct isis_area *area)
@@ -1398,18 +1310,17 @@ validate_metric_style_narrow (struct vty *vty, struct isis_area *area)
 
 DEFUN (metric_style,
        metric_style_cmd,
-       "metric-style (narrow|transition|wide)",
+       "metric-style <narrow|transition|wide>",
        "Use old-style (ISO 10589) or new-style packet formats\n"
        "Use old style of TLVs with narrow metric\n"
        "Send and accept both styles of TLVs during transition\n"
        "Use new style of TLVs to carry wider metric\n")
 {
-  struct isis_area *area = vty->index;
+  int idx_metric_style = 1;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int ret;
 
-  assert(area);
-
-  if (strncmp (argv[0], "w", 1) == 0)
+  if (strncmp (argv[idx_metric_style]->arg, "w", 1) == 0)
     {
       isis_area_metricstyle_set(area, false, true);
       return CMD_SUCCESS;
@@ -1419,9 +1330,9 @@ DEFUN (metric_style,
   if (ret != CMD_SUCCESS)
     return ret;
 
-  if (strncmp (argv[0], "t", 1) == 0)
+  if (strncmp (argv[idx_metric_style]->arg, "t", 1) == 0)
     isis_area_metricstyle_set(area, true, true);
-  else if (strncmp (argv[0], "n", 1) == 0)
+  else if (strncmp (argv[idx_metric_style]->arg, "n", 1) == 0)
     isis_area_metricstyle_set(area, true, false);
       return CMD_SUCCESS;
 
@@ -1434,10 +1345,9 @@ DEFUN (no_metric_style,
        NO_STR
        "Use old-style (ISO 10589) or new-style packet formats\n")
 {
-  struct isis_area *area = vty->index;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int ret;
 
-  assert (area);
   ret = validate_metric_style_narrow (vty, area);
   if (ret != CMD_SUCCESS)
     return ret;
@@ -1452,8 +1362,7 @@ DEFUN (set_overload_bit,
        "Set overload bit to avoid any transit traffic\n"
        "Set overload bit\n")
 {
-  struct isis_area *area = vty->index;
-  assert (area);
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   isis_area_overload_bit_set(area, true);
   return CMD_SUCCESS;
@@ -1465,8 +1374,7 @@ DEFUN (no_set_overload_bit,
        "Reset overload bit to accept transit traffic\n"
        "Reset overload bit\n")
 {
-  struct isis_area *area = vty->index;
-  assert (area);
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   isis_area_overload_bit_set(area, false);
   return CMD_SUCCESS;
@@ -1478,8 +1386,7 @@ DEFUN (set_attached_bit,
        "Set attached bit to identify as L1/L2 router for inter-area traffic\n"
        "Set attached bit\n")
 {
-  struct isis_area *area = vty->index;
-  assert (area);
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   isis_area_attached_bit_set(area, true);
   return CMD_SUCCESS;
@@ -1488,10 +1395,10 @@ DEFUN (set_attached_bit,
 DEFUN (no_set_attached_bit,
        no_set_attached_bit_cmd,
        "no set-attached-bit",
+       NO_STR
        "Reset attached bit\n")
 {
-  struct isis_area *area = vty->index;
-  assert (area);
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   isis_area_attached_bit_set(area, false);
   return CMD_SUCCESS;
@@ -1503,8 +1410,7 @@ DEFUN (dynamic_hostname,
        "Dynamic hostname for IS-IS\n"
        "Dynamic hostname\n")
 {
-  struct isis_area *area = vty->index;
-  assert(area);
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   isis_area_dynhostname_set(area, true);
   return CMD_SUCCESS;
@@ -1517,8 +1423,7 @@ DEFUN (no_dynamic_hostname,
        "Dynamic hostname for IS-IS\n"
        "Dynamic hostname\n")
 {
-  struct isis_area *area = vty->index;
-  assert(area);
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   isis_area_dynhostname_set(area, false);
   return CMD_SUCCESS;
@@ -1526,15 +1431,9 @@ DEFUN (no_dynamic_hostname,
 
 static int area_lsp_mtu_set(struct vty *vty, unsigned int lsp_mtu)
 {
-  struct isis_area *area = vty->index;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   struct listnode *node;
   struct isis_circuit *circuit;
-
-  if (!area)
-    {
-      vty_out (vty, "Can't find ISIS instance %s", VTY_NEWLINE);
-      return CMD_ERR_NO_MATCH;
-    }
 
   for (ALL_LIST_ELEMENTS_RO(area->circuit_list, node, circuit))
     {
@@ -1555,53 +1454,43 @@ static int area_lsp_mtu_set(struct vty *vty, unsigned int lsp_mtu)
 
 DEFUN (area_lsp_mtu,
        area_lsp_mtu_cmd,
-       "lsp-mtu <128-4352>",
+       "lsp-mtu (128-4352)",
        "Configure the maximum size of generated LSPs\n"
        "Maximum size of generated LSPs\n")
 {
+  int idx_number = 1;
   unsigned int lsp_mtu;
 
-  VTY_GET_INTEGER_RANGE("lsp-mtu", lsp_mtu, argv[0], 128, 4352);
+  VTY_GET_INTEGER_RANGE("lsp-mtu", lsp_mtu, argv[idx_number]->arg, 128, 4352);
 
   return area_lsp_mtu_set(vty, lsp_mtu);
 }
 
-DEFUN(no_area_lsp_mtu,
-      no_area_lsp_mtu_cmd,
-      "no lsp-mtu",
-      NO_STR
-      "Configure the maximum size of generated LSPs\n")
+
+DEFUN (no_area_lsp_mtu,
+       no_area_lsp_mtu_cmd,
+       "no lsp-mtu [(128-4352)]",
+       NO_STR
+       "Configure the maximum size of generated LSPs\n"
+       "Maximum size of generated LSPs\n")
 {
   return area_lsp_mtu_set(vty, DEFAULT_LSP_MTU);
 }
 
-ALIAS(no_area_lsp_mtu,
-      no_area_lsp_mtu_arg_cmd,
-      "no lsp-mtu <128-4352>",
-      NO_STR
-      "Configure the maximum size of generated LSPs\n"
-      "Maximum size of generated LSPs\n");
 
 DEFUN (is_type,
        is_type_cmd,
-       "is-type (level-1|level-1-2|level-2-only)",
+       "is-type <level-1|level-1-2|level-2-only>",
        "IS Level for this routing process (OSI only)\n"
        "Act as a station router only\n"
        "Act as both a station router and an area router\n"
        "Act as an area router only\n")
 {
-  struct isis_area *area;
+  int idx_level = 1;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int type;
 
-  area = vty->index;
-
-  if (!area)
-    {
-      vty_out (vty, "Can't find IS-IS instance%s", VTY_NEWLINE);
-      return CMD_ERR_NO_MATCH;
-    }
-
-  type = string2circuit_t (argv[0]);
+  type = string2circuit_t (argv[idx_level]->arg);
   if (!type)
     {
       vty_out (vty, "Unknown IS level %s", VTY_NEWLINE);
@@ -1615,18 +1504,15 @@ DEFUN (is_type,
 
 DEFUN (no_is_type,
        no_is_type_cmd,
-       "no is-type (level-1|level-1-2|level-2-only)",
+       "no is-type <level-1|level-1-2|level-2-only>",
        NO_STR
        "IS Level for this routing process (OSI only)\n"
        "Act as a station router only\n"
        "Act as both a station router and an area router\n"
        "Act as an area router only\n")
 {
-  struct isis_area *area;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int type;
-
-  area = vty->index;
-  assert (area);
 
   /*
    * Put the is-type back to defaults:
@@ -1675,153 +1561,81 @@ set_lsp_gen_interval (struct vty *vty, struct isis_area *area,
 
 DEFUN (lsp_gen_interval,
        lsp_gen_interval_cmd,
-       "lsp-gen-interval <1-120>",
+       "lsp-gen-interval [<level-1|level-2>] (1-120)",
        "Minimum interval between regenerating same LSP\n"
+       "Set interval for level 1 only\n"
+       "Set interval for level 2 only\n"
        "Minimum interval in seconds\n")
 {
-  struct isis_area *area;
+  int idx = 0;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   uint16_t interval;
   int level;
 
-  area = vty->index;
-  interval = atoi (argv[0]);
-  level = IS_LEVEL_1 | IS_LEVEL_2;
+  level = 0;
+  level |= argv_find (argv, argc, "level-1", &idx) ? IS_LEVEL_1 : 0;
+  level |= argv_find (argv, argc, "level-2", &idx) ? IS_LEVEL_2 : 0;
+  if (!level)
+    level = IS_LEVEL_1 | IS_LEVEL_2;
+
+  argv_find (argv, argc, "(1-120)", &idx);
+
+  interval = atoi (argv[idx]->arg);
   return set_lsp_gen_interval (vty, area, interval, level);
 }
 
 DEFUN (no_lsp_gen_interval,
        no_lsp_gen_interval_cmd,
-       "no lsp-gen-interval",
-       NO_STR
-       "Minimum interval between regenerating same LSP\n")
-{
-  struct isis_area *area;
-  uint16_t interval;
-  int level;
-
-  area = vty->index;
-  interval = DEFAULT_MIN_LSP_GEN_INTERVAL;
-  level = IS_LEVEL_1 | IS_LEVEL_2;
-  return set_lsp_gen_interval (vty, area, interval, level);
-}
-
-ALIAS (no_lsp_gen_interval,
-       no_lsp_gen_interval_arg_cmd,
-       "no lsp-gen-interval <1-120>",
-       NO_STR
-       "Minimum interval between regenerating same LSP\n"
-       "Minimum interval in seconds\n")
-
-DEFUN (lsp_gen_interval_l1,
-       lsp_gen_interval_l1_cmd,
-       "lsp-gen-interval level-1 <1-120>",
-       "Minimum interval between regenerating same LSP\n"
-       "Set interval for level 1 only\n"
-       "Minimum interval in seconds\n")
-{
-  struct isis_area *area;
-  uint16_t interval;
-  int level;
-
-  area = vty->index;
-  interval = atoi (argv[0]);
-  level = IS_LEVEL_1;
-  return set_lsp_gen_interval (vty, area, interval, level);
-}
-
-DEFUN (no_lsp_gen_interval_l1,
-       no_lsp_gen_interval_l1_cmd,
-       "no lsp-gen-interval level-1",
-       NO_STR
-       "Minimum interval between regenerating same LSP\n"
-       "Set interval for level 1 only\n")
-{
-  struct isis_area *area;
-  uint16_t interval;
-  int level;
-
-  area = vty->index;
-  interval = DEFAULT_MIN_LSP_GEN_INTERVAL;
-  level = IS_LEVEL_1;
-  return set_lsp_gen_interval (vty, area, interval, level);
-}
-
-ALIAS (no_lsp_gen_interval_l1,
-       no_lsp_gen_interval_l1_arg_cmd,
-       "no lsp-gen-interval level-1 <1-120>",
+       "no lsp-gen-interval [<level-1|level-2>] [(1-120)]",
        NO_STR
        "Minimum interval between regenerating same LSP\n"
        "Set interval for level 1 only\n"
-       "Minimum interval in seconds\n")
-
-DEFUN (lsp_gen_interval_l2,
-       lsp_gen_interval_l2_cmd,
-       "lsp-gen-interval level-2 <1-120>",
-       "Minimum interval between regenerating same LSP\n"
        "Set interval for level 2 only\n"
        "Minimum interval in seconds\n")
 {
-  struct isis_area *area;
+  int idx = 0;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   uint16_t interval;
   int level;
 
-  area = vty->index;
-  interval = atoi (argv[0]);
-  level = IS_LEVEL_2;
-  return set_lsp_gen_interval (vty, area, interval, level);
-}
+  level = 0;
+  level |= argv_find (argv, argc, "level-1", &idx) ? IS_LEVEL_1 : 0;
+  level |= argv_find (argv, argc, "level-2", &idx) ? IS_LEVEL_2 : 0;
+  if (!level)
+    level = IS_LEVEL_1 | IS_LEVEL_2;
 
-DEFUN (no_lsp_gen_interval_l2,
-       no_lsp_gen_interval_l2_cmd,
-       "no lsp-gen-interval level-2",
-       NO_STR
-       "Minimum interval between regenerating same LSP\n"
-       "Set interval for level 2 only\n")
-{
-  struct isis_area *area;
-  uint16_t interval;
-  int level;
-
-  area = vty->index;
   interval = DEFAULT_MIN_LSP_GEN_INTERVAL;
-  level = IS_LEVEL_2;
   return set_lsp_gen_interval (vty, area, interval, level);
 }
-
-ALIAS (no_lsp_gen_interval_l2,
-       no_lsp_gen_interval_l2_arg_cmd,
-       "no lsp-gen-interval level-2 <1-120>",
-       NO_STR
-       "Minimum interval between regenerating same LSP\n"
-       "Set interval for level 2 only\n"
-       "Minimum interval in seconds\n")
 
 DEFUN (spf_interval,
        spf_interval_cmd,
-       "spf-interval <1-120>",
+       "spf-interval (1-120)",
        "Minimum interval between SPF calculations\n"
        "Minimum interval between consecutive SPFs in seconds\n")
 {
-  struct isis_area *area;
+  int idx_number = 1;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   u_int16_t interval;
 
-  area = vty->index;
-  interval = atoi (argv[0]);
+  interval = atoi (argv[idx_number]->arg);
   area->min_spf_interval[0] = interval;
   area->min_spf_interval[1] = interval;
 
   return CMD_SUCCESS;
 }
 
+
 DEFUN (no_spf_interval,
        no_spf_interval_cmd,
-       "no spf-interval",
+       "no spf-interval [[<level-1|level-2>] (1-120)]",
        NO_STR
-       "Minimum interval between SPF calculations\n")
+       "Minimum interval between SPF calculations\n"
+       "Set interval for level 1 only\n"
+       "Set interval for level 2 only\n"
+       "Minimum interval between consecutive SPFs in seconds\n")
 {
-  struct isis_area *area;
-
-  area = vty->index;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   area->min_spf_interval[0] = MINIMUM_SPF_INTERVAL;
   area->min_spf_interval[1] = MINIMUM_SPF_INTERVAL;
@@ -1829,25 +1643,19 @@ DEFUN (no_spf_interval,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_spf_interval,
-       no_spf_interval_arg_cmd,
-       "no spf-interval <1-120>",
-       NO_STR
-       "Minimum interval between SPF calculations\n"
-       "Minimum interval between consecutive SPFs in seconds\n")
 
 DEFUN (spf_interval_l1,
        spf_interval_l1_cmd,
-       "spf-interval level-1 <1-120>",
+       "spf-interval level-1 (1-120)",
        "Minimum interval between SPF calculations\n"
        "Set interval for level 1 only\n"
        "Minimum interval between consecutive SPFs in seconds\n")
 {
-  struct isis_area *area;
+  int idx_number = 2;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   u_int16_t interval;
 
-  area = vty->index;
-  interval = atoi (argv[0]);
+  interval = atoi (argv[idx_number]->arg);
   area->min_spf_interval[0] = interval;
 
   return CMD_SUCCESS;
@@ -1860,35 +1668,26 @@ DEFUN (no_spf_interval_l1,
        "Minimum interval between SPF calculations\n"
        "Set interval for level 1 only\n")
 {
-  struct isis_area *area;
-
-  area = vty->index;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   area->min_spf_interval[0] = MINIMUM_SPF_INTERVAL;
 
   return CMD_SUCCESS;
 }
 
-ALIAS (no_spf_interval,
-       no_spf_interval_l1_arg_cmd,
-       "no spf-interval level-1 <1-120>",
-       NO_STR
-       "Minimum interval between SPF calculations\n"
-       "Set interval for level 1 only\n"
-       "Minimum interval between consecutive SPFs in seconds\n")
 
 DEFUN (spf_interval_l2,
        spf_interval_l2_cmd,
-       "spf-interval level-2 <1-120>",
+       "spf-interval level-2 (1-120)",
        "Minimum interval between SPF calculations\n"
        "Set interval for level 2 only\n"
        "Minimum interval between consecutive SPFs in seconds\n")
 {
-  struct isis_area *area;
+  int idx_number = 2;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   u_int16_t interval;
 
-  area = vty->index;
-  interval = atoi (argv[0]);
+  interval = atoi (argv[idx_number]->arg);
   area->min_spf_interval[1] = interval;
 
   return CMD_SUCCESS;
@@ -1901,37 +1700,22 @@ DEFUN (no_spf_interval_l2,
        "Minimum interval between SPF calculations\n"
        "Set interval for level 2 only\n")
 {
-  struct isis_area *area;
-
-  area = vty->index;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   area->min_spf_interval[1] = MINIMUM_SPF_INTERVAL;
 
   return CMD_SUCCESS;
 }
 
-ALIAS (no_spf_interval,
-       no_spf_interval_l2_arg_cmd,
-       "no spf-interval level-2 <1-120>",
-       NO_STR
-       "Minimum interval between SPF calculations\n"
-       "Set interval for level 2 only\n"
-       "Minimum interval between consecutive SPFs in seconds\n")
 
 static int
 area_max_lsp_lifetime_set(struct vty *vty, int level,
 			  uint16_t interval)
 {
-  struct isis_area *area = vty->index;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int lvl;
   uint16_t refresh_interval = interval - 300;
   int set_refresh_interval[ISIS_LEVELS] = {0, 0};
-
-  if (!area)
-    {
-      vty_out (vty, "Can't find ISIS instance %s", VTY_NEWLINE);
-      return CMD_ERR_NO_MATCH;
-    }
 
   for (lvl = IS_LEVEL_1; lvl <= IS_LEVEL_2; lvl++)
     {
@@ -1972,91 +1756,52 @@ area_max_lsp_lifetime_set(struct vty *vty, int level,
 
 DEFUN (max_lsp_lifetime,
        max_lsp_lifetime_cmd,
-       "max-lsp-lifetime <350-65535>",
+       "max-lsp-lifetime [<level-1|level-2>] (350-65535)",
        "Maximum LSP lifetime\n"
+       "Maximum LSP lifetime for Level 1 only\n"
+       "Maximum LSP lifetime for Level 2 only\n"
        "LSP lifetime in seconds\n")
 {
-  return area_max_lsp_lifetime_set(vty, IS_LEVEL_1_AND_2, atoi(argv[0]));
+  int idx = 0;
+  unsigned int level = IS_LEVEL_1_AND_2;
+
+  if (argv_find (argv, argc, "level-1", &idx))
+    level = IS_LEVEL_1;
+  else if (argv_find (argv, argc, "level-2", &idx))
+    level = IS_LEVEL_2;
+
+  argv_find (argv, argc, "(350-65535)", &idx);
+  int lifetime = atoi(argv[idx]->arg);
+
+  return area_max_lsp_lifetime_set(vty, level, lifetime);
 }
+
 
 DEFUN (no_max_lsp_lifetime,
        no_max_lsp_lifetime_cmd,
-       "no max-lsp-lifetime",
-       NO_STR
-       "LSP lifetime in seconds\n")
-{
-  return area_max_lsp_lifetime_set(vty, IS_LEVEL_1_AND_2,
-				   DEFAULT_LSP_LIFETIME);
-}
-
-ALIAS (no_max_lsp_lifetime,
-       no_max_lsp_lifetime_arg_cmd,
-       "no max-lsp-lifetime <350-65535>",
+       "no max-lsp-lifetime [<level-1|level-2>] [(350-65535)]",
        NO_STR
        "Maximum LSP lifetime\n"
+       "Maximum LSP lifetime for Level 1 only\n"
+       "Maximum LSP lifetime for Level 2 only\n"
        "LSP lifetime in seconds\n")
-
-DEFUN (max_lsp_lifetime_l1,
-       max_lsp_lifetime_l1_cmd,
-       "max-lsp-lifetime level-1 <350-65535>",
-       "Maximum LSP lifetime for Level 1 only\n"
-       "LSP lifetime for Level 1 only in seconds\n")
 {
-  return area_max_lsp_lifetime_set(vty, IS_LEVEL_1, atoi(argv[0]));
+  int idx = 0;
+  unsigned int level = IS_LEVEL_1_AND_2;
+
+  if (argv_find (argv, argc, "level-1", &idx))
+    level = IS_LEVEL_1;
+  else if (argv_find (argv, argc, "level-2", &idx))
+    level = IS_LEVEL_2;
+
+  return area_max_lsp_lifetime_set(vty, level, DEFAULT_LSP_LIFETIME);
 }
-
-DEFUN (no_max_lsp_lifetime_l1,
-       no_max_lsp_lifetime_l1_cmd,
-       "no max-lsp-lifetime level-1",
-       NO_STR
-       "LSP lifetime for Level 1 only in seconds\n")
-{
-  return area_max_lsp_lifetime_set(vty, IS_LEVEL_1, DEFAULT_LSP_LIFETIME);
-}
-
-ALIAS (no_max_lsp_lifetime_l1,
-       no_max_lsp_lifetime_l1_arg_cmd,
-       "no max-lsp-lifetime level-1 <350-65535>",
-       NO_STR
-       "Maximum LSP lifetime for Level 1 only\n"
-       "LSP lifetime for Level 1 only in seconds\n")
-
-DEFUN (max_lsp_lifetime_l2,
-       max_lsp_lifetime_l2_cmd,
-       "max-lsp-lifetime level-2 <350-65535>",
-       "Maximum LSP lifetime for Level 2 only\n"
-       "LSP lifetime for Level 2 only in seconds\n")
-{
-  return area_max_lsp_lifetime_set(vty, IS_LEVEL_2, atoi(argv[0]));
-}
-
-DEFUN (no_max_lsp_lifetime_l2,
-       no_max_lsp_lifetime_l2_cmd,
-       "no max-lsp-lifetime level-2",
-       NO_STR
-       "LSP lifetime for Level 2 only in seconds\n")
-{
-  return area_max_lsp_lifetime_set(vty, IS_LEVEL_2, DEFAULT_LSP_LIFETIME);
-}
-
-ALIAS (no_max_lsp_lifetime_l2,
-       no_max_lsp_lifetime_l2_arg_cmd,
-       "no max-lsp-lifetime level-2 <350-65535>",
-       NO_STR
-       "Maximum LSP lifetime for Level 2 only\n"
-       "LSP lifetime for Level 2 only in seconds\n")
 
 static int
 area_lsp_refresh_interval_set(struct vty *vty, int level, uint16_t interval)
 {
-  struct isis_area *area = vty->index;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int lvl;
-
-  if (!area)
-    {
-      vty_out (vty, "Can't find ISIS instance %s", VTY_NEWLINE);
-      return CMD_ERR_NO_MATCH;
-    }
 
   for (lvl = IS_LEVEL_1; lvl <= IS_LEVEL_2; ++lvl)
     {
@@ -2092,81 +1837,44 @@ area_lsp_refresh_interval_set(struct vty *vty, int level, uint16_t interval)
 
 DEFUN (lsp_refresh_interval,
        lsp_refresh_interval_cmd,
-       "lsp-refresh-interval <1-65235>",
+       "lsp-refresh-interval [<level-1|level-2>] (1-65235)",
        "LSP refresh interval\n"
+       "LSP refresh interval for Level 1 only\n"
+       "LSP refresh interval for Level 2 only\n"
        "LSP refresh interval in seconds\n")
 {
-  return area_lsp_refresh_interval_set(vty, IS_LEVEL_1_AND_2, atoi(argv[0]));
+  int idx = 0;
+  unsigned int level = IS_LEVEL_1_AND_2;
+  unsigned int interval = 0;
+
+  if (argv_find (argv, argc, "level-1", &idx))
+    level = IS_LEVEL_1;
+  else if (argv_find (argv, argc, "level-2", &idx))
+    level = IS_LEVEL_2;
+
+  interval = atoi(argv[argc-1]->arg);
+  return area_lsp_refresh_interval_set(vty, level, interval);
 }
 
 DEFUN (no_lsp_refresh_interval,
        no_lsp_refresh_interval_cmd,
-       "no lsp-refresh-interval",
-       NO_STR
-       "LSP refresh interval in seconds\n")
-{
-  return area_lsp_refresh_interval_set(vty, IS_LEVEL_1_AND_2,
-				       DEFAULT_MAX_LSP_GEN_INTERVAL);
-}
-
-ALIAS (no_lsp_refresh_interval,
-       no_lsp_refresh_interval_arg_cmd,
-       "no lsp-refresh-interval <1-65235>",
+       "no lsp-refresh-interval [<level-1|level-2>] [(1-65235)]",
        NO_STR
        "LSP refresh interval\n"
+       "LSP refresh interval for Level 1 only\n"
+       "LSP refresh interval for Level 2 only\n"
        "LSP refresh interval in seconds\n")
-
-DEFUN (lsp_refresh_interval_l1,
-       lsp_refresh_interval_l1_cmd,
-       "lsp-refresh-interval level-1 <1-65235>",
-       "LSP refresh interval for Level 1 only\n"
-       "LSP refresh interval for Level 1 only in seconds\n")
 {
-  return area_lsp_refresh_interval_set(vty, IS_LEVEL_1, atoi(argv[0]));
+  int idx = 0;
+  unsigned int level = IS_LEVEL_1_AND_2;
+
+  if (argv_find (argv, argc, "level-1", &idx))
+    level = IS_LEVEL_1;
+  else if (argv_find (argv, argc, "level-2", &idx))
+    level = IS_LEVEL_2;
+
+  return area_lsp_refresh_interval_set(vty, level, DEFAULT_MAX_LSP_GEN_INTERVAL);
 }
-
-DEFUN (no_lsp_refresh_interval_l1,
-       no_lsp_refresh_interval_l1_cmd,
-       "no lsp-refresh-interval level-1",
-       NO_STR
-       "LSP refresh interval for Level 1 only in seconds\n")
-{
-  return area_lsp_refresh_interval_set(vty, IS_LEVEL_1,
-				       DEFAULT_MAX_LSP_GEN_INTERVAL);
-}
-
-ALIAS (no_lsp_refresh_interval_l1,
-       no_lsp_refresh_interval_l1_arg_cmd,
-       "no lsp-refresh-interval level-1 <1-65235>",
-       NO_STR
-       "LSP refresh interval for Level 1 only\n"
-       "LSP refresh interval for Level 1 only in seconds\n")
-
-DEFUN (lsp_refresh_interval_l2,
-       lsp_refresh_interval_l2_cmd,
-       "lsp-refresh-interval level-2 <1-65235>",
-       "LSP refresh interval for Level 2 only\n"
-       "LSP refresh interval for Level 2 only in seconds\n")
-{
-  return area_lsp_refresh_interval_set(vty, IS_LEVEL_2, atoi(argv[0]));
-}
-
-DEFUN (no_lsp_refresh_interval_l2,
-       no_lsp_refresh_interval_l2_cmd,
-       "no lsp-refresh-interval level-2",
-       NO_STR
-       "LSP refresh interval for Level 2 only in seconds\n")
-{
-  return area_lsp_refresh_interval_set(vty, IS_LEVEL_2,
-				       DEFAULT_MAX_LSP_GEN_INTERVAL);
-}
-
-ALIAS (no_lsp_refresh_interval_l2,
-       no_lsp_refresh_interval_l2_arg_cmd,
-       "no lsp-refresh-interval level-2 <1-65235>",
-       NO_STR
-       "LSP refresh interval for Level 2 only\n"
-       "LSP refresh interval for Level 2 only in seconds\n")
 
 static int
 area_passwd_set(struct vty *vty, int level,
@@ -2174,13 +1882,7 @@ area_passwd_set(struct vty *vty, int level,
                                 const char *passwd, u_char snp_auth),
                 const char *passwd, u_char snp_auth)
 {
-  struct isis_area *area = vty->index;
-
-  if (!area)
-    {
-      vty_out (vty, "Can't find IS-IS instance%s", VTY_NEWLINE);
-      return CMD_ERR_NO_MATCH;
-    }
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   if (passwd && strlen(passwd) > 254)
     {
@@ -2192,32 +1894,38 @@ area_passwd_set(struct vty *vty, int level,
   return CMD_SUCCESS;
 }
 
+
 DEFUN (area_passwd_md5,
        area_passwd_md5_cmd,
-       "(area-password|domain-password) md5 WORD",
+       "area-password md5 WORD [authenticate snp <send-only|validate>]",
        "Configure the authentication password for an area\n"
-       "Set the authentication password for a routing domain\n"
        "Authentication type\n"
-       "Level-wide password\n")
+       "Level-wide password\n"
+       "Authentication\n"
+       "SNP PDUs\n"
+       "Send but do not check PDUs on receiving\n"
+       "Send and check PDUs on receiving\n")
 {
+  int idx_password = 0;
+  int idx_word = 2;
+  int idx_type = 5;
   u_char snp_auth = 0;
-  int level = (argv[0][0] == 'd') ? IS_LEVEL_2 : IS_LEVEL_1;
+  int level = strmatch(argv[idx_password]->text, "domain-password") ? IS_LEVEL_2 : IS_LEVEL_1;
 
-  if (argc > 2)
+  if (argc > 3)
     {
       snp_auth = SNP_AUTH_SEND;
-      if (strncmp(argv[2], "v", 1) == 0)
+      if (strmatch(argv[idx_type]->text, "validate"))
         snp_auth |= SNP_AUTH_RECV;
     }
 
   return area_passwd_set(vty, level, isis_area_passwd_hmac_md5_set,
-                         argv[1], snp_auth);
+                         argv[idx_word]->arg, snp_auth);
 }
 
-ALIAS (area_passwd_md5,
-       area_passwd_md5_snpauth_cmd,
-       "(area-password|domain-password) md5 WORD authenticate snp (send-only|validate)",
-       "Configure the authentication password for an area\n"
+DEFUN (domain_passwd_md5,
+       domain_passwd_md5_cmd,
+       "domain-password md5 WORD [authenticate snp <send-only|validate>]",
        "Set the authentication password for a routing domain\n"
        "Authentication type\n"
        "Level-wide password\n"
@@ -2225,33 +1933,41 @@ ALIAS (area_passwd_md5,
        "SNP PDUs\n"
        "Send but do not check PDUs on receiving\n"
        "Send and check PDUs on receiving\n")
+{
+  return area_passwd_md5 (self, vty, argc, argv);
+}
 
 DEFUN (area_passwd_clear,
        area_passwd_clear_cmd,
-       "(area-password|domain-password) clear WORD",
+       "area-password clear WORD [authenticate snp <send-only|validate>]",
        "Configure the authentication password for an area\n"
-       "Set the authentication password for a routing domain\n"
        "Authentication type\n"
-       "Area password\n")
+       "Area password\n"
+       "Authentication\n"
+       "SNP PDUs\n"
+       "Send but do not check PDUs on receiving\n"
+       "Send and check PDUs on receiving\n")
 {
+  int idx_password = 0;
+  int idx_word = 2;
+  int idx_type = 5;
   u_char snp_auth = 0;
-  int level = (argv[0][0] == 'd') ? IS_LEVEL_2 : IS_LEVEL_1;
+  int level = strmatch(argv[idx_password]->text, "domain-password") ? IS_LEVEL_2 : IS_LEVEL_1;
 
-  if (argc > 2)
+  if (argc > 3)
     {
       snp_auth = SNP_AUTH_SEND;
-      if (strncmp(argv[2], "v", 1) == 0)
+      if (strmatch (argv[idx_type]->text, "validate"))
         snp_auth |= SNP_AUTH_RECV;
     }
 
   return area_passwd_set(vty, level, isis_area_passwd_cleartext_set,
-                         argv[1], snp_auth);
+                         argv[idx_word]->arg, snp_auth);
 }
 
-ALIAS (area_passwd_clear,
-       area_passwd_clear_snpauth_cmd,
-       "(area-password|domain-password) clear WORD authenticate snp (send-only|validate)",
-       "Configure the authentication password for an area\n"
+DEFUN (domain_passwd_clear,
+       domain_passwd_clear_cmd,
+       "domain-password clear WORD [authenticate snp <send-only|validate>]",
        "Set the authentication password for a routing domain\n"
        "Authentication type\n"
        "Area password\n"
@@ -2259,22 +1975,20 @@ ALIAS (area_passwd_clear,
        "SNP PDUs\n"
        "Send but do not check PDUs on receiving\n"
        "Send and check PDUs on receiving\n")
+{
+  return area_passwd_clear (self, vty, argc, argv);
+}
 
 DEFUN (no_area_passwd,
        no_area_passwd_cmd,
-       "no (area-password|domain-password)",
+       "no <area-password|domain-password>",
        NO_STR
        "Configure the authentication password for an area\n"
        "Set the authentication password for a routing domain\n")
 {
-  int level = (argv[0][0] == 'd') ? IS_LEVEL_2 : IS_LEVEL_1;
-  struct isis_area *area = vty->index;
-
-  if (!area)
-    {
-      vty_out (vty, "Can't find IS-IS instance%s", VTY_NEWLINE);
-      return CMD_ERR_NO_MATCH;
-    }
+  int idx_password = 1;
+  int level = strmatch (argv[idx_password]->text, "domain-password") ? IS_LEVEL_2 : IS_LEVEL_1;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   return isis_area_passwd_unset (area, level);
 }
@@ -2283,6 +1997,7 @@ void
 isis_vty_init (void)
 {
   install_element (INTERFACE_NODE, &ip_router_isis_cmd);
+  install_element (INTERFACE_NODE, &ip6_router_isis_cmd);
   install_element (INTERFACE_NODE, &no_ip_router_isis_cmd);
 
   install_element (INTERFACE_NODE, &isis_passive_cmd);
@@ -2296,70 +2011,51 @@ isis_vty_init (void)
 
   install_element (INTERFACE_NODE, &isis_passwd_cmd);
   install_element (INTERFACE_NODE, &no_isis_passwd_cmd);
-  install_element (INTERFACE_NODE, &no_isis_passwd_arg_cmd);
 
   install_element (INTERFACE_NODE, &isis_priority_cmd);
   install_element (INTERFACE_NODE, &no_isis_priority_cmd);
-  install_element (INTERFACE_NODE, &no_isis_priority_arg_cmd);
   install_element (INTERFACE_NODE, &isis_priority_l1_cmd);
   install_element (INTERFACE_NODE, &no_isis_priority_l1_cmd);
-  install_element (INTERFACE_NODE, &no_isis_priority_l1_arg_cmd);
   install_element (INTERFACE_NODE, &isis_priority_l2_cmd);
   install_element (INTERFACE_NODE, &no_isis_priority_l2_cmd);
-  install_element (INTERFACE_NODE, &no_isis_priority_l2_arg_cmd);
 
   install_element (INTERFACE_NODE, &isis_metric_cmd);
   install_element (INTERFACE_NODE, &no_isis_metric_cmd);
-  install_element (INTERFACE_NODE, &no_isis_metric_arg_cmd);
   install_element (INTERFACE_NODE, &isis_metric_l1_cmd);
   install_element (INTERFACE_NODE, &no_isis_metric_l1_cmd);
-  install_element (INTERFACE_NODE, &no_isis_metric_l1_arg_cmd);
   install_element (INTERFACE_NODE, &isis_metric_l2_cmd);
   install_element (INTERFACE_NODE, &no_isis_metric_l2_cmd);
-  install_element (INTERFACE_NODE, &no_isis_metric_l2_arg_cmd);
 
   install_element (INTERFACE_NODE, &isis_hello_interval_cmd);
   install_element (INTERFACE_NODE, &no_isis_hello_interval_cmd);
-  install_element (INTERFACE_NODE, &no_isis_hello_interval_arg_cmd);
   install_element (INTERFACE_NODE, &isis_hello_interval_l1_cmd);
   install_element (INTERFACE_NODE, &no_isis_hello_interval_l1_cmd);
-  install_element (INTERFACE_NODE, &no_isis_hello_interval_l1_arg_cmd);
   install_element (INTERFACE_NODE, &isis_hello_interval_l2_cmd);
   install_element (INTERFACE_NODE, &no_isis_hello_interval_l2_cmd);
-  install_element (INTERFACE_NODE, &no_isis_hello_interval_l2_arg_cmd);
 
   install_element (INTERFACE_NODE, &isis_hello_multiplier_cmd);
   install_element (INTERFACE_NODE, &no_isis_hello_multiplier_cmd);
-  install_element (INTERFACE_NODE, &no_isis_hello_multiplier_arg_cmd);
   install_element (INTERFACE_NODE, &isis_hello_multiplier_l1_cmd);
   install_element (INTERFACE_NODE, &no_isis_hello_multiplier_l1_cmd);
-  install_element (INTERFACE_NODE, &no_isis_hello_multiplier_l1_arg_cmd);
   install_element (INTERFACE_NODE, &isis_hello_multiplier_l2_cmd);
   install_element (INTERFACE_NODE, &no_isis_hello_multiplier_l2_cmd);
-  install_element (INTERFACE_NODE, &no_isis_hello_multiplier_l2_arg_cmd);
 
   install_element (INTERFACE_NODE, &isis_hello_padding_cmd);
   install_element (INTERFACE_NODE, &no_isis_hello_padding_cmd);
 
   install_element (INTERFACE_NODE, &csnp_interval_cmd);
   install_element (INTERFACE_NODE, &no_csnp_interval_cmd);
-  install_element (INTERFACE_NODE, &no_csnp_interval_arg_cmd);
   install_element (INTERFACE_NODE, &csnp_interval_l1_cmd);
   install_element (INTERFACE_NODE, &no_csnp_interval_l1_cmd);
-  install_element (INTERFACE_NODE, &no_csnp_interval_l1_arg_cmd);
   install_element (INTERFACE_NODE, &csnp_interval_l2_cmd);
   install_element (INTERFACE_NODE, &no_csnp_interval_l2_cmd);
-  install_element (INTERFACE_NODE, &no_csnp_interval_l2_arg_cmd);
 
   install_element (INTERFACE_NODE, &psnp_interval_cmd);
   install_element (INTERFACE_NODE, &no_psnp_interval_cmd);
-  install_element (INTERFACE_NODE, &no_psnp_interval_arg_cmd);
   install_element (INTERFACE_NODE, &psnp_interval_l1_cmd);
   install_element (INTERFACE_NODE, &no_psnp_interval_l1_cmd);
-  install_element (INTERFACE_NODE, &no_psnp_interval_l1_arg_cmd);
   install_element (INTERFACE_NODE, &psnp_interval_l2_cmd);
   install_element (INTERFACE_NODE, &no_psnp_interval_l2_cmd);
-  install_element (INTERFACE_NODE, &no_psnp_interval_l2_arg_cmd);
 
   install_element (ISIS_NODE, &metric_style_cmd);
   install_element (ISIS_NODE, &no_metric_style_cmd);
@@ -2375,54 +2071,29 @@ isis_vty_init (void)
 
   install_element (ISIS_NODE, &area_lsp_mtu_cmd);
   install_element (ISIS_NODE, &no_area_lsp_mtu_cmd);
-  install_element (ISIS_NODE, &no_area_lsp_mtu_arg_cmd);
 
   install_element (ISIS_NODE, &is_type_cmd);
   install_element (ISIS_NODE, &no_is_type_cmd);
 
   install_element (ISIS_NODE, &lsp_gen_interval_cmd);
   install_element (ISIS_NODE, &no_lsp_gen_interval_cmd);
-  install_element (ISIS_NODE, &no_lsp_gen_interval_arg_cmd);
-  install_element (ISIS_NODE, &lsp_gen_interval_l1_cmd);
-  install_element (ISIS_NODE, &no_lsp_gen_interval_l1_cmd);
-  install_element (ISIS_NODE, &no_lsp_gen_interval_l1_arg_cmd);
-  install_element (ISIS_NODE, &lsp_gen_interval_l2_cmd);
-  install_element (ISIS_NODE, &no_lsp_gen_interval_l2_cmd);
-  install_element (ISIS_NODE, &no_lsp_gen_interval_l2_arg_cmd);
 
   install_element (ISIS_NODE, &spf_interval_cmd);
   install_element (ISIS_NODE, &no_spf_interval_cmd);
-  install_element (ISIS_NODE, &no_spf_interval_arg_cmd);
   install_element (ISIS_NODE, &spf_interval_l1_cmd);
   install_element (ISIS_NODE, &no_spf_interval_l1_cmd);
-  install_element (ISIS_NODE, &no_spf_interval_l1_arg_cmd);
   install_element (ISIS_NODE, &spf_interval_l2_cmd);
   install_element (ISIS_NODE, &no_spf_interval_l2_cmd);
-  install_element (ISIS_NODE, &no_spf_interval_l2_arg_cmd);
 
   install_element (ISIS_NODE, &max_lsp_lifetime_cmd);
   install_element (ISIS_NODE, &no_max_lsp_lifetime_cmd);
-  install_element (ISIS_NODE, &no_max_lsp_lifetime_arg_cmd);
-  install_element (ISIS_NODE, &max_lsp_lifetime_l1_cmd);
-  install_element (ISIS_NODE, &no_max_lsp_lifetime_l1_cmd);
-  install_element (ISIS_NODE, &no_max_lsp_lifetime_l1_arg_cmd);
-  install_element (ISIS_NODE, &max_lsp_lifetime_l2_cmd);
-  install_element (ISIS_NODE, &no_max_lsp_lifetime_l2_cmd);
-  install_element (ISIS_NODE, &no_max_lsp_lifetime_l2_arg_cmd);
 
   install_element (ISIS_NODE, &lsp_refresh_interval_cmd);
   install_element (ISIS_NODE, &no_lsp_refresh_interval_cmd);
-  install_element (ISIS_NODE, &no_lsp_refresh_interval_arg_cmd);
-  install_element (ISIS_NODE, &lsp_refresh_interval_l1_cmd);
-  install_element (ISIS_NODE, &no_lsp_refresh_interval_l1_cmd);
-  install_element (ISIS_NODE, &no_lsp_refresh_interval_l1_arg_cmd);
-  install_element (ISIS_NODE, &lsp_refresh_interval_l2_cmd);
-  install_element (ISIS_NODE, &no_lsp_refresh_interval_l2_cmd);
-  install_element (ISIS_NODE, &no_lsp_refresh_interval_l2_arg_cmd);
 
   install_element (ISIS_NODE, &area_passwd_md5_cmd);
-  install_element (ISIS_NODE, &area_passwd_md5_snpauth_cmd);
   install_element (ISIS_NODE, &area_passwd_clear_cmd);
-  install_element (ISIS_NODE, &area_passwd_clear_snpauth_cmd);
+  install_element (ISIS_NODE, &domain_passwd_md5_cmd);
+  install_element (ISIS_NODE, &domain_passwd_clear_cmd);
   install_element (ISIS_NODE, &no_area_passwd_cmd);
 }

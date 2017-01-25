@@ -34,9 +34,9 @@
 #include "stream.h"
 #include "prefix.h"
 #include "table.h"
+#include "qobj.h"
 
 #include "isisd/dict.h"
-#include "isisd/include-netbsd/iso.h"
 #include "isisd/isis_constants.h"
 #include "isisd/isis_common.h"
 #include "isisd/isis_flags.h"
@@ -56,12 +56,10 @@
 #include "isisd/isis_events.h"
 #include "isisd/isis_te.h"
 
-#ifdef TOPOLOGY_GENERATE
-#include "spgrid.h"
-u_char DEFAULT_TOPOLOGY_BASEIS[6] = { 0xFE, 0xED, 0xFE, 0xED, 0x00, 0x00 };
-#endif /* TOPOLOGY_GENERATE */
-
 struct isis *isis = NULL;
+
+DEFINE_QOBJ_TYPE(isis)
+DEFINE_QOBJ_TYPE(isis_area)
 
 /*
  * Prototypes.
@@ -91,15 +89,14 @@ isis_new (unsigned long process_id)
   isis->init_circ_list = list_new ();
   isis->uptime = time (NULL);
   isis->nexthops = list_new ();
-#ifdef HAVE_IPV6
   isis->nexthops6 = list_new ();
-#endif /* HAVE_IPV6 */
   dyn_cache_init ();
   /*
    * uncomment the next line for full debugs
    */
   /* isis->debugs = 0xFFFF; */
   isisMplsTE.status = disable;            /* Only support TE metric */
+  QOBJ_REG (isis, isis);
 }
 
 struct isis_area *
@@ -125,17 +122,13 @@ isis_area_create (const char *area_tag)
     {
       area->lspdb[0] = lsp_db_init ();
       area->route_table[0] = route_table_init ();
-#ifdef HAVE_IPV6
       area->route_table6[0] = route_table_init ();
-#endif /* HAVE_IPV6 */
     }
   if (area->is_type & IS_LEVEL_2)
     {
       area->lspdb[1] = lsp_db_init ();
       area->route_table[1] = route_table_init ();
-#ifdef HAVE_IPV6
       area->route_table6[1] = route_table_init ();
-#endif /* HAVE_IPV6 */
     }
 
   spftree_area_init (area);
@@ -161,13 +154,12 @@ isis_area_create (const char *area_tag)
   area->newmetric = 1;
   area->lsp_frag_threshold = 90;
   area->lsp_mtu = DEFAULT_LSP_MTU;
-#ifdef TOPOLOGY_GENERATE
-  memcpy (area->topology_baseis, DEFAULT_TOPOLOGY_BASEIS, ISIS_SYS_ID_LEN);
-#endif /* TOPOLOGY_GENERATE */
 
   area->area_tag = strdup (area_tag);
   listnode_add (isis->area_list, area);
   area->isis = isis;
+
+  QOBJ_REG (area, isis_area);
 
   return area;
 }
@@ -196,8 +188,7 @@ isis_area_get (struct vty *vty, const char *area_tag)
 
   if (area)
     {
-      vty->node = ISIS_NODE;
-      vty->index = area;
+      VTY_PUSH_CONTEXT (ISIS_NODE, area);
       return CMD_SUCCESS;
     }
 
@@ -206,8 +197,7 @@ isis_area_get (struct vty *vty, const char *area_tag)
   if (isis->debugs & DEBUG_EVENTS)
     zlog_debug ("New IS-IS area instance %s", area->area_tag);
 
-  vty->node = ISIS_NODE;
-  vty->index = area;
+  VTY_PUSH_CONTEXT (ISIS_NODE, area);
 
   return CMD_SUCCESS;
 }
@@ -228,14 +218,14 @@ isis_area_destroy (struct vty *vty, const char *area_tag)
       return CMD_ERR_NO_MATCH;
     }
 
+  QOBJ_UNREG (area);
+
   if (area->circuit_list)
     {
       for (ALL_LIST_ELEMENTS (area->circuit_list, node, nnode, circuit))
         {
           circuit->ip_router = 0;
-#ifdef HAVE_IPV6
           circuit->ipv6_router = 0;
-#endif
           isis_csm_state_change (ISIS_DISABLE, circuit, area);
         }
       list_delete (area->circuit_list);
@@ -269,7 +259,6 @@ isis_area_destroy (struct vty *vty, const char *area_tag)
       route_table_finish (area->route_table[1]);
       area->route_table[1] = NULL;
     }
-#ifdef HAVE_IPV6
   if (area->route_table6[0])
     {
       route_table_finish (area->route_table6[0]);
@@ -280,7 +269,6 @@ isis_area_destroy (struct vty *vty, const char *area_tag)
       route_table_finish (area->route_table6[1]);
       area->route_table6[1] = NULL;
     }
-#endif /* HAVE_IPV6 */
 
   isis_redist_area_finish(area);
 
@@ -315,19 +303,12 @@ isis_area_destroy (struct vty *vty, const char *area_tag)
 int
 area_net_title (struct vty *vty, const char *net_title)
 {
-  struct isis_area *area;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   struct area_addr *addr;
   struct area_addr *addrp;
   struct listnode *node;
 
   u_char buff[255];
-  area = vty->index;
-
-  if (!area)
-    {
-      vty_out (vty, "Can't find ISIS instance %s", VTY_NEWLINE);
-      return CMD_ERR_NO_MATCH;
-    }
 
   /* We check that we are not over the maximal number of addresses */
   if (listcount (area->area_addrs) >= isis->max_area_addrs)
@@ -418,17 +399,10 @@ area_net_title (struct vty *vty, const char *net_title)
 int
 area_clear_net_title (struct vty *vty, const char *net_title)
 {
-  struct isis_area *area;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   struct area_addr addr, *addrp = NULL;
   struct listnode *node;
   u_char buff[255];
-
-  area = vty->index;
-  if (!area)
-    {
-      vty_out (vty, "Can't find ISIS instance %s", VTY_NEWLINE);
-      return CMD_ERR_NO_MATCH;
-    }
 
   addr.addr_len = dotformat2buff (buff, net_title);
   if (addr.addr_len < 8 || addr.addr_len > 20)
@@ -533,7 +507,8 @@ DEFUN (show_isis_interface_arg,
        "ISIS interface\n"
        "ISIS interface name\n")
 {
-  return show_isis_interface_common (vty, argv[0], ISIS_UI_LEVEL_DETAIL);
+  int idx_word = 3;
+  return show_isis_interface_common (vty, argv[idx_word]->arg, ISIS_UI_LEVEL_DETAIL);
 }
 
 /*
@@ -707,7 +682,8 @@ DEFUN (show_isis_neighbor_arg,
        "ISIS neighbor adjacencies\n"
        "System id\n")
 {
-  return show_isis_neighbor_common (vty, argv[0], ISIS_UI_LEVEL_DETAIL);
+  int idx_word = 3;
+  return show_isis_neighbor_common (vty, argv[idx_word]->arg, ISIS_UI_LEVEL_DETAIL);
 }
 
 DEFUN (clear_isis_neighbor,
@@ -728,7 +704,8 @@ DEFUN (clear_isis_neighbor_arg,
        "ISIS neighbor adjacencies\n"
        "System id\n")
 {
-  return clear_isis_neighbor_common (vty, argv[0]);
+  int idx_word = 3;
+  return clear_isis_neighbor_common (vty, argv[idx_word]->arg);
 }
 
 /*
@@ -786,7 +763,8 @@ DEFUN (show_debugging,
        show_debugging_isis_cmd,
        "show debugging isis",
        SHOW_STR
-       "State of each debugging option\n")
+       "State of each debugging option\n"
+       ISIS_STR)
 {
   if (isis->debugs) {
       vty_out (vty, "IS-IS:%s", VTY_NEWLINE);
@@ -898,6 +876,7 @@ DEFUN (debug_isis_adj,
 DEFUN (no_debug_isis_adj,
        no_debug_isis_adj_cmd,
        "no debug isis adj-packets",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS Adjacency related packets\n")
@@ -924,6 +903,7 @@ DEFUN (debug_isis_csum,
 DEFUN (no_debug_isis_csum,
        no_debug_isis_csum_cmd,
        "no debug isis checksum-errors",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS LSP checksum errors\n")
@@ -950,6 +930,7 @@ DEFUN (debug_isis_lupd,
 DEFUN (no_debug_isis_lupd,
        no_debug_isis_lupd_cmd,
        "no debug isis local-updates",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS local update packets\n")
@@ -976,6 +957,7 @@ DEFUN (debug_isis_err,
 DEFUN (no_debug_isis_err,
        no_debug_isis_err_cmd,
        "no debug isis protocol-errors",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS LSP protocol errors\n")
@@ -1002,6 +984,7 @@ DEFUN (debug_isis_snp,
 DEFUN (no_debug_isis_snp,
        no_debug_isis_snp_cmd,
        "no debug isis snp-packets",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS CSNP/PSNP packets\n")
@@ -1028,6 +1011,7 @@ DEFUN (debug_isis_upd,
 DEFUN (no_debug_isis_upd,
        no_debug_isis_upd_cmd,
        "no debug isis update-packets",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS Update related packets\n")
@@ -1054,6 +1038,7 @@ DEFUN (debug_isis_spfevents,
 DEFUN (no_debug_isis_spfevents,
        no_debug_isis_spfevents_cmd,
        "no debug isis spf-events",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS Shortest Path First Events\n")
@@ -1080,6 +1065,7 @@ DEFUN (debug_isis_spfstats,
 DEFUN (no_debug_isis_spfstats,
        no_debug_isis_spfstats_cmd,
        "no debug isis spf-statistics",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS SPF Timing and Statistic Data\n")
@@ -1106,6 +1092,7 @@ DEFUN (debug_isis_spftrigg,
 DEFUN (no_debug_isis_spftrigg,
        no_debug_isis_spftrigg_cmd,
        "no debug isis spf-triggers",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS SPF triggering events\n")
@@ -1132,6 +1119,7 @@ DEFUN (debug_isis_rtevents,
 DEFUN (no_debug_isis_rtevents,
        no_debug_isis_rtevents_cmd,
        "no debug isis route-events",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS Route related events\n")
@@ -1158,6 +1146,7 @@ DEFUN (debug_isis_events,
 DEFUN (no_debug_isis_events,
        no_debug_isis_events_cmd,
        "no debug isis events",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS Events\n")
@@ -1184,6 +1173,7 @@ DEFUN (debug_isis_packet_dump,
 DEFUN (no_debug_isis_packet_dump,
        no_debug_isis_packet_dump_cmd,
        "no debug isis packet-dump",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS packet dump\n")
@@ -1210,6 +1200,7 @@ DEFUN (debug_isis_lsp_gen,
 DEFUN (no_debug_isis_lsp_gen,
        no_debug_isis_lsp_gen_cmd,
        "no debug isis lsp-gen",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS generation of own LSPs\n")
@@ -1235,7 +1226,8 @@ DEFUN (debug_isis_lsp_sched,
 
 DEFUN (no_debug_isis_lsp_sched,
        no_debug_isis_lsp_sched_cmd,
-       "no debug isis lsp-gen",
+       "no debug isis lsp-sched",
+       NO_STR
        UNDEBUG_STR
        "IS-IS information\n"
        "IS-IS scheduling of LSP generation\n")
@@ -1353,7 +1345,6 @@ DEFUN (show_isis_summary,
       vty_out (vty, "      run count         : %d%s",
           spftree->runcount, VTY_NEWLINE);
 
-#ifdef HAVE_IPV6
       spftree = area->spftree6[level - 1];
       if (spftree->pending)
         vty_out (vty, "    IPv6 SPF: (pending)%s", VTY_NEWLINE);
@@ -1372,7 +1363,6 @@ DEFUN (show_isis_summary,
 
       vty_out (vty, "      run count         : %d%s",
           spftree->runcount, VTY_NEWLINE);
-#endif
     }
   }
   vty_out (vty, "%s", VTY_NEWLINE);
@@ -1511,59 +1501,19 @@ show_isis_database (struct vty *vty, const char *argv, int ui_level)
   return CMD_SUCCESS;
 }
 
-DEFUN (show_database_brief,
+DEFUN (show_database,
        show_database_cmd,
-       "show isis database",
-       SHOW_STR
-       "IS-IS information\n"
-       "IS-IS link state database\n")
-{
-  return show_isis_database (vty, NULL, ISIS_UI_LEVEL_BRIEF);
-}
-
-DEFUN (show_database_lsp_brief,
-       show_database_arg_cmd,
-       "show isis database WORD",
-       SHOW_STR
-       "IS-IS information\n"
-       "IS-IS link state database\n"
-       "LSP ID\n")
-{
-  return show_isis_database (vty, argv[0], ISIS_UI_LEVEL_BRIEF);
-}
-
-DEFUN (show_database_lsp_detail,
-       show_database_arg_detail_cmd,
-       "show isis database WORD detail",
-       SHOW_STR
-       "IS-IS information\n"
-       "IS-IS link state database\n"
-       "LSP ID\n"
-       "Detailed information\n")
-{
-  return show_isis_database (vty, argv[0], ISIS_UI_LEVEL_DETAIL);
-}
-
-DEFUN (show_database_detail,
-       show_database_detail_cmd,
-       "show isis database detail",
-       SHOW_STR
-       "IS-IS information\n"
-       "IS-IS link state database\n")
-{
-  return show_isis_database (vty, NULL, ISIS_UI_LEVEL_DETAIL);
-}
-
-DEFUN (show_database_detail_lsp,
-       show_database_detail_arg_cmd,
-       "show isis database detail WORD",
+       "show isis database [detail] [WORD]",
        SHOW_STR
        "IS-IS information\n"
        "IS-IS link state database\n"
        "Detailed information\n"
        "LSP ID\n")
 {
-  return show_isis_database (vty, argv[0], ISIS_UI_LEVEL_DETAIL);
+  int idx = 0;
+  int uilevel = argv_find (argv, argc, "detail", &idx) ? ISIS_UI_LEVEL_DETAIL : ISIS_UI_LEVEL_BRIEF;
+  char *id = argv_find (argv, argc, "WORD", &idx) ? argv[idx]->arg : NULL;
+  return show_isis_database (vty, id, uilevel);
 }
 
 /* 
@@ -1576,7 +1526,8 @@ DEFUN (router_isis,
        "ISO IS-IS\n"
        "ISO Routing area tag")
 {
-  return isis_area_get (vty, argv[0]);
+  int idx_word = 2;
+  return isis_area_get (vty, argv[idx_word]->arg);
 }
 
 /* 
@@ -1587,7 +1538,8 @@ DEFUN (no_router_isis,
        "no router isis WORD",
        "no\n" ROUTER_STR "ISO IS-IS\n" "ISO Routing area tag")
 {
-  return isis_area_destroy (vty, argv[0]);
+  int idx_word = 3;
+  return isis_area_destroy (vty, argv[idx_word]->arg);
 }
 
 /*
@@ -1599,7 +1551,8 @@ DEFUN (net,
        "A Network Entity Title for this process (OSI only)\n"
        "XX.XXXX. ... .XXX.XX  Network entity title (NET)\n")
 {
-  return area_net_title (vty, argv[0]);
+  int idx_word = 1;
+  return area_net_title (vty, argv[idx_word]->arg);
 }
 
 /*
@@ -1612,7 +1565,8 @@ DEFUN (no_net,
        "A Network Entity Title for this process (OSI only)\n"
        "XX.XXXX. ... .XXX.XX  Network entity title (NET)\n")
 {
-  return area_clear_net_title (vty, argv[0]);
+  int idx_word = 2;
+  return area_clear_net_title (vty, argv[idx_word]->arg);
 }
 
 void isis_area_lsp_mtu_set(struct isis_area *area, unsigned int lsp_mtu)
@@ -1692,25 +1646,21 @@ area_resign_level (struct isis_area *area, int level)
       isis_spftree_del (area->spftree[level - 1]);
       area->spftree[level - 1] = NULL;
     }
-#ifdef HAVE_IPV6
   if (area->spftree6[level - 1])
     {
       isis_spftree_del (area->spftree6[level - 1]);
       area->spftree6[level - 1] = NULL;
     }
-#endif
   if (area->route_table[level - 1])
     {
       route_table_finish (area->route_table[level - 1]);
       area->route_table[level - 1] = NULL;
     }
-#ifdef HAVE_IPV6
   if (area->route_table6[level - 1])
     {
       route_table_finish (area->route_table6[level - 1]);
       area->route_table6[level - 1] = NULL;
     }
-#endif /* HAVE_IPV6 */
 
   sched_debug("ISIS (%s): Resigned from L%d - canceling LSP regeneration timer.",
               area->area_tag, level);
@@ -1741,10 +1691,8 @@ isis_area_is_type_set(struct isis_area *area, int is_type)
         area->lspdb[1] = lsp_db_init ();
       if (area->route_table[1] == NULL)
         area->route_table[1] = route_table_init ();
-#ifdef HAVE_IPV6
       if (area->route_table6[1] == NULL)
         area->route_table6[1] = route_table_init ();
-#endif /* HAVE_IPV6 */
       break;
 
     case IS_LEVEL_1_AND_2:
@@ -1762,10 +1710,8 @@ isis_area_is_type_set(struct isis_area *area, int is_type)
         area->lspdb[0] = lsp_db_init ();
       if (area->route_table[0] == NULL)
         area->route_table[0] = route_table_init ();
-#ifdef HAVE_IPV6
       if (area->route_table6[0] == NULL)
         area->route_table6[0] = route_table_init ();
-#endif /* HAVE_IPV6 */
       break;
 
     default:
@@ -1783,10 +1729,13 @@ isis_area_is_type_set(struct isis_area *area, int is_type)
 
   spftree_area_init (area);
 
-  if (is_type & IS_LEVEL_1)
-    lsp_generate (area, IS_LEVEL_1);
-  if (is_type & IS_LEVEL_2)
-    lsp_generate (area, IS_LEVEL_2);
+  if (listcount (area->area_addrs) > 0)
+    {
+      if (is_type & IS_LEVEL_1)
+        lsp_generate (area, IS_LEVEL_1);
+      if (is_type & IS_LEVEL_2)
+        lsp_generate (area, IS_LEVEL_2);
+    }
   lsp_regenerate_schedule (area, IS_LEVEL_1 | IS_LEVEL_2, 1);
 
   return;
@@ -1866,10 +1815,7 @@ DEFUN (log_adj_changes,
        "log-adjacency-changes",
        "Log changes in adjacency state\n")
 {
-  struct isis_area *area;
-
-  area = vty->index;
-  assert (area);
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   area->log_adj_changes = 1;
 
@@ -1879,147 +1825,15 @@ DEFUN (log_adj_changes,
 DEFUN (no_log_adj_changes,
        no_log_adj_changes_cmd,
        "no log-adjacency-changes",
+       NO_STR
        "Stop logging changes in adjacency state\n")
 {
-  struct isis_area *area;
-
-  area = vty->index;
-  assert (area);
+  VTY_DECLVAR_CONTEXT (isis_area, area);
 
   area->log_adj_changes = 0;
 
   return CMD_SUCCESS;
 }
-
-#ifdef TOPOLOGY_GENERATE
-
-DEFUN (topology_generate_grid,
-       topology_generate_grid_cmd,
-       "topology generate grid <1-100> <1-100> <1-65000> [param] [param] "
-       "[param]",
-       "Topology generation for IS-IS\n"
-       "Topology generation\n"
-       "Grid topology\n"
-       "X parameter of the grid\n"
-       "Y parameter of the grid\n"
-       "Random seed\n"
-       "Optional param 1\n"
-       "Optional param 2\n"
-       "Optional param 3\n"
-       "Topology\n")
-{
-  struct isis_area *area;
-
-  area = vty->index;
-  assert (area);
-
-  if (!spgrid_check_params (vty, argc, argv))
-    {
-      if (area->topology)
-	list_delete (area->topology);
-      area->topology = list_new ();
-      memcpy (area->top_params, vty->buf, 200);
-      gen_spgrid_topology (vty, area->topology);
-      remove_topology_lsps (area);
-      generate_topology_lsps (area);
-      /* Regenerate L1 LSP to get two way connection to the generated
-       * topology. */
-      lsp_regenerate_schedule (area, IS_LEVEL_1 | IS_LEVEL_2, 1);
-    }
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (show_isis_generated_topology,
-       show_isis_generated_topology_cmd,
-       "show isis generated-topologies",
-       SHOW_STR
-       "ISIS network information\n"
-       "Show generated topologies\n")
-{
-  struct isis_area *area;
-  struct listnode *node;
-  struct listnode *node2;
-  struct arc *arc;
-
-  for (ALL_LIST_ELEMENTS_RO (isis->area_list, node, area))
-    {
-      if (!area->topology)
-	continue;
-
-      vty_out (vty, "Topology for isis area: %s%s", area->area_tag,
-	       VTY_NEWLINE);
-      vty_out (vty, "From node     To node     Distance%s", VTY_NEWLINE);
-
-      for (ALL_LIST_ELEMENTS_RO (area->topology, node2, arc))
-	vty_out (vty, "%9ld %11ld %12ld%s", arc->from_node, arc->to_node,
-		 arc->distance, VTY_NEWLINE);
-    }
-  return CMD_SUCCESS;
-}
-
-/* Base IS for topology generation. */
-DEFUN (topology_baseis,
-       topology_baseis_cmd,
-       "topology base-is WORD",
-       "Topology generation for IS-IS\n"
-       "A Network IS Base for this topology\n"
-       "XXXX.XXXX.XXXX Network entity title (NET)\n")
-{
-  struct isis_area *area;
-  u_char buff[ISIS_SYS_ID_LEN];
-
-  area = vty->index;
-  assert (area);
-
-  if (sysid2buff (buff, argv[0]))
-    sysid2buff (area->topology_baseis, argv[0]);
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (no_topology_baseis,
-       no_topology_baseis_cmd,
-       "no topology base-is WORD",
-       NO_STR
-       "Topology generation for IS-IS\n"
-       "A Network IS Base for this topology\n"
-       "XXXX.XXXX.XXXX Network entity title (NET)\n")
-{
-  struct isis_area *area;
-
-  area = vty->index;
-  assert (area);
-
-  memcpy (area->topology_baseis, DEFAULT_TOPOLOGY_BASEIS, ISIS_SYS_ID_LEN);
-  return CMD_SUCCESS;
-}
-
-ALIAS (no_topology_baseis,
-       no_topology_baseis_noid_cmd,
-       "no topology base-is",
-       NO_STR
-       "Topology generation for IS-IS\n"
-       "A Network IS Base for this topology\n")
-
-DEFUN (topology_basedynh,
-       topology_basedynh_cmd,
-       "topology base-dynh WORD",
-       "Topology generation for IS-IS\n"
-       "Dynamic hostname base for this topology\n"
-       "Dynamic hostname base\n")
-{
-  struct isis_area *area;
-
-  area = vty->index;
-  assert (area);
-
-  /* I hope that it's enough. */
-  area->topology_basedynh = strndup (argv[0], 16); 
-  return CMD_SUCCESS;
-}
-
-#endif /* TOPOLOGY_GENERATE */
 
 /* IS-IS configuration write function */
 int
@@ -2262,28 +2076,6 @@ isis_config_write (struct vty *vty)
 	    write++;
 	  }
 
-#ifdef TOPOLOGY_GENERATE
-	if (memcmp (area->topology_baseis, DEFAULT_TOPOLOGY_BASEIS,
-		    ISIS_SYS_ID_LEN))
-	  {
-	    vty_out (vty, " topology base-is %s%s",
-		     sysid_print ((u_char *)area->topology_baseis), VTY_NEWLINE);
-	    write++;
-	  }
-	if (area->topology_basedynh)
-	  {
-	    vty_out (vty, " topology base-dynh %s%s",
-		     area->topology_basedynh, VTY_NEWLINE);
-	    write++;
-	  }
-	/* We save the whole command line here. */
-	if (strlen(area->top_params))
-	  {
-	    vty_out (vty, " %s%s", area->top_params, VTY_NEWLINE);
-	    write++;
-	  }
-#endif /* TOPOLOGY_GENERATE */
-
       }
     isis_mpls_te_config_write_router(vty);
     }
@@ -2317,10 +2109,6 @@ isis_init ()
 
   install_element (VIEW_NODE, &show_hostname_cmd);
   install_element (VIEW_NODE, &show_database_cmd);
-  install_element (VIEW_NODE, &show_database_arg_cmd);
-  install_element (VIEW_NODE, &show_database_arg_detail_cmd);
-  install_element (VIEW_NODE, &show_database_detail_cmd);
-  install_element (VIEW_NODE, &show_database_detail_arg_cmd);
 
   install_element (ENABLE_NODE, &show_debugging_isis_cmd);
 
@@ -2394,13 +2182,4 @@ isis_init ()
 
   install_element (ISIS_NODE, &log_adj_changes_cmd);
   install_element (ISIS_NODE, &no_log_adj_changes_cmd);
-
-#ifdef TOPOLOGY_GENERATE
-  install_element (ISIS_NODE, &topology_generate_grid_cmd);
-  install_element (ISIS_NODE, &topology_baseis_cmd);
-  install_element (ISIS_NODE, &topology_basedynh_cmd);
-  install_element (ISIS_NODE, &no_topology_baseis_cmd);
-  install_element (ISIS_NODE, &no_topology_baseis_noid_cmd);
-  install_element (VIEW_NODE, &show_isis_generated_topology_cmd);
-#endif /* TOPOLOGY_GENERATE */
 }

@@ -227,14 +227,8 @@ struct as_external_lsa
 
 /* Prototypes. */
 /* XXX: Eek, time functions, similar are in lib/thread.c */
-extern struct timeval tv_adjust (struct timeval);
-extern int tv_ceil (struct timeval);
-extern int tv_floor (struct timeval);
 extern struct timeval int2tv (int);
 extern struct timeval msec2tv (int);
-extern struct timeval tv_add (struct timeval, struct timeval);
-extern struct timeval tv_sub (struct timeval, struct timeval);
-extern int tv_cmp (struct timeval, struct timeval);
 
 extern int get_age (struct ospf_lsa *);
 extern u_int16_t ospf_lsa_checksum (struct lsa_header *);
@@ -255,7 +249,7 @@ extern void ospf_lsa_free (struct ospf_lsa *);
 extern struct ospf_lsa *ospf_lsa_lock (struct ospf_lsa *);
 extern void ospf_lsa_unlock (struct ospf_lsa **);
 extern void ospf_lsa_discard (struct ospf_lsa *);
-
+extern int ospf_lsa_flush_schedule (struct ospf *, struct ospf_lsa *);
 extern struct lsa_header *ospf_lsa_data_new (size_t);
 extern struct lsa_header *ospf_lsa_data_dup (struct lsa_header *);
 extern void ospf_lsa_data_free (struct lsa_header *);
@@ -309,7 +303,7 @@ extern struct ospf_lsa *ospf_lsa_refresh (struct ospf *, struct ospf_lsa *);
  
 extern void ospf_external_lsa_refresh_default (struct ospf *);
 
-extern void ospf_external_lsa_refresh_type (struct ospf *, u_char, int);
+extern void ospf_external_lsa_refresh_type (struct ospf *, u_char, u_short, int);
 extern struct ospf_lsa *ospf_external_lsa_refresh (struct ospf *,
                                                    struct ospf_lsa *,
                                                    struct external_info *,
@@ -328,8 +322,8 @@ extern void ospf_lsa_maxage_delete (struct ospf *, struct ospf_lsa *);
 extern void ospf_discard_from_db (struct ospf *, struct ospf_lsdb *, struct ospf_lsa*);
 extern int is_prefix_default (struct prefix_ipv4 *);
 
-extern int metric_type (struct ospf *, u_char);
-extern int metric_value (struct ospf *, u_char);
+extern int metric_type (struct ospf *, u_char, u_short);
+extern int metric_value (struct ospf *, u_char, u_short);
 
 extern struct in_addr ospf_get_nssa_ip (struct ospf_area *);
 extern int ospf_translated_nssa_compare (struct ospf_lsa *, struct ospf_lsa *);

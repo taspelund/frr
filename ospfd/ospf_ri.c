@@ -13,7 +13,7 @@
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2, or (at your option) any
  * later version.
- * 
+ *
  * GNU Quagga is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
@@ -206,7 +206,7 @@ ospf_router_info_term (void)
   OspfRI.pce_info.pce_neighbor = NULL;
   OspfRI.status = disabled;
 
-  ospf_router_info_unregister (OspfRI.scope);
+  ospf_router_info_unregister ();
 
   return;
 }
@@ -1176,11 +1176,14 @@ ospf_router_info_config_write_router (struct vty *vty)
 
 DEFUN (router_info,
        router_info_area_cmd,
-       "router-info area A.B.C.D",
+       "router-info <as|area A.B.C.D>",
        OSPF_RI_STR
+       "Enable the Router Information functionality with AS flooding scope\n"
        "Enable the Router Information functionality with Area flooding scope\n"
        "OSPF area ID in IP format")
 {
+  int idx_ipv4 = 2;
+  char *area = (argc == 3) ? argv[idx_ipv4]->arg : NULL;
 
   u_int8_t scope;
 
@@ -1188,14 +1191,9 @@ DEFUN (router_info,
     return CMD_SUCCESS;
 
   /* Check and get Area value if present */
-  if (argc == 1)
+  if (area)
     {
-      if (!inet_aton (argv[0], &OspfRI.area_id))
-        {
-          vty_out (vty, "Please specify Router Info Area by A.B.C.D%s",
-                   VTY_NEWLINE);
-          return CMD_WARNING;
-        }
+      inet_aton (area, &OspfRI.area_id);
       scope = OSPF_OPAQUE_AREA_LSA;
     }
   else
@@ -1236,11 +1234,6 @@ DEFUN (router_info,
 
 }
 
-ALIAS (router_info,
-       router_info_as_cmd,
-       "router-info as",
-       OSPF_RI_STR
-       "Enable the Router Information functionality with AS flooding scope\n")
 
 DEFUN (no_router_info,
        no_router_info_cmd,
@@ -1266,6 +1259,18 @@ DEFUN (no_router_info,
   return CMD_SUCCESS;
 }
 
+static int
+ospf_ri_enabled (struct vty *vty)
+{
+  if (OspfRI.status == enabled)
+    return 1;
+
+  if (vty)
+    vty_out (vty, "%% OSPF RI is not turned on%s", VTY_NEWLINE);
+
+  return 0;
+}
+
 DEFUN (pce_address,
        pce_address_cmd,
        "pce address A.B.C.D",
@@ -1273,10 +1278,14 @@ DEFUN (pce_address,
        "Stable IP address of the PCE\n"
        "PCE address in IPv4 address format\n")
 {
+  int idx_ipv4 = 2;
   struct in_addr value;
   struct ospf_pce_info *pi = &OspfRI.pce_info;
 
-  if (!inet_aton (argv[0], &value))
+  if (!ospf_ri_enabled (vty))
+    return CMD_WARNING;
+
+  if (!inet_aton (argv[idx_ipv4]->arg, &value))
     {
       vty_out (vty, "Please specify PCE Address by A.B.C.D%s", VTY_NEWLINE);
       return CMD_WARNING;
@@ -1289,7 +1298,7 @@ DEFUN (pce_address,
       set_pce_address (value, pi);
 
       /* Refresh RI LSA if already engaged */
-      if ((OspfRI.status == enabled) && (OspfRI.flags & RIFLG_LSA_ENGAGED))
+      if (OspfRI.flags & RIFLG_LSA_ENGAGED)
         ospf_router_info_lsa_schedule (REFRESH_THIS_LSA);
     }
 
@@ -1298,10 +1307,11 @@ DEFUN (pce_address,
 
 DEFUN (no_pce_address,
        no_pce_address_cmd,
-       "no pce address",
+       "no pce address [A.B.C.D]",
        NO_STR
        PCE_STR
-       "Disable PCE address\n")
+       "Disable PCE address\n"
+       "PCE address in IPv4 address format\n")
 {
 
   unset_param (&OspfRI.pce_info.pce_address.header);
@@ -1320,10 +1330,14 @@ DEFUN (pce_path_scope,
        "Path scope visibilities of the PCE for path computation\n"
        "32-bit Hexadecimal value\n")
 {
+  int idx_bitpattern = 2;
   uint32_t scope;
   struct ospf_pce_info *pi = &OspfRI.pce_info;
 
-  if (sscanf (argv[0], "0x%x", &scope) != 1)
+  if (!ospf_ri_enabled (vty))
+    return CMD_WARNING;
+
+  if (sscanf (argv[idx_bitpattern]->arg, "0x%x", &scope) != 1)
     {
       vty_out (vty, "pce_path_scope: fscanf: %s%s", safe_strerror (errno),
                VTY_NEWLINE);
@@ -1335,7 +1349,7 @@ DEFUN (pce_path_scope,
       set_pce_path_scope (scope, pi);
 
       /* Refresh RI LSA if already engaged */
-      if ((OspfRI.status == enabled) && (OspfRI.flags & RIFLG_LSA_ENGAGED))
+      if (OspfRI.flags & RIFLG_LSA_ENGAGED)
         ospf_router_info_lsa_schedule (REFRESH_THIS_LSA);
     }
 
@@ -1344,10 +1358,11 @@ DEFUN (pce_path_scope,
 
 DEFUN (no_pce_path_scope,
        no_pce_path_scope_cmd,
-       "no pce scope",
+       "no pce scope [BITPATTERN]",
        NO_STR
        PCE_STR
-       "Disable PCE path scope\n")
+       "Disable PCE path scope\n"
+       "32-bit Hexadecimal value\n")
 {
 
   unset_param (&OspfRI.pce_info.pce_address.header);
@@ -1361,19 +1376,23 @@ DEFUN (no_pce_path_scope,
 
 DEFUN (pce_domain,
        pce_domain_cmd,
-       "pce domain as <0-65535>",
+       "pce domain as (0-65535)",
        PCE_STR
        "Configure PCE domain AS number\n"
        "AS number where the PCE as visibilities for path computation\n"
        "AS number in decimal <0-65535>\n")
 {
+  int idx_number = 3;
 
   uint32_t as;
   struct ospf_pce_info *pce = &OspfRI.pce_info;
   struct listnode *node;
   struct ri_pce_subtlv_domain *domain;
 
-  if (sscanf (argv[0], "%d", &as) != 1)
+  if (!ospf_ri_enabled (vty))
+    return CMD_WARNING;
+
+  if (sscanf (argv[idx_number]->arg, "%d", &as) != 1)
     {
       vty_out (vty, "pce_domain: fscanf: %s%s", safe_strerror (errno),
                VTY_NEWLINE);
@@ -1384,33 +1403,34 @@ DEFUN (pce_domain,
   for (ALL_LIST_ELEMENTS_RO (pce->pce_domain, node, domain))
     {
       if (ntohl (domain->header.type) == 0 && as == domain->value)
-        goto out;
+        return CMD_SUCCESS;
     }
 
   /* Create new domain if not found */
   set_pce_domain (PCE_DOMAIN_TYPE_AS, as, pce);
 
   /* Refresh RI LSA if already engaged */
-  if ((OspfRI.status == enabled) && (OspfRI.flags & RIFLG_LSA_ENGAGED))
+  if (OspfRI.flags & RIFLG_LSA_ENGAGED)
     ospf_router_info_lsa_schedule (REFRESH_THIS_LSA);
 
-out:return CMD_SUCCESS;
+  return CMD_SUCCESS;
 }
 
 DEFUN (no_pce_domain,
        no_pce_domain_cmd,
-       "no pce domain as <0-65535>",
+       "no pce domain as (0-65535)",
        NO_STR
        PCE_STR
        "Disable PCE domain AS number\n"
        "AS number where the PCE as visibilities for path computation\n"
        "AS number in decimal <0-65535>\n")
 {
+  int idx_number = 4;
 
   uint32_t as;
   struct ospf_pce_info *pce = &OspfRI.pce_info;
 
-  if (sscanf (argv[0], "%d", &as) != 1)
+  if (sscanf (argv[idx_number]->arg, "%d", &as) != 1)
     {
       vty_out (vty, "no_pce_domain: fscanf: %s%s", safe_strerror (errno),
                VTY_NEWLINE);
@@ -1429,19 +1449,23 @@ DEFUN (no_pce_domain,
 
 DEFUN (pce_neigbhor,
        pce_neighbor_cmd,
-       "pce neighbor as <0-65535>",
+       "pce neighbor as (0-65535)",
        PCE_STR
        "Configure PCE neighbor domain AS number\n"
        "AS number of PCE neighbors\n"
        "AS number in decimal <0-65535>\n")
 {
+  int idx_number = 3;
 
   uint32_t as;
   struct ospf_pce_info *pce = &OspfRI.pce_info;
   struct listnode *node;
   struct ri_pce_subtlv_neighbor *neighbor;
 
-  if (sscanf (argv[0], "%d", &as) != 1)
+  if (!ospf_ri_enabled (vty))
+    return CMD_WARNING;
+
+  if (sscanf (argv[idx_number]->arg, "%d", &as) != 1)
     {
       vty_out (vty, "pce_neighbor: fscanf: %s%s", safe_strerror (errno),
                VTY_NEWLINE);
@@ -1452,33 +1476,34 @@ DEFUN (pce_neigbhor,
   for (ALL_LIST_ELEMENTS_RO (pce->pce_neighbor, node, neighbor))
     {
       if (ntohl (neighbor->header.type) == 0 && as == neighbor->value)
-        goto out;
+        return CMD_SUCCESS;
     }
 
   /* Create new domain if not found */
   set_pce_neighbor (PCE_DOMAIN_TYPE_AS, as, pce);
 
   /* Refresh RI LSA if already engaged */
-  if ((OspfRI.status == enabled) && (OspfRI.flags & RIFLG_LSA_ENGAGED))
+  if (OspfRI.flags & RIFLG_LSA_ENGAGED)
     ospf_router_info_lsa_schedule (REFRESH_THIS_LSA);
 
-out:return CMD_SUCCESS;
+  return CMD_SUCCESS;
 }
 
 DEFUN (no_pce_neighbor,
        no_pce_neighbor_cmd,
-       "no pce neighbor as <0-65535>",
+       "no pce neighbor as (0-65535)",
        NO_STR
        PCE_STR
        "Disable PCE neighbor AS number\n"
        "AS number of PCE neighbor\n"
        "AS number in decimal <0-65535>\n")
 {
+  int idx_number = 4;
 
   uint32_t as;
   struct ospf_pce_info *pce = &OspfRI.pce_info;
 
-  if (sscanf (argv[0], "%d", &as) != 1)
+  if (sscanf (argv[idx_number]->arg, "%d", &as) != 1)
     {
       vty_out (vty, "no_pce_neighbor: fscanf: %s%s", safe_strerror (errno),
                VTY_NEWLINE);
@@ -1502,11 +1527,15 @@ DEFUN (pce_cap_flag,
        "Capabilities of the PCE for path computation\n"
        "32-bit Hexadecimal value\n")
 {
+  int idx_bitpattern = 2;
 
   uint32_t cap;
   struct ospf_pce_info *pce = &OspfRI.pce_info;
 
-  if (sscanf (argv[0], "0x%x", &cap) != 1)
+  if (!ospf_ri_enabled (vty))
+    return CMD_WARNING;
+
+  if (sscanf (argv[idx_bitpattern]->arg, "0x%x", &cap) != 1)
     {
       vty_out (vty, "pce_cap_flag: fscanf: %s%s", safe_strerror (errno),
                VTY_NEWLINE);
@@ -1519,7 +1548,7 @@ DEFUN (pce_cap_flag,
       set_pce_cap_flag (cap, pce);
 
       /* Refresh RI LSA if already engaged */
-      if ((OspfRI.status == enabled) && (OspfRI.flags & RIFLG_LSA_ENGAGED))
+      if (OspfRI.flags & RIFLG_LSA_ENGAGED)
         ospf_router_info_lsa_schedule (REFRESH_THIS_LSA);
     }
 
@@ -1623,15 +1652,17 @@ ospf_router_info_register_vty (void)
   install_element (VIEW_NODE, &show_ip_ospf_router_info_pce_cmd);
 
   install_element (OSPF_NODE, &router_info_area_cmd);
-  install_element (OSPF_NODE, &router_info_as_cmd);
   install_element (OSPF_NODE, &no_router_info_cmd);
   install_element (OSPF_NODE, &pce_address_cmd);
+  install_element (OSPF_NODE, &no_pce_address_cmd);
   install_element (OSPF_NODE, &pce_path_scope_cmd);
+  install_element (OSPF_NODE, &no_pce_path_scope_cmd);
   install_element (OSPF_NODE, &pce_domain_cmd);
   install_element (OSPF_NODE, &no_pce_domain_cmd);
   install_element (OSPF_NODE, &pce_neighbor_cmd);
   install_element (OSPF_NODE, &no_pce_neighbor_cmd);
   install_element (OSPF_NODE, &pce_cap_flag_cmd);
+  install_element (OSPF_NODE, &no_pce_cap_flag_cmd);
 
   return;
 }

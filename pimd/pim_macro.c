@@ -16,31 +16,44 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-  
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
 
 #include <zebra.h>
 
 #include "log.h"
+#include "prefix.h"
+#include "vty.h"
+#include "plist.h"
 
-#include "pim_macro.h"
 #include "pimd.h"
-#include "pim_str.h"
+#include "pim_macro.h"
 #include "pim_iface.h"
 #include "pim_ifchannel.h"
-
-#define PIM_IFP_I_am_DR(pim_ifp) ((pim_ifp)->pim_dr_addr.s_addr == (pim_ifp)->primary_address.s_addr)
+#include "pim_rp.h"
 
 /*
   DownstreamJPState(S,G,I) is the per-interface state machine for
   receiving (S,G) Join/Prune messages.
 
-  DownstreamJPState(S,G,I) is either Join or Prune-Pending ?
+  DownstreamJPState(S,G,I) is either Join or Prune-Pending
+  DownstreamJPState(*,G,I) is either Join or Prune-Pending
 */
 static int downstream_jpstate_isjoined(const struct pim_ifchannel *ch)
 {
-  return ch->ifjoin_state != PIM_IFJOIN_NOINFO;
+  switch (ch->ifjoin_state)
+    {
+    case PIM_IFJOIN_NOINFO:
+    case PIM_IFJOIN_PRUNE:
+    case PIM_IFJOIN_PRUNE_TMP:
+    case PIM_IFJOIN_PRUNE_PENDING_TMP:
+      return 0;
+     break;
+    case PIM_IFJOIN_JOIN:
+    case PIM_IFJOIN_PRUNE_PENDING:
+      return 1;
+      break;
+    }
+  return 0;
 }
 
 /*
@@ -104,13 +117,9 @@ int pim_macro_ch_lost_assert(const struct pim_ifchannel *ch)
 
   ifp = ch->interface;
   if (!ifp) {
-    char src_str[100];
-    char grp_str[100];
-    pim_inet4_dump("<src?>", ch->source_addr, src_str, sizeof(src_str));
-    pim_inet4_dump("<grp?>", ch->group_addr, grp_str, sizeof(grp_str));
-    zlog_warn("%s: (S,G)=(%s,%s): null interface",
+    zlog_warn("%s: (S,G)=%s: null interface",
 	      __PRETTY_FUNCTION__,
-	      src_str, grp_str);
+	      ch->sg_str);
     return 0; /* false */
   }
 
@@ -120,13 +129,9 @@ int pim_macro_ch_lost_assert(const struct pim_ifchannel *ch)
 
   pim_ifp = ifp->info;
   if (!pim_ifp) {
-    char src_str[100];
-    char grp_str[100];
-    pim_inet4_dump("<src?>", ch->source_addr, src_str, sizeof(src_str));
-    pim_inet4_dump("<grp?>", ch->group_addr, grp_str, sizeof(grp_str));
-    zlog_warn("%s: (S,G)=(%s,%s): multicast not enabled on interface %s",
+    zlog_warn("%s: (S,G)=%s: multicast not enabled on interface %s",
 	      __PRETTY_FUNCTION__,
-	      src_str, grp_str, ifp->name);
+	      ch->sg_str, ifp->name);
     return 0; /* false */
   }
 
@@ -161,13 +166,9 @@ int pim_macro_chisin_pim_include(const struct pim_ifchannel *ch)
   struct pim_interface *pim_ifp = ch->interface->info;
 
   if (!pim_ifp) {
-    char src_str[100];
-    char grp_str[100];
-    pim_inet4_dump("<src?>", ch->source_addr, src_str, sizeof(src_str));
-    pim_inet4_dump("<grp?>", ch->group_addr, grp_str, sizeof(grp_str));
-    zlog_warn("%s: (S,G)=(%s,%s): multicast not enabled on interface %s",
+    zlog_warn("%s: (S,G)=%s: multicast not enabled on interface %s",
 	      __PRETTY_FUNCTION__,
-	      src_str, grp_str, ch->interface->name);
+	      ch->sg_str, ch->interface->name);
     return 0; /* false */
   }
 
@@ -181,7 +182,7 @@ int pim_macro_chisin_pim_include(const struct pim_ifchannel *ch)
     
   return (
 	  /* I_am_DR( I ) ? */
-	  PIM_IFP_I_am_DR(pim_ifp)
+	  PIM_I_am_DR(pim_ifp)
 	  &&
 	  /* lost_assert(S,G,I) == FALSE ? */
 	  (!pim_macro_ch_lost_assert(ch))
@@ -227,19 +228,16 @@ int pim_macro_ch_could_assert_eval(const struct pim_ifchannel *ch)
 {
   struct interface *ifp;
 
-  /* SPTbit(S,G) is always true for PIM-SSM-Only Routers */
-
   ifp = ch->interface;
   if (!ifp) {
-    char src_str[100];
-    char grp_str[100];
-    pim_inet4_dump("<src?>", ch->source_addr, src_str, sizeof(src_str));
-    pim_inet4_dump("<grp?>", ch->group_addr, grp_str, sizeof(grp_str));
-    zlog_warn("%s: (S,G)=(%s,%s): null interface",
-	      __PRETTY_FUNCTION__,
-	      src_str, grp_str);
+    zlog_warn("%s: (S,G)=%s: null interface",
+	      __PRETTY_FUNCTION__, ch->sg_str);
     return 0; /* false */
   }
+
+  /* SPTbit(S,G) == TRUE */
+  if (ch->upstream->sptbit == PIM_UPSTREAM_SPTBIT_FALSE)
+    return 0; /* false */
 
   /* RPF_interface(S) != I ? */
   if (ch->upstream->rpf.source_nexthop.interface == ifp)
@@ -307,10 +305,10 @@ struct pim_assert_metric pim_macro_ch_my_assert_metric_eval(const struct pim_ifc
 
 /*
   RFC 4601 4.2.  Data Packet Forwarding Rules
-  RFC 4601 4.8.2.  PIM-SSM-Only Routers
   
   Macro:
   inherited_olist(S,G) =
+    inherited_olist(S,G,rpt) (+)
     joins(S,G) (+) pim_include(S,G) (-) lost_assert(S,G)
 */
 static int pim_macro_chisin_inherited_olist(const struct pim_ifchannel *ch)
@@ -352,7 +350,7 @@ static int pim_macro_chisin_inherited_olist(const struct pim_ifchannel *ch)
 */
 int pim_macro_chisin_oiflist(const struct pim_ifchannel *ch)
 {
-  if (ch->upstream->join_state != PIM_UPSTREAM_JOINED) {
+  if (ch->upstream->join_state == PIM_UPSTREAM_NOTJOINED) {
     /* oiflist is NULL */
     return 0; /* false */
   }
@@ -388,25 +386,15 @@ int pim_macro_assert_tracking_desired_eval(const struct pim_ifchannel *ch)
 
   ifp = ch->interface;
   if (!ifp) {
-    char src_str[100];
-    char grp_str[100];
-    pim_inet4_dump("<src?>", ch->source_addr, src_str, sizeof(src_str));
-    pim_inet4_dump("<grp?>", ch->group_addr, grp_str, sizeof(grp_str));
-    zlog_warn("%s: (S,G)=(%s,%s): null interface",
-	      __PRETTY_FUNCTION__,
-	      src_str, grp_str);
+    zlog_warn("%s: (S,G)=%s: null interface",
+	      __PRETTY_FUNCTION__, ch->sg_str);
     return 0; /* false */
   }
 
   pim_ifp = ifp->info;
   if (!pim_ifp) {
-    char src_str[100];
-    char grp_str[100];
-    pim_inet4_dump("<src?>", ch->source_addr, src_str, sizeof(src_str));
-    pim_inet4_dump("<grp?>", ch->group_addr, grp_str, sizeof(grp_str));
-    zlog_warn("%s: (S,G)=(%s,%s): multicast not enabled on interface %s",
-	      __PRETTY_FUNCTION__,
-	      src_str, grp_str, ch->interface->name);
+    zlog_warn("%s: (S,G)=%s: multicast not enabled on interface %s",
+	      __PRETTY_FUNCTION__, ch->sg_str, ch->interface->name);
     return 0; /* false */
   }
 
@@ -417,7 +405,7 @@ int pim_macro_assert_tracking_desired_eval(const struct pim_ifchannel *ch)
   /* local_receiver_include(S,G,I) ? */
   if (local_receiver_include(ch)) {
     /* I_am_DR(I) ? */
-    if (PIM_IFP_I_am_DR(pim_ifp))
+    if (PIM_I_am_DR(pim_ifp))
       return 1; /* true */
 
     /* AssertWinner(S,G,I) == me ? */

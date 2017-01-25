@@ -1,6 +1,23 @@
 ## Process this file with Automake to create Makefile.in
 
-AM_CPPFLAGS = -I$(top_srcdir) -I$(top_srcdir)/lib -I$(top_builddir)/lib
+
+if ENABLE_BGP_VNC
+BGP_VNC_RFP_SRCDIR   = @top_srcdir@/@LIBRFP@
+BGP_VNC_RFP_INCDIR   = -I$(BGP_VNC_RFP_SRCDIR)
+BGP_VNC_RFP_SRC      = $(BGP_VNC_RFP_SRCDIR)/*.c
+BGP_VNC_RFAPI_SRCDIR = @top_srcdir@/bgpd/rfapi
+BGP_VNC_RFAPI_INCDIR = -I$(BGP_VNC_RFAPI_SRCDIR) -I$(top_srcdir)/bgpd
+BGP_VNC_RFAPI_SRC    = $(BGP_VNC_RFAPI_SRCDIR)/*.c
+else
+BGP_VNC_RFP_INCDIR   =
+BGP_VNC_RFP_SRCDIR   =
+BGP_VNC_RFP_SRC      =
+BGP_VNC_RFAPI_INCDIR =
+BGP_VNC_RFAPI_SRCDIR =
+BGP_VNC_RFAPI_SRC    =
+endif
+AM_CPPFLAGS = -I$(top_srcdir) -I$(top_srcdir)/lib -I$(top_builddir)/lib \
+	$(BGP_VNC_RFAPI_INCDIR) $(BGP_VNC_RFP_INCDIR)
 DEFS = @DEFS@ -DSYSCONFDIR=\"$(sysconfdir)/\"
 
 LIBS = @LIBS@ @CURSES@ @LIBPAM@
@@ -20,21 +37,70 @@ dist_examples_DATA = vtysh.conf.sample
 
 EXTRA_DIST = extract.pl
 
-vtysh_cmd_FILES = $(top_srcdir)/bgpd/*.c $(top_srcdir)/isisd/*.c \
-		  $(top_srcdir)/ospfd/*.c $(top_srcdir)/ospf6d/*.c \
-		  $(top_srcdir)/ripd/*.c $(top_srcdir)/ripngd/*.c \
-		  $(top_srcdir)/pimd/pim_cmd.c \
+vtysh_scan =
+
+if PIMD
+vtysh_scan += $(top_srcdir)/pimd/pim_cmd.c
+endif
+
+if BGPD
+vtysh_scan += $(top_srcdir)/bgpd/*.c
+endif
+
+if ISISD
+vtysh_scan += $(top_srcdir)/isisd/*.c
+endif
+
+if OSPFD
+vtysh_scan += $(top_srcdir)/ospfd/*.c
+endif
+
+if OSPF6D
+vtysh_scan += $(top_srcdir)/ospf6d/*.c
+endif
+
+if RIPD
+vtysh_scan += $(top_srcdir)/ripd/*.c
+endif
+
+if RIPNGD
+vtysh_scan += $(top_srcdir)/ripngd/*.c
+endif
+
+vtysh_cmd_FILES = $(vtysh_scan) \
 		  $(top_srcdir)/lib/keychain.c $(top_srcdir)/lib/routemap.c \
 		  $(top_srcdir)/lib/filter.c $(top_srcdir)/lib/plist.c \
 		  $(top_srcdir)/lib/distribute.c $(top_srcdir)/lib/if_rmap.c \
 		  $(top_srcdir)/lib/vrf.c \
 		  $(top_srcdir)/lib/vty.c $(top_srcdir)/zebra/debug.c \
+		  $(top_srcdir)/lib/ns.c \
 		  $(top_srcdir)/zebra/interface.c \
 		  $(top_srcdir)/zebra/irdp_interface.c \
 		  $(top_srcdir)/zebra/rtadv.c $(top_srcdir)/zebra/zebra_vty.c \
 		  $(top_srcdir)/zebra/zserv.c $(top_srcdir)/zebra/router-id.c \
 		  $(top_srcdir)/zebra/zebra_routemap.c \
-	          $(top_srcdir)/zebra/zebra_fpm.c
+	          $(top_srcdir)/zebra/zebra_fpm.c \
+		  $(top_srcdir)/zebra/zebra_ptm.c \
+		  $(top_srcdir)/zebra/zebra_mpls_vty.c \
+		  $(top_srcdir)/watchfrr/watchfrr_vty.c \
+	          $(BGP_VNC_RFAPI_SRC) $(BGP_VNC_RFP_SRC)
 
-vtysh_cmd.c: $(vtysh_cmd_FILES) extract.pl
-	./extract.pl $(vtysh_cmd_FILES) > vtysh_cmd.c
+# this is slightly iffy... ldp_vty_cmds.c can be located in either
+# $srcdir or $builddir depending on whether it's coming pre-built from a
+# dist tarball or being built.  automake uses VPATH to find it, but that
+# doesn't work here...
+# so after running "make ldp_vty_cmds.c", the file can be in either of the
+# two directories.  we need to do some magic to find out which.
+vtysh_cmd_DEPS = $(vtysh_cmd_FILES)
+if LDPD
+$(top_builddir)/ldpd/ldp_vty_cmds.c:
+	make -C "$(top_builddir)/ldpd" ldp_vty_cmds.c
+vtysh_cmd_DEPS += $(top_builddir)/ldpd/ldp_vty_cmds.c
+endif
+
+vtysh_cmd.c: $(vtysh_cmd_DEPS) extract.pl
+	if test -n "${LDPD}"; then \
+		ldpcmds="$(top_srcdir)/ldpd/ldp_vty_cmds.c"; \
+		test -f "$(top_builddir)/ldpd/ldp_vty_cmds.c" && ldpcmds="$(top_builddir)/ldpd/ldp_vty_cmds.c"; \
+	fi; \
+	./extract.pl $(vtysh_cmd_FILES) $${ldpcmds} > vtysh_cmd.c

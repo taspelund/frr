@@ -71,33 +71,34 @@
 static void 
 handle_route_entry (mib2_ipRouteEntry_t *routeEntry)
 {
-	struct prefix_ipv4	prefix;
- 	struct in_addr		tmpaddr, gateway;
-	u_char			zebra_flags = 0;
+  struct prefix	prefix;
+  struct in_addr		tmpaddr, gateway;
+  union g_addr *ggateway;
+  u_char			zebra_flags = 0;
 
-	if (routeEntry->ipRouteInfo.re_ire_type & IRE_CACHETABLE)
-		return;
+  if (routeEntry->ipRouteInfo.re_ire_type & IRE_CACHETABLE)
+    return;
 
-	if (routeEntry->ipRouteInfo.re_ire_type & IRE_HOST_REDIRECT)
-		zebra_flags |= ZEBRA_FLAG_SELFROUTE;
+  if (routeEntry->ipRouteInfo.re_ire_type & IRE_HOST_REDIRECT)
+    zebra_flags |= ZEBRA_FLAG_SELFROUTE;
 
-	prefix.family = AF_INET;
+  prefix.family = AF_INET;
 
-	tmpaddr.s_addr = routeEntry->ipRouteDest;
-	prefix.prefix = tmpaddr;
+  tmpaddr.s_addr = routeEntry->ipRouteDest;
+  prefix.u.prefix4 = tmpaddr;
 
-	tmpaddr.s_addr = routeEntry->ipRouteMask;
-	prefix.prefixlen = ip_masklen (tmpaddr);
+  tmpaddr.s_addr = routeEntry->ipRouteMask;
+  prefix.prefixlen = ip_masklen (tmpaddr);
 
-	gateway.s_addr = routeEntry->ipRouteNextHop;
+  gateway.s_addr = routeEntry->ipRouteNextHop;
+  ggateway = (union g_addr *)&gateway;
 
-	rib_add_ipv4 (ZEBRA_ROUTE_KERNEL, zebra_flags, &prefix,
-		      &gateway, NULL, 0, VRF_DEFAULT, RT_TABLE_MAIN,
-		      0, 0, 0, SAFI_UNICAST);
+  rib_add (AFI_IP, SAFI_UNICAST, VRF_DEFAULT, ZEBRA_ROUTE_KERNEL, 0,
+	   zebra_flags, &prefix, ggateway, NULL, 0, 0, 0, 0, 0);
 }
 
 void
-route_read (struct zebra_vrf *zvrf)
+route_read (struct zebra_ns *zns)
 {
 	char 			storage[RT_BUFSIZ];
 
@@ -111,10 +112,6 @@ route_read (struct zebra_vrf *zvrf)
 
 	struct strbuf		msgdata;
 	int			flags, dev, retval, process;
-
-	if (zvrf->vrf_id != VRF_DEFAULT) {
-		return;
-	}
 
 	if ((dev = open (_PATH_GETMSG_ROUTE, O_RDWR)) == -1) {
 		zlog_warn ("can't open %s: %s", _PATH_GETMSG_ROUTE,

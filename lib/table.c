@@ -27,6 +27,9 @@
 #include "memory.h"
 #include "sockunion.h"
 
+DEFINE_MTYPE(       LIB, ROUTE_TABLE, "Route table")
+DEFINE_MTYPE_STATIC(LIB, ROUTE_NODE,  "Route node")
+
 static void route_node_delete (struct route_node *);
 static void route_table_free (struct route_table *);
 
@@ -247,7 +250,6 @@ route_node_match_ipv4 (const struct route_table *table,
   return route_node_match (table, (struct prefix *) &p);
 }
 
-#ifdef HAVE_IPV6
 struct route_node *
 route_node_match_ipv6 (const struct route_table *table,
 		       const struct in6_addr *addr)
@@ -261,7 +263,6 @@ route_node_match_ipv6 (const struct route_table *table,
 
   return route_node_match (table, (struct prefix *) &p);
 }
-#endif /* HAVE_IPV6 */
 
 /* Lookup same prefix node.  Return NULL when we can't find route. */
 struct route_node *
@@ -491,7 +492,7 @@ route_table_count (const struct route_table *table)
  *
  * Default function for creating a route node.
  */
-static struct route_node *
+struct route_node *
 route_node_create (route_table_delegate_t *delegate,
 		   struct route_table *table)
 {
@@ -505,7 +506,7 @@ route_node_create (route_table_delegate_t *delegate,
  *
  * Default function for destroying a route node.
  */
-static void
+void
 route_node_destroy (route_table_delegate_t *delegate,
 		    struct route_table *table, struct route_node *node)
 {
@@ -519,6 +520,12 @@ static route_table_delegate_t default_delegate = {
   .create_node = route_node_create,
   .destroy_node = route_node_destroy
 };
+
+route_table_delegate_t *
+route_table_get_default_delegate(void)
+{
+  return &default_delegate;
+}
 
 /*
  * route_table_init

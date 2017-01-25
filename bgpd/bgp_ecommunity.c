@@ -24,6 +24,7 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "memory.h"
 #include "prefix.h"
 #include "command.h"
+#include "queue.h"
 #include "filter.h"
 
 #include "bgpd/bgpd.h"
@@ -34,7 +35,7 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 static struct hash *ecomhash;
 
 /* Allocate a new ecommunities.  */
-static struct ecommunity *
+struct ecommunity *
 ecommunity_new (void)
 {
   return (struct ecommunity *) XCALLOC (MTYPE_ECOMMUNITY,
@@ -53,12 +54,19 @@ ecommunity_free (struct ecommunity **ecom)
   ecom = NULL;
 }
 
+static void 
+ecommunity_hash_free (struct ecommunity *ecom)
+{
+  ecommunity_free(&ecom);
+}
+
+
 /* Add a new Extended Communities value to Extended Communities
    Attribute structure.  When the value is already exists in the
    structure, we don't add the value.  Newly added value is sorted by
    numerical order.  When the value is added to the structure return 1
    else return 0.  */
-static int
+int
 ecommunity_add_val (struct ecommunity *ecom, struct ecommunity_val *eval)
 {
   u_int8_t *p;
@@ -260,6 +268,12 @@ ecommunity_cmp (const void *arg1, const void *arg2)
 {
   const struct ecommunity *ecom1 = arg1;
   const struct ecommunity *ecom2 = arg2;
+
+  if (ecom1 == NULL && ecom2 == NULL)
+    return 1;
+
+  if (ecom1 == NULL || ecom2 == NULL)
+    return 0;
   
   return (ecom1->size == ecom2->size
 	  && memcmp (ecom1->val, ecom2->val, ecom1->size * ECOMMUNITY_SIZE) == 0);
@@ -275,6 +289,7 @@ ecommunity_init (void)
 void
 ecommunity_finish (void)
 {
+  hash_clean (ecomhash, (void (*)(void *))ecommunity_hash_free);
   hash_free (ecomhash);
   ecomhash = NULL;
 }
@@ -577,7 +592,7 @@ ecommunity_str2com (const char *str, int type, int keyword_included)
    extcommunity-list
         "rt 100:1 rt 100:2 soo 100:3"
 
-   "show ip bgp" and extcommunity-list regular expression matching
+   "show [ip] bgp" and extcommunity-list regular expression matching
         "RT:100:1 RT:100:2 SoO:100:3"
 
    For each formath please use below definition for format:
@@ -763,7 +778,9 @@ ecommunity_match (const struct ecommunity *ecom1,
   /* Every community on com2 needs to be on com1 for this to match */
   while (i < ecom1->size && j < ecom2->size)
     {
-      if (memcmp (ecom1->val + i, ecom2->val + j, ECOMMUNITY_SIZE) == 0)
+      if (memcmp (ecom1->val + i * ECOMMUNITY_SIZE,
+                  ecom2->val + j * ECOMMUNITY_SIZE,
+                  ECOMMUNITY_SIZE) == 0)
         j++;
       i++;
     }
@@ -773,4 +790,3 @@ ecommunity_match (const struct ecommunity *ecom1,
   else
     return 0;
 }
-

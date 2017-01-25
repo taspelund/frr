@@ -26,12 +26,18 @@
 #include "if.h"
 #include "workqueue.h"
 #include "vrf.h"
+#include "routemap.h"
+#include "vty.h"
+#include "zclient.h"
 
+#include "zebra/zebra_ns.h"
 /* Default port information. */
 #define ZEBRA_VTY_PORT                2601
 
 /* Default configuration filename. */
 #define DEFAULT_CONFIG_FILE "zebra.conf"
+
+#define ZEBRA_RMAP_DEFAULT_UPDATE_TIMER 5 /* disabled by default */
 
 /* Client structure. */
 struct zserv
@@ -57,7 +63,8 @@ struct zserv
   int rtm_table;
 
   /* This client's redistribute flag. */
-  vrf_bitmap_t redist[ZEBRA_ROUTE_MAX];
+  struct redist_proto mi_redist[AFI_MAX][ZEBRA_ROUTE_MAX];
+  vrf_bitmap_t redist[AFI_MAX][ZEBRA_ROUTE_MAX];
 
   /* Redistribute default route flag. */
   vrf_bitmap_t redist_default;
@@ -70,6 +77,7 @@ struct zserv
 
   /* client's protocol */
   u_char proto;
+  u_short instance;
 
   /* Statistics */
   u_int32_t redist_v4_add_cnt;
@@ -88,6 +96,15 @@ struct zserv
   u_int32_t ifdown_cnt;
   u_int32_t ifadd_cnt;
   u_int32_t ifdel_cnt;
+  u_int32_t if_bfd_cnt;
+  u_int32_t bfd_peer_add_cnt;
+  u_int32_t bfd_peer_upd8_cnt;
+  u_int32_t bfd_peer_del_cnt;
+  u_int32_t bfd_peer_replay_cnt;
+  u_int32_t vrfadd_cnt;
+  u_int32_t vrfdel_cnt;
+  u_int32_t if_vrfchg_cnt;
+  u_int32_t bfd_client_reg_cnt;
 
   time_t connect_time;
   time_t last_read_time;
@@ -108,12 +125,16 @@ struct zebra_t
   struct list *client_list;
 
   /* default table */
-  int rtm_table_default;
+  u_int32_t rtm_table_default;
 
   /* rib work queue */
   struct work_queue *ribq;
   struct meta_queue *mq;
+
+  /* LSP work queue */
+  struct work_queue *lsp_process_q;
 };
+extern struct zebra_t zebrad;
 
 /* Prototypes. */
 extern void zebra_init (void);
@@ -121,29 +142,40 @@ extern void zebra_if_init (void);
 extern void zebra_zserv_socket_init (char *path);
 extern void hostinfo_get (void);
 extern void rib_init (void);
-extern void interface_list (struct zebra_vrf *);
-extern void route_read (struct zebra_vrf *);
-extern void kernel_init (struct zebra_vrf *);
-extern void kernel_terminate (struct zebra_vrf *);
+extern void interface_list (struct zebra_ns *);
+extern void route_read (struct zebra_ns *);
+extern void kernel_init (struct zebra_ns *);
+extern void kernel_terminate (struct zebra_ns *);
 extern void zebra_route_map_init (void);
 extern void zebra_snmp_init (void);
 extern void zebra_vty_init (void);
 
+extern int zsend_vrf_add (struct zserv *, struct zebra_vrf *);
+extern int zsend_vrf_delete (struct zserv *, struct zebra_vrf *);
+
 extern int zsend_interface_add (struct zserv *, struct interface *);
 extern int zsend_interface_delete (struct zserv *, struct interface *);
+extern int zsend_interface_addresses (struct zserv *, struct interface *);
 extern int zsend_interface_address (int, struct zserv *, struct interface *,
                                     struct connected *);
+extern void nbr_connected_add_ipv6 (struct interface *, struct in6_addr *);
+extern void nbr_connected_delete_ipv6 (struct interface *, struct in6_addr *);
 extern int zsend_interface_update (int, struct zserv *, struct interface *);
-extern int zsend_route_multipath (int, struct zserv *, struct prefix *, 
-                                  struct rib *);
+extern int zsend_redistribute_route (int, struct zserv *, struct prefix *,
+				     struct rib *);
 extern int zsend_router_id_update (struct zserv *, struct prefix *,
                                    vrf_id_t);
+extern int zsend_interface_vrf_update (struct zserv *, struct interface *,
+                                       vrf_id_t);
 
 extern int zsend_interface_link_params (struct zserv *, struct interface *);
 
 extern pid_t pid;
 
-extern void zserv_create_header(struct stream *s, uint16_t cmd, vrf_id_t);
+extern void zserv_create_header(struct stream *s, uint16_t cmd, vrf_id_t vrf_id);
+extern void zserv_nexthop_num_warn(const char *, const struct prefix *, const unsigned int);
 extern int zebra_server_send_message(struct zserv *client);
+
+extern struct zserv *zebra_find_client (u_char proto);
 
 #endif /* _ZEBRA_ZEBRA_H */

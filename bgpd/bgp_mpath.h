@@ -1,5 +1,4 @@
-/* $QuaggaId: Format:%an, %ai, %h$ $
- *
+/*
  * BGP Multipath
  * Copyright (C) 2010 Google Inc.
  *
@@ -24,9 +23,6 @@
 #ifndef _QUAGGA_BGP_MPATH_H
 #define _QUAGGA_BGP_MPATH_H
 
-/* BGP default maximum-paths */
-#define BGP_DEFAULT_MAXPATHS 1
-
 /* Supplemental information linked to bgp_info for keeping track of
  * multipath selections, lazily allocated to save memory
  */
@@ -49,21 +45,21 @@ struct bgp_info_mpath
 };
 
 /* Functions to support maximum-paths configuration */
-extern int bgp_maximum_paths_set (struct bgp *, afi_t, safi_t, int, u_int16_t);
+extern int bgp_maximum_paths_set (struct bgp *, afi_t, safi_t, int, u_int16_t,
+				  u_int16_t);
 extern int bgp_maximum_paths_unset (struct bgp *, afi_t, safi_t, int);
-bool bgp_mpath_is_configured_sort (struct bgp *, bgp_peer_sort_t, afi_t, safi_t);
-bool bgp_mpath_is_configured (struct bgp *, afi_t, safi_t);
 
 /* Functions used by bgp_best_selection to record current
  * multipath selections
  */
+extern int bgp_info_nexthop_cmp (struct bgp_info *bi1, struct bgp_info *bi2);
 extern void bgp_mp_list_init (struct list *);
 extern void bgp_mp_list_clear (struct list *);
 extern void bgp_mp_list_add (struct list *, struct bgp_info *);
 extern void bgp_mp_dmed_deselect (struct bgp_info *);
 extern void bgp_info_mpath_update (struct bgp_node *, struct bgp_info *,
                                    struct bgp_info *, struct list *,
-                                   afi_t, safi_t);
+                                   struct bgp_maxpaths_cfg *);
 extern void bgp_info_mpath_aggregate_update (struct bgp_info *,
                                              struct bgp_info *);
 

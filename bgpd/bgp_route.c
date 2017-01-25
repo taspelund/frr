@@ -26,7 +26,6 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "command.h"
 #include "stream.h"
 #include "filter.h"
-#include "str.h"
 #include "log.h"
 #include "routemap.h"
 #include "buffer.h"
@@ -34,6 +33,9 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "plist.h"
 #include "thread.h"
 #include "workqueue.h"
+#include "queue.h"
+#include "memory.h"
+#include "lib/json.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_table.h"
@@ -56,12 +58,19 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "bgpd/bgp_vty.h"
 #include "bgpd/bgp_mpath.h"
 #include "bgpd/bgp_nht.h"
+#include "bgpd/bgp_updgrp.h"
+
+#if ENABLE_BGP_VNC
+#include "bgpd/rfapi/rfapi_backend.h"
+#include "bgpd/rfapi/vnc_import_bgp.h"
+#include "bgpd/rfapi/vnc_export_bgp.h"
+#endif
 
 /* Extern from bgp_dump.c */
 extern const char *bgp_origin_str[];
 extern const char *bgp_origin_long_str[];
 
-static struct bgp_node *
+struct bgp_node *
 bgp_afi_node_get (struct bgp_table *table, afi_t afi, safi_t safi, struct prefix *p,
 		  struct prefix_rd *prd)
 {
@@ -125,6 +134,13 @@ bgp_info_extra_get (struct bgp_info *ri)
   if (!ri->extra)
     ri->extra = bgp_info_extra_new();
   return ri->extra;
+}
+
+/* Allocate new bgp info structure. */
+struct bgp_info *
+bgp_info_new (void)
+{
+  return XCALLOC (MTYPE_BGP_ROUTE, sizeof (struct bgp_info));
 }
 
 /* Free bgp route information. */
@@ -223,7 +239,7 @@ bgp_info_delete (struct bgp_node *rn, struct bgp_info *ri)
 /* undo the effects of a previous call to bgp_info_delete; typically
    called when a route is deleted and then quickly re-added before the
    deletion has been processed */
-static void
+void
 bgp_info_restore (struct bgp_node *rn, struct bgp_info *ri)
 {
   bgp_info_unset_flag (rn, ri, BGP_INFO_REMOVED);
@@ -242,9 +258,7 @@ bgp_pcount_adjust (struct bgp_node *rn, struct bgp_info *ri)
 
   table = bgp_node_table (rn);
 
-  /* Ignore 'pcount' for RS-client tables */
-  if (table->type != BGP_TABLE_MAIN
-      || ri->peer == ri->peer->bgp->peer_self)
+  if (ri->peer == ri->peer->bgp->peer_self)
     return;
     
   if (!BGP_INFO_COUNTABLE (ri)
@@ -316,12 +330,20 @@ bgp_med_value (struct attr *attr, struct bgp *bgp)
     }
 }
 
-/* Compare two bgp route entity.  Return -1 if new is preferred, 1 if exist
- * is preferred, or 0 if they are the same (usually will only occur if
- * multipath is enabled */
+void
+bgp_info_path_with_addpath_rx_str (struct bgp_info *ri, char *buf)
+{
+  if (ri->addpath_rx_id)
+    sprintf(buf, "path %s (addpath rxid %d)", ri->peer->host, ri->addpath_rx_id);
+  else
+    sprintf(buf, "path %s", ri->peer->host);
+}
+
+/* Compare two bgp route entity.  If 'new' is preferable over 'exist' return 1. */
 static int
 bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
-              afi_t afi, safi_t safi)
+	      int *paths_eq, struct bgp_maxpaths_cfg *mpath_cfg, int debug,
+              const char *pfx_buf)
 {
   struct attr *newattr, *existattr;
   struct attr_extra *newattre, *existattre;
@@ -341,12 +363,35 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
   int internal_as_route;
   int confed_as_route;
   int ret;
+  char new_buf[PATH_ADDPATH_STR_BUFFER];
+  char exist_buf[PATH_ADDPATH_STR_BUFFER];
+
+  *paths_eq = 0;
 
   /* 0. Null check. */
   if (new == NULL)
-    return 1;
+    {
+      if (debug)
+        zlog_debug("%s: new is NULL", pfx_buf);
+      return 0;
+    }
+
+  if (debug)
+    bgp_info_path_with_addpath_rx_str (new, new_buf);
+
   if (exist == NULL)
-    return -1;
+    {
+      if (debug)
+        zlog_debug("%s: %s is the initial bestpath", pfx_buf, new_buf);
+      return 1;
+    }
+
+  if (debug)
+    {
+      bgp_info_path_with_addpath_rx_str (exist, exist_buf);
+      zlog_debug("%s: Comparing %s flags 0x%x with %s flags 0x%x",
+                 pfx_buf, new_buf, new->flags, exist_buf, exist->flags);
+    }
 
   newattr = new->attr;
   existattr = exist->attr;
@@ -362,9 +407,20 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
     exist_weight = existattre->weight;
 
   if (new_weight > exist_weight)
-    return -1;
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to weight %d > %d",
+                   pfx_buf, new_buf, exist_buf, new_weight, exist_weight);
+      return 1;
+    }
+
   if (new_weight < exist_weight)
-    return 1;
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to weight %d < %d",
+                   pfx_buf, new_buf, exist_buf, new_weight, exist_weight);
+      return 0;
+    }
 
   /* 2. Local preference check. */
   new_pref = exist_pref = bgp->default_local_pref;
@@ -375,9 +431,20 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
     exist_pref = existattr->local_pref;
 
   if (new_pref > exist_pref)
-    return -1;
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to localpref %d > %d",
+                   pfx_buf, new_buf, exist_buf, new_pref, exist_pref);
+      return 1;
+    }
+
   if (new_pref < exist_pref)
-    return 1;
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to localpref %d < %d",
+                   pfx_buf, new_buf, exist_buf, new_pref, exist_pref);
+      return 0;
+    }
 
   /* 3. Local route check. We prefer:
    *  - BGP_ROUTE_STATIC
@@ -385,9 +452,20 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
    *  - BGP_ROUTE_REDISTRIBUTE
    */
   if (! (new->sub_type == BGP_ROUTE_NORMAL))
-     return -1;
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to preferred BGP_ROUTE type",
+                   pfx_buf, new_buf, exist_buf);
+      return 1;
+    }
+
   if (! (exist->sub_type == BGP_ROUTE_NORMAL))
-     return 1;
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to preferred BGP_ROUTE type",
+                   pfx_buf, new_buf, exist_buf);
+      return 0;
+    }
 
   /* 4. AS path length check. */
   if (! bgp_flag_check (bgp, BGP_FLAG_ASPATH_IGNORE))
@@ -403,26 +481,65 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
           aspath_hops += aspath_count_confeds (newattr->aspath);
           
 	  if ( aspath_hops < (exist_hops + exist_confeds))
-	    return -1;
+            {
+              if (debug)
+                zlog_debug("%s: %s wins over %s due to aspath (with confeds) hopcount %d < %d",
+                           pfx_buf, new_buf, exist_buf,
+                           aspath_hops, (exist_hops + exist_confeds));
+	      return 1;
+            }
+
 	  if ( aspath_hops > (exist_hops + exist_confeds))
-	    return 1;
+            {
+              if (debug)
+                zlog_debug("%s: %s loses to %s due to aspath (with confeds) hopcount %d > %d",
+                           pfx_buf, new_buf, exist_buf,
+                           aspath_hops, (exist_hops + exist_confeds));
+	      return 0;
+            }
 	}
       else
 	{
 	  int newhops = aspath_count_hops (newattr->aspath);
 	  
 	  if (newhops < exist_hops)
-	    return -1;
+            {
+              if (debug)
+                zlog_debug("%s: %s wins over %s due to aspath hopcount %d < %d",
+                           pfx_buf, new_buf, exist_buf, newhops, exist_hops);
+	      return 1;
+            }
+
           if (newhops > exist_hops)
-	    return 1;
+            {
+              if (debug)
+                zlog_debug("%s: %s loses to %s due to aspath hopcount %d > %d",
+                           pfx_buf, new_buf, exist_buf, newhops, exist_hops);
+	      return 0;
+            }
 	}
     }
 
   /* 5. Origin check. */
   if (newattr->origin < existattr->origin)
-    return -1;
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to ORIGIN %s < %s",
+                   pfx_buf, new_buf, exist_buf,
+                   bgp_origin_long_str[newattr->origin],
+                   bgp_origin_long_str[existattr->origin]);
+      return 1;
+    }
+
   if (newattr->origin > existattr->origin)
-    return 1;
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to ORIGIN %s > %s",
+                   pfx_buf, new_buf, exist_buf,
+                   bgp_origin_long_str[newattr->origin],
+                   bgp_origin_long_str[existattr->origin]);
+      return 0;
+    }
 
   /* 6. MED check. */
   internal_as_route = (aspath_count_hops (newattr->aspath) == 0
@@ -443,9 +560,20 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
       exist_med = bgp_med_value (exist->attr, bgp);
 
       if (new_med < exist_med)
-	return -1;
+        {
+          if (debug)
+            zlog_debug("%s: %s wins over %s due to MED %d < %d",
+                       pfx_buf, new_buf, exist_buf, new_med, exist_med);
+	  return 1;
+        }
+
       if (new_med > exist_med)
-	return 1;
+        {
+          if (debug)
+            zlog_debug("%s: %s loses to %s due to MED %d > %d",
+                       pfx_buf, new_buf, exist_buf, new_med, exist_med);
+	  return 0;
+        }
     }
 
   /* 7. Peer type check. */
@@ -454,10 +582,21 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
 
   if (new_sort == BGP_PEER_EBGP
       && (exist_sort == BGP_PEER_IBGP || exist_sort == BGP_PEER_CONFED))
-    return -1;
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to eBGP peer > iBGP peer",
+                   pfx_buf, new_buf, exist_buf);
+      return 1;
+    }
+
   if (exist_sort == BGP_PEER_EBGP
       && (new_sort == BGP_PEER_IBGP || new_sort == BGP_PEER_CONFED))
-    return 1;
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to iBGP peer < eBGP peer",
+                   pfx_buf, new_buf, exist_buf);
+      return 0;
+    }
 
   /* 8. IGP metric check. */
   newm = existm = 0;
@@ -468,35 +607,133 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
     existm = exist->extra->igpmetric;
 
   if (newm < existm)
-    return -1;
-  if (newm > existm)
-    return 1;
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to IGP metric %d < %d",
+                   pfx_buf, new_buf, exist_buf, newm, existm);
+      ret = 1;
+    }
 
-  /* 9. Maximum path check. */
-  if (bgp_mpath_is_configured (bgp, afi, safi))
+  if (newm > existm)
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to IGP metric %d > %d",
+                   pfx_buf, new_buf, exist_buf, newm, existm);
+      ret = 0;
+    }
+
+  /* 9. Same IGP metric. Compare the cluster list length as
+     representative of IGP hops metric. Rewrite the metric value
+     pair (newm, existm) with the cluster list length. Prefer the
+     path with smaller cluster list length.                       */
+  if (newm == existm)
+    {
+      if (peer_sort (new->peer) == BGP_PEER_IBGP
+	  && peer_sort (exist->peer) == BGP_PEER_IBGP
+	  && (mpath_cfg == NULL ||
+              CHECK_FLAG (mpath_cfg->ibgp_flags,
+                          BGP_FLAG_IBGP_MULTIPATH_SAME_CLUSTERLEN)))
+	{
+	  newm = BGP_CLUSTER_LIST_LENGTH(new->attr);
+	  existm = BGP_CLUSTER_LIST_LENGTH(exist->attr);
+
+	  if (newm < existm)
+            {
+              if (debug)
+                zlog_debug("%s: %s wins over %s due to CLUSTER_LIST length %d < %d",
+                           pfx_buf, new_buf, exist_buf, newm, existm);
+	      ret = 1;
+            }
+
+	  if (newm > existm)
+            {
+              if (debug)
+                zlog_debug("%s: %s loses to %s due to CLUSTER_LIST length %d > %d",
+                           pfx_buf, new_buf, exist_buf, newm, existm);
+	      ret = 0;
+            }
+	}
+    }
+
+  /* 10. confed-external vs. confed-internal */
+  if (CHECK_FLAG(bgp->config, BGP_CONFIG_CONFEDERATION))
+    {
+      if (new_sort == BGP_PEER_CONFED && exist_sort == BGP_PEER_IBGP)
+        {
+          if (debug)
+            zlog_debug("%s: %s wins over %s due to confed-external peer > confed-internal peer",
+                       pfx_buf, new_buf, exist_buf);
+          return 1;
+        }
+
+      if (exist_sort == BGP_PEER_CONFED && new_sort == BGP_PEER_IBGP)
+        {
+          if (debug)
+            zlog_debug("%s: %s loses to %s due to confed-internal peer < confed-external peer",
+                       pfx_buf, new_buf, exist_buf);
+          return 0;
+        }
+    }
+
+  /* 11. Maximum path check. */
+  if (newm == existm)
     {
       if (bgp_flag_check(bgp, BGP_FLAG_ASPATH_MULTIPATH_RELAX))
         {
-          /*
-           * For the two paths, all comparison steps till IGP metric
-           * have succeeded - including AS_PATH hop count. Since 'bgp
-           * bestpath as-path multipath-relax' knob is on, we don't need
-           * an exact match of AS_PATH. Thus, mark the paths are equal.
-           * That will trigger both these paths to get into the multipath
-           * array.
-           */
-          return 0;
+
+	  /*
+	   * For the two paths, all comparison steps till IGP metric
+	   * have succeeded - including AS_PATH hop count. Since 'bgp
+	   * bestpath as-path multipath-relax' knob is on, we don't need
+	   * an exact match of AS_PATH. Thus, mark the paths are equal.
+	   * That will trigger both these paths to get into the multipath
+	   * array.
+	   */
+	  *paths_eq = 1;
+
+          if (debug)
+            zlog_debug("%s: %s and %s are equal via multipath-relax",
+                       pfx_buf, new_buf, exist_buf);
         }
       else if (new->peer->sort == BGP_PEER_IBGP)
-        {
-          if (aspath_cmp (new->attr->aspath, exist->attr->aspath))
-            return 0;
-        }
+	{
+	  if (aspath_cmp (new->attr->aspath, exist->attr->aspath))
+            {
+	      *paths_eq = 1;
+
+              if (debug)
+                zlog_debug("%s: %s and %s are equal via matching aspaths",
+                           pfx_buf, new_buf, exist_buf);
+            }
+	}
       else if (new->peer->as == exist->peer->as)
-        return 0;
+        {
+	  *paths_eq = 1;
+
+          if (debug)
+            zlog_debug("%s: %s and %s are equal via same remote-as",
+                       pfx_buf, new_buf, exist_buf);
+        }
+    }
+  else
+    {
+      /*
+       * TODO: If unequal cost ibgp multipath is enabled we can
+       * mark the paths as equal here instead of returning
+       */
+      if (debug)
+        {
+          if (ret == 1)
+            zlog_debug("%s: %s wins over %s after IGP metric comparison",
+                       pfx_buf, new_buf, exist_buf);
+          else
+            zlog_debug("%s: %s loses to %s after IGP metric comparison",
+                       pfx_buf, new_buf, exist_buf);
+        }
+      return ret;
     }
 
-  /* 10. If both paths are external, prefer the path that was received
+  /* 12. If both paths are external, prefer the path that was received
      first (the oldest one).  This step minimizes route-flap, since a
      newer path won't displace an older one, even if it was the
      preferred route based on the additional decision criteria below.  */
@@ -505,12 +742,23 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
       && exist_sort == BGP_PEER_EBGP)
     {
       if (CHECK_FLAG (new->flags, BGP_INFO_SELECTED))
-	return -1;
+        {
+          if (debug)
+              zlog_debug("%s: %s wins over %s due to oldest external",
+                         pfx_buf, new_buf, exist_buf);
+	  return 1;
+        }
+
       if (CHECK_FLAG (exist->flags, BGP_INFO_SELECTED))
-	return 1;
+        {
+          if (debug)
+              zlog_debug("%s: %s loses to %s due to oldest external",
+                         pfx_buf, new_buf, exist_buf);
+	  return 0;
+        }
     }
 
-  /* 11. Router-ID comparision. */
+  /* 13. Router-ID comparision. */
   /* If one of the paths is "stale", the corresponding peer router-id will
    * be 0 and would always win over the other path. If originator id is
    * used for the comparision, it will decide which path is better.
@@ -525,45 +773,114 @@ bgp_info_cmp (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
     exist_id.s_addr = exist->peer->remote_id.s_addr;
 
   if (ntohl (new_id.s_addr) < ntohl (exist_id.s_addr))
-    return -1;
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to Router-ID comparison",
+                   pfx_buf, new_buf, exist_buf);
+      return 1;
+    }
+
   if (ntohl (new_id.s_addr) > ntohl (exist_id.s_addr))
-    return 1;
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to Router-ID comparison",
+                   pfx_buf, new_buf, exist_buf);
+      return 0;
+    }
 
-  /* 12. Cluster length comparision. */
-  new_cluster = exist_cluster = 0;
-
-  if (newattr->flag & ATTR_FLAG_BIT(BGP_ATTR_CLUSTER_LIST))
-    new_cluster = newattre->cluster->length;
-  if (existattr->flag & ATTR_FLAG_BIT(BGP_ATTR_CLUSTER_LIST))
-    exist_cluster = existattre->cluster->length;
+  /* 14. Cluster length comparision. */
+  new_cluster = BGP_CLUSTER_LIST_LENGTH(new->attr);
+  exist_cluster = BGP_CLUSTER_LIST_LENGTH(exist->attr);
 
   if (new_cluster < exist_cluster)
-    return -1;
-  if (new_cluster > exist_cluster)
-    return 1;
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to CLUSTER_LIST length %d < %d",
+                   pfx_buf, new_buf, exist_buf, new_cluster, exist_cluster);
+      return 1;
+    }
 
-  /* 13. Neighbor address comparision. */
+  if (new_cluster > exist_cluster)
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to CLUSTER_LIST length %d > %d",
+                   pfx_buf, new_buf, exist_buf, new_cluster, exist_cluster);
+      return 0;
+    }
+
+  /* 15. Neighbor address comparision. */
   /* Do this only if neither path is "stale" as stale paths do not have
    * valid peer information (as the connection may or may not be up).
    */
   if (CHECK_FLAG (exist->flags, BGP_INFO_STALE))
-    return -1;
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to latter path being STALE",
+                   pfx_buf, new_buf, exist_buf);
+      return 1;
+    }
+
   if (CHECK_FLAG (new->flags, BGP_INFO_STALE))
-    return 1;
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to former path being STALE",
+                   pfx_buf, new_buf, exist_buf);
+      return 0;
+    }
+
   /* locally configured routes to advertise do not have su_remote */
   if (new->peer->su_remote == NULL)
-    return 1;
+    return 0;
   if (exist->peer->su_remote == NULL)
-    return -1;
+    return 1;
   
   ret = sockunion_cmp (new->peer->su_remote, exist->peer->su_remote);
 
   if (ret == 1)
-    return 1;
-  if (ret == -1)
-    return -1;
+    {
+      if (debug)
+        zlog_debug("%s: %s loses to %s due to Neighor IP comparison",
+                   pfx_buf, new_buf, exist_buf);
+      return 0;
+    }
 
-  return -1;
+  if (ret == -1)
+    {
+      if (debug)
+        zlog_debug("%s: %s wins over %s due to Neighor IP comparison",
+                   pfx_buf, new_buf, exist_buf);
+      return 1;
+    }
+
+  if (debug)
+    zlog_debug("%s: %s wins over %s due to nothing left to compare",
+               pfx_buf, new_buf, exist_buf);
+
+  return 1;
+}
+
+/* Compare two bgp route entity.  Return -1 if new is preferred, 1 if exist
+ * is preferred, or 0 if they are the same (usually will only occur if
+ * multipath is enabled 
+ * This version is compatible with */
+int
+bgp_info_cmp_compatible (struct bgp *bgp, struct bgp_info *new, struct bgp_info *exist,
+                         afi_t afi, safi_t safi)
+{
+  int paths_eq;
+  int ret;
+  ret = bgp_info_cmp (bgp, new, exist, &paths_eq, NULL, 0, __func__);
+
+  if (paths_eq)
+    ret = 0;
+  else 
+    {
+      if (ret == 1)
+        ret = -1;
+      else 
+        ret = 1;
+    }
+  return ret;
 }
 
 static enum filter_type
@@ -577,7 +894,7 @@ bgp_input_filter (struct peer *peer, struct prefix *p, struct attr *attr,
 #define FILTER_EXIST_WARN(F,f,filter) \
   if (BGP_DEBUG (update, UPDATE_IN) \
       && !(F ## _IN (filter))) \
-    plog_warn (peer->log, "%s: Could not find configured input %s-list %s!", \
+    zlog_warn ("%s: Could not find configured input %s-list %s!", \
                peer->host, #f, F ## _IN_NAME(filter));
   
   if (DISTRIBUTE_IN_NAME (filter)) {
@@ -616,7 +933,7 @@ bgp_output_filter (struct peer *peer, struct prefix *p, struct attr *attr,
 #define FILTER_EXIST_WARN(F,f,filter) \
   if (BGP_DEBUG (update, UPDATE_OUT) \
       && !(F ## _OUT (filter))) \
-    plog_warn (peer->log, "%s: Could not find configured output %s-list %s!", \
+    zlog_warn ("%s: Could not find configured output %s-list %s!", \
                peer->host, #f, F ## _OUT_NAME(filter));
 
   if (DISTRIBUTE_OUT_NAME (filter)) {
@@ -689,20 +1006,39 @@ bgp_cluster_filter (struct peer *peer, struct attr *attr)
 
 static int
 bgp_input_modifier (struct peer *peer, struct prefix *p, struct attr *attr,
-		    afi_t afi, safi_t safi)
+		    afi_t afi, safi_t safi, const char *rmap_name)
 {
   struct bgp_filter *filter;
   struct bgp_info info;
   route_map_result_t ret;
+  struct route_map *rmap = NULL;
 
   filter = &peer->filter[afi][safi];
 
   /* Apply default weight value. */
-  if (peer->weight)
-    (bgp_attr_extra_get (attr))->weight = peer->weight;
+  if (peer->weight[afi][safi])
+    (bgp_attr_extra_get (attr))->weight = peer->weight[afi][safi];
+
+  if (rmap_name)
+    {
+      rmap = route_map_lookup_by_name(rmap_name);
+
+      if (rmap == NULL)
+	    return RMAP_DENY;
+    }
+  else
+    {
+      if (ROUTE_MAP_IN_NAME(filter))
+        {
+          rmap = ROUTE_MAP_IN (filter);
+
+          if (rmap == NULL)
+	        return RMAP_DENY;
+        }
+    }
 
   /* Route map apply. */
-  if (ROUTE_MAP_IN_NAME (filter))
+  if (rmap)
     {
       /* Duplicate current value to new strucutre for modification. */
       info.peer = peer;
@@ -711,7 +1047,64 @@ bgp_input_modifier (struct peer *peer, struct prefix *p, struct attr *attr,
       SET_FLAG (peer->rmap_type, PEER_RMAP_TYPE_IN); 
 
       /* Apply BGP route map to the attribute. */
-      ret = route_map_apply (ROUTE_MAP_IN (filter), p, RMAP_BGP, &info);
+      ret = route_map_apply (rmap, p, RMAP_BGP, &info);
+
+      peer->rmap_type = 0;
+
+      if (ret == RMAP_DENYMATCH)
+	{
+	  /* Free newly generated AS path and community by route-map. */
+	  bgp_attr_flush (attr);
+	  return RMAP_DENY;
+	}
+    }
+  return RMAP_PERMIT;
+}
+
+static int
+bgp_output_modifier (struct peer *peer, struct prefix *p, struct attr *attr,
+		     afi_t afi, safi_t safi, const char *rmap_name)
+{
+  struct bgp_filter *filter;
+  struct bgp_info info;
+  route_map_result_t ret;
+  struct route_map *rmap = NULL;
+
+  filter = &peer->filter[afi][safi];
+
+  /* Apply default weight value. */
+  if (peer->weight[afi][safi])
+    (bgp_attr_extra_get (attr))->weight = peer->weight[afi][safi];
+
+  if (rmap_name)
+    {
+      rmap = route_map_lookup_by_name(rmap_name);
+
+      if (rmap == NULL)
+	    return RMAP_DENY;
+    }
+  else
+    {
+      if (ROUTE_MAP_OUT_NAME(filter))
+        {
+          rmap = ROUTE_MAP_OUT (filter);
+
+          if (rmap == NULL)
+	        return RMAP_DENY;
+        }
+    }
+
+  /* Route map apply. */
+  if (rmap)
+    {
+      /* Duplicate current value to new strucutre for modification. */
+      info.peer = peer;
+      info.attr = attr;
+
+      SET_FLAG (peer->rmap_type, PEER_RMAP_TYPE_OUT);
+
+      /* Apply BGP route map to the attribute. */
+      ret = route_map_apply (rmap, p, RMAP_BGP, &info);
 
       peer->rmap_type = 0;
 
@@ -722,119 +1115,157 @@ bgp_input_modifier (struct peer *peer, struct prefix *p, struct attr *attr,
   return RMAP_PERMIT;
 }
 
-static int
-bgp_export_modifier (struct peer *rsclient, struct peer *peer,
-        struct prefix *p, struct attr *attr, afi_t afi, safi_t safi)
+/* If this is an EBGP peer with remove-private-AS */
+static void
+bgp_peer_remove_private_as(struct bgp *bgp, afi_t afi, safi_t safi,
+                           struct peer *peer, struct attr *attr)
 {
-  struct bgp_filter *filter;
-  struct bgp_info info;
-  route_map_result_t ret;
-
-  filter = &peer->filter[afi][safi];
-
-  /* Route map apply. */
-  if (ROUTE_MAP_EXPORT_NAME (filter))
+  if (peer->sort == BGP_PEER_EBGP &&
+      (peer_af_flag_check (peer, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS_ALL_REPLACE) ||
+       peer_af_flag_check (peer, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS_REPLACE) ||
+       peer_af_flag_check (peer, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS_ALL) ||
+       peer_af_flag_check (peer, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS)))
     {
-      /* Duplicate current value to new strucutre for modification. */
-      info.peer = rsclient;
-      info.attr = attr;
-
-      SET_FLAG (rsclient->rmap_type, PEER_RMAP_TYPE_EXPORT);
-
-      /* Apply BGP route map to the attribute. */
-      ret = route_map_apply (ROUTE_MAP_EXPORT (filter), p, RMAP_BGP, &info);
-
-      rsclient->rmap_type = 0;
-
-      if (ret == RMAP_DENYMATCH)
+      // Take action on the entire aspath
+      if (peer_af_flag_check (peer, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS_ALL_REPLACE) ||
+          peer_af_flag_check (peer, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS_ALL))
         {
-          /* Free newly generated AS path and community by route-map. */
-          bgp_attr_flush (attr);
-          return RMAP_DENY;
+          if (peer_af_flag_check (peer, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS_ALL_REPLACE))
+            attr->aspath = aspath_replace_private_asns (attr->aspath, bgp->as);
+
+          // The entire aspath consists of private ASNs so create an empty aspath
+          else if (aspath_private_as_check (attr->aspath))
+            attr->aspath = aspath_empty_get ();
+
+          // There are some public and some private ASNs, remove the private ASNs
+          else
+            attr->aspath = aspath_remove_private_asns (attr->aspath);
+        }
+
+      // 'all' was not specified so the entire aspath must be private ASNs
+      // for us to do anything
+      else if (aspath_private_as_check (attr->aspath))
+        {
+          if (peer_af_flag_check (peer, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS_REPLACE))
+            attr->aspath = aspath_replace_private_asns (attr->aspath, bgp->as);
+          else
+            attr->aspath = aspath_empty_get ();
         }
     }
-  return RMAP_PERMIT;
 }
 
-static int
-bgp_import_modifier (struct peer *rsclient, struct peer *peer,
-        struct prefix *p, struct attr *attr, afi_t afi, safi_t safi)
+/* If this is an EBGP peer with as-override */
+static void
+bgp_peer_as_override(struct bgp *bgp, afi_t afi, safi_t safi,
+                     struct peer *peer, struct attr *attr)
 {
-  struct bgp_filter *filter;
-  struct bgp_info info;
-  route_map_result_t ret;
-
-  filter = &rsclient->filter[afi][safi];
-
-  /* Apply default weight value. */
-  if (peer->weight)
-    (bgp_attr_extra_get (attr))->weight = peer->weight;
-
-  /* Route map apply. */
-  if (ROUTE_MAP_IMPORT_NAME (filter))
+  if (peer->sort == BGP_PEER_EBGP &&
+      peer_af_flag_check (peer, afi, safi, PEER_FLAG_AS_OVERRIDE))
     {
-      /* Duplicate current value to new strucutre for modification. */
-      info.peer = peer;
-      info.attr = attr;
-
-      SET_FLAG (peer->rmap_type, PEER_RMAP_TYPE_IMPORT);
-
-      /* Apply BGP route map to the attribute. */
-      ret = route_map_apply (ROUTE_MAP_IMPORT (filter), p, RMAP_BGP, &info);
-
-      peer->rmap_type = 0;
-
-      if (ret == RMAP_DENYMATCH)
-        {
-          /* Free newly generated AS path and community by route-map. */
-          bgp_attr_flush (attr);
-          return RMAP_DENY;
-        }
+      if (aspath_single_asn_check (attr->aspath, peer->as))
+        attr->aspath = aspath_replace_specific_asn (attr->aspath, peer->as, bgp->as);
     }
-  return RMAP_PERMIT;
 }
 
-static int
-bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
-		    struct attr *attr, afi_t afi, safi_t safi)
+static void
+subgroup_announce_reset_nhop (u_char family, struct attr *attr)
 {
-  int ret;
-  char buf[SU_ADDRSTRLEN];
+  if (family == AF_INET)
+    attr->nexthop.s_addr = 0;
+  if (family == AF_INET6)
+    memset (&attr->extra->mp_nexthop_global, 0, IPV6_MAX_BYTELEN);
+}
+
+int
+subgroup_announce_check (struct bgp_info *ri, struct update_subgroup *subgrp,
+			 struct prefix *p, struct attr *attr)
+{
   struct bgp_filter *filter;
   struct peer *from;
+  struct peer *peer;
+  struct peer *onlypeer;
   struct bgp *bgp;
+  struct attr *riattr;
+  struct peer_af *paf;
+  char buf[SU_ADDRSTRLEN];
+  int ret;
   int transparent;
   int reflect;
-  struct attr *riattr;
+  afi_t afi;
+  safi_t safi;
+  int samepeer_safe = 0;	/* for synthetic mplsvpns routes */
 
-  from = ri->peer;
-  filter = &peer->filter[afi][safi];
-  bgp = peer->bgp;
-  riattr = bgp_info_mpath_count (ri) ? bgp_info_mpath_attr (ri) : ri->attr;
-  
   if (DISABLE_BGP_ANNOUNCE)
     return 0;
 
-  /* Do not send announces to RS-clients from the 'normal' bgp_table. */
-  if (CHECK_FLAG(peer->af_flags[afi][safi], PEER_FLAG_RSERVER_CLIENT))
-    return 0;
+  afi = SUBGRP_AFI(subgrp);
+  safi = SUBGRP_SAFI(subgrp);
+  peer = SUBGRP_PEER(subgrp);
+  onlypeer = NULL;
+  if (CHECK_FLAG (peer->flags, PEER_FLAG_LONESOUL))
+    onlypeer = SUBGRP_PFIRST(subgrp)->peer;
 
-  /* Do not send back route to sender. */
-  if (from == peer)
-    return 0;
+  from = ri->peer;
+  filter = &peer->filter[afi][safi];
+  bgp = SUBGRP_INST(subgrp);
+  riattr = bgp_info_mpath_count (ri) ? bgp_info_mpath_attr (ri) : ri->attr;
+
+#if ENABLE_BGP_VNC
+  if (((afi == AFI_IP) || (afi == AFI_IP6)) && (safi == SAFI_MPLS_VPN) &&
+      ((ri->type == ZEBRA_ROUTE_BGP_DIRECT) ||
+       (ri->type == ZEBRA_ROUTE_BGP_DIRECT_EXT))) {
+
+    /*
+     * direct and direct_ext type routes originate internally even
+     * though they can have peer pointers that reference other systems
+     */
+    char    buf[BUFSIZ];
+    prefix2str(p, buf, BUFSIZ);
+    zlog_debug("%s: pfx %s bgp_direct->vpn route peer safe", __func__, buf);
+    samepeer_safe = 1;
+  }
+#endif
+
+  /* With addpath we may be asked to TX all kinds of paths so make sure
+   * ri is valid */
+  if (!CHECK_FLAG (ri->flags, BGP_INFO_VALID) ||
+      CHECK_FLAG (ri->flags, BGP_INFO_HISTORY) ||
+      CHECK_FLAG (ri->flags, BGP_INFO_REMOVED))
+    {
+      return 0;
+    }
+
+  /* If this is not the bestpath then check to see if there is an enabled addpath
+   * feature that requires us to advertise it */
+  if (! CHECK_FLAG (ri->flags, BGP_INFO_SELECTED))
+    {
+      if (! bgp_addpath_tx_path(peer, afi, safi, ri))
+        {
+          return 0;
+        }
+    }
 
   /* Aggregate-address suppress check. */
   if (ri->extra && ri->extra->suppress)
     if (! UNSUPPRESS_MAP_NAME (filter))
-      return 0;
+      {
+	return 0;
+      }
 
-  /* Default route check.  */
-  if (CHECK_FLAG (peer->af_sflags[afi][safi], PEER_STATUS_DEFAULT_ORIGINATE))
+  /* Do not send back route to sender. */
+  if (onlypeer && from == onlypeer)
+    {
+      return 0;
+    }
+
+  /* Do not send the default route in the BGP table if the neighbor is
+   * configured for default-originate */
+  if (CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_DEFAULT_ORIGINATE))
     {
       if (p->family == AF_INET && p->u.prefix4.s_addr == INADDR_ANY)
-	return 0;
+        return 0;
       else if (p->family == AF_INET6 && p->prefixlen == 0)
-	return 0;
+        return 0;
     }
 
   /* Transparency check. */
@@ -846,40 +1277,50 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
 
   /* If community is not disabled check the no-export and local. */
   if (! transparent && bgp_community_filter (peer, riattr))
-    return 0;
+    {
+      if (bgp_debug_update(NULL, p, subgrp->update_group, 0))
+	zlog_debug ("subgrpannouncecheck: community filter check fail");
+      return 0;
+    }
 
   /* If the attribute has originator-id and it is same as remote
      peer's id. */
-  if (riattr->flag & ATTR_FLAG_BIT (BGP_ATTR_ORIGINATOR_ID))
-    {
-      if (IPV4_ADDR_SAME (&peer->remote_id, &riattr->extra->originator_id))
+  if (onlypeer &&
+      riattr->flag & ATTR_FLAG_BIT (BGP_ATTR_ORIGINATOR_ID) &&
+      (IPV4_ADDR_SAME (&onlypeer->remote_id, &riattr->extra->originator_id)))
 	{
-	  if (BGP_DEBUG (filter, FILTER))  
-	    zlog (peer->log, LOG_DEBUG,
-		  "%s [Update:SEND] %s/%d originator-id is same as remote router-id",
-		  peer->host,
+          if (bgp_debug_update(NULL, p, subgrp->update_group, 0))
+	    zlog_debug ("%s [Update:SEND] %s/%d originator-id is same as "
+		  "remote router-id",
+		  onlypeer->host,
 		  inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
 		  p->prefixlen);
 	  return 0;
 	}
-    }
- 
+
   /* ORF prefix-list filter check */
   if (CHECK_FLAG (peer->af_cap[afi][safi], PEER_CAP_ORF_PREFIX_RM_ADV)
       && (CHECK_FLAG (peer->af_cap[afi][safi], PEER_CAP_ORF_PREFIX_SM_RCV)
-	  || CHECK_FLAG (peer->af_cap[afi][safi], PEER_CAP_ORF_PREFIX_SM_OLD_RCV)))
+	  || CHECK_FLAG (peer->af_cap[afi][safi],
+			 PEER_CAP_ORF_PREFIX_SM_OLD_RCV)))
     if (peer->orf_plist[afi][safi])
       {
 	if (prefix_list_apply (peer->orf_plist[afi][safi], p) == PREFIX_DENY)
-          return 0;
+	  {
+            if (bgp_debug_update(NULL, p, subgrp->update_group, 0))
+              zlog_debug ("%s [Update:SEND] %s/%d is filtered via ORF",
+                          peer->host,
+                          inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+                          p->prefixlen);
+	    return 0;
+	  }
       }
 
   /* Output filter check. */
   if (bgp_output_filter (peer, p, riattr, afi, safi) == FILTER_DENY)
     {
-      if (BGP_DEBUG (filter, FILTER))
-	zlog (peer->log, LOG_DEBUG,
-	      "%s [Update:SEND] %s/%d is filtered",
+      if (bgp_debug_update(NULL, p, subgrp->update_group, 0))
+	zlog_debug ("%s [Update:SEND] %s/%d is filtered",
 	      peer->host,
 	      inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
 	      p->prefixlen);
@@ -888,12 +1329,12 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
 
 #ifdef BGP_SEND_ASPATH_CHECK
   /* AS path loop check. */
-  if (aspath_loop_check (riattr->aspath, peer->as))
+  if (onlypeer && aspath_loop_check (riattr->aspath, onlypeer->as))
     {
-      if (BGP_DEBUG (filter, FILTER))  
-        zlog (peer->log, LOG_DEBUG, 
-	      "%s [Update:SEND] suppress announcement to peer AS %u is AS path.",
-	      peer->host, peer->as);
+      if (bgp_debug_update(NULL, p, subgrp->update_group, 0))
+        zlog_debug ("%s [Update:SEND] suppress announcement to peer AS %u "
+	      "that is part of AS path.",
+	      onlypeer->host, onlypeer->as);
       return 0;
     }
 #endif /* BGP_SEND_ASPATH_CHECK */
@@ -903,13 +1344,13 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
     {
       if (aspath_loop_check(riattr->aspath, bgp->confed_id))
 	{
-	  if (BGP_DEBUG (filter, FILTER))  
-	    zlog (peer->log, LOG_DEBUG, 
-		  "%s [Update:SEND] suppress announcement to peer AS %u is AS path.",
+          if (bgp_debug_update(NULL, p, subgrp->update_group, 0))
+	    zlog_debug ("%s [Update:SEND] suppress announcement to peer AS %u"
+		  " is AS path.",
 		  peer->host,
 		  bgp->confed_id);
 	  return 0;
-	}      
+	}
     }
 
   /* Route-Reflect check. */
@@ -919,7 +1360,7 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
     reflect = 0;
 
   /* IBGP reflection check. */
-  if (reflect)
+  if (reflect && !samepeer_safe)
     {
       /* A route from a Client peer. */
       if (CHECK_FLAG (from->af_flags[afi][safi], PEER_FLAG_REFLECTOR_CLIENT))
@@ -929,21 +1370,23 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
              is already done.  So there is noting to do. */
 	  /* no bgp client-to-client reflection check. */
 	  if (bgp_flag_check (bgp, BGP_FLAG_NO_CLIENT_TO_CLIENT))
-	    if (CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_REFLECTOR_CLIENT))
+	    if (CHECK_FLAG (peer->af_flags[afi][safi],
+			    PEER_FLAG_REFLECTOR_CLIENT))
 	      return 0;
 	}
       else
 	{
 	  /* A route from a Non-client peer. Reflect to all other
 	     clients. */
-	  if (! CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_REFLECTOR_CLIENT))
+	  if (! CHECK_FLAG (peer->af_flags[afi][safi],
+			    PEER_FLAG_REFLECTOR_CLIENT))
 	    return 0;
 	}
     }
-  
+
   /* For modify attribute, copy it to temporary structure. */
   bgp_attr_dup (attr, riattr);
-  
+
   /* If local-preference is not set. */
   if ((peer->sort == BGP_PEER_IBGP
        || peer->sort == BGP_PEER_CONFED)
@@ -955,9 +1398,7 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
 
   /* If originator-id is not set and the route is to be reflected,
      set the originator id */
-  if (peer && from && peer->sort == BGP_PEER_IBGP &&
-      from->sort == BGP_PEER_IBGP &&
-      (! (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_ORIGINATOR_ID))))
+  if (reflect && (!(attr->flag & ATTR_FLAG_BIT(BGP_ATTR_ORIGINATOR_ID))))
     {
       attr->extra = bgp_attr_extra_get(attr);
       IPV4_ADDR_COPY(&(attr->extra->originator_id), &(from->remote_id));
@@ -968,101 +1409,59 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
   if (peer->sort == BGP_PEER_EBGP
       && attr->flag & ATTR_FLAG_BIT (BGP_ATTR_MULTI_EXIT_DISC))
     {
-      if (ri->peer != bgp->peer_self && ! transparent
+      if (from != bgp->peer_self && ! transparent
 	  && ! CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_MED_UNCHANGED))
 	attr->flag &= ~(ATTR_FLAG_BIT (BGP_ATTR_MULTI_EXIT_DISC));
     }
 
-
-#define NEXTHOP_IS_V4 (\
-    (safi != SAFI_ENCAP && p->family == AF_INET) || \
-    (safi == SAFI_ENCAP && attr->extra->mp_nexthop_len == 4))
+  /* Since the nexthop attribute can vary per peer, it is not explicitly set
+   * in announce check, only certain flags and length (or number of nexthops
+   * -- for IPv6/MP_REACH) are set here in order to guide the update formation
+   * code in setting the nexthop(s) on a per peer basis in reformat_peer().
+   * Typically, the source nexthop in the attribute is preserved but in the
+   * scenarios where we know it will always be overwritten, we reset the
+   * nexthop to "0" in an attempt to achieve better Update packing. An
+   * example of this is when a prefix from each of 2 IBGP peers needs to be
+   * announced to an EBGP peer (and they have the same attributes barring
+   * their nexthop).
+   */
+  if (reflect)
+    SET_FLAG(attr->rmap_change_flags, BATTR_REFLECTED);
 
 #define NEXTHOP_IS_V6 (\
-    (safi != SAFI_ENCAP && p->family == AF_INET6) || \
-    (safi == SAFI_ENCAP && attr->extra->mp_nexthop_len == 16))
+    (safi != SAFI_ENCAP && safi != SAFI_MPLS_VPN &&\
+     (p->family == AF_INET6 || peer_cap_enhe(peer))) || \
+    ((safi == SAFI_ENCAP || safi == SAFI_MPLS_VPN) &&\
+     attr->extra->mp_nexthop_len >= IPV6_MAX_BYTELEN))
 
-  /* next-hop-set */
-  if (transparent
-      || (reflect && ! CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_NEXTHOP_SELF_ALL))
-      || (CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_NEXTHOP_UNCHANGED)
-	  && ((NEXTHOP_IS_V4 && attr->nexthop.s_addr)
-	      || (NEXTHOP_IS_V6 &&
-                  ! IN6_IS_ADDR_UNSPECIFIED(&attr->extra->mp_nexthop_global))
-	      )))
+  /* IPv6/MP starts with 1 nexthop. The link-local address is passed only if
+   * the peer (group) is configured to receive link-local nexthop unchanged
+   * and it is available in the prefix OR we're not reflecting the route and
+   * the peer (group) to whom we're going to announce is on a shared network
+   * and this is either a self-originated route or the peer is EBGP.
+   */
+  if (NEXTHOP_IS_V6)
     {
-      /* NEXT-HOP Unchanged. */
-    }
-  else if (CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_NEXTHOP_SELF)
-	   || (NEXTHOP_IS_V4 && attr->nexthop.s_addr == 0)
-	   || (NEXTHOP_IS_V6 &&
-               IN6_IS_ADDR_UNSPECIFIED(&attr->extra->mp_nexthop_global))
-	   || (peer->sort == BGP_PEER_EBGP
-               && (bgp_multiaccess_check_v4 (attr->nexthop, peer) == 0)))
-    {
-      /* Set IPv4 nexthop. */
-      if (NEXTHOP_IS_V4)
-	{
-	  if ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP))
-	    memcpy (&attr->extra->mp_nexthop_global_in, &peer->nexthop.v4,
-	            IPV4_MAX_BYTELEN);
-	  else
-	    memcpy (&attr->nexthop, &peer->nexthop.v4, IPV4_MAX_BYTELEN);
-	}
-      /* Set IPv6 nexthop. */
-      if (NEXTHOP_IS_V6)
-	{
-	  /* IPv6 global nexthop must be included. */
-	  memcpy (&attr->extra->mp_nexthop_global, &peer->nexthop.v6_global, 
-		  IPV6_MAX_BYTELEN);
-	  attr->extra->mp_nexthop_len = 16;
-	}
-    }
-
-  if (p->family == AF_INET6 && safi != SAFI_ENCAP)
-    {
-      /* Left nexthop_local unchanged if so configured. */ 
-      if ( CHECK_FLAG (peer->af_flags[afi][safi], 
-           PEER_FLAG_NEXTHOP_LOCAL_UNCHANGED) )
+      attr->extra->mp_nexthop_len = BGP_ATTR_NHLEN_IPV6_GLOBAL;
+      if ((CHECK_FLAG (peer->af_flags[afi][safi],
+                       PEER_FLAG_NEXTHOP_LOCAL_UNCHANGED) &&
+           IN6_IS_ADDR_LINKLOCAL (&attr->extra->mp_nexthop_local)) ||
+          (!reflect && peer->shared_network &&
+           (from == bgp->peer_self || peer->sort == BGP_PEER_EBGP)))
         {
-          if ( IN6_IS_ADDR_LINKLOCAL (&attr->extra->mp_nexthop_local) )
-            attr->extra->mp_nexthop_len=32;
-          else
-            attr->extra->mp_nexthop_len=16;
+          attr->extra->mp_nexthop_len = BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL;
         }
 
-      /* Default nexthop_local treatment for non-RS-Clients */
-      else 
-        {
-      /* Link-local address should not be transit to different peer. */
-      attr->extra->mp_nexthop_len = 16;
-
-      /* Set link-local address for shared network peer. */
-      if (peer->shared_network 
-	  && ! IN6_IS_ADDR_UNSPECIFIED (&peer->nexthop.v6_local))
-	{
-	  memcpy (&attr->extra->mp_nexthop_local, &peer->nexthop.v6_local, 
-		  IPV6_MAX_BYTELEN);
-	  attr->extra->mp_nexthop_len = 32;
-	}
-
-      /* If bgpd act as BGP-4+ route-reflector, do not send link-local
-	 address.*/
-      if (reflect)
-	attr->extra->mp_nexthop_len = 16;
-
-      /* If BGP-4+ link-local nexthop is not link-local nexthop. */
-      if (! IN6_IS_ADDR_LINKLOCAL (&peer->nexthop.v6_local))
-	attr->extra->mp_nexthop_len = 16;
+      /* Clear off link-local nexthop in source, whenever it is not needed to
+       * ensure more prefixes share the same attribute for announcement.
+       */
+      if (!(CHECK_FLAG (peer->af_flags[afi][safi],
+            PEER_FLAG_NEXTHOP_LOCAL_UNCHANGED)))
+        memset (&attr->extra->mp_nexthop_local, 0, IPV6_MAX_BYTELEN);
     }
 
-    }
-
-  /* If this is EBGP peer and remove-private-AS is set.  */
-  if (peer->sort == BGP_PEER_EBGP
-      && peer_af_flag_check (peer, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS)
-      && aspath_private_as_check (attr->aspath))
-    attr->aspath = aspath_empty_get ();
+  bgp_peer_remove_private_as(bgp, afi, safi, peer, attr);
+  bgp_peer_as_override(bgp, afi, safi, peer, attr);
 
   /* Route map & unsuppress-map apply. */
   if (ROUTE_MAP_OUT_NAME (filter)
@@ -1076,17 +1475,21 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
 
       info.peer = peer;
       info.attr = attr;
+      /* don't confuse inbound and outbound setting */
+      RESET_FLAG(attr->rmap_change_flags);
 
-      /* The route reflector is not allowed to modify the attributes
-	 of the reflected IBGP routes, unless configured to allow it */
-      if ((from->sort == BGP_PEER_IBGP && peer->sort == BGP_PEER_IBGP) &&
-	  !bgp_flag_check(bgp, BGP_FLAG_RR_ALLOW_OUTBOUND_POLICY))
-	{
-	  bgp_attr_dup (&dummy_attr, attr);
-	  info.attr = &dummy_attr;
-	}
+      /*
+       * The route reflector is not allowed to modify the attributes
+       * of the reflected IBGP routes unless explicitly allowed.
+       */
+      if ((from->sort == BGP_PEER_IBGP && peer->sort == BGP_PEER_IBGP)
+        && !bgp_flag_check(bgp, BGP_FLAG_RR_ALLOW_OUTBOUND_POLICY))
+        {
+          bgp_attr_dup (&dummy_attr, attr);
+          info.attr = &dummy_attr;
+        }
 
-      SET_FLAG (peer->rmap_type, PEER_RMAP_TYPE_OUT); 
+      SET_FLAG (peer->rmap_type, PEER_RMAP_TYPE_OUT);
 
       if (ri->extra && ri->extra->suppress)
 	ret = route_map_apply (UNSUPPRESS_MAP (filter), p, RMAP_BGP, &info);
@@ -1101,193 +1504,61 @@ bgp_announce_check (struct bgp_info *ri, struct peer *peer, struct prefix *p,
 	  return 0;
 	}
     }
-  return 1;
-}
 
-static int
-bgp_announce_check_rsclient (struct bgp_info *ri, struct peer *rsclient,
-        struct prefix *p, struct attr *attr, afi_t afi, safi_t safi)
-{
-  int ret;
-  char buf[SU_ADDRSTRLEN];
-  struct bgp_filter *filter;
-  struct bgp_info info;
-  struct peer *from;
-  struct attr *riattr;
-
-  from = ri->peer;
-  filter = &rsclient->filter[afi][safi];
-  riattr = bgp_info_mpath_count (ri) ? bgp_info_mpath_attr (ri) : ri->attr;
-
-  if (DISABLE_BGP_ANNOUNCE)
-    return 0;
-
-  /* Do not send back route to sender. */
-  if (from == rsclient)
-    return 0;
-
-  /* Aggregate-address suppress check. */
-  if (ri->extra && ri->extra->suppress)
-    if (! UNSUPPRESS_MAP_NAME (filter))
-      return 0;
-
-  /* Default route check.  */
-  if (CHECK_FLAG (rsclient->af_sflags[afi][safi],
-          PEER_STATUS_DEFAULT_ORIGINATE))
+  /* After route-map has been applied, we check to see if the nexthop to
+   * be carried in the attribute (that is used for the announcement) can
+   * be cleared off or not. We do this in all cases where we would be
+   * setting the nexthop to "ourselves". For IPv6, we only need to consider
+   * the global nexthop here; the link-local nexthop would have been cleared
+   * already, and if not, it is required by the update formation code.
+   * Also see earlier comments in this function.
+   */
+  /*
+   * If route-map has performed some operation on the nexthop or the peer
+   * configuration says to pass it unchanged, we cannot reset the nexthop
+   * here, so only attempt to do it if these aren't true. Note that the
+   * route-map handler itself might have cleared the nexthop, if for example,
+   * it is configured as 'peer-address'.
+   */
+  if (!bgp_rmap_nhop_changed(attr->rmap_change_flags,
+                             riattr->rmap_change_flags) &&
+      !transparent &&
+      !CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_NEXTHOP_UNCHANGED))
     {
-      if (p->family == AF_INET && p->u.prefix4.s_addr == INADDR_ANY)
-        return 0;
-      else if (p->family == AF_INET6 && p->prefixlen == 0)
-        return 0;
-    }
-
-  /* If the attribute has originator-id and it is same as remote
-     peer's id. */
-  if (riattr->flag & ATTR_FLAG_BIT (BGP_ATTR_ORIGINATOR_ID))
-    {
-      if (IPV4_ADDR_SAME (&rsclient->remote_id, 
-                          &riattr->extra->originator_id))
+      /* We can reset the nexthop, if setting (or forcing) it to 'self' */
+      if (CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_NEXTHOP_SELF) ||
+          CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_FORCE_NEXTHOP_SELF))
         {
-         if (BGP_DEBUG (filter, FILTER))
-           zlog (rsclient->log, LOG_DEBUG,
-                 "%s [Update:SEND] %s/%d originator-id is same as remote router-id",
-                 rsclient->host,
-                 inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-                 p->prefixlen);
-         return 0;
-       }
-    }
-
-  /* ORF prefix-list filter check */
-  if (CHECK_FLAG (rsclient->af_cap[afi][safi], PEER_CAP_ORF_PREFIX_RM_ADV)
-      && (CHECK_FLAG (rsclient->af_cap[afi][safi], PEER_CAP_ORF_PREFIX_SM_RCV)
-         || CHECK_FLAG (rsclient->af_cap[afi][safi], PEER_CAP_ORF_PREFIX_SM_OLD_RCV)))
-    if (rsclient->orf_plist[afi][safi])
-      {
-       if (prefix_list_apply (rsclient->orf_plist[afi][safi], p) == PREFIX_DENY)
-          return 0;
-      }
-
-  /* Output filter check. */
-  if (bgp_output_filter (rsclient, p, riattr, afi, safi) == FILTER_DENY)
-    {
-      if (BGP_DEBUG (filter, FILTER))
-       zlog (rsclient->log, LOG_DEBUG,
-             "%s [Update:SEND] %s/%d is filtered",
-             rsclient->host,
-             inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-             p->prefixlen);
-      return 0;
-    }
-
-#ifdef BGP_SEND_ASPATH_CHECK
-  /* AS path loop check. */
-  if (aspath_loop_check (riattr->aspath, rsclient->as))
-    {
-      if (BGP_DEBUG (filter, FILTER))
-        zlog (rsclient->log, LOG_DEBUG,
-             "%s [Update:SEND] suppress announcement to peer AS %u is AS path.",
-             rsclient->host, rsclient->as);
-      return 0;
-    }
-#endif /* BGP_SEND_ASPATH_CHECK */
-
-  /* For modify attribute, copy it to temporary structure. */
-  bgp_attr_dup (attr, riattr);
-
-  /* next-hop-set */
-  if ((p->family == AF_INET && attr->nexthop.s_addr == 0)
-          || (p->family == AF_INET6 &&
-              IN6_IS_ADDR_UNSPECIFIED(&attr->extra->mp_nexthop_global))
-     )
-  {
-    /* Set IPv4 nexthop. */
-    if (p->family == AF_INET)
-      {
-        if ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP))
-          memcpy (&attr->extra->mp_nexthop_global_in, &rsclient->nexthop.v4,
-                  IPV4_MAX_BYTELEN);
-        else
-          memcpy (&attr->nexthop, &rsclient->nexthop.v4, IPV4_MAX_BYTELEN);
-      }
-    /* Set IPv6 nexthop. */
-    if (p->family == AF_INET6)
-      {
-        /* IPv6 global nexthop must be included. */
-        memcpy (&attr->extra->mp_nexthop_global, &rsclient->nexthop.v6_global,
-                IPV6_MAX_BYTELEN);
-        attr->extra->mp_nexthop_len = 16;
-      }
-  }
-
-  if (p->family == AF_INET6)
-    {
-      struct attr_extra *attre = attr->extra;
-
-      /* Left nexthop_local unchanged if so configured. */
-      if ( CHECK_FLAG (rsclient->af_flags[afi][safi], 
-           PEER_FLAG_NEXTHOP_LOCAL_UNCHANGED) )
+          if (!reflect ||
+              CHECK_FLAG (peer->af_flags[afi][safi],
+                          PEER_FLAG_FORCE_NEXTHOP_SELF))
+            subgroup_announce_reset_nhop ((peer_cap_enhe(peer) ?
+                          AF_INET6 : p->family), attr);
+        }
+      else if (peer->sort == BGP_PEER_EBGP)
         {
-          if ( IN6_IS_ADDR_LINKLOCAL (&attre->mp_nexthop_local) )
-            attre->mp_nexthop_len=32;
-          else
-            attre->mp_nexthop_len=16;
-        }
-        
-      /* Default nexthop_local treatment for RS-Clients */
-      else 
-        { 
-          /* Announcer and RS-Client are both in the same network */      
-          if (rsclient->shared_network && from->shared_network &&
-              (rsclient->ifindex == from->ifindex))
+          /* Can also reset the nexthop if announcing to EBGP, but only if
+           * no peer in the subgroup is on a shared subnet.
+           * Note: 3rd party nexthop currently implemented for IPv4 only.
+           */
+          SUBGRP_FOREACH_PEER (subgrp, paf)
             {
-              if ( IN6_IS_ADDR_LINKLOCAL (&attre->mp_nexthop_local) )
-                attre->mp_nexthop_len=32;
-              else
-                attre->mp_nexthop_len=16;
+              if (bgp_multiaccess_check_v4 (riattr->nexthop, paf->peer))
+                break;
             }
-
-          /* Set link-local address for shared network peer. */
-          else if (rsclient->shared_network
-              && IN6_IS_ADDR_LINKLOCAL (&rsclient->nexthop.v6_local))
-            {
-              memcpy (&attre->mp_nexthop_local, &rsclient->nexthop.v6_local,
-                      IPV6_MAX_BYTELEN);
-              attre->mp_nexthop_len = 32;
-            }
-
-          else
-            attre->mp_nexthop_len = 16;
+          if (!paf)
+            subgroup_announce_reset_nhop ((peer_cap_enhe(peer) ? AF_INET6 : p->family), attr);
         }
-
-    }
-
-  /* If this is EBGP peer and remove-private-AS is set.  */
-  if (rsclient->sort == BGP_PEER_EBGP
-      && peer_af_flag_check (rsclient, afi, safi, PEER_FLAG_REMOVE_PRIVATE_AS)
-      && aspath_private_as_check (attr->aspath))
-    attr->aspath = aspath_empty_get ();
-
-  /* Route map & unsuppress-map apply. */
-  if (ROUTE_MAP_OUT_NAME (filter) || (ri->extra && ri->extra->suppress) )
-    {
-      info.peer = rsclient;
-      info.attr = attr;
-
-      SET_FLAG (rsclient->rmap_type, PEER_RMAP_TYPE_OUT);
-
-      if (ri->extra && ri->extra->suppress)
-        ret = route_map_apply (UNSUPPRESS_MAP (filter), p, RMAP_BGP, &info);
-      else
-        ret = route_map_apply (ROUTE_MAP_OUT (filter), p, RMAP_BGP, &info);
-
-      rsclient->rmap_type = 0;
-
-      if (ret == RMAP_DENYMATCH)
-       {
-         bgp_attr_flush (attr);
-         return 0;
-       }
+      /* If IPv6/MP and nexthop does not have any override and happens to
+       * be a link-local address, reset it so that we don't pass along the
+       * source's link-local IPv6 address to recipients who may not be on
+       * the same interface.
+       */
+      if (p->family == AF_INET6 || peer_cap_enhe(peer))
+        {
+          if (IN6_IS_ADDR_LINKLOCAL (&attr->extra->mp_nexthop_global))
+            subgroup_announce_reset_nhop (AF_INET6, attr);
+        }
     }
 
   return 1;
@@ -1301,8 +1572,8 @@ struct bgp_info_pair
 
 static void
 bgp_best_selection (struct bgp *bgp, struct bgp_node *rn,
-		    struct bgp_info_pair *result,
-		    afi_t afi, safi_t safi)
+		    struct bgp_maxpaths_cfg *mpath_cfg,
+		    struct bgp_info_pair *result)
 {
   struct bgp_info *new_select;
   struct bgp_info *old_select;
@@ -1310,84 +1581,79 @@ bgp_best_selection (struct bgp *bgp, struct bgp_node *rn,
   struct bgp_info *ri1;
   struct bgp_info *ri2;
   struct bgp_info *nextri = NULL;
-  int cmpret, do_mpath;
+  int paths_eq, do_mpath, debug;
   struct list mp_list;
-    
-  result->old = result->new = NULL;
-  
-  if (rn->info == NULL)
-    {
-      char buf[PREFIX_STRLEN];
-      zlog_warn ("%s: Called for route_node %s with no routing entries!",
-                 __func__,
-                 prefix2str (&(bgp_node_to_rnode (rn)->p), buf, sizeof(buf)));
-      return;
-    }
-  
+  char pfx_buf[PREFIX2STR_BUFFER];
+  char path_buf[PATH_ADDPATH_STR_BUFFER];
+
   bgp_mp_list_init (&mp_list);
-  do_mpath = bgp_mpath_is_configured (bgp, afi, safi);
+  do_mpath = (mpath_cfg->maxpaths_ebgp > 1 || mpath_cfg->maxpaths_ibgp > 1);
+
+  debug = bgp_debug_bestpath(&rn->p);
+
+  if (debug)
+    prefix2str (&rn->p, pfx_buf, sizeof (pfx_buf));
 
   /* bgp deterministic-med */
   new_select = NULL;
   if (bgp_flag_check (bgp, BGP_FLAG_DETERMINISTIC_MED))
-    for (ri1 = rn->info; ri1; ri1 = ri1->next)
-      {
-	if (CHECK_FLAG (ri1->flags, BGP_INFO_DMED_CHECK))
-	  continue;
-	if (BGP_INFO_HOLDDOWN (ri1))
-	  continue;
-        if (ri1->peer && ri1->peer != bgp->peer_self)
-          if (ri1->peer->status != Established)
+    {
+
+      /* Clear BGP_INFO_DMED_SELECTED for all paths */
+      for (ri1 = rn->info; ri1; ri1 = ri1->next)
+        bgp_info_unset_flag (rn, ri1, BGP_INFO_DMED_SELECTED);
+
+      for (ri1 = rn->info; ri1; ri1 = ri1->next)
+        {
+          if (CHECK_FLAG (ri1->flags, BGP_INFO_DMED_CHECK))
             continue;
+          if (BGP_INFO_HOLDDOWN (ri1))
+            continue;
+          if (ri1->peer && ri1->peer != bgp->peer_self)
+            if (ri1->peer->status != Established)
+              continue;
 
-	new_select = ri1;
-	if (do_mpath)
-	  bgp_mp_list_add (&mp_list, ri1);
-	old_select = CHECK_FLAG (ri1->flags, BGP_INFO_SELECTED) ? ri1 : NULL;
-	if (ri1->next)
-	  for (ri2 = ri1->next; ri2; ri2 = ri2->next)
-	    {
-	      if (CHECK_FLAG (ri2->flags, BGP_INFO_DMED_CHECK))
-		continue;
-	      if (BGP_INFO_HOLDDOWN (ri2))
-		continue;
-              if (ri2->peer &&
-                  ri2->peer != bgp->peer_self &&
-                  !CHECK_FLAG (ri2->peer->sflags, PEER_STATUS_NSF_WAIT))
-                if (ri2->peer->status != Established)
-                  continue;
+          new_select = ri1;
+          if (ri1->next)
+            {
+              for (ri2 = ri1->next; ri2; ri2 = ri2->next)
+                {
+                  if (CHECK_FLAG (ri2->flags, BGP_INFO_DMED_CHECK))
+                    continue;
+                  if (BGP_INFO_HOLDDOWN (ri2))
+                    continue;
+                  if (ri2->peer &&
+                      ri2->peer != bgp->peer_self &&
+                      !CHECK_FLAG (ri2->peer->sflags, PEER_STATUS_NSF_WAIT))
+                    if (ri2->peer->status != Established)
+                      continue;
 
-	      if (aspath_cmp_left (ri1->attr->aspath, ri2->attr->aspath)
-		  || aspath_cmp_left_confed (ri1->attr->aspath,
-					     ri2->attr->aspath))
-		{
-		  if (CHECK_FLAG (ri2->flags, BGP_INFO_SELECTED))
-		    old_select = ri2;
-		  if ((cmpret = bgp_info_cmp (bgp, ri2, new_select, afi, safi))
-		       == -1)
-		    {
-		      bgp_info_unset_flag (rn, new_select, BGP_INFO_DMED_SELECTED);
-		      new_select = ri2;
-		    }
+                  if (aspath_cmp_left (ri1->attr->aspath, ri2->attr->aspath)
+                      || aspath_cmp_left_confed (ri1->attr->aspath,
+                                                 ri2->attr->aspath))
+                    {
+                      if (bgp_info_cmp (bgp, ri2, new_select, &paths_eq,
+                                        mpath_cfg, debug, pfx_buf))
+                        {
+                          bgp_info_unset_flag (rn, new_select, BGP_INFO_DMED_SELECTED);
+                          new_select = ri2;
+                        }
 
-		  if (do_mpath)
-		    {
-                      if (cmpret != 0)
-                        bgp_mp_list_clear (&mp_list);
-
-                      if (cmpret == 0 || cmpret == -1)
-                        bgp_mp_list_add (&mp_list, ri2);
+                      bgp_info_set_flag (rn, ri2, BGP_INFO_DMED_CHECK);
                     }
+                }
+            }
+          bgp_info_set_flag (rn, new_select, BGP_INFO_DMED_CHECK);
+          bgp_info_set_flag (rn, new_select, BGP_INFO_DMED_SELECTED);
 
-		  bgp_info_set_flag (rn, ri2, BGP_INFO_DMED_CHECK);
-		}
-	    }
-	bgp_info_set_flag (rn, new_select, BGP_INFO_DMED_CHECK);
-	bgp_info_set_flag (rn, new_select, BGP_INFO_DMED_SELECTED);
-
-	bgp_info_mpath_update (rn, new_select, old_select, &mp_list, afi, safi);
-	bgp_mp_list_clear (&mp_list);
-      }
+          if (debug)
+            {
+              bgp_info_path_with_addpath_rx_str (new_select, path_buf);
+              zlog_debug("%s: %s is the bestpath from AS %d",
+                         pfx_buf, path_buf, aspath_get_first_as(new_select->attr->aspath));
+            }
+        }
+    }
 
   /* Check old selected route and new selected route. */
   old_select = NULL;
@@ -1421,33 +1687,76 @@ bgp_best_selection (struct bgp *bgp, struct bgp_node *rn,
 	  bgp_info_unset_flag (rn, ri, BGP_INFO_DMED_CHECK);
 	  continue;
         }
+
       bgp_info_unset_flag (rn, ri, BGP_INFO_DMED_CHECK);
-      bgp_info_unset_flag (rn, ri, BGP_INFO_DMED_SELECTED);
 
-      if ((cmpret = bgp_info_cmp (bgp, ri, new_select, afi, safi)) == -1)
+      if (bgp_info_cmp (bgp, ri, new_select, &paths_eq, mpath_cfg, debug, pfx_buf))
 	{
-	  if (do_mpath && bgp_flag_check (bgp, BGP_FLAG_DETERMINISTIC_MED))
-	    bgp_mp_dmed_deselect (new_select);
-
 	  new_select = ri;
 	}
-      else if (cmpret == 1 && do_mpath
-               && bgp_flag_check (bgp, BGP_FLAG_DETERMINISTIC_MED))
-	bgp_mp_dmed_deselect (ri);
+    }
+    
+  /* Now that we know which path is the bestpath see if any of the other paths
+   * qualify as multipaths
+   */
+  if (debug)
+    {
+      if (new_select)
+        bgp_info_path_with_addpath_rx_str (new_select, path_buf);
+      else
+        sprintf (path_buf, "NONE");
+      zlog_debug("%s: After path selection, newbest is %s oldbest was %s",
+                 pfx_buf, path_buf,
+                 old_select ? old_select->peer->host : "NONE");
+    }
 
-      if (do_mpath)
+  if (do_mpath && new_select)
+    {
+      for (ri = rn->info; (ri != NULL) && (nextri = ri->next, 1); ri = nextri)
         {
-          if (cmpret != 0)
-            bgp_mp_list_clear (&mp_list);
 
-          if (cmpret == 0 || cmpret == -1)
-            bgp_mp_list_add (&mp_list, ri);
+          if (debug)
+            bgp_info_path_with_addpath_rx_str (ri, path_buf);
+
+          if (ri == new_select)
+            {
+              if (debug)
+                zlog_debug("%s: %s is the bestpath, add to the multipath list",
+                           pfx_buf, path_buf);
+              bgp_mp_list_add (&mp_list, ri);
+              continue;
+            }
+
+          if (BGP_INFO_HOLDDOWN (ri))
+            continue;
+
+          if (ri->peer &&
+              ri->peer != bgp->peer_self &&
+              !CHECK_FLAG (ri->peer->sflags, PEER_STATUS_NSF_WAIT))
+            if (ri->peer->status != Established)
+              continue;
+
+          if (!bgp_info_nexthop_cmp (ri, new_select))
+            {
+              if (debug)
+                zlog_debug("%s: %s has the same nexthop as the bestpath, skip it",
+                           pfx_buf, path_buf);
+              continue;
+            }
+
+          bgp_info_cmp (bgp, ri, new_select, &paths_eq, mpath_cfg, debug, pfx_buf);
+
+          if (paths_eq)
+            {
+              if (debug)
+                zlog_debug("%s: %s is equivalent to the bestpath, add to the multipath list",
+                           pfx_buf, path_buf);
+	      bgp_mp_list_add (&mp_list, ri);
+            }
         }
     }
 
-  if (!bgp_flag_check (bgp, BGP_FLAG_DETERMINISTIC_MED))
-    bgp_info_mpath_update (rn, new_select, old_select, &mp_list, afi, safi);
-
+  bgp_info_mpath_update (rn, new_select, old_select, &mp_list, mpath_cfg);
   bgp_info_mpath_aggregate_update (new_select, old_select);
   bgp_mp_list_clear (&mp_list);
 
@@ -1457,129 +1766,114 @@ bgp_best_selection (struct bgp *bgp, struct bgp_node *rn,
   return;
 }
 
-static int
-bgp_process_announce_selected (struct peer *peer, struct bgp_info *selected,
-                               struct bgp_node *rn, afi_t afi, safi_t safi)
+/*
+ * A new route/change in bestpath of an existing route. Evaluate the path
+ * for advertisement to the subgroup.
+ */
+int
+subgroup_process_announce_selected (struct update_subgroup *subgrp,
+				    struct bgp_info *selected,
+				    struct bgp_node *rn,
+                                    u_int32_t addpath_tx_id)
 {
   struct prefix *p;
+  struct peer *onlypeer;
   struct attr attr;
   struct attr_extra extra;
-
-  memset (&attr, 0, sizeof(struct attr));
-  memset (&extra, 0, sizeof(struct attr_extra));
+  afi_t afi;
+  safi_t safi;
 
   p = &rn->p;
-
-  /* Announce route to Established peer. */
-  if (peer->status != Established)
-    return 0;
-
-  /* Address family configuration check. */
-  if (! peer->afc_nego[afi][safi])
-    return 0;
+  afi = SUBGRP_AFI(subgrp);
+  safi = SUBGRP_SAFI(subgrp);
+  onlypeer = ((SUBGRP_PCOUNT(subgrp) == 1) ?
+	      (SUBGRP_PFIRST(subgrp))->peer : NULL);
 
   /* First update is deferred until ORF or ROUTE-REFRESH is received */
-  if (CHECK_FLAG (peer->af_sflags[afi][safi],
-      PEER_STATUS_ORF_WAIT_REFRESH))
+  if (onlypeer && CHECK_FLAG (onlypeer->af_sflags[afi][safi],
+			      PEER_STATUS_ORF_WAIT_REFRESH))
     return 0;
 
-  /* It's initialized in bgp_announce_[check|check_rsclient]() */
+  memset(&extra, 0, sizeof(struct attr_extra));
+  /* It's initialized in bgp_announce_check() */
   attr.extra = &extra;
 
-  switch (bgp_node_table (rn)->type)
+  /* Announcement to the subgroup.  If the route is filtered withdraw it. */
+  if (selected)
     {
-      case BGP_TABLE_MAIN:
-      /* Announcement to peer->conf.  If the route is filtered,
-         withdraw it. */
-        if (selected && bgp_announce_check (selected, peer, p, &attr, afi, safi))
-          bgp_adj_out_set (rn, peer, p, &attr, afi, safi, selected);
-        else
-          bgp_adj_out_unset (rn, peer, p, afi, safi);
-        break;
-      case BGP_TABLE_RSCLIENT:
-        /* Announcement to peer->conf.  If the route is filtered, 
-           withdraw it. */
-        if (selected && 
-            bgp_announce_check_rsclient (selected, peer, p, &attr, afi, safi))
-          bgp_adj_out_set (rn, peer, p, &attr, afi, safi, selected);
-        else
-	  bgp_adj_out_unset (rn, peer, p, afi, safi);
-        break;
+      if (subgroup_announce_check(selected, subgrp, p, &attr))
+        bgp_adj_out_set_subgroup(rn, subgrp, &attr, selected);
+      else
+        bgp_adj_out_unset_subgroup(rn, subgrp, 1, selected->addpath_tx_id);
     }
 
-  bgp_attr_flush (&attr);
+  /* If selected is NULL we must withdraw the path using addpath_tx_id */
+  else
+    {
+      bgp_adj_out_unset_subgroup(rn, subgrp, 1, addpath_tx_id);
+    }
+
   return 0;
 }
 
-struct bgp_process_queue 
+/*
+ * Clear IGP changed flag and attribute changed flag for a route (all paths).
+ * This is called at the end of route processing.
+ */
+static void
+bgp_zebra_clear_route_change_flags (struct bgp_node *rn)
+{
+  struct bgp_info *ri;
+
+  for (ri = rn->info; ri; ri = ri->next)
+    {
+	if (BGP_INFO_HOLDDOWN (ri))
+          continue;
+        UNSET_FLAG (ri->flags, BGP_INFO_IGP_CHANGED);
+        UNSET_FLAG (ri->flags, BGP_INFO_ATTR_CHANGED);
+    }
+}
+
+/*
+ * Has the route changed from the RIB's perspective? This is invoked only
+ * if the route selection returns the same best route as earlier - to
+ * determine if we need to update zebra or not.
+ */
+static int
+bgp_zebra_has_route_changed (struct bgp_node *rn, struct bgp_info *selected)
+{
+  struct bgp_info *mpinfo;
+
+  /* If this is multipath, check all selected paths for any nexthop change or
+   * attribute change. Some attribute changes (e.g., community) aren't of
+   * relevance to the RIB, but we'll update zebra to ensure we handle the
+   * case of BGP nexthop change. This is the behavior when the best path has
+   * an attribute change anyway.
+   */
+  if (CHECK_FLAG (selected->flags, BGP_INFO_IGP_CHANGED) ||
+      CHECK_FLAG (selected->flags, BGP_INFO_MULTIPATH_CHG))
+    return 1;
+
+  /* If this is multipath, check all selected paths for any nexthop change */
+  for (mpinfo = bgp_info_mpath_first (selected); mpinfo;
+       mpinfo = bgp_info_mpath_next (mpinfo))
+    {
+      if (CHECK_FLAG (mpinfo->flags, BGP_INFO_IGP_CHANGED)
+          || CHECK_FLAG (mpinfo->flags, BGP_INFO_ATTR_CHANGED))
+        return 1;
+    }
+
+  /* Nothing has changed from the RIB's perspective. */
+  return 0;
+}
+
+struct bgp_process_queue
 {
   struct bgp *bgp;
   struct bgp_node *rn;
   afi_t afi;
   safi_t safi;
 };
-
-static wq_item_status
-bgp_process_rsclient (struct work_queue *wq, void *data)
-{
-  struct bgp_process_queue *pq = data;
-  struct bgp *bgp = pq->bgp;
-  struct bgp_node *rn = pq->rn;
-  afi_t afi = pq->afi;
-  safi_t safi = pq->safi;
-  struct bgp_info *new_select;
-  struct bgp_info *old_select;
-  struct bgp_info_pair old_and_new;
-  struct listnode *node, *nnode;
-  struct peer *rsclient = bgp_node_table (rn)->owner;
-  
-  /* Best path selection. */
-  bgp_best_selection (bgp, rn, &old_and_new, afi, safi);
-  new_select = old_and_new.new;
-  old_select = old_and_new.old;
-
-  if (CHECK_FLAG (rsclient->sflags, PEER_STATUS_GROUP))
-    {
-      if (rsclient->group)
-        for (ALL_LIST_ELEMENTS (rsclient->group->peer, node, nnode, rsclient))
-          {
-            /* Nothing to do. */
-            if (old_select && old_select == new_select)
-              if (!CHECK_FLAG (old_select->flags, BGP_INFO_ATTR_CHANGED))
-                continue;
-
-            if (old_select)
-              bgp_info_unset_flag (rn, old_select, BGP_INFO_SELECTED);
-            if (new_select)
-              {
-                bgp_info_set_flag (rn, new_select, BGP_INFO_SELECTED);
-                bgp_info_unset_flag (rn, new_select, BGP_INFO_ATTR_CHANGED);
-		UNSET_FLAG (new_select->flags, BGP_INFO_MULTIPATH_CHG);
-             }
-
-            bgp_process_announce_selected (rsclient, new_select, rn,
-                                           afi, safi);
-          }
-    }
-  else
-    {
-      if (old_select)
-	bgp_info_unset_flag (rn, old_select, BGP_INFO_SELECTED);
-      if (new_select)
-	{
-	  bgp_info_set_flag (rn, new_select, BGP_INFO_SELECTED);
-	  bgp_info_unset_flag (rn, new_select, BGP_INFO_ATTR_CHANGED);
-	  UNSET_FLAG (new_select->flags, BGP_INFO_MULTIPATH_CHG);
-	}
-      bgp_process_announce_selected (rsclient, new_select, rn, afi, safi);
-    }
-
-  if (old_select && CHECK_FLAG (old_select->flags, BGP_INFO_REMOVED))
-    bgp_info_reap (rn, old_select);
-  
-  UNSET_FLAG (rn->flags, BGP_NODE_PROCESS_SCHEDULED);
-  return WQ_SUCCESS;
-}
 
 static wq_item_status
 bgp_process_main (struct work_queue *wq, void *data)
@@ -1593,32 +1887,66 @@ bgp_process_main (struct work_queue *wq, void *data)
   struct bgp_info *new_select;
   struct bgp_info *old_select;
   struct bgp_info_pair old_and_new;
-  struct listnode *node, *nnode;
-  struct peer *peer;
-  
+
+  /* Is it end of initial update? (after startup) */
+  if (!rn)
+    {
+      quagga_timestamp(3, bgp->update_delay_zebra_resume_time,
+                       sizeof(bgp->update_delay_zebra_resume_time));
+
+      bgp->main_zebra_update_hold = 0;
+      for (afi = AFI_IP; afi < AFI_MAX; afi++)
+        for (safi = SAFI_UNICAST; safi < SAFI_MAX; safi++)
+          {
+            bgp_zebra_announce_table(bgp, afi, safi);
+          }
+      bgp->main_peers_update_hold = 0;
+
+      bgp_start_routeadv(bgp);
+      return WQ_SUCCESS;
+    }
+
   /* Best path selection. */
-  bgp_best_selection (bgp, rn, &old_and_new, afi, safi);
+  bgp_best_selection (bgp, rn, &bgp->maxpaths[afi][safi], &old_and_new);
   old_select = old_and_new.old;
   new_select = old_and_new.new;
 
   /* Nothing to do. */
-  if (old_select && old_select == new_select 
-      && !CHECK_FLAG(rn->flags, BGP_NODE_USER_CLEAR))
+  if (old_select && old_select == new_select &&
+      !CHECK_FLAG(rn->flags, BGP_NODE_USER_CLEAR) &&
+      !CHECK_FLAG(old_select->flags, BGP_INFO_ATTR_CHANGED) &&
+      !bgp->addpath_tx_used[afi][safi])
     {
-      if (! CHECK_FLAG (old_select->flags, BGP_INFO_ATTR_CHANGED))
+      if (bgp_zebra_has_route_changed (rn, old_select))
         {
-          if (CHECK_FLAG (old_select->flags, BGP_INFO_IGP_CHANGED) ||
-	      CHECK_FLAG (old_select->flags, BGP_INFO_MULTIPATH_CHG))
-            bgp_zebra_announce (p, old_select, bgp, safi);
-          
-	  UNSET_FLAG (old_select->flags, BGP_INFO_MULTIPATH_CHG);
-          UNSET_FLAG (rn->flags, BGP_NODE_PROCESS_SCHEDULED);
-          return WQ_SUCCESS;
+#if ENABLE_BGP_VNC
+              vnc_import_bgp_add_route(bgp, p, old_select);
+              vnc_import_bgp_exterior_add_route(bgp, p, old_select);
+#endif
+        bgp_zebra_announce (p, old_select, bgp, afi, safi);
         }
+      UNSET_FLAG (old_select->flags, BGP_INFO_MULTIPATH_CHG);
+      bgp_zebra_clear_route_change_flags (rn);
+      UNSET_FLAG (rn->flags, BGP_NODE_PROCESS_SCHEDULED);
+      return WQ_SUCCESS;
     }
 
   /* If the user did "clear ip bgp prefix x.x.x.x" this flag will be set */
   UNSET_FLAG(rn->flags, BGP_NODE_USER_CLEAR);
+
+  /* bestpath has changed; bump version */
+  if (old_select || new_select)
+    {
+      bgp_bump_version(rn);
+
+      if (!bgp->t_rmap_def_originate_eval)
+        {
+          bgp_lock (bgp);
+          THREAD_TIMER_ON(bm->master, bgp->t_rmap_def_originate_eval,
+                          update_group_refresh_default_originate_route_map,
+                          bgp, RMAP_DEFAULT_ORIGINATE_EVAL_TIMER);
+        }
+    }
 
   if (old_select)
     bgp_info_unset_flag (rn, old_select, BGP_INFO_SELECTED);
@@ -1629,31 +1957,47 @@ bgp_process_main (struct work_queue *wq, void *data)
       UNSET_FLAG (new_select->flags, BGP_INFO_MULTIPATH_CHG);
     }
 
-
-  /* Check each BGP peer. */
-  for (ALL_LIST_ELEMENTS (bgp->peer, node, nnode, peer))
-    {
-      bgp_process_announce_selected (peer, new_select, rn, afi, safi);
+#if ENABLE_BGP_VNC
+  if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) {
+    if (old_select != new_select) {
+      if (old_select) {
+        vnc_import_bgp_exterior_del_route(bgp, p, old_select);
+        vnc_import_bgp_del_route(bgp, p, old_select);
+      }
+      if (new_select) {
+        vnc_import_bgp_exterior_add_route(bgp, p, new_select);
+        vnc_import_bgp_add_route(bgp, p, new_select);
+      }
     }
+  }
+#endif
+
+  group_announce_route(bgp, afi, safi, rn, new_select);
 
   /* FIB update. */
-  if ((safi == SAFI_UNICAST || safi == SAFI_MULTICAST) && (! bgp->name &&
-      ! bgp_option_check (BGP_OPT_NO_FIB)))
+  if ((safi == SAFI_UNICAST || safi == SAFI_MULTICAST) &&
+      (bgp->inst_type != BGP_INSTANCE_TYPE_VIEW) &&
+      !bgp_option_check (BGP_OPT_NO_FIB))
     {
       if (new_select 
 	  && new_select->type == ZEBRA_ROUTE_BGP 
-	  && new_select->sub_type == BGP_ROUTE_NORMAL)
-	bgp_zebra_announce (p, new_select, bgp, safi);
+	  && (new_select->sub_type == BGP_ROUTE_NORMAL ||
+              new_select->sub_type == BGP_ROUTE_AGGREGATE))
+	bgp_zebra_announce (p, new_select, bgp, afi, safi);
       else
 	{
 	  /* Withdraw the route from the kernel. */
 	  if (old_select 
 	      && old_select->type == ZEBRA_ROUTE_BGP
-	      && old_select->sub_type == BGP_ROUTE_NORMAL)
+	      && (old_select->sub_type == BGP_ROUTE_NORMAL ||
+                  old_select->sub_type == BGP_ROUTE_AGGREGATE))
 	    bgp_zebra_withdraw (p, old_select, safi);
 	}
     }
-    
+
+  /* Clear any route change flags. */
+  bgp_zebra_clear_route_change_flags (rn);
+
   /* Reap old select bgp_info, if it has been removed */
   if (old_select && CHECK_FLAG (old_select->flags, BGP_INFO_REMOVED))
     bgp_info_reap (rn, old_select);
@@ -1666,37 +2010,39 @@ static void
 bgp_processq_del (struct work_queue *wq, void *data)
 {
   struct bgp_process_queue *pq = data;
-  struct bgp_table *table = bgp_node_table (pq->rn);
-  
+  struct bgp_table *table;
+
   bgp_unlock (pq->bgp);
-  bgp_unlock_node (pq->rn);
-  bgp_table_unlock (table);
+  if (pq->rn)
+    {
+      table = bgp_node_table (pq->rn);
+      bgp_unlock_node (pq->rn);
+      bgp_table_unlock (table);
+    }
   XFREE (MTYPE_BGP_PROCESS_QUEUE, pq);
 }
 
-static void
+void
 bgp_process_queue_init (void)
 {
-  bm->process_main_queue
-    = work_queue_new (bm->master, "process_main_queue");
-  bm->process_rsclient_queue
-    = work_queue_new (bm->master, "process_rsclient_queue");
-  
-  if ( !(bm->process_main_queue && bm->process_rsclient_queue) )
+  if (!bm->process_main_queue)
     {
-      zlog_err ("%s: Failed to allocate work queue", __func__);
-      exit (1);
+      bm->process_main_queue
+	= work_queue_new (bm->master, "process_main_queue");
+
+      if ( !bm->process_main_queue)
+        {
+          zlog_err ("%s: Failed to allocate work queue", __func__);
+          exit (1);
+        }
     }
   
   bm->process_main_queue->spec.workfunc = &bgp_process_main;
   bm->process_main_queue->spec.del_item_data = &bgp_processq_del;
   bm->process_main_queue->spec.max_retries = 0;
   bm->process_main_queue->spec.hold = 50;
-  
-  bm->process_rsclient_queue->spec.workfunc = &bgp_process_rsclient;
-  bm->process_rsclient_queue->spec.del_item_data = &bgp_processq_del;
-  bm->process_rsclient_queue->spec.max_retries = 0;
-  bm->process_rsclient_queue->spec.hold = 50;
+  /* Use a higher yield value of 50ms for main queue processing */
+  bm->process_main_queue->spec.yield = 50 * 1000L;
 }
 
 void
@@ -1707,24 +2053,10 @@ bgp_process (struct bgp *bgp, struct bgp_node *rn, afi_t afi, safi_t safi)
   /* already scheduled for processing? */
   if (CHECK_FLAG (rn->flags, BGP_NODE_PROCESS_SCHEDULED))
     return;
-  
-  if (rn->info == NULL)
-    {
-      /* XXX: Perhaps remove before next release, after we've flushed out
-       * any obvious cases
-       */
-      assert (rn->info != NULL);
-      char buf[PREFIX_STRLEN];
-      zlog_warn ("%s: Called for route_node %s with no routing entries!",
-                 __func__,
-                 prefix2str (&(bgp_node_to_rnode (rn)->p), buf, sizeof(buf)));
-      return;
-    }
-  
-  if ( (bm->process_main_queue == NULL) ||
-       (bm->process_rsclient_queue == NULL) )
+
+  if (bm->process_main_queue == NULL)
     bgp_process_queue_init ();
-  
+
   pqnode = XCALLOC (MTYPE_BGP_PROCESS_QUEUE, 
                     sizeof (struct bgp_process_queue));
   if (!pqnode)
@@ -1737,19 +2069,28 @@ bgp_process (struct bgp *bgp, struct bgp_node *rn, afi_t afi, safi_t safi)
   bgp_lock (bgp);
   pqnode->afi = afi;
   pqnode->safi = safi;
-  
-  switch (bgp_node_table (rn)->type)
-    {
-      case BGP_TABLE_MAIN:
-        work_queue_add (bm->process_main_queue, pqnode);
-        break;
-      case BGP_TABLE_RSCLIENT:
-        work_queue_add (bm->process_rsclient_queue, pqnode);
-        break;
-    }
-  
+  work_queue_add (bm->process_main_queue, pqnode);
   SET_FLAG (rn->flags, BGP_NODE_PROCESS_SCHEDULED);
   return;
+}
+
+void
+bgp_add_eoiu_mark (struct bgp *bgp)
+{
+  struct bgp_process_queue *pqnode;
+
+  if (bm->process_main_queue == NULL)
+    bgp_process_queue_init ();
+
+  pqnode = XCALLOC (MTYPE_BGP_PROCESS_QUEUE,
+                    sizeof (struct bgp_process_queue));
+  if (!pqnode)
+    return;
+
+  pqnode->rn = NULL;
+  pqnode->bgp = bgp;
+  bgp_lock (bgp);
+  work_queue_add (bm->process_main_queue, pqnode);
 }
 
 static int
@@ -1760,19 +2101,22 @@ bgp_maximum_prefix_restart_timer (struct thread *thread)
   peer = THREAD_ARG (thread);
   peer->t_pmax_restart = NULL;
 
-  if (BGP_DEBUG (events, EVENTS))
+  if (bgp_debug_neighbor_events(peer))
     zlog_debug ("%s Maximum-prefix restart timer expired, restore peering",
 		peer->host);
 
-  peer_clear (peer);
+  peer_clear (peer, NULL);
 
   return 0;
 }
 
 int
-bgp_maximum_prefix_overflow (struct peer *peer, afi_t afi, 
+bgp_maximum_prefix_overflow (struct peer *peer, afi_t afi,
                              safi_t safi, int always)
 {
+  iana_afi_t pkt_afi;
+  safi_t pkt_safi;
+
   if (!CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_MAX_PREFIX))
     return 0;
 
@@ -1782,24 +2126,23 @@ bgp_maximum_prefix_overflow (struct peer *peer, afi_t afi,
          && ! always)
        return 0;
 
-      zlog (peer->log, LOG_INFO,
-	    "%%MAXPFXEXCEED: No. of %s prefix received from %s %ld exceed, "
-	    "limit %ld", afi_safi_print (afi, safi), peer->host,
-	    peer->pcount[afi][safi], peer->pmax[afi][safi]);
+      zlog_info ("%%MAXPFXEXCEED: No. of %s prefix received from %s %ld exceed, "
+	         "limit %ld", afi_safi_print (afi, safi), peer->host,
+	         peer->pcount[afi][safi], peer->pmax[afi][safi]);
       SET_FLAG (peer->af_sflags[afi][safi], PEER_STATUS_PREFIX_LIMIT);
 
       if (CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_MAX_PREFIX_WARNING))
        return 0;
 
+      /* Convert AFI, SAFI to values for packet. */
+      pkt_afi = afi_int2iana (afi);
+      pkt_safi = safi_int2iana (safi);
       {
        u_int8_t ndata[7];
 
-       if (safi == SAFI_MPLS_VPN)
-         safi = SAFI_MPLS_LABELED_VPN;
-         
-       ndata[0] = (afi >>  8);
-       ndata[1] = afi;
-       ndata[2] = safi;
+       ndata[0] = (pkt_afi >>  8);
+       ndata[1] = pkt_afi;
+       ndata[2] = pkt_safi;
        ndata[3] = (peer->pmax[afi][safi] >> 24);
        ndata[4] = (peer->pmax[afi][safi] >> 16);
        ndata[5] = (peer->pmax[afi][safi] >> 8);
@@ -1810,12 +2153,16 @@ bgp_maximum_prefix_overflow (struct peer *peer, afi_t afi,
                                   BGP_NOTIFY_CEASE_MAX_PREFIX, ndata, 7);
       }
 
+      /* Dynamic peers will just close their connection. */
+      if (peer_dynamic_neighbor (peer))
+        return 1;
+
       /* restart timer start */
       if (peer->pmax_restart[afi][safi])
 	{
 	  peer->v_pmax_restart = peer->pmax_restart[afi][safi] * 60;
 
-	  if (BGP_DEBUG (events, EVENTS))
+          if (bgp_debug_neighbor_events(peer))
 	    zlog_debug ("%s Maximum-prefix restart timer started for %d secs",
 			peer->host, peer->v_pmax_restart);
 
@@ -1834,10 +2181,9 @@ bgp_maximum_prefix_overflow (struct peer *peer, afi_t afi,
          && ! always)
        return 0;
 
-      zlog (peer->log, LOG_INFO,
-	    "%%MAXPFX: No. of %s prefix received from %s reaches %ld, max %ld",
-	    afi_safi_print (afi, safi), peer->host, peer->pcount[afi][safi],
-	    peer->pmax[afi][safi]);
+      zlog_info ("%%MAXPFX: No. of %s prefix received from %s reaches %ld, max %ld",
+	         afi_safi_print (afi, safi), peer->host, peer->pcount[afi][safi],
+	         peer->pmax[afi][safi]);
       SET_FLAG (peer->af_sflags[afi][safi], PEER_STATUS_PREFIX_THRESHOLD);
     }
   else
@@ -1878,11 +2224,37 @@ bgp_rib_withdraw (struct bgp_node *rn, struct bgp_info *ri, struct peer *peer,
         return;
       }
     
+#if ENABLE_BGP_VNC
+    if (safi == SAFI_MPLS_VPN) {
+	struct bgp_node		*prn = NULL;
+	struct bgp_table	*table = NULL;
+
+	prn = bgp_node_get(peer->bgp->rib[afi][safi], (struct prefix *) prd);
+	if (prn->info) {
+	    table = (struct bgp_table *)(prn->info);
+
+	    vnc_import_bgp_del_vnc_host_route_mode_resolve_nve(
+		peer->bgp,
+		prd,
+		table,
+		&rn->p,
+		ri);
+	}
+	bgp_unlock_node(prn);
+    }
+    if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) {
+        if (CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)) {
+
+	    vnc_import_bgp_del_route(peer->bgp, &rn->p, ri);
+	    vnc_import_bgp_exterior_del_route(peer->bgp, &rn->p, ri);
+	}
+    }
+#endif    
   bgp_rib_remove (rn, ri, peer, afi, safi);
 }
 
 static struct bgp_info *
-info_make (int type, int sub_type, struct peer *peer, struct attr *attr,
+info_make (int type, int sub_type, u_short instance, struct peer *peer, struct attr *attr,
 	   struct bgp_node *rn)
 {
   struct bgp_info *new;
@@ -1890,233 +2262,81 @@ info_make (int type, int sub_type, struct peer *peer, struct attr *attr,
   /* Make new BGP info. */
   new = XCALLOC (MTYPE_BGP_ROUTE, sizeof (struct bgp_info));
   new->type = type;
+  new->instance = instance;
   new->sub_type = sub_type;
   new->peer = peer;
   new->attr = attr;
   new->uptime = bgp_clock ();
   new->net = rn;
+  new->addpath_tx_id = ++peer->bgp->addpath_tx_id;
   return new;
 }
 
 static void
-bgp_update_rsclient (struct peer *rsclient, afi_t afi, safi_t safi,
-      struct attr *attr, struct peer *peer, struct prefix *p, int type,
-      int sub_type, struct prefix_rd *prd, u_char *tag)
+bgp_info_addpath_rx_str(u_int32_t addpath_id, char *buf)
 {
-  struct bgp_node *rn;
-  struct bgp *bgp;
-  struct attr new_attr;
-  struct attr_extra new_extra;
-  struct attr *attr_new;
-  struct attr *attr_new2;
-  struct bgp_info *ri;
-  struct bgp_info *new;
-  const char *reason;
-  char buf[SU_ADDRSTRLEN];
-
-  /* Do not insert announces from a rsclient into its own 'bgp_table'. */
-  if (peer == rsclient)
-    return;
-
-  bgp = peer->bgp;
-  rn = bgp_afi_node_get (rsclient->rib[afi][safi], afi, safi, p, prd);
-
-  /* Check previously received route. */
-  for (ri = rn->info; ri; ri = ri->next)
-    if (ri->peer == peer && ri->type == type && ri->sub_type == sub_type)
-      break;
-
-  /* AS path loop check. */
-  if (aspath_loop_check (attr->aspath, rsclient->as) > rsclient->allowas_in[afi][safi])
-    {
-      reason = "as-path contains our own AS;";
-      goto filtered;
-    }
-
-  /* Route reflector originator ID check.  */
-  if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_ORIGINATOR_ID)
-      && IPV4_ADDR_SAME (&rsclient->remote_id, &attr->extra->originator_id))
-    {
-      reason = "originator is us;";
-      goto filtered;
-    }
-  
-  new_attr.extra = &new_extra;
-  bgp_attr_dup (&new_attr, attr);
-
-  /* Apply export policy. */
-  if (CHECK_FLAG(peer->af_flags[afi][safi], PEER_FLAG_RSERVER_CLIENT) &&
-        bgp_export_modifier (rsclient, peer, p, &new_attr, afi, safi) == RMAP_DENY)
-    {
-      reason = "export-policy;";
-      goto filtered;
-    }
-
-  attr_new2 = bgp_attr_intern (&new_attr);
-  
-  /* Apply import policy. */
-  if (bgp_import_modifier (rsclient, peer, p, &new_attr, afi, safi) == RMAP_DENY)
-    {
-      bgp_attr_unintern (&attr_new2);
-
-      reason = "import-policy;";
-      goto filtered;
-    }
-
-  attr_new = bgp_attr_intern (&new_attr);
-  bgp_attr_unintern (&attr_new2);
-
-  /* IPv4 unicast next hop check.  */
-  if ((afi == AFI_IP) && ((safi == SAFI_UNICAST) || safi == SAFI_MULTICAST))
-    {
-     /* Next hop must not be 0.0.0.0 nor Class D/E address. */
-      if (new_attr.nexthop.s_addr == 0
-         || IPV4_CLASS_DE (ntohl (new_attr.nexthop.s_addr)))
-       {
-         bgp_attr_unintern (&attr_new);
-
-         reason = "martian next-hop;";
-         goto filtered;
-       }
-    }
-
-  /* If the update is implicit withdraw. */
-  if (ri)
-    {
-      ri->uptime = bgp_clock ();
-
-      /* Same attribute comes in. */
-      if (!CHECK_FLAG(ri->flags, BGP_INFO_REMOVED)
-          && attrhash_cmp (ri->attr, attr_new))
-        {
-
-
-          if (BGP_DEBUG (update, UPDATE_IN))
-            zlog (peer->log, LOG_DEBUG,
-                    "%s rcvd %s/%d for RS-client %s...duplicate ignored",
-                    peer->host,
-                    inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-                    p->prefixlen, rsclient->host);
-
-          bgp_unlock_node (rn);
-          bgp_attr_unintern (&attr_new);
-          bgp_attr_flush(&new_attr);
-          return;
-        }
-
-      /* Withdraw/Announce before we fully processed the withdraw */
-      if (CHECK_FLAG(ri->flags, BGP_INFO_REMOVED))
-        bgp_info_restore (rn, ri);
-      
-      /* Received Logging. */
-      if (BGP_DEBUG (update, UPDATE_IN))
-        zlog (peer->log, LOG_DEBUG, "%s rcvd %s/%d for RS-client %s",
-                peer->host,
-                inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-                p->prefixlen, rsclient->host);
-
-      /* The attribute is changed. */
-      bgp_info_set_flag (rn, ri, BGP_INFO_ATTR_CHANGED);
-
-      /* Update to new attribute.  */
-      bgp_attr_unintern (&ri->attr);
-      ri->attr = attr_new;
-
-      /* Update MPLS tag.  */
-      if (safi == SAFI_MPLS_VPN)
-        memcpy ((bgp_info_extra_get (ri))->tag, tag, 3);
-
-      bgp_info_set_flag (rn, ri, BGP_INFO_VALID);
-
-      /* Process change. */
-      bgp_process (bgp, rn, afi, safi);
-      bgp_unlock_node (rn);
-
-      return;
-    }
-
-  /* Received Logging. */
-  if (BGP_DEBUG (update, UPDATE_IN))
-    {
-      zlog (peer->log, LOG_DEBUG, "%s rcvd %s/%d for RS-client %s",
-              peer->host,
-              inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-              p->prefixlen, rsclient->host);
-    }
-
-  new = info_make(type, sub_type, peer, attr_new, rn);
-
-  /* Update MPLS tag. */
-  if (safi == SAFI_MPLS_VPN)
-    memcpy ((bgp_info_extra_get (new))->tag, tag, 3);
-
-  bgp_info_set_flag (rn, new, BGP_INFO_VALID);
-
-  /* Register new BGP information. */
-  bgp_info_add (rn, new);
-  
-  /* route_node_get lock */
-  bgp_unlock_node (rn);
-  
-  /* Process change. */
-  bgp_process (bgp, rn, afi, safi);
-
-  return;
-
- filtered: 
-
-  /* This BGP update is filtered.  Log the reason then update BGP entry.  */
-  if (BGP_DEBUG (update, UPDATE_IN))
-        zlog (peer->log, LOG_DEBUG,
-        "%s rcvd UPDATE about %s/%d -- DENIED for RS-client %s due to: %s",
-        peer->host,
-        inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-        p->prefixlen, rsclient->host, reason);
-
-  if (ri)
-    bgp_rib_remove (rn, ri, peer, afi, safi);
-
-  bgp_unlock_node (rn);
-
-  return;
+  if (addpath_id)
+    sprintf(buf, " with addpath ID %d", addpath_id);
 }
 
-static void
-bgp_withdraw_rsclient (struct peer *rsclient, afi_t afi, safi_t safi,
-      struct peer *peer, struct prefix *p, int type, int sub_type,
-      struct prefix_rd *prd, u_char *tag)
-{
-  struct bgp_node *rn;
-  struct bgp_info *ri;
-  char buf[SU_ADDRSTRLEN];
 
-  if (rsclient == peer)
-    return;
-
-  rn = bgp_afi_node_get (rsclient->rib[afi][safi], afi, safi, p, prd);
-
-  /* Lookup withdrawn route. */
-  for (ri = rn->info; ri; ri = ri->next)
-    if (ri->peer == peer && ri->type == type && ri->sub_type == sub_type)
-      break;
-
-  /* Withdraw specified route from routing table. */
-  if (ri && ! CHECK_FLAG (ri->flags, BGP_INFO_HISTORY))
-    bgp_rib_withdraw (rn, ri, peer, afi, safi, prd);
-  else if (BGP_DEBUG (update, UPDATE_IN))
-    zlog (peer->log, LOG_DEBUG,
-          "%s Can't find the route %s/%d", peer->host,
-          inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-          p->prefixlen);
-
-  /* Unlock bgp_node_get() lock. */
-  bgp_unlock_node (rn);
-}
-
+/* Check if received nexthop is valid or not. */
 static int
-bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
-	    afi_t afi, safi_t safi, int type, int sub_type,
-	    struct prefix_rd *prd, u_char *tag, int soft_reconfig)
+bgp_update_martian_nexthop (struct bgp *bgp, afi_t afi, safi_t safi, struct attr *attr)
+{
+  struct attr_extra *attre = attr->extra;
+  int ret = 0;
+
+  /* Only validated for unicast and multicast currently. */
+  if (safi != SAFI_UNICAST && safi != SAFI_MULTICAST)
+    return 0;
+
+  /* If NEXT_HOP is present, validate it. */
+  if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_NEXT_HOP))
+    {
+      if (attr->nexthop.s_addr == 0 ||
+          IPV4_CLASS_DE (ntohl (attr->nexthop.s_addr)) ||
+          bgp_nexthop_self (bgp, attr))
+        ret = 1;
+    }
+
+  /* If MP_NEXTHOP is present, validate it. */
+  /* Note: For IPv6 nexthops, we only validate the global (1st) nexthop;
+   * there is code in bgp_attr.c to ignore the link-local (2nd) nexthop if
+   * it is not an IPv6 link-local address.
+   */
+  if (attre && attre->mp_nexthop_len)
+    {
+      switch (attre->mp_nexthop_len)
+        {
+        case BGP_ATTR_NHLEN_IPV4:
+        case BGP_ATTR_NHLEN_VPNV4:
+          ret = (attre->mp_nexthop_global_in.s_addr == 0 ||
+                 IPV4_CLASS_DE (ntohl (attre->mp_nexthop_global_in.s_addr)));
+          break;
+
+        case BGP_ATTR_NHLEN_IPV6_GLOBAL:
+        case BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL:
+        case BGP_ATTR_NHLEN_VPNV6_GLOBAL:
+          ret = (IN6_IS_ADDR_UNSPECIFIED(&attre->mp_nexthop_global) ||
+                 IN6_IS_ADDR_LOOPBACK(&attre->mp_nexthop_global)    ||
+                 IN6_IS_ADDR_MULTICAST(&attre->mp_nexthop_global));
+          break;
+
+        default:
+          ret = 1;
+          break;
+        }
+    }
+
+  return ret;
+}
+
+int
+bgp_update (struct peer *peer, struct prefix *p, u_int32_t addpath_id,
+            struct attr *attr, afi_t afi, safi_t safi, int type,
+            int sub_type, struct prefix_rd *prd, u_char *tag,
+            int soft_reconfig)
 {
   int ret;
   int aspath_loop_count = 0;
@@ -2129,7 +2349,12 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
   struct bgp_info *new;
   const char *reason;
   char buf[SU_ADDRSTRLEN];
+  char buf2[30];
   int connected = 0;
+  int do_loop_check = 1;
+#if ENABLE_BGP_VNC
+  int vnc_implicit_withdraw = 0;
+#endif
 
   memset (&new_attr, 0, sizeof(struct attr));
   memset (&new_extra, 0, sizeof(struct attr_extra));
@@ -2141,11 +2366,12 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
      Adj-RIBs-In.  */
   if (! soft_reconfig && CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_SOFT_RECONFIG)
       && peer != bgp->peer_self)
-    bgp_adj_in_set (rn, peer, attr);
+    bgp_adj_in_set (rn, peer, attr, addpath_id);
 
   /* Check previously received route. */
   for (ri = rn->info; ri; ri = ri->next)
-    if (ri->peer == peer && ri->type == type && ri->sub_type == sub_type)
+    if (ri->peer == peer && ri->type == type && ri->sub_type == sub_type &&
+        ri->addpath_rx_id == addpath_id)
       break;
 
   /* AS path local-as loop check. */
@@ -2161,14 +2387,23 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
 	}
     }
 
+  /* If the peer is configured for "allowas-in origin" and the last ASN in the
+   * as-path is our ASN then we do not need to call aspath_loop_check
+   */
+  if (CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_ALLOWAS_IN_ORIGIN))
+      if (aspath_get_last_as(attr->aspath) == bgp->as)
+        do_loop_check = 0;
+
   /* AS path loop check. */
-  if (aspath_loop_check (attr->aspath, bgp->as) > peer->allowas_in[afi][safi]
-      || (CHECK_FLAG(bgp->config, BGP_CONFIG_CONFEDERATION)
-	  && aspath_loop_check(attr->aspath, bgp->confed_id)
-	  > peer->allowas_in[afi][safi]))
+  if (do_loop_check)
     {
-      reason = "as-path contains our own AS;";
-      goto filtered;
+      if (aspath_loop_check (attr->aspath, bgp->as) > peer->allowas_in[afi][safi]
+          || (CHECK_FLAG(bgp->config, BGP_CONFIG_CONFEDERATION)
+              && aspath_loop_check(attr->aspath, bgp->confed_id) > peer->allowas_in[afi][safi]))
+        {
+          reason = "as-path contains our own AS;";
+          goto filtered;
+        }
     }
 
   /* Route reflector originator ID check.  */
@@ -2200,26 +2435,19 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
    * NB: new_attr may now contain newly allocated values from route-map "set"
    * commands, so we need bgp_attr_flush in the error paths, until we intern
    * the attr (which takes over the memory references) */
-  if (bgp_input_modifier (peer, p, &new_attr, afi, safi) == RMAP_DENY)
+  if (bgp_input_modifier (peer, p, &new_attr, afi, safi, NULL) == RMAP_DENY)
     {
       reason = "route-map;";
       bgp_attr_flush (&new_attr);
       goto filtered;
     }
 
-  /* IPv4 unicast next hop check.  */
-  if (afi == AFI_IP && safi == SAFI_UNICAST)
+  /* next hop check.  */
+  if (bgp_update_martian_nexthop (bgp, afi, safi, &new_attr))
     {
-      /* Next hop must not be 0.0.0.0 nor Class D/E address. Next hop
-	 must not be my own address.  */
-      if (new_attr.nexthop.s_addr == 0
-	  || IPV4_CLASS_DE (ntohl (new_attr.nexthop.s_addr))
-	  || bgp_nexthop_self (&new_attr))
-	{
-	  reason = "martian next-hop;";
-	  bgp_attr_flush (&new_attr);
-	  goto filtered;
-	}
+       reason = "martian or self next-hop;";
+       bgp_attr_flush (&new_attr);
+       goto filtered;
     }
 
   attr_new = bgp_attr_intern (&new_attr);
@@ -2237,11 +2465,14 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
 	      && peer->sort == BGP_PEER_EBGP
 	      && CHECK_FLAG (ri->flags, BGP_INFO_HISTORY))
 	    {
-	      if (BGP_DEBUG (update, UPDATE_IN))  
-		  zlog (peer->log, LOG_DEBUG, "%s rcvd %s/%d",
-		  peer->host,
-		  inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-		  p->prefixlen);
+	      if (bgp_debug_update(peer, p, NULL, 1))
+                {
+                  bgp_info_addpath_rx_str(addpath_id, buf2);
+		  zlog_debug ("%s rcvd %s/%d%s",
+		              peer->host,
+		              inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+		              p->prefixlen, buf2);
+                }
 
 	      if (bgp_damp_update (ri, rn, afi, safi) != BGP_DAMP_SUPPRESSED)
 	        {
@@ -2251,12 +2482,20 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
 	    }
           else /* Duplicate - odd */
 	    {
-	      if (BGP_DEBUG (update, UPDATE_IN))  
-		zlog (peer->log, LOG_DEBUG,
-		"%s rcvd %s/%d...duplicate ignored",
-		peer->host,
-		inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-		p->prefixlen);
+	      if (bgp_debug_update(peer, p, NULL, 1))
+                {
+                if (!peer->rcvd_attr_printed)
+                  {
+                    zlog_debug ("%s rcvd UPDATE w/ attr: %s", peer->host, peer->rcvd_attr_str);
+                    peer->rcvd_attr_printed = 1;
+                  }
+
+                  bgp_info_addpath_rx_str(addpath_id, buf2);
+		  zlog_debug ("%s rcvd %s/%d%s...duplicate ignored",
+		              peer->host,
+		              inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+		              p->prefixlen, buf2);
+                }
 
 	      /* graceful restart STALE flag unset. */
 	      if (CHECK_FLAG (ri->flags, BGP_INFO_STALE))
@@ -2268,7 +2507,6 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
 
 	  bgp_unlock_node (rn);
 	  bgp_attr_unintern (&attr_new);
-          bgp_attr_flush (&new_attr);
 
 	  return 0;
 	}
@@ -2276,20 +2514,26 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
       /* Withdraw/Announce before we fully processed the withdraw */
       if (CHECK_FLAG(ri->flags, BGP_INFO_REMOVED))
         {
-          if (BGP_DEBUG (update, UPDATE_IN))
-            zlog (peer->log, LOG_DEBUG, "%s rcvd %s/%d, flapped quicker than processing",
-            peer->host,
-            inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-            p->prefixlen);
+          if (bgp_debug_update(peer, p, NULL, 1))
+            {
+              bgp_info_addpath_rx_str(addpath_id, buf2);
+              zlog_debug ("%s rcvd %s/%d%s, flapped quicker than processing",
+                          peer->host,
+                          inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+                          p->prefixlen, buf2);
+            }
           bgp_info_restore (rn, ri);
         }
 
       /* Received Logging. */
-      if (BGP_DEBUG (update, UPDATE_IN))  
-	zlog (peer->log, LOG_DEBUG, "%s rcvd %s/%d",
-	      peer->host,
-	      inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-	      p->prefixlen);
+      if (bgp_debug_update(peer, p, NULL, 1))
+        {
+          bgp_info_addpath_rx_str(addpath_id, buf2);
+	  zlog_debug ("%s rcvd %s/%d%s",
+	            peer->host,
+	            inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+	            p->prefixlen, buf2);
+        }
 
       /* graceful restart STALE flag unset. */
       if (CHECK_FLAG (ri->flags, BGP_INFO_STALE))
@@ -2312,6 +2556,35 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
 	  if (! CHECK_FLAG (ri->flags, BGP_INFO_HISTORY))
 	    bgp_damp_withdraw (ri, rn, afi, safi, 1);  
 	}
+#if ENABLE_BGP_VNC
+    if (safi == SAFI_MPLS_VPN) {
+	struct bgp_node		*prn = NULL;
+	struct bgp_table	*table = NULL;
+
+	prn = bgp_node_get(bgp->rib[afi][safi], (struct prefix *) prd);
+	if (prn->info) {
+	    table = (struct bgp_table *)(prn->info);
+
+	    vnc_import_bgp_del_vnc_host_route_mode_resolve_nve(
+		bgp,
+		prd,
+		table,
+		p,
+		ri);
+	}
+	bgp_unlock_node(prn);
+    }
+    if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) {
+        if (CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)) {
+	    /*
+	     * Implicit withdraw case.
+	     */
+	    ++vnc_implicit_withdraw;
+	    vnc_import_bgp_del_route(bgp, p, ri);
+	    vnc_import_bgp_exterior_del_route(bgp, p, ri);
+	}
+    }
+#endif
 	
       /* Update to new attribute.  */
       bgp_attr_unintern (&ri->attr);
@@ -2321,7 +2594,24 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
       if (safi == SAFI_MPLS_VPN)
         memcpy ((bgp_info_extra_get (ri))->tag, tag, 3);
 
-      bgp_attr_flush (&new_attr);
+#if ENABLE_BGP_VNC
+      if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) 
+        {
+          if (vnc_implicit_withdraw) 
+            {
+              /*
+               * Add back the route with its new attributes (e.g., nexthop).
+               * The route is still selected, until the route selection
+               * queued by bgp_process actually runs. We have to make this
+               * update to the VNC side immediately to avoid racing against
+               * configuration changes (e.g., route-map changes) which
+               * trigger re-importation of the entire RIB.
+               */
+              vnc_import_bgp_add_route(bgp, p, ri);
+              vnc_import_bgp_exterior_add_route(bgp, p, ri);
+            }
+        }
+#endif
 
       /* Update bgp route dampening information.  */
       if (CHECK_FLAG (bgp->af_flags[afi][safi], BGP_CONFIG_DAMPENING)
@@ -2340,12 +2630,13 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
       if ((afi == AFI_IP || afi == AFI_IP6) && safi == SAFI_UNICAST)
 	{
 	  if (peer->sort == BGP_PEER_EBGP && peer->ttl == 1 &&
-	      ! CHECK_FLAG (peer->flags, PEER_FLAG_DISABLE_CONNECTED_CHECK))
+	      ! CHECK_FLAG (peer->flags, PEER_FLAG_DISABLE_CONNECTED_CHECK)
+	      && ! bgp_flag_check(bgp, BGP_FLAG_DISABLE_NH_CONNECTED_CHK))
 	    connected = 1;
 	  else
 	    connected = 0;
 
-	  if (bgp_find_or_add_nexthop (afi, ri, NULL, connected))
+	  if (bgp_find_or_add_nexthop (bgp, afi, ri, NULL, connected))
 	    bgp_info_set_flag (rn, ri, BGP_INFO_VALID);
 	  else
 	    {
@@ -2361,7 +2652,27 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
       else
 	bgp_info_set_flag (rn, ri, BGP_INFO_VALID);
 
-      bgp_attr_flush (&new_attr);
+#if ENABLE_BGP_VNC
+      if (safi == SAFI_MPLS_VPN) 
+        {
+          struct bgp_node		*prn = NULL;
+          struct bgp_table	*table = NULL;
+
+          prn = bgp_node_get(bgp->rib[afi][safi], (struct prefix *) prd);
+          if (prn->info) 
+            {
+              table = (struct bgp_table *)(prn->info);
+
+              vnc_import_bgp_add_vnc_host_route_mode_resolve_nve(
+		bgp,
+                    prd,
+                    table,
+                    p,
+                    ri);
+            }
+          bgp_unlock_node(prn);
+        }
+#endif
 
       /* Process change. */
       bgp_aggregate_increment (bgp, p, ri, afi, safi);
@@ -2370,19 +2681,26 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
       bgp_unlock_node (rn);
 
       return 0;
-    }
+    } // End of implicit withdraw
 
   /* Received Logging. */
-  if (BGP_DEBUG (update, UPDATE_IN))  
+  if (bgp_debug_update(peer, p, NULL, 1))
     {
-      zlog (peer->log, LOG_DEBUG, "%s rcvd %s/%d",
-	    peer->host,
-	    inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-	    p->prefixlen);
+      if (!peer->rcvd_attr_printed)
+        {
+          zlog_debug ("%s rcvd UPDATE w/ attr: %s", peer->host, peer->rcvd_attr_str);
+          peer->rcvd_attr_printed = 1;
+        }
+
+      bgp_info_addpath_rx_str(addpath_id, buf2);
+      zlog_debug ("%s rcvd %s/%d%s",
+	          peer->host,
+	          inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+	          p->prefixlen, buf2);
     }
 
   /* Make new BGP info. */
-  new = info_make(type, sub_type, peer, attr_new, rn);
+  new = info_make(type, sub_type, 0, peer, attr_new, rn);
 
   /* Update MPLS tag. */
   if (safi == SAFI_MPLS_VPN)
@@ -2392,12 +2710,13 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
   if ((afi == AFI_IP || afi == AFI_IP6) && safi == SAFI_UNICAST)
     {
       if (peer->sort == BGP_PEER_EBGP && peer->ttl == 1 &&
-	  ! CHECK_FLAG (peer->flags, PEER_FLAG_DISABLE_CONNECTED_CHECK))
+	  ! CHECK_FLAG (peer->flags, PEER_FLAG_DISABLE_CONNECTED_CHECK)
+	  && ! bgp_flag_check(bgp, BGP_FLAG_DISABLE_NH_CONNECTED_CHK))
 	connected = 1;
       else
 	connected = 0;
 
-      if (bgp_find_or_add_nexthop (afi, new, NULL, connected))
+      if (bgp_find_or_add_nexthop (bgp, afi, new, NULL, connected))
 	bgp_info_set_flag (rn, new, BGP_INFO_VALID);
       else
 	{
@@ -2413,6 +2732,9 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
   else
     bgp_info_set_flag (rn, new, BGP_INFO_VALID);
 
+  /* Addpath ID */
+  new->addpath_rx_id = addpath_id;
+
   /* Increment prefix */
   bgp_aggregate_increment (bgp, p, new, afi, safi);
   
@@ -2422,7 +2744,27 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
   /* route_node_get lock */
   bgp_unlock_node (rn);
 
-  bgp_attr_flush (&new_attr);
+#if ENABLE_BGP_VNC
+  if (safi == SAFI_MPLS_VPN) 
+    {
+      struct bgp_node		*prn = NULL;
+      struct bgp_table	*table = NULL;
+    
+      prn = bgp_node_get(bgp->rib[afi][safi], (struct prefix *) prd);
+      if (prn->info) 
+        {
+          table = (struct bgp_table *)(prn->info);
+      
+          vnc_import_bgp_add_vnc_host_route_mode_resolve_nve(
+                             bgp,
+                             prd,
+                             table,
+                             p,
+                             new);
+        }
+      bgp_unlock_node(prn);
+    }
+#endif
 
   /* If maximum prefix count is configured and current prefix
      count exeed it. */
@@ -2437,110 +2779,90 @@ bgp_update_main (struct peer *peer, struct prefix *p, struct attr *attr,
   /* This BGP update is filtered.  Log the reason then update BGP
      entry.  */
  filtered:
-  if (BGP_DEBUG (update, UPDATE_IN))
-    zlog (peer->log, LOG_DEBUG,
-	  "%s rcvd UPDATE about %s/%d -- DENIED due to: %s",
-	  peer->host,
-	  inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-	  p->prefixlen, reason);
+  if (bgp_debug_update(peer, p, NULL, 1))
+    {
+      if (!peer->rcvd_attr_printed)
+        {
+          zlog_debug ("%s rcvd UPDATE w/ attr: %s", peer->host, peer->rcvd_attr_str);
+          peer->rcvd_attr_printed = 1;
+        }
+
+      bgp_info_addpath_rx_str(addpath_id, buf2);
+      zlog_debug ("%s rcvd UPDATE about %s/%d%s -- DENIED due to: %s",
+                  peer->host,
+                  inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+                  p->prefixlen, buf2, reason);
+    }
 
   if (ri)
     bgp_rib_remove (rn, ri, peer, afi, safi);
 
   bgp_unlock_node (rn);
-  bgp_attr_flush (&new_attr);
 
   return 0;
 }
 
 int
-bgp_update (struct peer *peer, struct prefix *p, struct attr *attr,
-            afi_t afi, safi_t safi, int type, int sub_type,
-            struct prefix_rd *prd, u_char *tag, int soft_reconfig)
-{
-  struct peer *rsclient;
-  struct listnode *node, *nnode;
-  struct bgp *bgp;
-  int ret;
-
-  ret = bgp_update_main (peer, p, attr, afi, safi, type, sub_type, prd, tag,
-          soft_reconfig);
-
-  bgp = peer->bgp;
-
-  /* Process the update for each RS-client. */
-  for (ALL_LIST_ELEMENTS (bgp->rsclient, node, nnode, rsclient))
-    {
-      if (CHECK_FLAG (rsclient->af_flags[afi][safi], PEER_FLAG_RSERVER_CLIENT))
-        bgp_update_rsclient (rsclient, afi, safi, attr, peer, p, type,
-                sub_type, prd, tag);
-    }
-
-  return ret;
-}
-
-int
-bgp_withdraw (struct peer *peer, struct prefix *p, struct attr *attr, 
-	     afi_t afi, safi_t safi, int type, int sub_type, 
-	     struct prefix_rd *prd, u_char *tag)
+bgp_withdraw (struct peer *peer, struct prefix *p, u_int32_t addpath_id,
+              struct attr *attr, afi_t afi, safi_t safi, int type, int sub_type,
+	      struct prefix_rd *prd, u_char *tag)
 {
   struct bgp *bgp;
   char buf[SU_ADDRSTRLEN];
+  char buf2[30];
   struct bgp_node *rn;
   struct bgp_info *ri;
-  struct peer *rsclient;
-  struct listnode *node, *nnode;
 
   bgp = peer->bgp;
 
   /* Lookup node. */
   rn = bgp_afi_node_get (bgp->rib[afi][safi], afi, safi, p, prd);
 
-  /* Cisco IOS 12.4(24)T4 on session establishment sends withdraws for all
+  /* If peer is soft reconfiguration enabled.  Record input packet for
+   * further calculation.
+   *
+   * Cisco IOS 12.4(24)T4 on session establishment sends withdraws for all
    * routes that are filtered.  This tanks out Quagga RS pretty badly due to
    * the iteration over all RS clients.
    * Since we need to remove the entry from adj_in anyway, do that first and
-   * if there was no entry, we don't need to do anything more. */
+   * if there was no entry, we don't need to do anything more.
+   */
   if (CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_SOFT_RECONFIG)
       && peer != bgp->peer_self)
-    if (!bgp_adj_in_unset (rn, peer))
+    if (!bgp_adj_in_unset (rn, peer, addpath_id))
       {
-        if (BGP_DEBUG (update, UPDATE_IN))
-          zlog (peer->log, LOG_DEBUG, "%s withdrawing route %s/%d "
-                "not in adj-in", peer->host,
-                inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-                p->prefixlen);
+        if (bgp_debug_update (peer, p, NULL, 1))
+          zlog_debug ("%s withdrawing route %s/%d "
+		      "not in adj-in", peer->host,
+		      inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+		      p->prefixlen);
         bgp_unlock_node (rn);
         return 0;
       }
 
-  /* Process the withdraw for each RS-client. */
-  for (ALL_LIST_ELEMENTS (bgp->rsclient, node, nnode, rsclient))
-    {
-      if (CHECK_FLAG (rsclient->af_flags[afi][safi], PEER_FLAG_RSERVER_CLIENT))
-        bgp_withdraw_rsclient (rsclient, afi, safi, peer, p, type, sub_type, prd, tag);
-    }
-
-  /* Logging. */
-  if (BGP_DEBUG (update, UPDATE_IN))  
-    zlog (peer->log, LOG_DEBUG, "%s rcvd UPDATE about %s/%d -- withdrawn",
-	  peer->host,
-	  inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-	  p->prefixlen);
-
   /* Lookup withdrawn route. */
   for (ri = rn->info; ri; ri = ri->next)
-    if (ri->peer == peer && ri->type == type && ri->sub_type == sub_type)
+    if (ri->peer == peer && ri->type == type && ri->sub_type == sub_type &&
+        ri->addpath_rx_id == addpath_id)
       break;
+
+  /* Logging. */
+  if (bgp_debug_update(peer, p, NULL, 1))
+    {
+      bgp_info_addpath_rx_str(addpath_id, buf2);
+      zlog_debug ("%s rcvd UPDATE about %s/%d%s -- withdrawn",
+	        peer->host,
+	        inet_ntop(p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+	        p->prefixlen, buf2);
+    }
 
   /* Withdraw specified route from routing table. */
   if (ri && ! CHECK_FLAG (ri->flags, BGP_INFO_HISTORY))
     bgp_rib_withdraw (rn, ri, peer, afi, safi, prd);
-  else if (BGP_DEBUG (update, UPDATE_IN))
-    zlog (peer->log, LOG_DEBUG, 
-	  "%s Can't find the route %s/%d", peer->host,
-	  inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-	  p->prefixlen);
+  else if (bgp_debug_update(peer, p, NULL, 1))
+    zlog_debug ("%s Can't find the route %s/%d", peer->host,
+	        inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
+	        p->prefixlen);
 
   /* Unlock bgp_node_get() lock. */
   bgp_unlock_node (rn);
@@ -2551,168 +2873,97 @@ bgp_withdraw (struct peer *peer, struct prefix *p, struct attr *attr,
 void
 bgp_default_originate (struct peer *peer, afi_t afi, safi_t safi, int withdraw)
 {
-  struct bgp *bgp;
-  struct attr attr;
-  struct aspath *aspath;
-  struct prefix p;
-  struct peer *from;
-  struct bgp_node *rn;
-  struct bgp_info *ri;
-  int ret = RMAP_DENYMATCH;
-  
-  if (!(afi == AFI_IP || afi == AFI_IP6))
-    return;
-  
-  bgp = peer->bgp;
-  from = bgp->peer_self;
-  
-  bgp_attr_default_set (&attr, BGP_ORIGIN_IGP);
-  aspath = attr.aspath;
-  attr.local_pref = bgp->default_local_pref;
-  memcpy (&attr.nexthop, &peer->nexthop.v4, IPV4_MAX_BYTELEN);
-
-  if (afi == AFI_IP)
-    str2prefix ("0.0.0.0/0", &p);
-  else if (afi == AFI_IP6)
-    {
-      struct attr_extra *ae = attr.extra;
-
-      str2prefix ("::/0", &p);
-
-      /* IPv6 global nexthop must be included. */
-      memcpy (&ae->mp_nexthop_global, &peer->nexthop.v6_global, 
-	      IPV6_MAX_BYTELEN);
-	      ae->mp_nexthop_len = 16;
- 
-      /* If the peer is on shared nextwork and we have link-local
-	 nexthop set it. */
-      if (peer->shared_network 
-	  && !IN6_IS_ADDR_UNSPECIFIED (&peer->nexthop.v6_local))
-	{
-	  memcpy (&ae->mp_nexthop_local, &peer->nexthop.v6_local, 
-		  IPV6_MAX_BYTELEN);
-	  ae->mp_nexthop_len = 32;
-	}
-    }
-
-  if (peer->default_rmap[afi][safi].name)
-    {
-      SET_FLAG (bgp->peer_self->rmap_type, PEER_RMAP_TYPE_DEFAULT);
-      for (rn = bgp_table_top(bgp->rib[afi][safi]); rn; rn = bgp_route_next(rn))
-        {
-          for (ri = rn->info; ri; ri = ri->next)
-            {
-              struct attr dummy_attr;
-              struct attr_extra dummy_extra;
-              struct bgp_info info;
-
-              /* Provide dummy so the route-map can't modify the attributes */
-              dummy_attr.extra = &dummy_extra;
-              bgp_attr_dup(&dummy_attr, ri->attr);
-              info.peer = ri->peer;
-              info.attr = &dummy_attr;
-
-              ret = route_map_apply(peer->default_rmap[afi][safi].map, &rn->p,
-                                    RMAP_BGP, &info);
-
-              /* The route map might have set attributes. If we don't flush them
-               * here, they will be leaked. */
-              bgp_attr_flush(&dummy_attr);
-              if (ret != RMAP_DENYMATCH)
-                break;
-            }
-          if (ret != RMAP_DENYMATCH)
-            break;
-        }
-      bgp->peer_self->rmap_type = 0;
-
-      if (ret == RMAP_DENYMATCH)
-        withdraw = 1;
-    }
-
-  if (withdraw)
-    {
-      if (CHECK_FLAG (peer->af_sflags[afi][safi], PEER_STATUS_DEFAULT_ORIGINATE))
-	bgp_default_withdraw_send (peer, afi, safi);
-      UNSET_FLAG (peer->af_sflags[afi][safi], PEER_STATUS_DEFAULT_ORIGINATE);
-    }
-  else
-    {
-      if (! CHECK_FLAG (peer->af_sflags[afi][safi], PEER_STATUS_DEFAULT_ORIGINATE))
-        {
-          SET_FLAG (peer->af_sflags[afi][safi], PEER_STATUS_DEFAULT_ORIGINATE);
-          bgp_default_update_send (peer, &attr, afi, safi, from);
-        }
-    }
-  
-  bgp_attr_extra_free (&attr);
-  aspath_unintern (&aspath);
+  struct update_subgroup *subgrp;
+  subgrp = peer_subgroup(peer, afi, safi);
+  subgroup_default_originate(subgrp, withdraw);
 }
 
-static void
-bgp_announce_table (struct peer *peer, afi_t afi, safi_t safi,
-                   struct bgp_table *table, int rsclient)
+
+/*
+ * bgp_stop_announce_route_timer
+ */
+void
+bgp_stop_announce_route_timer (struct peer_af *paf)
 {
-  struct bgp_node *rn;
-  struct bgp_info *ri;
-  struct attr attr;
-  struct attr_extra extra;
-
-  memset(&extra, 0, sizeof(extra));
-
-  if (! table)
-    table = (rsclient) ? peer->rib[afi][safi] : peer->bgp->rib[afi][safi];
-
-  if ((safi != SAFI_MPLS_VPN) && (safi != SAFI_ENCAP)
-      && CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_DEFAULT_ORIGINATE))
-    bgp_default_originate (peer, afi, safi, 0);
-
-  /* It's initialized in bgp_announce_[check|check_rsclient]() */
-  attr.extra = &extra;
-
-  for (rn = bgp_table_top (table); rn; rn = bgp_route_next(rn))
-    for (ri = rn->info; ri; ri = ri->next)
-      if (CHECK_FLAG (ri->flags, BGP_INFO_SELECTED) && ri->peer != peer)
-	{
-         if ( (rsclient) ?
-              (bgp_announce_check_rsclient (ri, peer, &rn->p, &attr, afi, safi))
-              : (bgp_announce_check (ri, peer, &rn->p, &attr, afi, safi)))
-	    bgp_adj_out_set (rn, peer, &rn->p, &attr, afi, safi, ri);
-	  else
-	    bgp_adj_out_unset (rn, peer, &rn->p, afi, safi);
-	}
-
-  bgp_attr_flush_encap(&attr);
+  if (!paf->t_announce_route)
+    return;
+ 
+  THREAD_TIMER_OFF (paf->t_announce_route);
 }
 
+/*
+ * bgp_announce_route_timer_expired
+ *
+ * Callback that is invoked when the route announcement timer for a
+ * peer_af expires.
+ */
+static int
+bgp_announce_route_timer_expired (struct thread *t)
+{
+  struct peer_af *paf;
+  struct peer *peer;
+
+  paf = THREAD_ARG (t);
+  peer = paf->peer;
+
+  assert (paf->t_announce_route);
+  paf->t_announce_route = NULL;
+
+  if (peer->status != Established)
+    return 0;
+
+  if (!peer->afc_nego[paf->afi][paf->safi])
+    return 0;
+
+  peer_af_announce_route (paf, 1);
+  return 0;
+}
+
+/*
+ * bgp_announce_route
+ *
+ * *Triggers* announcement of routes of a given AFI/SAFI to a peer.
+ */
 void
 bgp_announce_route (struct peer *peer, afi_t afi, safi_t safi)
 {
-  struct bgp_node *rn;
-  struct bgp_table *table;
+  struct peer_af *paf;
+  struct update_subgroup *subgrp;
 
-  if (peer->status != Established)
+  paf = peer_af_find (peer, afi, safi);
+  if (!paf)
+    return;
+  subgrp = PAF_SUBGRP(paf);
+
+  /*
+   * Ignore if subgroup doesn't exist (implies AF is not negotiated)
+   * or a refresh has already been triggered.
+   */
+  if (!subgrp || paf->t_announce_route)
     return;
 
-  if (! peer->afc_nego[afi][safi])
-    return;
-
-  /* First update is deferred until ORF or ROUTE-REFRESH is received */
-  if (CHECK_FLAG (peer->af_sflags[afi][safi], PEER_STATUS_ORF_WAIT_REFRESH))
-    return;
-
-  if ((safi != SAFI_MPLS_VPN) && (safi != SAFI_ENCAP))
-    bgp_announce_table (peer, afi, safi, NULL, 0);
-  else
-    for (rn = bgp_table_top (peer->bgp->rib[afi][safi]); rn;
-	 rn = bgp_route_next(rn))
-      if ((table = (rn->info)) != NULL)
-       bgp_announce_table (peer, afi, safi, table, 0);
-
-  if (CHECK_FLAG(peer->af_flags[afi][safi], PEER_FLAG_RSERVER_CLIENT))
-    bgp_announce_table (peer, afi, safi, NULL, 1);
+  /*
+   * Start a timer to stagger/delay the announce. This serves
+   * two purposes - announcement can potentially be combined for
+   * multiple peers and the announcement doesn't happen in the
+   * vty context.
+   */
+  THREAD_TIMER_MSEC_ON (bm->master, paf->t_announce_route,
+			bgp_announce_route_timer_expired, paf,
+                        (subgrp->peer_count == 1) ?
+			BGP_ANNOUNCE_ROUTE_SHORT_DELAY_MS :
+			BGP_ANNOUNCE_ROUTE_DELAY_MS);
 }
 
+/*
+ * Announce routes from all AF tables to a peer.
+ *
+ * This should ONLY be called when there is a need to refresh the
+ * routes to the peer based on a policy change for this peer alone
+ * or a route refresh request received from the peer.
+ * The operation will result in splitting the peer from its existing
+ * subgroups and putting it in new subgroups.
+ */
 void
 bgp_announce_route_all (struct peer *peer)
 {
@@ -2722,50 +2973,6 @@ bgp_announce_route_all (struct peer *peer)
   for (afi = AFI_IP; afi < AFI_MAX; afi++)
     for (safi = SAFI_UNICAST; safi < SAFI_MAX; safi++)
       bgp_announce_route (peer, afi, safi);
-}
-
-static void
-bgp_soft_reconfig_table_rsclient (struct peer *rsclient, afi_t afi,
-        safi_t safi, struct bgp_table *table, struct prefix_rd *prd)
-{
-  struct bgp_node *rn;
-  struct bgp_adj_in *ain;
-
-  if (! table)
-    table = rsclient->bgp->rib[afi][safi];
-
-  for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
-    for (ain = rn->adj_in; ain; ain = ain->next)
-      {
-        struct bgp_info *ri = rn->info;
-        u_char *tag = (ri && ri->extra) ? ri->extra->tag : NULL;
-
-        bgp_update_rsclient (rsclient, afi, safi, ain->attr, ain->peer,
-                &rn->p, ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, prd, tag);
-      }
-}
-
-void
-bgp_soft_reconfig_rsclient (struct peer *rsclient, afi_t afi, safi_t safi)
-{
-  struct bgp_table *table;
-  struct bgp_node *rn;
-  
-  if ((safi != SAFI_MPLS_VPN) && (safi != SAFI_ENCAP))
-    bgp_soft_reconfig_table_rsclient (rsclient, afi, safi, NULL, NULL);
-
-  else
-    for (rn = bgp_table_top (rsclient->bgp->rib[afi][safi]); rn;
-            rn = bgp_route_next (rn))
-      if ((table = rn->info) != NULL)
-        {
-          struct prefix_rd prd;
-          prd.family = AF_UNSPEC;
-          prd.prefixlen = 64;
-          memcpy(&prd.val, rn->p.u.val, 8);
-
-          bgp_soft_reconfig_table_rsclient (rsclient, afi, safi, table, &prd);
-        }
 }
 
 static void
@@ -2787,8 +2994,8 @@ bgp_soft_reconfig_table (struct peer *peer, afi_t afi, safi_t safi,
 	    struct bgp_info *ri = rn->info;
 	    u_char *tag = (ri && ri->extra) ? ri->extra->tag : NULL;
 
-	    ret = bgp_update (peer, &rn->p, ain->attr, afi, safi,
-			      ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL,
+	    ret = bgp_update (peer, &rn->p, ain->addpath_rx_id, ain->attr,
+                              afi, safi, ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL,
 			      prd, tag, 1);
 
 	    if (ret < 0)
@@ -2796,7 +3003,6 @@ bgp_soft_reconfig_table (struct peer *peer, afi_t afi, safi_t safi,
 		bgp_unlock_node (rn);
 		return;
 	      }
-	    continue;
 	  }
       }
 }
@@ -2830,7 +3036,6 @@ bgp_soft_reconfig_in (struct peer *peer, afi_t afi, safi_t safi)
 struct bgp_clear_node_queue
 {
   struct bgp_node *rn;
-  enum bgp_clear_route_type purpose;
 };
 
 static wq_item_status
@@ -2845,8 +3050,11 @@ bgp_clear_route_node (struct work_queue *wq, void *data)
   
   assert (rn && peer);
   
+  /* It is possible that we have multiple paths for a prefix from a peer
+   * if that peer is using AddPath.
+   */
   for (ri = rn->info; ri; ri = ri->next)
-    if (ri->peer == peer || cnq->purpose == BGP_CLEAR_ROUTE_MY_RSCLIENT)
+    if (ri->peer == peer)
       {
         /* graceful restart STALE flag set. */
         if (CHECK_FLAG (peer->sflags, PEER_STATUS_NSF_WAIT)
@@ -2856,7 +3064,6 @@ bgp_clear_route_node (struct work_queue *wq, void *data)
           bgp_info_set_flag (rn, ri, BGP_INFO_STALE);
         else
           bgp_rib_remove (rn, ri, peer, afi, safi);
-        break;
       }
   return WQ_SUCCESS;
 }
@@ -2909,14 +3116,13 @@ bgp_clear_node_queue_init (struct peer *peer)
 
 static void
 bgp_clear_route_table (struct peer *peer, afi_t afi, safi_t safi,
-                       struct bgp_table *table, struct peer *rsclient,
-                       enum bgp_clear_route_type purpose)
+                       struct bgp_table *table)
 {
   struct bgp_node *rn;
-  
+  int force = bm->process_main_queue ? 0 : 1;
   
   if (! table)
-    table = (rsclient) ? rsclient->rib[afi][safi] : peer->bgp->rib[afi][safi];
+    table = peer->bgp->rib[afi][safi];
   
   /* If still no table => afi/safi isn't configured at all or smth. */
   if (! table)
@@ -2924,9 +3130,9 @@ bgp_clear_route_table (struct peer *peer, afi_t afi, safi_t safi,
   
   for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
     {
-      struct bgp_info *ri;
+      struct bgp_info *ri, *next;
       struct bgp_adj_in *ain;
-      struct bgp_adj_out *aout;
+      struct bgp_adj_in *ain_next;
 
       /* XXX:TODO: This is suboptimal, every non-empty route_node is
        * queued for every clearing peer, regardless of whether it is
@@ -2958,49 +3164,55 @@ bgp_clear_route_table (struct peer *peer, afi_t afi, safi_t safi,
        * Given that our per-peer prefix-counts now should be reliable,
        * this may actually be achievable. It doesn't seem to be a huge
        * problem at this time,
+       *
+       * It is possible that we have multiple paths for a prefix from a peer
+       * if that peer is using AddPath.
        */
-      for (ain = rn->adj_in; ain; ain = ain->next)
-        if (ain->peer == peer || purpose == BGP_CLEAR_ROUTE_MY_RSCLIENT)
-          {
-            bgp_adj_in_remove (rn, ain);
-            bgp_unlock_node (rn);
-            break;
-          }
-      for (aout = rn->adj_out; aout; aout = aout->next)
-        if (aout->peer == peer || purpose == BGP_CLEAR_ROUTE_MY_RSCLIENT)
-          {
-            bgp_adj_out_remove (rn, aout, peer, afi, safi);
-            bgp_unlock_node (rn);
-            break;
-          }
+      ain = rn->adj_in;
+      while (ain)
+        {
+          ain_next = ain->next;
 
-      for (ri = rn->info; ri; ri = ri->next)
-        if (ri->peer == peer || purpose == BGP_CLEAR_ROUTE_MY_RSCLIENT)
-          {
-            struct bgp_clear_node_queue *cnq;
+          if (ain->peer == peer)
+            {
+              bgp_adj_in_remove (rn, ain);
+              bgp_unlock_node (rn);
+            }
 
-            /* both unlocked in bgp_clear_node_queue_del */
-            bgp_table_lock (bgp_node_table (rn));
-            bgp_lock_node (rn);
-            cnq = XCALLOC (MTYPE_BGP_CLEAR_NODE_QUEUE,
-                           sizeof (struct bgp_clear_node_queue));
-            cnq->rn = rn;
-            cnq->purpose = purpose;
-            work_queue_add (peer->clear_node_queue, cnq);
-            break;
-          }
+          ain = ain_next;
+        }
+
+      for (ri = rn->info; ri; ri = next)
+	{
+	  next = ri->next;
+	  if (ri->peer != peer)
+	    continue;
+
+	  if (force)
+	    bgp_info_reap (rn, ri);
+	  else
+	    {
+	      struct bgp_clear_node_queue *cnq;
+
+	      /* both unlocked in bgp_clear_node_queue_del */
+	      bgp_table_lock (bgp_node_table (rn));
+	      bgp_lock_node (rn);
+	      cnq = XCALLOC (MTYPE_BGP_CLEAR_NODE_QUEUE,
+			     sizeof (struct bgp_clear_node_queue));
+	      cnq->rn = rn;
+	      work_queue_add (peer->clear_node_queue, cnq);
+	      break;
+	    }
+	}
     }
   return;
 }
 
 void
-bgp_clear_route (struct peer *peer, afi_t afi, safi_t safi,
-                 enum bgp_clear_route_type purpose)
+bgp_clear_route (struct peer *peer, afi_t afi, safi_t safi)
 {
   struct bgp_node *rn;
   struct bgp_table *table;
-  struct peer *rsclient;
-  struct listnode *node, *nnode;
 
   if (peer->clear_node_queue == NULL)
     bgp_clear_node_queue_init (peer);
@@ -3023,37 +3235,15 @@ bgp_clear_route (struct peer *peer, afi_t afi, safi_t safi,
    * unlock happens at the end of this function.
    */
   if (!peer->clear_node_queue->thread)
-    peer_lock (peer); /* bgp_clear_node_complete */
-  switch (purpose)
-    {
-    case BGP_CLEAR_ROUTE_NORMAL:
-      if ((safi != SAFI_MPLS_VPN) && (safi != SAFI_ENCAP))
-        bgp_clear_route_table (peer, afi, safi, NULL, NULL, purpose);
-      else
-        for (rn = bgp_table_top (peer->bgp->rib[afi][safi]); rn;
-             rn = bgp_route_next (rn))
-          if ((table = rn->info) != NULL)
-            bgp_clear_route_table (peer, afi, safi, table, NULL, purpose);
+    peer_lock (peer);
 
-      for (ALL_LIST_ELEMENTS (peer->bgp->rsclient, node, nnode, rsclient))
-        if (CHECK_FLAG(rsclient->af_flags[afi][safi],
-                       PEER_FLAG_RSERVER_CLIENT))
-          bgp_clear_route_table (peer, afi, safi, NULL, rsclient, purpose);
-      break;
-
-    case BGP_CLEAR_ROUTE_MY_RSCLIENT:
-      /*
-       * gpz 091009: TBD why don't we have special handling for
-       * SAFI_MPLS_VPN here in the original quagga code?
-       * (and, by extension, for SAFI_ENCAP)
-       */
-      bgp_clear_route_table (peer, afi, safi, NULL, peer, purpose);
-      break;
-
-    default:
-      assert (0);
-      break;
-    }
+  if (safi != SAFI_MPLS_VPN && safi != SAFI_ENCAP)
+    bgp_clear_route_table (peer, afi, safi, NULL);
+  else
+    for (rn = bgp_table_top (peer->bgp->rib[afi][safi]); rn;
+         rn = bgp_route_next (rn))
+      if ((table = rn->info) != NULL)
+        bgp_clear_route_table (peer, afi, safi, table);
 
   /* unlock if no nodes got added to the clear-node-queue. */
   if (!peer->clear_node_queue->thread)
@@ -3069,58 +3259,11 @@ bgp_clear_route_all (struct peer *peer)
 
   for (afi = AFI_IP; afi < AFI_MAX; afi++)
     for (safi = SAFI_UNICAST; safi < SAFI_MAX; safi++)
-      bgp_clear_route (peer, afi, safi, BGP_CLEAR_ROUTE_NORMAL);
-}
+      bgp_clear_route (peer, afi, safi);
 
-/*
- * Finish freeing things when exiting
- */
-static void
-bgp_drain_workqueue_immediate (struct work_queue *wq)
-{
-  if (!wq)
-    return;
-
-  if (!wq->thread)
-    {
-      /*
-       * no thread implies no queued items
-       */
-      assert(!wq->items->count);
-      return;
-    }
-
-   while (wq->items->count)
-     {
-       if (wq->thread)
-         thread_cancel(wq->thread);
-       work_queue_run(wq->thread);
-     }
-}
-
-/*
- * Special function to process clear node queue when bgpd is exiting
- * and the thread scheduler is no longer running.
- */
-void
-bgp_peer_clear_node_queue_drain_immediate(struct peer *peer)
-{
-  if (!peer)
-    return;
-
-  bgp_drain_workqueue_immediate(peer->clear_node_queue);
-}
-
-/*
- * The work queues are not specific to a BGP instance, but the
- * items in them refer to BGP instances, so this should be called
- * before each BGP instance is deleted.
- */
-void
-bgp_process_queues_drain_immediate(void)
-{
-  bgp_drain_workqueue_immediate(bm->process_main_queue);
-  bgp_drain_workqueue_immediate(bm->process_rsclient_queue);
+#if ENABLE_BGP_VNC
+  rfapiProcessPeerDown(peer);
+#endif
 }
 
 void
@@ -3129,17 +3272,30 @@ bgp_clear_adj_in (struct peer *peer, afi_t afi, safi_t safi)
   struct bgp_table *table;
   struct bgp_node *rn;
   struct bgp_adj_in *ain;
+  struct bgp_adj_in *ain_next;
 
   table = peer->bgp->rib[afi][safi];
 
+  /* It is possible that we have multiple paths for a prefix from a peer
+   * if that peer is using AddPath.
+   */
   for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
-    for (ain = rn->adj_in; ain ; ain = ain->next)
-      if (ain->peer == peer)
-	{
-          bgp_adj_in_remove (rn, ain);
-          bgp_unlock_node (rn);
-          break;
-	}
+    {
+      ain = rn->adj_in;
+
+      while (ain)
+        {
+          ain_next = ain->next;
+
+          if (ain->peer == peer)
+            {
+              bgp_adj_in_remove (rn, ain);
+              bgp_unlock_node (rn);
+	    }
+
+          ain = ain_next;
+        }
+    }
 }
 
 void
@@ -3149,17 +3305,37 @@ bgp_clear_stale_route (struct peer *peer, afi_t afi, safi_t safi)
   struct bgp_info *ri;
   struct bgp_table *table;
 
-  table = peer->bgp->rib[afi][safi];
-
-  for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
+  if ( safi == SAFI_MPLS_VPN)
     {
-      for (ri = rn->info; ri; ri = ri->next)
-	if (ri->peer == peer)
-	  {
-	    if (CHECK_FLAG (ri->flags, BGP_INFO_STALE))
-	      bgp_rib_remove (rn, ri, peer, afi, safi);
-	    break;
-	  }
+      for (rn = bgp_table_top (peer->bgp->rib[afi][safi]); rn; rn = bgp_route_next (rn))
+        {
+          struct bgp_node *rm;
+          struct bgp_info *ri;
+
+          /* look for neighbor in tables */
+          if ((table = rn->info) != NULL)
+            {
+              for (rm = bgp_table_top (table); rm; rm = bgp_route_next (rm))
+                for (ri = rm->info; ri; ri = ri->next)
+                  if (ri->peer == peer)
+                    {
+                      if (CHECK_FLAG (ri->flags, BGP_INFO_STALE))
+                        bgp_rib_remove (rm, ri, peer, afi, safi);
+                      break;
+                    }
+            }
+        }
+    }
+  else
+    {
+      for (rn = bgp_table_top (peer->bgp->rib[afi][safi]); rn; rn = bgp_route_next (rn))
+        for (ri = rn->info; ri; ri = ri->next)
+          if (ri->peer == peer)
+            {
+              if (CHECK_FLAG (ri->flags, BGP_INFO_STALE))
+                bgp_rib_remove (rn, ri, peer, afi, safi);
+              break;
+            }
     }
 }
 
@@ -3176,52 +3352,55 @@ bgp_cleanup_table(struct bgp_table *table, safi_t safi)
         next = ri->next;
         if (CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)
             && ri->type == ZEBRA_ROUTE_BGP
-            && ri->sub_type == BGP_ROUTE_NORMAL)
-          bgp_zebra_withdraw (&rn->p, ri, safi);
+            && (ri->sub_type == BGP_ROUTE_NORMAL ||
+                ri->sub_type == BGP_ROUTE_AGGREGATE))
+          {
+#if ENABLE_BGP_VNC
+            if (table->owner && table->owner->bgp)
+              vnc_import_bgp_del_route(table->owner->bgp, &rn->p, ri);
+#endif
+            bgp_zebra_withdraw (&rn->p, ri, safi);
+            bgp_info_reap (rn, ri);
+          }
       }
 }
 
 /* Delete all kernel routes. */
 void
-bgp_cleanup_routes (void)
+bgp_cleanup_routes (struct bgp *bgp)
 {
-  struct bgp *bgp;
-  struct listnode *node, *nnode;
   afi_t afi;
 
-  for (ALL_LIST_ELEMENTS (bm->bgp, node, nnode, bgp))
+  for (afi = AFI_IP; afi < AFI_MAX; ++afi)
     {
-      for (afi = AFI_IP; afi < AFI_MAX; ++afi)
+      struct bgp_node *rn;
+
+      bgp_cleanup_table(bgp->rib[afi][SAFI_UNICAST], SAFI_UNICAST);
+
+      /*
+       * VPN and ENCAP tables are two-level (RD is top level)
+       */
+      for (rn = bgp_table_top(bgp->rib[afi][SAFI_MPLS_VPN]); rn;
+	   rn = bgp_route_next (rn))
 	{
-	  struct bgp_node *rn;
-
-	  bgp_cleanup_table(bgp->rib[afi][SAFI_UNICAST], SAFI_UNICAST);
-
-	  /*
-	   * VPN and ENCAP tables are two-level (RD is top level)
-	   */
-	  for (rn = bgp_table_top(bgp->rib[afi][SAFI_MPLS_VPN]); rn;
-               rn = bgp_route_next (rn))
+	  if (rn->info)
 	    {
-	      if (rn->info)
-                {
-		  bgp_cleanup_table((struct bgp_table *)(rn->info), SAFI_MPLS_VPN);
-		  bgp_table_finish ((struct bgp_table **)&(rn->info));
-		  rn->info = NULL;
-		  bgp_unlock_node(rn);
-                }
+	      bgp_cleanup_table((struct bgp_table *)(rn->info), SAFI_MPLS_VPN);
+	      bgp_table_finish ((struct bgp_table **)&(rn->info));
+	      rn->info = NULL;
+	      bgp_unlock_node(rn);
 	    }
+	}
 
-	  for (rn = bgp_table_top(bgp->rib[afi][SAFI_ENCAP]); rn;
-               rn = bgp_route_next (rn))
+      for (rn = bgp_table_top(bgp->rib[afi][SAFI_ENCAP]); rn;
+	   rn = bgp_route_next (rn))
+	{
+	  if (rn->info)
 	    {
-	      if (rn->info)
-		{
-		  bgp_cleanup_table((struct bgp_table *)(rn->info), SAFI_ENCAP);
-		  bgp_table_finish ((struct bgp_table **)&(rn->info));
-		  rn->info = NULL;
-		  bgp_unlock_node(rn);
-		}
+	      bgp_cleanup_table((struct bgp_table *)(rn->info), SAFI_ENCAP);
+	      bgp_table_finish ((struct bgp_table **)&(rn->info));
+	      rn->info = NULL;
+	      bgp_unlock_node(rn);
 	    }
 	}
     }
@@ -3236,6 +3415,13 @@ bgp_reset (void)
   prefix_list_reset ();
 }
 
+static int
+bgp_addpath_encode_rx (struct peer *peer, afi_t afi, safi_t safi)
+{
+  return (CHECK_FLAG (peer->af_cap[afi][safi], PEER_CAP_ADDPATH_AF_RX_ADV) &&
+          CHECK_FLAG (peer->af_cap[afi][safi], PEER_CAP_ADDPATH_AF_TX_RCV));
+}
+
 /* Parse NLRI stream.  Withdraw NLRI is recognized by NULL attr
    value. */
 int
@@ -3247,6 +3433,10 @@ bgp_nlri_parse_ip (struct peer *peer, struct attr *attr,
   struct prefix p;
   int psize;
   int ret;
+  afi_t afi;
+  safi_t safi;
+  int addpath_encoded;
+  u_int32_t addpath_id;
 
   /* Check peer status. */
   if (peer->status != Established)
@@ -3254,6 +3444,10 @@ bgp_nlri_parse_ip (struct peer *peer, struct attr *attr,
   
   pnt = packet->nlri;
   lim = pnt + packet->length;
+  afi = packet->afi;
+  safi = packet->safi;
+  addpath_id = 0;
+  addpath_encoded = bgp_addpath_encode_rx (peer, afi, safi);
 
   /* RFC4771 6.3 The NLRI field in the UPDATE message is checked for
      syntactic validity.  If the field is syntactically incorrect,
@@ -3263,41 +3457,46 @@ bgp_nlri_parse_ip (struct peer *peer, struct attr *attr,
       /* Clear prefix structure. */
       memset (&p, 0, sizeof (struct prefix));
 
+      if (addpath_encoded)
+        {
+
+          /* When packet overflow occurs return immediately. */
+          if (pnt + BGP_ADDPATH_ID_LEN > lim)
+            return -1;
+
+          addpath_id = ntohl(*((uint32_t*) pnt));
+          pnt += BGP_ADDPATH_ID_LEN;
+        }
+
       /* Fetch prefix length. */
       p.prefixlen = *pnt++;
       /* afi/safi validity already verified by caller, bgp_update_receive */
-      p.family = afi2family (packet->afi);
-      
+      p.family = afi2family (afi);
+
       /* Prefix length check. */
       if (p.prefixlen > prefix_blen (&p) * 8)
         {
-          plog_err (peer->log,
-                    "%s [Error] Update packet error"
-                    " (wrong prefix length %u for afi %u)",
-                    peer->host, p.prefixlen, packet->afi);
+          zlog_err("%s [Error] Update packet error (wrong perfix length %d for afi %u)",
+                   peer->host, p.prefixlen, packet->afi);
           return -1;
         }
-      
+
       /* Packet size overflow check. */
       psize = PSIZE (p.prefixlen);
 
       /* When packet overflow occur return immediately. */
       if (pnt + psize > lim)
         {
-          plog_err (peer->log,
-                    "%s [Error] Update packet error"
-                    " (prefix length %u overflows packet)",
-                    peer->host, p.prefixlen);
+          zlog_err("%s [Error] Update packet error (prefix length %d overflows packet)",
+                   peer->host, p.prefixlen);
           return -1;
         }
-      
-      /* Defensive coding, double-check the psize fits in a struct prefix */  
+
+      /* Defensive coding, double-check the psize fits in a struct prefix */
       if (psize > (ssize_t) sizeof(p.u))
         {
-          plog_err (peer->log,
-                    "%s [Error] Update packet error"
-                    " (prefix length %u too large for prefix storage %zu!?!!",
-                    peer->host, p.prefixlen, sizeof(p.u));
+          zlog_err("%s [Error] Update packet error (prefix length %d too large for prefix storage %zu)",
+                   peer->host, p.prefixlen, sizeof(p.u));
           return -1;
         }
 
@@ -3305,55 +3504,51 @@ bgp_nlri_parse_ip (struct peer *peer, struct attr *attr,
       memcpy (&p.u.prefix, pnt, psize);
 
       /* Check address. */
-      if (packet->afi == AFI_IP && packet->safi == SAFI_UNICAST)
+      if (afi == AFI_IP && safi == SAFI_UNICAST)
 	{
 	  if (IN_CLASSD (ntohl (p.u.prefix4.s_addr)))
 	    {
-	     /* 
- 	      * From RFC4271 Section 6.3: 
-	      * 
-	      * If a prefix in the NLRI field is semantically incorrect
-	      * (e.g., an unexpected multicast IP address), an error SHOULD
-	      * be logged locally, and the prefix SHOULD be ignored.
-	      */
-	      zlog (peer->log, LOG_ERR, 
-		    "%s: IPv4 unicast NLRI is multicast address %s, ignoring",
-		    peer->host, inet_ntoa (p.u.prefix4));
+	      /* From RFC4271 Section 6.3:
+	       *
+	       * If a prefix in the NLRI field is semantically incorrect
+	       * (e.g., an unexpected multicast IP address), an error SHOULD
+	       * be logged locally, and the prefix SHOULD be ignored.
+	        */
+	      zlog_err ("%s: IPv4 unicast NLRI is multicast address %s, ignoring",
+	                peer->host, inet_ntoa (p.u.prefix4));
 	      continue;
 	    }
 	}
 
       /* Check address. */
-      if (packet->afi == AFI_IP6 && packet->safi == SAFI_UNICAST)
+      if (afi == AFI_IP6 && safi == SAFI_UNICAST)
 	{
 	  if (IN6_IS_ADDR_LINKLOCAL (&p.u.prefix6))
 	    {
 	      char buf[BUFSIZ];
 
-	      zlog (peer->log, LOG_ERR, 
-		    "%s: IPv6 unicast NLRI is link-local address %s, ignoring",
-		    peer->host,
-		    inet_ntop (AF_INET6, &p.u.prefix6, buf, BUFSIZ));
+	      zlog_err ("%s: IPv6 unicast NLRI is link-local address %s, ignoring",
+	                peer->host, inet_ntop (AF_INET6, &p.u.prefix6, buf, BUFSIZ));
+
 	      continue;
 	    }
 	  if (IN6_IS_ADDR_MULTICAST (&p.u.prefix6))
 	    {
 	      char buf[BUFSIZ];
 
-	      zlog (peer->log, LOG_ERR, 
-		    "%s: IPv6 unicast NLRI is multicast address %s, ignoring",
-		    peer->host,
-		    inet_ntop (AF_INET6, &p.u.prefix6, buf, BUFSIZ));
+	      zlog_err ("%s: IPv6 unicast NLRI is multicast address %s, ignoring",
+	                peer->host, inet_ntop (AF_INET6, &p.u.prefix6, buf, BUFSIZ));
+
 	      continue;
 	    }
-        }
+	}
 
       /* Normal process. */
       if (attr)
-	ret = bgp_update (peer, &p, attr, packet->afi, packet->safi, 
+	ret = bgp_update (peer, &p, addpath_id, attr, afi, safi,
 			  ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, NULL, NULL, 0);
       else
-	ret = bgp_withdraw (peer, &p, attr, packet->afi, packet->safi, 
+	ret = bgp_withdraw (peer, &p, addpath_id, attr, afi, safi,
 			    ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, NULL, NULL);
 
       /* Address family configuration mismatch or maximum-prefix count
@@ -3365,13 +3560,11 @@ bgp_nlri_parse_ip (struct peer *peer, struct attr *attr,
   /* Packet length consistency check. */
   if (pnt != lim)
     {
-      plog_err (peer->log,
-                "%s [Error] Update packet error"
-                " (prefix length mismatch with total length)",
+      zlog_err ("%s [Error] Update packet error (prefix length mismatch with total length)",
                 peer->host);
       return -1;
     }
-  
+
   return 0;
 }
 
@@ -3385,222 +3578,8 @@ static void
 bgp_static_free (struct bgp_static *bgp_static)
 {
   if (bgp_static->rmap.name)
-    free (bgp_static->rmap.name);
+    XFREE(MTYPE_ROUTE_MAP_NAME, bgp_static->rmap.name);
   XFREE (MTYPE_BGP_STATIC, bgp_static);
-}
-
-static void
-bgp_static_withdraw_rsclient (struct bgp *bgp, struct peer *rsclient,
-        struct prefix *p, afi_t afi, safi_t safi)
-{
-  struct bgp_node *rn;
-  struct bgp_info *ri;
-
-  rn = bgp_afi_node_get (rsclient->rib[afi][safi], afi, safi, p, NULL);
-
-  /* Check selected route and self inserted route. */
-  for (ri = rn->info; ri; ri = ri->next)
-    if (ri->peer == bgp->peer_self
-       && ri->type == ZEBRA_ROUTE_BGP
-       && ri->sub_type == BGP_ROUTE_STATIC)
-      break;
-
-  /* Withdraw static BGP route from routing table. */
-  if (ri)
-    {
-      bgp_info_delete (rn, ri);
-      bgp_process (bgp, rn, afi, safi);
-    }
-
-  /* Unlock bgp_node_lookup. */
-  bgp_unlock_node (rn);
-}
-
-static void
-bgp_static_update_rsclient (struct peer *rsclient, struct prefix *p,
-                            struct bgp_static *bgp_static,
-                            afi_t afi, safi_t safi)
-{
-  struct bgp_node *rn;
-  struct bgp_info *ri;
-  struct bgp_info *new;
-  struct bgp_info info;
-  struct attr *attr_new;
-  struct attr attr;
-  struct attr new_attr;
-  struct attr_extra new_extra;
-  struct bgp *bgp;
-  int ret;
-  char buf[SU_ADDRSTRLEN];
-
-  bgp = rsclient->bgp;
-
-  assert (bgp_static);
-  if (!bgp_static)
-    return;
-
-  rn = bgp_afi_node_get (rsclient->rib[afi][safi], afi, safi, p, NULL);
-
-  bgp_attr_default_set (&attr, BGP_ORIGIN_IGP);
-
-  attr.nexthop = bgp_static->igpnexthop;
-  attr.med = bgp_static->igpmetric;
-  attr.flag |= ATTR_FLAG_BIT (BGP_ATTR_MULTI_EXIT_DISC);
-  
-  if (bgp_static->atomic)
-    attr.flag |= ATTR_FLAG_BIT (BGP_ATTR_ATOMIC_AGGREGATE);
-  
-  /* Apply network route-map for export to this rsclient. */
-  if (bgp_static->rmap.name)
-    {
-      struct attr attr_tmp = attr;
-      info.peer = rsclient;
-      info.attr = &attr_tmp;
-      
-      SET_FLAG (rsclient->rmap_type, PEER_RMAP_TYPE_EXPORT);
-      SET_FLAG (rsclient->rmap_type, PEER_RMAP_TYPE_NETWORK);
-
-      ret = route_map_apply (bgp_static->rmap.map, p, RMAP_BGP, &info);
-
-      rsclient->rmap_type = 0;
-
-      if (ret == RMAP_DENYMATCH)
-        {
-          /* Free uninterned attribute. */
-          bgp_attr_flush (&attr_tmp);
-
-          /* Unintern original. */
-          aspath_unintern (&attr.aspath);
-          bgp_static_withdraw_rsclient (bgp, rsclient, p, afi, safi);
-          bgp_attr_extra_free (&attr);
-          
-          return;
-        }
-      attr_new = bgp_attr_intern (&attr_tmp);
-    }
-  else
-    attr_new = bgp_attr_intern (&attr);
-
-  new_attr.extra = &new_extra;
-  bgp_attr_dup(&new_attr, attr_new);
-  
-  SET_FLAG (bgp->peer_self->rmap_type, PEER_RMAP_TYPE_NETWORK);
-
-  if (bgp_import_modifier (rsclient, bgp->peer_self, p, &new_attr, afi, safi) 
-        == RMAP_DENY)
-    {
-      /* This BGP update is filtered.  Log the reason then update BGP entry.  */
-      if (BGP_DEBUG (update, UPDATE_IN))
-              zlog (rsclient->log, LOG_DEBUG,
-              "Static UPDATE about %s/%d -- DENIED for RS-client %s due to: import-policy",
-              inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
-              p->prefixlen, rsclient->host);
-
-      bgp->peer_self->rmap_type = 0;
-
-      bgp_attr_unintern (&attr_new);
-      aspath_unintern (&attr.aspath);
-      bgp_attr_extra_free (&attr);
-
-      bgp_static_withdraw_rsclient (bgp, rsclient, p, afi, safi);
-      
-      return;
-    }
-
-  bgp->peer_self->rmap_type = 0;
-
-  bgp_attr_unintern (&attr_new);
-  attr_new = bgp_attr_intern (&new_attr);
-
-  for (ri = rn->info; ri; ri = ri->next)
-    if (ri->peer == bgp->peer_self && ri->type == ZEBRA_ROUTE_BGP
-            && ri->sub_type == BGP_ROUTE_STATIC)
-      break;
-
-  if (ri)
-       {
-      if (attrhash_cmp (ri->attr, attr_new) &&
-	  !CHECK_FLAG(ri->flags, BGP_INFO_REMOVED))
-        {
-          bgp_unlock_node (rn);
-          bgp_attr_unintern (&attr_new);
-          aspath_unintern (&attr.aspath);
-          bgp_attr_extra_free (&attr);
-          return;
-       }
-      else
-        {
-          /* The attribute is changed. */
-          bgp_info_set_flag (rn, ri, BGP_INFO_ATTR_CHANGED);
-
-          /* Rewrite BGP route information. */
-	  if (CHECK_FLAG(ri->flags, BGP_INFO_REMOVED))
-	    bgp_info_restore(rn, ri);
-          bgp_attr_unintern (&ri->attr);
-          ri->attr = attr_new;
-          ri->uptime = bgp_clock ();
-
-	  /* Nexthop reachability check. */
-	  if (bgp_flag_check (bgp, BGP_FLAG_IMPORT_CHECK))
-	    {
-	      if (bgp_find_or_add_nexthop (afi, ri, NULL, 0))
-		bgp_info_set_flag (rn, ri, BGP_INFO_VALID);
-	      else
-		{
-		  if (BGP_DEBUG(nht, NHT))
-		    {
-		      char buf1[INET6_ADDRSTRLEN];
-		      inet_ntop(AF_INET, (const void *)&attr_new->nexthop,
-				buf1, INET6_ADDRSTRLEN);
-		      zlog_debug("%s(%s): NH unresolved", __FUNCTION__, buf1);
-		    }
-		  bgp_info_unset_flag (rn, ri, BGP_INFO_VALID);
-		}
-	    }
-          /* Process change. */
-          bgp_process (bgp, rn, afi, safi);
-          bgp_unlock_node (rn);
-          aspath_unintern (&attr.aspath);
-          bgp_attr_extra_free (&attr);
-          return;
-        }
-    }
-
-  /* Make new BGP info. */
-  new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_STATIC, bgp->peer_self,
-		  attr_new, rn);
-  /* Nexthop reachability check. */
-  if (bgp_flag_check (bgp, BGP_FLAG_IMPORT_CHECK))
-    {
-      if (bgp_find_or_add_nexthop (afi, new, NULL, 0))
-	bgp_info_set_flag (rn, new, BGP_INFO_VALID);
-      else
-	{
-	  if (BGP_DEBUG(nht, NHT))
-	    {
-	      char buf1[INET6_ADDRSTRLEN];
-	      inet_ntop(AF_INET, (const void *)&attr_new->nexthop,
-			buf1, INET6_ADDRSTRLEN);
-	      zlog_debug("%s(%s): NH unresolved", __FUNCTION__, buf1);
-	    }
-	  bgp_info_unset_flag (rn, new, BGP_INFO_VALID);
-	}
-    }
-  else
-    bgp_info_set_flag (rn, new, BGP_INFO_VALID);
-
-  /* Register new BGP information. */
-  bgp_info_add (rn, new);
-  
-  /* route_node_get lock */
-  bgp_unlock_node (rn);
-  
-  /* Process change. */
-  bgp_process (bgp, rn, afi, safi);
-
-  /* Unintern original. */
-  aspath_unintern (&attr.aspath);
-  bgp_attr_extra_free (&attr);
 }
 
 static void
@@ -3614,6 +3593,9 @@ bgp_static_update_main (struct bgp *bgp, struct prefix *p,
   struct attr attr;
   struct attr *attr_new;
   int ret;
+#if ENABLE_BGP_VNC
+  int vnc_implicit_withdraw = 0;
+#endif
 
   assert (bgp_static);
   if (!bgp_static)
@@ -3667,7 +3649,8 @@ bgp_static_update_main (struct bgp *bgp, struct prefix *p,
   if (ri)
     {
       if (attrhash_cmp (ri->attr, attr_new) &&
-	  !CHECK_FLAG(ri->flags, BGP_INFO_REMOVED))
+	  !CHECK_FLAG(ri->flags, BGP_INFO_REMOVED) &&
+	  !bgp_flag_check(bgp, BGP_FLAG_FORCE_STATIC_PROCESS))
 	{
 	  bgp_unlock_node (rn);
 	  bgp_attr_unintern (&attr_new);
@@ -3685,26 +3668,61 @@ bgp_static_update_main (struct bgp *bgp, struct prefix *p,
 	    bgp_info_restore(rn, ri);
 	  else
 	    bgp_aggregate_decrement (bgp, p, ri, afi, safi);
+#if ENABLE_BGP_VNC
+          if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) 
+            {
+              if (CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)) 
+                {
+                  /*
+                   * Implicit withdraw case.
+                   * We have to do this before ri is changed
+                   */
+                  ++vnc_implicit_withdraw;
+                  vnc_import_bgp_del_route(bgp, p, ri);
+                  vnc_import_bgp_exterior_del_route(bgp, p, ri);
+                }
+            }
+#endif
 	  bgp_attr_unintern (&ri->attr);
 	  ri->attr = attr_new;
 	  ri->uptime = bgp_clock ();
+#if ENABLE_BGP_VNC
+          if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) 
+            {
+              if (vnc_implicit_withdraw) 
+                {
+                  vnc_import_bgp_add_route(bgp, p, ri);
+                  vnc_import_bgp_exterior_add_route(bgp, p, ri);
+                }
+            }
+#endif
 
 	  /* Nexthop reachability check. */
 	  if (bgp_flag_check (bgp, BGP_FLAG_IMPORT_CHECK))
 	    {
-	      if (bgp_find_or_add_nexthop (afi, ri, NULL, 0))
+	      if (bgp_find_or_add_nexthop (bgp, afi, ri, NULL, 0))
 		bgp_info_set_flag (rn, ri, BGP_INFO_VALID);
 	      else
 		{
 		  if (BGP_DEBUG(nht, NHT))
 		    {
 		      char buf1[INET6_ADDRSTRLEN];
-		      inet_ntop(AF_INET, (const void *)&attr_new->nexthop,
-				buf1, INET6_ADDRSTRLEN);
-		      zlog_debug("%s(%s): NH unresolved", __FUNCTION__, buf1);
+		      inet_ntop(p->family, &p->u.prefix, buf1,
+				INET6_ADDRSTRLEN);
+		      zlog_debug("%s(%s): Route not in table, not advertising",
+				 __FUNCTION__, buf1);
 		    }
 		  bgp_info_unset_flag (rn, ri, BGP_INFO_VALID);
 		}
+	    }
+	  else
+	    {
+	      /* Delete the NHT structure if any, if we're toggling between
+	       * enabling/disabling import check. We deregister the route
+	       * from NHT to avoid overloading NHT and the process interaction
+	       */
+	      bgp_unlink_nexthop(ri);
+	      bgp_info_set_flag (rn, ri, BGP_INFO_VALID);
 	    }
 	  /* Process change. */
 	  bgp_aggregate_increment (bgp, p, ri, afi, safi);
@@ -3717,27 +3735,36 @@ bgp_static_update_main (struct bgp *bgp, struct prefix *p,
     }
 
   /* Make new BGP info. */
-  new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_STATIC, bgp->peer_self, attr_new,
+  new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_STATIC, 0, bgp->peer_self, attr_new,
 		  rn);
   /* Nexthop reachability check. */
   if (bgp_flag_check (bgp, BGP_FLAG_IMPORT_CHECK))
     {
-      if (bgp_find_or_add_nexthop (afi, new, NULL, 0))
+      if (bgp_find_or_add_nexthop (bgp, afi, new, NULL, 0))
 	bgp_info_set_flag (rn, new, BGP_INFO_VALID);
       else
 	{
 	  if (BGP_DEBUG(nht, NHT))
 	    {
 	      char buf1[INET6_ADDRSTRLEN];
-	      inet_ntop(AF_INET, (const void *)&attr_new->nexthop, buf1,
+	      inet_ntop(p->family, &p->u.prefix, buf1,
 			INET6_ADDRSTRLEN);
-	      zlog_debug("%s(%s): NH unresolved", __FUNCTION__, buf1);
+	      zlog_debug("%s(%s): Route not in table, not advertising",
+			 __FUNCTION__, buf1);
 	    }
 	  bgp_info_unset_flag (rn, new, BGP_INFO_VALID);
 	}
     }
   else
-    bgp_info_set_flag (rn, new, BGP_INFO_VALID);
+    {
+      /* Delete the NHT structure if any, if we're toggling between
+       * enabling/disabling import check. We deregister the route
+       * from NHT to avoid overloading NHT and the process interaction
+       */
+      bgp_unlink_nexthop(new);
+
+      bgp_info_set_flag (rn, new, BGP_INFO_VALID);
+    }
 
   /* Aggregate address increment. */
   bgp_aggregate_increment (bgp, p, new, afi, safi);
@@ -3760,16 +3787,7 @@ void
 bgp_static_update (struct bgp *bgp, struct prefix *p,
                   struct bgp_static *bgp_static, afi_t afi, safi_t safi)
 {
-  struct peer *rsclient;
-  struct listnode *node, *nnode;
-
   bgp_static_update_main (bgp, p, bgp_static, afi, safi);
-
-  for (ALL_LIST_ELEMENTS (bgp->rsclient, node, nnode, rsclient))
-    {
-      if (CHECK_FLAG (rsclient->af_flags[afi][safi], PEER_FLAG_RSERVER_CLIENT))
-        bgp_static_update_rsclient (rsclient, p, bgp_static, afi, safi);
-    }
 }
 
 void
@@ -3779,8 +3797,7 @@ bgp_static_withdraw (struct bgp *bgp, struct prefix *p, afi_t afi,
   struct bgp_node *rn;
   struct bgp_info *ri;
 
-  /* Make new BGP info. */
-  rn = bgp_node_get (bgp->rib[afi][safi], p);
+  rn = bgp_afi_node_get (bgp->rib[afi][safi], afi, safi, p, NULL);
 
   /* Check selected route and self inserted route. */
   for (ri = rn->info; ri; ri = ri->next)
@@ -3800,26 +3817,6 @@ bgp_static_withdraw (struct bgp *bgp, struct prefix *p, afi_t afi,
 
   /* Unlock bgp_node_lookup. */
   bgp_unlock_node (rn);
-}
-
-void
-bgp_check_local_routes_rsclient (struct peer *rsclient, afi_t afi, safi_t safi)
-{
-  struct bgp_static *bgp_static;
-  struct bgp *bgp;
-  struct bgp_node *rn;
-  struct prefix *p;
-
-  bgp = rsclient->bgp;
-
-  for (rn = bgp_table_top (bgp->route[afi][safi]); rn; rn = bgp_route_next (rn))
-    if ((bgp_static = rn->info) != NULL)
-      {
-        p = &rn->p;
-
-        bgp_static_update_rsclient (rsclient, p, bgp_static,
-                afi, safi);
-      }
 }
 
 /*
@@ -3844,6 +3841,18 @@ bgp_static_withdraw_safi (struct bgp *bgp, struct prefix *p, afi_t afi,
   /* Withdraw static BGP route from routing table. */
   if (ri)
     {
+#if ENABLE_BGP_VNC
+	rfapiProcessWithdraw(
+	    ri->peer,
+	    NULL,
+	    p,
+	    prd,
+	    ri->attr,
+	    afi,
+	    safi,
+	    ri->type,
+	    1);		/* Kill, since it is an administrative change */
+#endif
       bgp_aggregate_decrement (bgp, p, ri, afi, safi);
       bgp_info_delete (rn, ri);
       bgp_process (bgp, rn, afi, safi);
@@ -3862,6 +3871,9 @@ bgp_static_update_safi (struct bgp *bgp, struct prefix *p,
   struct attr *attr_new;
   struct attr attr = { 0 };
   struct bgp_info *ri;
+#if ENABLE_BGP_VNC
+  u_int32_t        label = 0;
+#endif
 
   assert (bgp_static);
 
@@ -3938,10 +3950,19 @@ bgp_static_update_safi (struct bgp *bgp, struct prefix *p,
           bgp_attr_unintern (&ri->attr);
           ri->attr = attr_new;
           ri->uptime = bgp_clock ();
+#if ENABLE_BGP_VNC
+          if (ri->extra)
+              label = decode_label (ri->extra->tag);
+#endif
 
           /* Process change. */
           bgp_aggregate_increment (bgp, p, ri, afi, safi);
           bgp_process (bgp, rn, afi, safi);
+#if ENABLE_BGP_VNC
+          rfapiProcessUpdate(ri->peer, NULL, p, &bgp_static->prd,
+                             ri->attr, afi, safi, 
+                             ri->type, ri->sub_type, &label);
+#endif
           bgp_unlock_node (rn);
           aspath_unintern (&attr.aspath);
           bgp_attr_extra_free (&attr);
@@ -3951,11 +3972,14 @@ bgp_static_update_safi (struct bgp *bgp, struct prefix *p,
 
 
   /* Make new BGP info. */
-  new = info_make (ZEBRA_ROUTE_BGP, BGP_ROUTE_STATIC, bgp->peer_self,
-		   attr_new, rn);
+  new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_STATIC, 0, bgp->peer_self, attr_new,
+		  rn);
   SET_FLAG (new->flags, BGP_INFO_VALID);
   new->extra = bgp_info_extra_new();
   memcpy (new->extra->tag, bgp_static->tag, 3);
+#if ENABLE_BGP_VNC
+  label = decode_label (bgp_static->tag);
+#endif
 
   /* Aggregate address increment. */
   bgp_aggregate_increment (bgp, p, new, afi, safi);
@@ -3969,6 +3993,12 @@ bgp_static_update_safi (struct bgp *bgp, struct prefix *p,
   /* Process change. */
   bgp_process (bgp, rn, afi, safi);
 
+#if ENABLE_BGP_VNC
+  rfapiProcessUpdate(new->peer, NULL, p, &bgp_static->prd,
+                     new->attr, afi, safi, 
+                     new->type, new->sub_type, &label);
+#endif
+
   /* Unintern original. */
   aspath_unintern (&attr.aspath);
   bgp_attr_extra_free (&attr);
@@ -3977,9 +4007,10 @@ bgp_static_update_safi (struct bgp *bgp, struct prefix *p,
 /* Configure static BGP network.  When user don't run zebra, static
    route should be installed as valid.  */
 static int
-bgp_static_set (struct vty *vty, struct bgp *bgp, const char *ip_str, 
+bgp_static_set (struct vty *vty, const char *ip_str, 
                 afi_t afi, safi_t safi, const char *rmap, int backdoor)
 {
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
   int ret;
   struct prefix p;
   struct bgp_static *bgp_static;
@@ -4019,14 +4050,14 @@ bgp_static_set (struct vty *vty, struct bgp *bgp, const char *ip_str,
       if (rmap)
 	{
 	  if (bgp_static->rmap.name)
-	    free (bgp_static->rmap.name);
-	  bgp_static->rmap.name = strdup (rmap);
+	    XFREE(MTYPE_ROUTE_MAP_NAME, bgp_static->rmap.name);
+	  bgp_static->rmap.name = XSTRDUP(MTYPE_ROUTE_MAP_NAME, rmap);
 	  bgp_static->rmap.map = route_map_lookup_by_name (rmap);
 	}
       else
 	{
 	  if (bgp_static->rmap.name)
-	    free (bgp_static->rmap.name);
+	    XFREE(MTYPE_ROUTE_MAP_NAME, bgp_static->rmap.name);
 	  bgp_static->rmap.name = NULL;
 	  bgp_static->rmap.map = NULL;
 	  bgp_static->valid = 0;
@@ -4045,8 +4076,8 @@ bgp_static_set (struct vty *vty, struct bgp *bgp, const char *ip_str,
       if (rmap)
 	{
 	  if (bgp_static->rmap.name)
-	    free (bgp_static->rmap.name);
-	  bgp_static->rmap.name = strdup (rmap);
+	    XFREE(MTYPE_ROUTE_MAP_NAME, bgp_static->rmap.name);
+	  bgp_static->rmap.name = XSTRDUP(MTYPE_ROUTE_MAP_NAME, rmap);
 	  bgp_static->rmap.map = route_map_lookup_by_name (rmap);
 	}
       rn->info = bgp_static;
@@ -4064,9 +4095,10 @@ bgp_static_set (struct vty *vty, struct bgp *bgp, const char *ip_str,
 
 /* Configure static BGP network. */
 static int
-bgp_static_unset (struct vty *vty, struct bgp *bgp, const char *ip_str,
+bgp_static_unset (struct vty *vty, const char *ip_str,
 		  afi_t afi, safi_t safi)
 {
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
   int ret;
   struct prefix p;
   struct bgp_static *bgp_static;
@@ -4109,6 +4141,38 @@ bgp_static_unset (struct vty *vty, struct bgp *bgp, const char *ip_str,
   bgp_unlock_node (rn);
 
   return CMD_SUCCESS;
+}
+
+void
+bgp_static_add (struct bgp *bgp)
+{
+  afi_t afi;
+  safi_t safi;
+  struct bgp_node *rn;
+  struct bgp_node *rm;
+  struct bgp_table *table;
+  struct bgp_static *bgp_static;
+
+  for (afi = AFI_IP; afi < AFI_MAX; afi++)
+    for (safi = SAFI_UNICAST; safi < SAFI_MAX; safi++)
+      for (rn = bgp_table_top (bgp->route[afi][safi]); rn; rn = bgp_route_next (rn))
+	if (rn->info != NULL)
+	  {      
+	    if (safi == SAFI_MPLS_VPN)
+	      {
+		table = rn->info;
+
+		for (rm = bgp_table_top (table); rm; rm = bgp_route_next (rm))
+		  {
+		    bgp_static = rn->info;
+                    bgp_static_update_safi (bgp, &rm->p, bgp_static, afi, safi);
+		  }
+	      }
+	    else
+	      {
+		bgp_static_update (bgp, &rn->p, rn->info, afi, safi);
+	      }
+	  }
 }
 
 /* Called from bgp_delete().  Delete all static routes from the BGP
@@ -4155,6 +4219,69 @@ bgp_static_delete (struct bgp *bgp)
 	  }
 }
 
+void
+bgp_static_redo_import_check (struct bgp *bgp)
+{
+  afi_t afi;
+  safi_t safi;
+  struct bgp_node *rn;
+  struct bgp_static *bgp_static;
+
+  /* Use this flag to force reprocessing of the route */
+  bgp_flag_set(bgp, BGP_FLAG_FORCE_STATIC_PROCESS);
+  for (afi = AFI_IP; afi < AFI_MAX; afi++)
+    for (safi = SAFI_UNICAST; safi < SAFI_MAX; safi++)
+      for (rn = bgp_table_top (bgp->route[afi][safi]); rn; rn = bgp_route_next (rn))
+	if (rn->info != NULL)
+	  {
+	    bgp_static = rn->info;
+	    bgp_static_update (bgp, &rn->p, bgp_static, afi, safi);
+	  }
+  bgp_flag_unset(bgp, BGP_FLAG_FORCE_STATIC_PROCESS);
+}
+
+static void
+bgp_purge_af_static_redist_routes (struct bgp *bgp, afi_t afi, safi_t safi)
+{
+  struct bgp_table *table;
+  struct bgp_node *rn;
+  struct bgp_info *ri;
+
+  table = bgp->rib[afi][safi];
+  for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
+    {
+      for (ri = rn->info; ri; ri = ri->next)
+        {
+          if (ri->peer == bgp->peer_self &&
+              ((ri->type == ZEBRA_ROUTE_BGP &&
+                ri->sub_type == BGP_ROUTE_STATIC) ||
+               (ri->type != ZEBRA_ROUTE_BGP &&
+                ri->sub_type == BGP_ROUTE_REDISTRIBUTE)))
+            {
+              bgp_aggregate_decrement (bgp, &rn->p, ri, afi, safi);
+              bgp_unlink_nexthop(ri);
+              bgp_info_delete (rn, ri);
+              bgp_process (bgp, rn, afi, safi);
+            }
+        }
+    }
+}
+
+/*
+ * Purge all networks and redistributed routes from routing table.
+ * Invoked upon the instance going down.
+ */
+void
+bgp_purge_static_redist_routes (struct bgp *bgp)
+{
+  afi_t afi;
+  safi_t safi;
+
+  for (afi = AFI_IP; afi < AFI_MAX; afi++)
+    for (safi = SAFI_UNICAST; safi < SAFI_MAX; safi++)
+      bgp_purge_af_static_redist_routes (bgp, afi, safi);
+}
+
 /*
  * gpz 110624
  * Currently this is used to set static routes for VPN and ENCAP.
@@ -4165,17 +4292,16 @@ bgp_static_set_safi (safi_t safi, struct vty *vty, const char *ip_str,
                      const char *rd_str, const char *tag_str,
                      const char *rmap_str)
 {
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
   int ret;
   struct prefix p;
   struct prefix_rd prd;
-  struct bgp *bgp;
   struct bgp_node *prn;
   struct bgp_node *rn;
   struct bgp_table *table;
   struct bgp_static *bgp_static;
   u_char tag[3];
-
-  bgp = vty->index;
+  afi_t afi;
 
   ret = str2prefix (ip_str, &p);
   if (! ret)
@@ -4198,11 +4324,19 @@ bgp_static_set_safi (safi_t safi, struct vty *vty, const char *ip_str,
       vty_out (vty, "%% Malformed tag%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
-
-  prn = bgp_node_get (bgp->route[AFI_IP][safi],
+  if (p.family == AF_INET)
+    afi = AFI_IP;
+  else if (p.family == AF_INET6)
+    afi = AFI_IP6;
+  else
+    {
+      vty_out (vty, "%% Non Supported prefix%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
+  prn = bgp_node_get (bgp->route[afi][safi],
 			(struct prefix *)&prd);
   if (prn->info == NULL)
-    prn->info = bgp_table_init (AFI_IP, safi);
+    prn->info = bgp_table_init (afi, safi);
   else
     bgp_unlock_node (prn);
   table = prn->info;
@@ -4235,7 +4369,7 @@ bgp_static_set_safi (safi_t safi, struct vty *vty, const char *ip_str,
       rn->info = bgp_static;
 
       bgp_static->valid = 1;
-      bgp_static_update_safi (bgp, &p, bgp_static, AFI_IP, safi);
+      bgp_static_update_safi (bgp, &p, bgp_static, afi, safi);
     }
 
   return CMD_SUCCESS;
@@ -4246,8 +4380,8 @@ int
 bgp_static_unset_safi(safi_t safi, struct vty *vty, const char *ip_str,
                       const char *rd_str, const char *tag_str)
 {
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
   int ret;
-  struct bgp *bgp;
   struct prefix p;
   struct prefix_rd prd;
   struct bgp_node *prn;
@@ -4255,8 +4389,6 @@ bgp_static_unset_safi(safi_t safi, struct vty *vty, const char *ip_str,
   struct bgp_table *table;
   struct bgp_static *bgp_static;
   u_char tag[3];
-
-  bgp = vty->index;
 
   /* Convert IP prefix string to struct prefix. */
   ret = str2prefix (ip_str, &p);
@@ -4307,13 +4439,96 @@ bgp_static_unset_safi(safi_t safi, struct vty *vty, const char *ip_str,
   return CMD_SUCCESS;
 }
 
+static int
+bgp_table_map_set (struct vty *vty, afi_t afi, safi_t safi,
+                   const char *rmap_name)
+{
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
+  struct bgp_rmap *rmap;
+
+  rmap = &bgp->table_map[afi][safi];
+  if (rmap_name)
+    {
+      if (rmap->name)
+        XFREE(MTYPE_ROUTE_MAP_NAME, rmap->name);
+      rmap->name = XSTRDUP(MTYPE_ROUTE_MAP_NAME, rmap_name);
+      rmap->map = route_map_lookup_by_name (rmap_name);
+    }
+  else
+    {
+      if (rmap->name)
+        XFREE(MTYPE_ROUTE_MAP_NAME, rmap->name);
+      rmap->name = NULL;
+      rmap->map = NULL;
+    }
+
+  bgp_zebra_announce_table(bgp, afi, safi);
+
+  return CMD_SUCCESS;
+}
+
+static int
+bgp_table_map_unset (struct vty *vty, afi_t afi, safi_t safi,
+                     const char *rmap_name)
+{
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
+  struct bgp_rmap *rmap;
+
+  rmap = &bgp->table_map[afi][safi];
+  if (rmap->name)
+    XFREE(MTYPE_ROUTE_MAP_NAME, rmap->name);
+  rmap->name = NULL;
+  rmap->map = NULL;
+
+  bgp_zebra_announce_table(bgp, afi, safi);
+
+  return CMD_SUCCESS;
+}
+
+int
+bgp_config_write_table_map (struct vty *vty, struct bgp *bgp, afi_t afi,
+			   safi_t safi, int *write)
+{
+  if (bgp->table_map[afi][safi].name)
+    {
+      bgp_config_write_family_header (vty, afi, safi, write);
+      vty_out (vty, "  table-map %s%s",
+	       bgp->table_map[afi][safi].name, VTY_NEWLINE);
+    }
+
+  return 0;
+}
+
+DEFUN (bgp_table_map,
+       bgp_table_map_cmd,
+       "table-map WORD",
+       "BGP table to RIB route download filter\n"
+       "Name of the route map\n")
+{
+  int idx_word = 1;
+  return bgp_table_map_set (vty,
+             bgp_node_afi (vty), bgp_node_safi (vty), argv[idx_word]->arg);
+}
+DEFUN (no_bgp_table_map,
+       no_bgp_table_map_cmd,
+       "no table-map WORD",
+       NO_STR
+       "BGP table to RIB route download filter\n"
+       "Name of the route map\n")
+{
+  int idx_word = 2;
+  return bgp_table_map_unset (vty,
+             bgp_node_afi (vty), bgp_node_safi (vty), argv[idx_word]->arg);
+}
+
 DEFUN (bgp_network,
        bgp_network_cmd,
        "network A.B.C.D/M",
        "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
+       "IPv4 prefix\n")
 {
-  return bgp_static_set (vty, vty->index, argv[0],
+  int idx_ipv4_prefixlen = 1;
+  return bgp_static_set (vty, argv[idx_ipv4_prefixlen]->arg,
 			 AFI_IP, bgp_node_safi (vty), NULL, 0);
 }
 
@@ -4321,22 +4536,25 @@ DEFUN (bgp_network_route_map,
        bgp_network_route_map_cmd,
        "network A.B.C.D/M route-map WORD",
        "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
+       "IPv4 prefix\n"
        "Route-map to modify the attributes\n"
        "Name of the route map\n")
 {
-  return bgp_static_set (vty, vty->index, argv[0],
-			 AFI_IP, bgp_node_safi (vty), argv[1], 0);
+  int idx_ipv4_prefixlen = 1;
+  int idx_word = 3;
+  return bgp_static_set (vty, argv[idx_ipv4_prefixlen]->arg,
+			 AFI_IP, bgp_node_safi (vty), argv[idx_word]->arg, 0);
 }
 
 DEFUN (bgp_network_backdoor,
        bgp_network_backdoor_cmd,
        "network A.B.C.D/M backdoor",
        "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
+       "IPv4 prefix\n"
        "Specify a BGP backdoor route\n")
 {
-  return bgp_static_set (vty, vty->index, argv[0], AFI_IP, SAFI_UNICAST,
+  int idx_ipv4_prefixlen = 1;
+  return bgp_static_set (vty, argv[idx_ipv4_prefixlen]->arg, AFI_IP, SAFI_UNICAST,
                          NULL, 1);
 }
 
@@ -4348,17 +4566,19 @@ DEFUN (bgp_network_mask,
        "Network mask\n"
        "Network mask\n")
 {
+  int idx_ipv4 = 1;
+  int idx_ipv4_2 = 3;
   int ret;
   char prefix_str[BUFSIZ];
   
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
+  ret = netmask_str2prefix_str (argv[idx_ipv4]->arg, argv[idx_ipv4_2]->arg, prefix_str);
   if (! ret)
     {
       vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_static_set (vty, vty->index, prefix_str,
+  return bgp_static_set (vty, prefix_str,
 			 AFI_IP, bgp_node_safi (vty), NULL, 0);
 }
 
@@ -4372,18 +4592,21 @@ DEFUN (bgp_network_mask_route_map,
        "Route-map to modify the attributes\n"
        "Name of the route map\n")
 {
+  int idx_ipv4 = 1;
+  int idx_ipv4_2 = 3;
+  int idx_word = 5;
   int ret;
   char prefix_str[BUFSIZ];
   
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
+  ret = netmask_str2prefix_str (argv[idx_ipv4]->arg, argv[idx_ipv4_2]->arg, prefix_str);
   if (! ret)
     {
       vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_static_set (vty, vty->index, prefix_str,
-			 AFI_IP, bgp_node_safi (vty), argv[2], 0);
+  return bgp_static_set (vty, prefix_str,
+			 AFI_IP, bgp_node_safi (vty), argv[idx_word]->arg, 0);
 }
 
 DEFUN (bgp_network_mask_backdoor,
@@ -4395,17 +4618,19 @@ DEFUN (bgp_network_mask_backdoor,
        "Network mask\n"
        "Specify a BGP backdoor route\n")
 {
+  int idx_ipv4 = 1;
+  int idx_ipv4_2 = 3;
   int ret;
   char prefix_str[BUFSIZ];
   
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
+  ret = netmask_str2prefix_str (argv[idx_ipv4]->arg, argv[idx_ipv4_2]->arg, prefix_str);
   if (! ret)
     {
       vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_static_set (vty, vty->index, prefix_str, AFI_IP, SAFI_UNICAST,
+  return bgp_static_set (vty, prefix_str, AFI_IP, SAFI_UNICAST,
                          NULL, 1);
 }
 
@@ -4415,17 +4640,18 @@ DEFUN (bgp_network_mask_natural,
        "Specify a network to announce via BGP\n"
        "Network number\n")
 {
+  int idx_ipv4 = 1;
   int ret;
   char prefix_str[BUFSIZ];
 
-  ret = netmask_str2prefix_str (argv[0], NULL, prefix_str);
+  ret = netmask_str2prefix_str (argv[idx_ipv4]->arg, NULL, prefix_str);
   if (! ret)
     {
       vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_static_set (vty, vty->index, prefix_str,
+  return bgp_static_set (vty, prefix_str,
 			 AFI_IP, bgp_node_safi (vty), NULL, 0);
 }
 
@@ -4437,18 +4663,20 @@ DEFUN (bgp_network_mask_natural_route_map,
        "Route-map to modify the attributes\n"
        "Name of the route map\n")
 {
+  int idx_ipv4 = 1;
+  int idx_word = 3;
   int ret;
   char prefix_str[BUFSIZ];
 
-  ret = netmask_str2prefix_str (argv[0], NULL, prefix_str);
+  ret = netmask_str2prefix_str (argv[idx_ipv4]->arg, NULL, prefix_str);
   if (! ret)
     {
       vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_static_set (vty, vty->index, prefix_str,
-			 AFI_IP, bgp_node_safi (vty), argv[1], 0);
+  return bgp_static_set (vty, prefix_str,
+			 AFI_IP, bgp_node_safi (vty), argv[idx_word]->arg, 0);
 }
 
 DEFUN (bgp_network_mask_natural_backdoor,
@@ -4458,137 +4686,97 @@ DEFUN (bgp_network_mask_natural_backdoor,
        "Network number\n"
        "Specify a BGP backdoor route\n")
 {
+  int idx_ipv4 = 1;
   int ret;
   char prefix_str[BUFSIZ];
 
-  ret = netmask_str2prefix_str (argv[0], NULL, prefix_str);
+  ret = netmask_str2prefix_str (argv[idx_ipv4]->arg, NULL, prefix_str);
   if (! ret)
     {
       vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_static_set (vty, vty->index, prefix_str, AFI_IP, SAFI_UNICAST,
+  return bgp_static_set (vty, prefix_str, AFI_IP, SAFI_UNICAST,
                          NULL, 1);
 }
 
 DEFUN (no_bgp_network,
        no_bgp_network_cmd,
-       "no network A.B.C.D/M",
+       "no network A.B.C.D/M [<backdoor|route-map WORD>]",
        NO_STR
        "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_static_unset (vty, vty->index, argv[0], AFI_IP, 
-			   bgp_node_safi (vty));
-}
-
-ALIAS (no_bgp_network,
-       no_bgp_network_route_map_cmd,
-       "no network A.B.C.D/M route-map WORD",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
+       "IPv4 prefix\n"
+       "Specify a BGP backdoor route\n"
        "Route-map to modify the attributes\n"
        "Name of the route map\n")
-
-ALIAS (no_bgp_network,
-       no_bgp_network_backdoor_cmd,
-       "no network A.B.C.D/M backdoor",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Specify a BGP backdoor route\n")
+{
+  int idx_ipv4_prefixlen = 2;
+  return bgp_static_unset (vty, argv[idx_ipv4_prefixlen]->arg, AFI_IP, 
+			   bgp_node_safi (vty));
+}
 
 DEFUN (no_bgp_network_mask,
        no_bgp_network_mask_cmd,
-       "no network A.B.C.D mask A.B.C.D",
+       "no network A.B.C.D mask A.B.C.D [<backdoor|route-map WORD>]",
        NO_STR
        "Specify a network to announce via BGP\n"
        "Network number\n"
        "Network mask\n"
-       "Network mask\n")
+       "Network mask\n"
+       "Specify a BGP backdoor route\n"
+       "Route-map to modify the attributes\n"
+       "Name of the route map\n")
 {
+  int idx_ipv4 = 2;
+  int idx_ipv4_2 = 4;
   int ret;
   char prefix_str[BUFSIZ];
 
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
+  ret = netmask_str2prefix_str (argv[idx_ipv4]->arg, argv[idx_ipv4_2]->arg, prefix_str);
   if (! ret)
     {
       vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_static_unset (vty, vty->index, prefix_str, AFI_IP, 
+  return bgp_static_unset (vty, prefix_str, AFI_IP, 
 			   bgp_node_safi (vty));
 }
-
-ALIAS (no_bgp_network_mask,
-       no_bgp_network_mask_route_map_cmd,
-       "no network A.B.C.D mask A.B.C.D route-map WORD",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Network mask\n"
-       "Network mask\n"
-       "Route-map to modify the attributes\n"
-       "Name of the route map\n")
-
-ALIAS (no_bgp_network_mask,
-       no_bgp_network_mask_backdoor_cmd,
-       "no network A.B.C.D mask A.B.C.D backdoor",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Network mask\n"
-       "Network mask\n"
-       "Specify a BGP backdoor route\n")
 
 DEFUN (no_bgp_network_mask_natural,
        no_bgp_network_mask_natural_cmd,
-       "no network A.B.C.D",
+       "no network A.B.C.D [<backdoor|route-map WORD>]",
        NO_STR
        "Specify a network to announce via BGP\n"
-       "Network number\n")
+       "Network number\n"
+       "Specify a BGP backdoor route\n"
+       "Route-map to modify the attributes\n"
+       "Name of the route map\n")
 {
+  int idx_ipv4 = 2;
   int ret;
   char prefix_str[BUFSIZ];
 
-  ret = netmask_str2prefix_str (argv[0], NULL, prefix_str);
+  ret = netmask_str2prefix_str (argv[idx_ipv4]->arg, NULL, prefix_str);
   if (! ret)
     {
       vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_static_unset (vty, vty->index, prefix_str, AFI_IP, 
+  return bgp_static_unset (vty, prefix_str, AFI_IP, 
 			   bgp_node_safi (vty));
 }
-
-ALIAS (no_bgp_network_mask_natural,
-       no_bgp_network_mask_natural_route_map_cmd,
-       "no network A.B.C.D route-map WORD",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Route-map to modify the attributes\n"
-       "Name of the route map\n")
-
-ALIAS (no_bgp_network_mask_natural,
-       no_bgp_network_mask_natural_backdoor_cmd,
-       "no network A.B.C.D backdoor",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Specify a BGP backdoor route\n")
 
 DEFUN (ipv6_bgp_network,
        ipv6_bgp_network_cmd,
        "network X:X::X:X/M",
        "Specify a network to announce via BGP\n"
-       "IPv6 prefix <network>/<length>\n")
+       "IPv6 prefix\n")
 {
-  return bgp_static_set (vty, vty->index, argv[0], AFI_IP6, bgp_node_safi(vty),
+  int idx_ipv6_prefixlen = 1;
+  return bgp_static_set (vty, argv[idx_ipv6_prefixlen]->arg, AFI_IP6, bgp_node_safi(vty),
                          NULL, 0);
 }
 
@@ -4596,170 +4784,28 @@ DEFUN (ipv6_bgp_network_route_map,
        ipv6_bgp_network_route_map_cmd,
        "network X:X::X:X/M route-map WORD",
        "Specify a network to announce via BGP\n"
-       "IPv6 prefix <network>/<length>\n"
+       "IPv6 prefix\n"
        "Route-map to modify the attributes\n"
        "Name of the route map\n")
 {
-  return bgp_static_set (vty, vty->index, argv[0], AFI_IP6,
-			 bgp_node_safi (vty), argv[1], 0);
+  int idx_ipv6_prefixlen = 1;
+  int idx_word = 3;
+  return bgp_static_set (vty, argv[idx_ipv6_prefixlen]->arg, AFI_IP6,
+			 bgp_node_safi (vty), argv[idx_word]->arg, 0);
 }
 
 DEFUN (no_ipv6_bgp_network,
        no_ipv6_bgp_network_cmd,
-       "no network X:X::X:X/M",
+       "no network X:X::X:X/M [route-map WORD]",
        NO_STR
        "Specify a network to announce via BGP\n"
-       "IPv6 prefix <network>/<length>\n")
-{
-  return bgp_static_unset (vty, vty->index, argv[0], AFI_IP6, bgp_node_safi(vty));
-}
-
-ALIAS (no_ipv6_bgp_network,
-       no_ipv6_bgp_network_route_map_cmd,
-       "no network X:X::X:X/M route-map WORD",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "IPv6 prefix <network>/<length>\n"
+       "IPv6 prefix\n"
        "Route-map to modify the attributes\n"
        "Name of the route map\n")
-
-ALIAS (ipv6_bgp_network,
-       old_ipv6_bgp_network_cmd,
-       "ipv6 bgp network X:X::X:X/M",
-       IPV6_STR
-       BGP_STR
-       "Specify a network to announce via BGP\n"
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
-
-ALIAS (no_ipv6_bgp_network,
-       old_no_ipv6_bgp_network_cmd,
-       "no ipv6 bgp network X:X::X:X/M",
-       NO_STR
-       IPV6_STR
-       BGP_STR
-       "Specify a network to announce via BGP\n"
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
-
-/* stubs for removed AS-Pathlimit commands, kept for config compatibility */
-ALIAS_DEPRECATED (bgp_network,
-       bgp_network_ttl_cmd,
-       "network A.B.C.D/M pathlimit <0-255>",
-       "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (bgp_network_backdoor,
-       bgp_network_backdoor_ttl_cmd,
-       "network A.B.C.D/M backdoor pathlimit <0-255>",
-       "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Specify a BGP backdoor route\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (bgp_network_mask,
-       bgp_network_mask_ttl_cmd,
-       "network A.B.C.D mask A.B.C.D pathlimit <0-255>",
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Network mask\n"
-       "Network mask\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (bgp_network_mask_backdoor,
-       bgp_network_mask_backdoor_ttl_cmd,
-       "network A.B.C.D mask A.B.C.D backdoor pathlimit <0-255>",
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Network mask\n"
-       "Network mask\n"
-       "Specify a BGP backdoor route\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (bgp_network_mask_natural,
-       bgp_network_mask_natural_ttl_cmd,
-       "network A.B.C.D pathlimit <0-255>",
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (bgp_network_mask_natural_backdoor,
-       bgp_network_mask_natural_backdoor_ttl_cmd,
-       "network A.B.C.D backdoor pathlimit <1-255>",
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Specify a BGP backdoor route\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (no_bgp_network,
-       no_bgp_network_ttl_cmd,
-       "no network A.B.C.D/M pathlimit <0-255>",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (no_bgp_network,
-       no_bgp_network_backdoor_ttl_cmd,
-       "no network A.B.C.D/M backdoor pathlimit <0-255>",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Specify a BGP backdoor route\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (no_bgp_network,
-       no_bgp_network_mask_ttl_cmd,
-       "no network A.B.C.D mask A.B.C.D pathlimit <0-255>",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Network mask\n"
-       "Network mask\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (no_bgp_network_mask,
-       no_bgp_network_mask_backdoor_ttl_cmd,
-       "no network A.B.C.D mask A.B.C.D  backdoor pathlimit <0-255>",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Network mask\n"
-       "Network mask\n"
-       "Specify a BGP backdoor route\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (no_bgp_network_mask_natural,
-       no_bgp_network_mask_natural_ttl_cmd,
-       "no network A.B.C.D pathlimit <0-255>",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (no_bgp_network_mask_natural,
-       no_bgp_network_mask_natural_backdoor_ttl_cmd,
-       "no network A.B.C.D backdoor pathlimit <0-255>",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "Network number\n"
-       "Specify a BGP backdoor route\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (ipv6_bgp_network,
-       ipv6_bgp_network_ttl_cmd,
-       "network X:X::X:X/M pathlimit <0-255>",
-       "Specify a network to announce via BGP\n"
-       "IPv6 prefix <network>/<length>\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
-ALIAS_DEPRECATED (no_ipv6_bgp_network,
-       no_ipv6_bgp_network_ttl_cmd,
-       "no network X:X::X:X/M pathlimit <0-255>",
-       NO_STR
-       "Specify a network to announce via BGP\n"
-       "IPv6 prefix <network>/<length>\n"
-       "AS-Path hopcount limit attribute\n"
-       "AS-Pathlimit TTL, in number of AS-Path hops\n")
+{
+  int idx_ipv6_prefixlen = 2;
+  return bgp_static_unset (vty, argv[idx_ipv6_prefixlen]->arg, AFI_IP6, bgp_node_safi(vty));
+}
 
 /* Aggreagete address:
 
@@ -4815,11 +4861,24 @@ bgp_aggregate_route (struct bgp *bgp, struct prefix *p, struct bgp_info *rinew,
   struct aspath *asmerge = NULL;
   struct community *community = NULL;
   struct community *commerge = NULL;
+#if defined(AGGREGATE_NEXTHOP_CHECK)
+  struct in_addr nexthop;
+  u_int32_t med = 0;
+#endif
   struct bgp_info *ri;
   struct bgp_info *new;
   int first = 1;
   unsigned long match = 0;
   u_char atomic_aggregate = 0;
+
+  /* Record adding route's nexthop and med. */
+ if (rinew)
+   {
+#if defined(AGGREGATE_NEXTHOP_CHECK)
+     nexthop = rinew->attr->nexthop;
+     med = rinew->attr->med;
+#endif
+   }
 
   /* ORIGIN attribute: If at least one route among routes that are
      aggregated has ORIGIN with the value INCOMPLETE, then the
@@ -4848,7 +4907,13 @@ bgp_aggregate_route (struct bgp *bgp, struct prefix *p, struct bgp_info *rinew,
 	      continue;
 
 	    if (! rinew && first)
-              first = 0;
+	      {
+#if defined(AGGREGATE_NEXTHOP_CHECK)
+		nexthop = ri->attr->nexthop;
+		med = ri->attr->med;
+#endif
+		first = 0;
+	      }
 
 #ifdef AGGREGATE_NEXTHOP_CHECK
 	    if (! IPV4_ADDR_SAME (&ri->attr->nexthop, &nexthop)
@@ -4951,7 +5016,7 @@ bgp_aggregate_route (struct bgp *bgp, struct prefix *p, struct bgp_info *rinew,
   if (aggregate->count > 0)
     {
       rn = bgp_node_get (table, p);
-      new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_AGGREGATE, bgp->peer_self,
+      new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_AGGREGATE, 0, bgp->peer_self,
 		      bgp_attr_aggregate_intern(bgp, origin, aspath, community,
 						aggregate->as_set,
                                                 atomic_aggregate), rn);
@@ -5146,7 +5211,7 @@ bgp_aggregate_add (struct bgp *bgp, struct prefix *p, afi_t afi, safi_t safi,
   if (aggregate->count)
     {
       rn = bgp_node_get (table, p);
-      new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_AGGREGATE, bgp->peer_self,
+      new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_AGGREGATE, 0, bgp->peer_self,
 		      bgp_attr_aggregate_intern(bgp, origin, aspath, community,
 						aggregate->as_set,
                                                 atomic_aggregate), rn);
@@ -5246,10 +5311,10 @@ static int
 bgp_aggregate_unset (struct vty *vty, const char *prefix_str,
                      afi_t afi, safi_t safi)
 {
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
   int ret;
   struct prefix p;
   struct bgp_node *rn;
-  struct bgp *bgp;
   struct bgp_aggregate *aggregate;
 
   /* Convert string to prefix structure. */
@@ -5260,9 +5325,6 @@ bgp_aggregate_unset (struct vty *vty, const char *prefix_str,
       return CMD_WARNING;
     }
   apply_mask (&p);
-
-  /* Get BGP structure. */
-  bgp = vty->index;
 
   /* Old configuration check. */
   rn = bgp_node_lookup (bgp->aggregate[afi][safi], &p);
@@ -5293,10 +5355,10 @@ bgp_aggregate_set (struct vty *vty, const char *prefix_str,
                    afi_t afi, safi_t safi,
 		   u_char summary_only, u_char as_set)
 {
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
   int ret;
   struct prefix p;
   struct bgp_node *rn;
-  struct bgp *bgp;
   struct bgp_aggregate *aggregate;
 
   /* Convert string to prefix structure. */
@@ -5307,9 +5369,6 @@ bgp_aggregate_set (struct vty *vty, const char *prefix_str,
       return CMD_WARNING;
     }
   apply_mask (&p);
-
-  /* Get BGP structure. */
-  bgp = vty->index;
 
   /* Old configuration check. */
   rn = bgp_node_get (bgp->aggregate[afi][safi], &p);
@@ -5345,137 +5404,46 @@ bgp_aggregate_set (struct vty *vty, const char *prefix_str,
 
 DEFUN (aggregate_address,
        aggregate_address_cmd,
-       "aggregate-address A.B.C.D/M",
+       "aggregate-address A.B.C.D/M [<as-set [summary-only]|summary-only [as-set]>]",
        "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n")
+       "Aggregate prefix\n"
+       "Generate AS set path information\n"
+       "Filter more specific routes from updates\n"
+       "Filter more specific routes from updates\n"
+       "Generate AS set path information\n")
 {
-  return bgp_aggregate_set (vty, argv[0], AFI_IP, bgp_node_safi (vty), 0, 0);
+  int idx = 0;
+  argv_find (argv, argc, "A.B.C.D/M", &idx);
+  char *prefix = argv[idx]->arg;
+  int as_set = argv_find (argv, argc, "as-set", &idx) ? AGGREGATE_AS_SET : 0;
+  idx = 0;
+  int summary_only = argv_find (argv, argc, "summary-only", &idx) ? AGGREGATE_SUMMARY_ONLY : 0;
+
+  return bgp_aggregate_set (vty, prefix, AFI_IP, bgp_node_safi (vty), summary_only, as_set);
 }
 
 DEFUN (aggregate_address_mask,
        aggregate_address_mask_cmd,
-       "aggregate-address A.B.C.D A.B.C.D",
-       "Configure BGP aggregate entries\n"
-       "Aggregate address\n"
-       "Aggregate mask\n")
-{
-  int ret;
-  char prefix_str[BUFSIZ];
-
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
-
-  if (! ret)
-    {
-      vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  return bgp_aggregate_set (vty, prefix_str, AFI_IP, bgp_node_safi (vty),
-			    0, 0);
-}
-
-DEFUN (aggregate_address_summary_only,
-       aggregate_address_summary_only_cmd,
-       "aggregate-address A.B.C.D/M summary-only",
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n"
-       "Filter more specific routes from updates\n")
-{
-  return bgp_aggregate_set (vty, argv[0], AFI_IP, bgp_node_safi (vty),
-			    AGGREGATE_SUMMARY_ONLY, 0);
-}
-
-DEFUN (aggregate_address_mask_summary_only,
-       aggregate_address_mask_summary_only_cmd,
-       "aggregate-address A.B.C.D A.B.C.D summary-only",
-       "Configure BGP aggregate entries\n"
-       "Aggregate address\n"
-       "Aggregate mask\n"
-       "Filter more specific routes from updates\n")
-{
-  int ret;
-  char prefix_str[BUFSIZ];
-
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
-
-  if (! ret)
-    {
-      vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  return bgp_aggregate_set (vty, prefix_str, AFI_IP, bgp_node_safi (vty),
-			    AGGREGATE_SUMMARY_ONLY, 0);
-}
-
-DEFUN (aggregate_address_as_set,
-       aggregate_address_as_set_cmd,
-       "aggregate-address A.B.C.D/M as-set",
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n"
-       "Generate AS set path information\n")
-{
-  return bgp_aggregate_set (vty, argv[0], AFI_IP, bgp_node_safi (vty),
-			    0, AGGREGATE_AS_SET);
-}
-
-DEFUN (aggregate_address_mask_as_set,
-       aggregate_address_mask_as_set_cmd,
-       "aggregate-address A.B.C.D A.B.C.D as-set",
-       "Configure BGP aggregate entries\n"
-       "Aggregate address\n"
-       "Aggregate mask\n"
-       "Generate AS set path information\n")
-{
-  int ret;
-  char prefix_str[BUFSIZ];
-
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
-
-  if (! ret)
-    {
-      vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  return bgp_aggregate_set (vty, prefix_str, AFI_IP, bgp_node_safi (vty),
-			    0, AGGREGATE_AS_SET);
-}
-
-
-DEFUN (aggregate_address_as_set_summary,
-       aggregate_address_as_set_summary_cmd,
-       "aggregate-address A.B.C.D/M as-set summary-only",
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n"
-       "Generate AS set path information\n"
-       "Filter more specific routes from updates\n")
-{
-  return bgp_aggregate_set (vty, argv[0], AFI_IP, bgp_node_safi (vty),
-			    AGGREGATE_SUMMARY_ONLY, AGGREGATE_AS_SET);
-}
-
-ALIAS (aggregate_address_as_set_summary,
-       aggregate_address_summary_as_set_cmd,
-       "aggregate-address A.B.C.D/M summary-only as-set",
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n"
-       "Filter more specific routes from updates\n"
-       "Generate AS set path information\n")
-
-DEFUN (aggregate_address_mask_as_set_summary,
-       aggregate_address_mask_as_set_summary_cmd,
-       "aggregate-address A.B.C.D A.B.C.D as-set summary-only",
+       "aggregate-address A.B.C.D A.B.C.D [<as-set [summary-only]|summary-only [as-set]>]",
        "Configure BGP aggregate entries\n"
        "Aggregate address\n"
        "Aggregate mask\n"
        "Generate AS set path information\n"
-       "Filter more specific routes from updates\n")
+       "Filter more specific routes from updates\n"
+       "Filter more specific routes from updates\n"
+       "Generate AS set path information\n")
 {
-  int ret;
-  char prefix_str[BUFSIZ];
+  int idx = 0;
+  argv_find (argv, argc, "A.B.C.D", &idx);
+  char *prefix = argv[idx++]->arg;
+  argv_find (argv, argc, "A.B.C.D", &idx);
+  char *mask = argv[idx]->arg;
+  int as_set = argv_find (argv, argc, "as-set", &idx) ? AGGREGATE_AS_SET : 0;
+  idx = 0;
+  int summary_only = argv_find (argv, argc, "summary-only", &idx) ? AGGREGATE_SUMMARY_ONLY : 0;
 
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
+  char prefix_str[BUFSIZ];
+  int ret = netmask_str2prefix_str (prefix, mask, prefix_str);
 
   if (! ret)
     {
@@ -5483,75 +5451,46 @@ DEFUN (aggregate_address_mask_as_set_summary,
       return CMD_WARNING;
     }
 
-  return bgp_aggregate_set (vty, prefix_str, AFI_IP, bgp_node_safi (vty),
-			    AGGREGATE_SUMMARY_ONLY, AGGREGATE_AS_SET);
+  return bgp_aggregate_set (vty, prefix_str, AFI_IP, bgp_node_safi (vty), summary_only, as_set);
 }
-
-ALIAS (aggregate_address_mask_as_set_summary,
-       aggregate_address_mask_summary_as_set_cmd,
-       "aggregate-address A.B.C.D A.B.C.D summary-only as-set",
-       "Configure BGP aggregate entries\n"
-       "Aggregate address\n"
-       "Aggregate mask\n"
-       "Filter more specific routes from updates\n"
-       "Generate AS set path information\n")
 
 DEFUN (no_aggregate_address,
        no_aggregate_address_cmd,
-       "no aggregate-address A.B.C.D/M",
-       NO_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n")
-{
-  return bgp_aggregate_unset (vty, argv[0], AFI_IP, bgp_node_safi (vty));
-}
-
-ALIAS (no_aggregate_address,
-       no_aggregate_address_summary_only_cmd,
-       "no aggregate-address A.B.C.D/M summary-only",
-       NO_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n"
-       "Filter more specific routes from updates\n")
-
-ALIAS (no_aggregate_address,
-       no_aggregate_address_as_set_cmd,
-       "no aggregate-address A.B.C.D/M as-set",
-       NO_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n"
-       "Generate AS set path information\n")
-
-ALIAS (no_aggregate_address,
-       no_aggregate_address_as_set_summary_cmd,
-       "no aggregate-address A.B.C.D/M as-set summary-only",
+       "no aggregate-address A.B.C.D/M [<as-set [summary-only]|summary-only [as-set]>]",
        NO_STR
        "Configure BGP aggregate entries\n"
        "Aggregate prefix\n"
        "Generate AS set path information\n"
-       "Filter more specific routes from updates\n")
-
-ALIAS (no_aggregate_address,
-       no_aggregate_address_summary_as_set_cmd,
-       "no aggregate-address A.B.C.D/M summary-only as-set",
-       NO_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n"
+       "Filter more specific routes from updates\n"
        "Filter more specific routes from updates\n"
        "Generate AS set path information\n")
+{
+  int idx = 0;
+  argv_find (argv, argc, "A.B.C.D/M", &idx);
+  char *prefix = argv[idx]->arg;
+  return bgp_aggregate_unset (vty, prefix, AFI_IP, bgp_node_safi (vty));
+}
 
 DEFUN (no_aggregate_address_mask,
        no_aggregate_address_mask_cmd,
-       "no aggregate-address A.B.C.D A.B.C.D",
+       "no aggregate-address A.B.C.D A.B.C.D [<as-set [summary-only]|summary-only [as-set]>]",
        NO_STR
        "Configure BGP aggregate entries\n"
        "Aggregate address\n"
-       "Aggregate mask\n")
+       "Aggregate mask\n"
+       "Generate AS set path information\n"
+       "Filter more specific routes from updates\n"
+       "Filter more specific routes from updates\n"
+       "Generate AS set path information\n")
 {
-  int ret;
-  char prefix_str[BUFSIZ];
+  int idx = 0;
+  argv_find (argv, argc, "A.B.C.D", &idx);
+  char *prefix = argv[idx++]->arg;
+  argv_find (argv, argc, "A.B.C.D", &idx);
+  char *mask = argv[idx]->arg;
 
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
+  char prefix_str[BUFSIZ];
+  int ret = netmask_str2prefix_str (prefix, mask, prefix_str);
 
   if (! ret)
     {
@@ -5562,129 +5501,40 @@ DEFUN (no_aggregate_address_mask,
   return bgp_aggregate_unset (vty, prefix_str, AFI_IP, bgp_node_safi (vty));
 }
 
-ALIAS (no_aggregate_address_mask,
-       no_aggregate_address_mask_summary_only_cmd,
-       "no aggregate-address A.B.C.D A.B.C.D summary-only",
-       NO_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate address\n"
-       "Aggregate mask\n"
-       "Filter more specific routes from updates\n")
-
-ALIAS (no_aggregate_address_mask,
-       no_aggregate_address_mask_as_set_cmd,
-       "no aggregate-address A.B.C.D A.B.C.D as-set",
-       NO_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate address\n"
-       "Aggregate mask\n"
-       "Generate AS set path information\n")
-
-ALIAS (no_aggregate_address_mask,
-       no_aggregate_address_mask_as_set_summary_cmd,
-       "no aggregate-address A.B.C.D A.B.C.D as-set summary-only",
-       NO_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate address\n"
-       "Aggregate mask\n"
-       "Generate AS set path information\n"
-       "Filter more specific routes from updates\n")
-
-ALIAS (no_aggregate_address_mask,
-       no_aggregate_address_mask_summary_as_set_cmd,
-       "no aggregate-address A.B.C.D A.B.C.D summary-only as-set",
-       NO_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate address\n"
-       "Aggregate mask\n"
-       "Filter more specific routes from updates\n"
-       "Generate AS set path information\n")
-
 DEFUN (ipv6_aggregate_address,
        ipv6_aggregate_address_cmd,
-       "aggregate-address X:X::X:X/M",
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n")
-{
-  return bgp_aggregate_set (vty, argv[0], AFI_IP6, SAFI_UNICAST, 0, 0);
-}
-
-DEFUN (ipv6_aggregate_address_summary_only,
-       ipv6_aggregate_address_summary_only_cmd,
-       "aggregate-address X:X::X:X/M summary-only",
+       "aggregate-address X:X::X:X/M [summary-only]",
        "Configure BGP aggregate entries\n"
        "Aggregate prefix\n"
        "Filter more specific routes from updates\n")
 {
-  return bgp_aggregate_set (vty, argv[0], AFI_IP6, SAFI_UNICAST, 
-			    AGGREGATE_SUMMARY_ONLY, 0);
+  int idx = 0;
+  argv_find (argv, argc, "X:X::X:X/M", &idx);
+  char *prefix = argv[idx]->arg;
+  int sum_only = argv_find (argv, argc, "summary-only", &idx) ? AGGREGATE_SUMMARY_ONLY : 0;
+  return bgp_aggregate_set (vty, prefix, AFI_IP6, SAFI_UNICAST, sum_only, 0);
 }
 
 DEFUN (no_ipv6_aggregate_address,
        no_ipv6_aggregate_address_cmd,
-       "no aggregate-address X:X::X:X/M",
-       NO_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n")
-{
-  return bgp_aggregate_unset (vty, argv[0], AFI_IP6, SAFI_UNICAST);
-}
-
-DEFUN (no_ipv6_aggregate_address_summary_only,
-       no_ipv6_aggregate_address_summary_only_cmd,
-       "no aggregate-address X:X::X:X/M summary-only",
+       "no aggregate-address X:X::X:X/M [summary-only]",
        NO_STR
        "Configure BGP aggregate entries\n"
        "Aggregate prefix\n"
        "Filter more specific routes from updates\n")
 {
-  return bgp_aggregate_unset (vty, argv[0], AFI_IP6, SAFI_UNICAST);
+  int idx = 0;
+  argv_find (argv, argc, "X:X::X:X/M", &idx);
+  char *prefix = argv[idx]->arg;
+  return bgp_aggregate_unset (vty, prefix, AFI_IP6, SAFI_UNICAST);
 }
-
-ALIAS (ipv6_aggregate_address,
-       old_ipv6_aggregate_address_cmd,
-       "ipv6 bgp aggregate-address X:X::X:X/M",
-       IPV6_STR
-       BGP_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n")
-
-ALIAS (ipv6_aggregate_address_summary_only,
-       old_ipv6_aggregate_address_summary_only_cmd,
-       "ipv6 bgp aggregate-address X:X::X:X/M summary-only",
-       IPV6_STR
-       BGP_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n"
-       "Filter more specific routes from updates\n")
-
-ALIAS (no_ipv6_aggregate_address,
-       old_no_ipv6_aggregate_address_cmd,
-       "no ipv6 bgp aggregate-address X:X::X:X/M",
-       NO_STR
-       IPV6_STR
-       BGP_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n")
-
-ALIAS (no_ipv6_aggregate_address_summary_only,
-       old_no_ipv6_aggregate_address_summary_only_cmd,
-       "no ipv6 bgp aggregate-address X:X::X:X/M summary-only",
-       NO_STR
-       IPV6_STR
-       BGP_STR
-       "Configure BGP aggregate entries\n"
-       "Aggregate prefix\n"
-       "Filter more specific routes from updates\n")
 
 /* Redistribute route treatment. */
 void
-bgp_redistribute_add (struct prefix *p, const struct in_addr *nexthop,
-		      const struct in6_addr *nexthop6,
-		      u_int32_t metric, u_char type, route_tag_t tag)
+bgp_redistribute_add (struct bgp *bgp, struct prefix *p, const struct in_addr *nexthop,
+		      const struct in6_addr *nexthop6, unsigned int ifindex,
+		      u_int32_t metric, u_char type, u_short instance, route_tag_t tag)
 {
-  struct bgp *bgp;
-  struct listnode *node, *nnode;
   struct bgp_info *new;
   struct bgp_info *bi;
   struct bgp_info info;
@@ -5693,119 +5543,120 @@ bgp_redistribute_add (struct prefix *p, const struct in_addr *nexthop,
   struct attr *new_attr;
   afi_t afi;
   int ret;
+  struct bgp_redist *red;
 
   /* Make default attribute. */
   bgp_attr_default_set (&attr, BGP_ORIGIN_INCOMPLETE);
   if (nexthop)
     attr.nexthop = *nexthop;
+  attr.nh_ifindex = ifindex;
 
   if (nexthop6)
     {
       struct attr_extra *extra = bgp_attr_extra_get(&attr);
       extra->mp_nexthop_global = *nexthop6;
-      extra->mp_nexthop_len = 16;
+      extra->mp_nexthop_len = BGP_ATTR_NHLEN_IPV6_GLOBAL;
     }
 
   attr.med = metric;
   attr.flag |= ATTR_FLAG_BIT (BGP_ATTR_MULTI_EXIT_DISC);
   attr.extra->tag = tag;
 
-  for (ALL_LIST_ELEMENTS (bm->bgp, node, nnode, bgp))
+  afi = family2afi (p->family);
+
+  red = bgp_redist_lookup(bgp, afi, type, instance);
+  if (red)
     {
-      afi = family2afi (p->family);
+      struct attr attr_new;
+      struct attr_extra extra_new;
 
-      if (bgp->redist[afi][type])
-	{
-	  struct attr attr_new;
-	  struct attr_extra extra_new;
+      /* Copy attribute for modification. */
+      attr_new.extra = &extra_new;
+      bgp_attr_dup (&attr_new, &attr);
 
-	  /* Copy attribute for modification. */
-	  attr_new.extra = &extra_new;
-	  bgp_attr_dup (&attr_new, &attr);
+      if (red->redist_metric_flag)
+        attr_new.med = red->redist_metric;
 
-	  if (bgp->redist_metric_flag[afi][type])
-	    attr_new.med = bgp->redist_metric[afi][type];
+      /* Apply route-map. */
+      if (red->rmap.name)
+        {
+          info.peer = bgp->peer_self;
+          info.attr = &attr_new;
 
-	  /* Apply route-map. */
-	  if (bgp->rmap[afi][type].name)
-	    {
-	      info.peer = bgp->peer_self;
-	      info.attr = &attr_new;
+          SET_FLAG (bgp->peer_self->rmap_type, PEER_RMAP_TYPE_REDISTRIBUTE);
 
-              SET_FLAG (bgp->peer_self->rmap_type, PEER_RMAP_TYPE_REDISTRIBUTE);
+          ret = route_map_apply (red->rmap.map, p, RMAP_BGP, &info);
 
-	      ret = route_map_apply (bgp->rmap[afi][type].map, p, RMAP_BGP,
-				     &info);
+          bgp->peer_self->rmap_type = 0;
 
-              bgp->peer_self->rmap_type = 0;
+          if (ret == RMAP_DENYMATCH)
+            {
+              /* Free uninterned attribute. */
+              bgp_attr_flush (&attr_new);
 
-	      if (ret == RMAP_DENYMATCH)
-		{
-		  /* Free uninterned attribute. */
-		  bgp_attr_flush (&attr_new);
+              /* Unintern original. */
+              aspath_unintern (&attr.aspath);
+              bgp_attr_extra_free (&attr);
+              bgp_redistribute_delete (bgp, p, type, instance);
+              return;
+            }
+        }
 
-		  /* Unintern original. */
-		  aspath_unintern (&attr.aspath);
-		  bgp_attr_extra_free (&attr);
-		  bgp_redistribute_delete (p, type);
-		  return;
-		}
-	    }
+      bn = bgp_afi_node_get (bgp->rib[afi][SAFI_UNICAST], 
+                             afi, SAFI_UNICAST, p, NULL);
 
-          bn = bgp_afi_node_get (bgp->rib[afi][SAFI_UNICAST], 
-                                 afi, SAFI_UNICAST, p, NULL);
-          
-	  new_attr = bgp_attr_intern (&attr_new);
+      new_attr = bgp_attr_intern (&attr_new);
 
- 	  for (bi = bn->info; bi; bi = bi->next)
- 	    if (bi->peer == bgp->peer_self
- 		&& bi->sub_type == BGP_ROUTE_REDISTRIBUTE)
- 	      break;
- 
- 	  if (bi)
- 	    {
- 	      if (attrhash_cmp (bi->attr, new_attr) &&
-		  !CHECK_FLAG(bi->flags, BGP_INFO_REMOVED))
- 		{
- 		  bgp_attr_unintern (&new_attr);
- 		  aspath_unintern (&attr.aspath);
- 		  bgp_attr_extra_free (&attr);
- 		  bgp_unlock_node (bn);
- 		  return;
- 		}
- 	      else
- 		{
- 		  /* The attribute is changed. */
- 		  bgp_info_set_flag (bn, bi, BGP_INFO_ATTR_CHANGED);
- 
- 		  /* Rewrite BGP route information. */
-		  if (CHECK_FLAG(bi->flags, BGP_INFO_REMOVED))
-		    bgp_info_restore(bn, bi);
-		  else
-		    bgp_aggregate_decrement (bgp, p, bi, afi, SAFI_UNICAST);
- 		  bgp_attr_unintern (&bi->attr);
- 		  bi->attr = new_attr;
- 		  bi->uptime = bgp_clock ();
- 
- 		  /* Process change. */
- 		  bgp_aggregate_increment (bgp, p, bi, afi, SAFI_UNICAST);
- 		  bgp_process (bgp, bn, afi, SAFI_UNICAST);
- 		  bgp_unlock_node (bn);
- 		  aspath_unintern (&attr.aspath);
- 		  bgp_attr_extra_free (&attr);
- 		  return;
-		}
- 	    }
+      for (bi = bn->info; bi; bi = bi->next)
+        if (bi->peer == bgp->peer_self
+            && bi->sub_type == BGP_ROUTE_REDISTRIBUTE)
+          break;
 
-	  new = info_make(type, BGP_ROUTE_REDISTRIBUTE, bgp->peer_self,
-			  new_attr, bn);
-	  SET_FLAG (new->flags, BGP_INFO_VALID);
+      if (bi)
+        {
+          /* Ensure the (source route) type is updated. */
+          bi->type = type;
+          if (attrhash_cmp (bi->attr, new_attr) &&
+              !CHECK_FLAG(bi->flags, BGP_INFO_REMOVED))
+            {
+              bgp_attr_unintern (&new_attr);
+              aspath_unintern (&attr.aspath);
+              bgp_attr_extra_free (&attr);
+              bgp_unlock_node (bn);
+              return;
+            }
+          else
+            {
+              /* The attribute is changed. */
+              bgp_info_set_flag (bn, bi, BGP_INFO_ATTR_CHANGED);
 
-	  bgp_aggregate_increment (bgp, p, new, afi, SAFI_UNICAST);
-	  bgp_info_add (bn, new);
-	  bgp_unlock_node (bn);
-	  bgp_process (bgp, bn, afi, SAFI_UNICAST);
-	}
+              /* Rewrite BGP route information. */
+              if (CHECK_FLAG(bi->flags, BGP_INFO_REMOVED))
+                bgp_info_restore(bn, bi);
+              else
+                bgp_aggregate_decrement (bgp, p, bi, afi, SAFI_UNICAST);
+              bgp_attr_unintern (&bi->attr);
+              bi->attr = new_attr;
+              bi->uptime = bgp_clock ();
+
+              /* Process change. */
+              bgp_aggregate_increment (bgp, p, bi, afi, SAFI_UNICAST);
+              bgp_process (bgp, bn, afi, SAFI_UNICAST);
+              bgp_unlock_node (bn);
+              aspath_unintern (&attr.aspath);
+              bgp_attr_extra_free (&attr);
+              return;
+            }
+        }
+
+      new = info_make(type, BGP_ROUTE_REDISTRIBUTE, instance, bgp->peer_self,
+                      new_attr, bn);
+      SET_FLAG (new->flags, BGP_INFO_VALID);
+
+      bgp_aggregate_increment (bgp, p, new, afi, SAFI_UNICAST);
+      bgp_info_add (bn, new);
+      bgp_unlock_node (bn);
+      bgp_process (bgp, bn, afi, SAFI_UNICAST);
     }
 
   /* Unintern original. */
@@ -5814,41 +5665,38 @@ bgp_redistribute_add (struct prefix *p, const struct in_addr *nexthop,
 }
 
 void
-bgp_redistribute_delete (struct prefix *p, u_char type)
+bgp_redistribute_delete (struct bgp *bgp, struct prefix *p, u_char type, u_short instance)
 {
-  struct bgp *bgp;
-  struct listnode *node, *nnode;
   afi_t afi;
   struct bgp_node *rn;
   struct bgp_info *ri;
+  struct bgp_redist *red;
 
-  for (ALL_LIST_ELEMENTS (bm->bgp, node, nnode, bgp))
+  afi = family2afi (p->family);
+
+  red = bgp_redist_lookup(bgp, afi, type, instance);
+  if (red)
     {
-      afi = family2afi (p->family);
+      rn = bgp_afi_node_get (bgp->rib[afi][SAFI_UNICAST], afi, SAFI_UNICAST, p, NULL);
 
-      if (bgp->redist[afi][type])
-	{
-         rn = bgp_afi_node_get (bgp->rib[afi][SAFI_UNICAST], afi, SAFI_UNICAST, p, NULL);
+      for (ri = rn->info; ri; ri = ri->next)
+        if (ri->peer == bgp->peer_self
+            && ri->type == type)
+          break;
 
-	  for (ri = rn->info; ri; ri = ri->next)
-	    if (ri->peer == bgp->peer_self
-		&& ri->type == type)
-	      break;
-
-	  if (ri)
-	    {
-	      bgp_aggregate_decrement (bgp, p, ri, afi, SAFI_UNICAST);
-	      bgp_info_delete (rn, ri);
-	      bgp_process (bgp, rn, afi, SAFI_UNICAST);
-	    }
-	  bgp_unlock_node (rn);
-	}
+      if (ri)
+        {
+          bgp_aggregate_decrement (bgp, p, ri, afi, SAFI_UNICAST);
+          bgp_info_delete (rn, ri);
+          bgp_process (bgp, rn, afi, SAFI_UNICAST);
+        }
+      bgp_unlock_node (rn);
     }
 }
 
 /* Withdraw specified route type's route. */
 void
-bgp_redistribute_withdraw (struct bgp *bgp, afi_t afi, int type)
+bgp_redistribute_withdraw (struct bgp *bgp, afi_t afi, int type, u_short instance)
 {
   struct bgp_node *rn;
   struct bgp_info *ri;
@@ -5860,7 +5708,8 @@ bgp_redistribute_withdraw (struct bgp *bgp, afi_t afi, int type)
     {
       for (ri = rn->info; ri; ri = ri->next)
 	if (ri->peer == bgp->peer_self
-	    && ri->type == type)
+	    && ri->type == type
+            && ri->instance == instance)
 	  break;
 
       if (ri)
@@ -5886,14 +5735,14 @@ route_vty_out_route (struct prefix *p, struct vty *vty)
       destination = ntohl (p->u.prefix4.s_addr);
 
       if ((IN_CLASSC (destination) && p->prefixlen == 24)
-	  || (IN_CLASSB (destination) && p->prefixlen == 16)
-	  || (IN_CLASSA (destination) && p->prefixlen == 8)
-	  || p->u.prefix4.s_addr == 0)
-	{
-	  /* When mask is natural, mask is not displayed. */
-	}
+          || (IN_CLASSB (destination) && p->prefixlen == 16)
+          || (IN_CLASSA (destination) && p->prefixlen == 8)
+          || p->u.prefix4.s_addr == 0)
+        {
+          /* When mask is natural, mask is not displayed. */
+        }
       else
-	len += vty_out (vty, "/%d", p->prefixlen);
+        len += vty_out (vty, "/%d", p->prefixlen);
     }
   else
     len = vty_out (vty, "%s/%d", inet_ntop (p->family, &p->u.prefix, buf, BUFSIZ),
@@ -5913,8 +5762,48 @@ enum bgp_display_type
 
 /* Print the short form route status for a bgp_info */
 static void
-route_vty_short_status_out (struct vty *vty, struct bgp_info *binfo)
+route_vty_short_status_out (struct vty *vty, struct bgp_info *binfo,
+                            json_object *json_path)
 {
+  if (json_path)
+    {
+
+      /* Route status display. */
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_REMOVED))
+        json_object_boolean_true_add(json_path, "removed");
+
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_STALE))
+        json_object_boolean_true_add(json_path, "stale");
+
+      if (binfo->extra && binfo->extra->suppress)
+        json_object_boolean_true_add(json_path, "suppressed");
+
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_VALID) &&
+               ! CHECK_FLAG (binfo->flags, BGP_INFO_HISTORY))
+        json_object_boolean_true_add(json_path, "valid");
+
+      /* Selected */
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_HISTORY))
+        json_object_boolean_true_add(json_path, "history");
+
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_DAMPED))
+        json_object_boolean_true_add(json_path, "damped");
+
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_SELECTED))
+        json_object_boolean_true_add(json_path, "bestpath");
+
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_MULTIPATH))
+        json_object_boolean_true_add(json_path, "multipath");
+
+      /* Internal route. */
+      if ((binfo->peer->as) && (binfo->peer->as == binfo->peer->local_as))
+        json_object_string_add(json_path, "pathFrom", "internal");
+      else
+        json_object_string_add(json_path, "pathFrom", "external");
+
+      return;
+    }
+
  /* Route status display. */
   if (CHECK_FLAG (binfo->flags, BGP_INFO_REMOVED))
     vty_out (vty, "R");
@@ -5941,266 +5830,539 @@ route_vty_short_status_out (struct vty *vty, struct bgp_info *binfo)
     vty_out (vty, " ");
 
   /* Internal route. */
-    if ((binfo->peer->as) && (binfo->peer->as == binfo->peer->local_as))
-      vty_out (vty, "i");
-    else
-      vty_out (vty, " "); 
+  if ((binfo->peer->as) && (binfo->peer->as == binfo->peer->local_as))
+    vty_out (vty, "i");
+  else
+    vty_out (vty, " ");
 }
 
 /* called from terminal list command */
 void
-route_vty_out(
-    struct vty *vty,
-    struct prefix *p,
-    struct bgp_info *binfo,
-    int display,
-    safi_t safi)
+route_vty_out (struct vty *vty, struct prefix *p,
+	       struct bgp_info *binfo, int display, safi_t safi,
+               json_object *json_paths)
 {
   struct attr *attr;
-  
-  /* short status lead text */ 
-  route_vty_short_status_out (vty, binfo);
-  
-  /* print prefix and mask */
-  if (!display)
-    route_vty_out_route (p, vty);
-  else
-    vty_out (vty, "%*s", 17, " ");
+  json_object *json_path = NULL;
+  json_object *json_nexthops = NULL;
+  json_object *json_nexthop_global = NULL;
+  json_object *json_nexthop_ll = NULL;
+
+  if (json_paths)
+    json_path = json_object_new_object();
+
+  /* short status lead text */
+  route_vty_short_status_out (vty, binfo, json_path);
+
+  if (!json_paths)
+    {
+      /* print prefix and mask */
+      if (! display)
+        route_vty_out_route (p, vty);
+      else
+        vty_out (vty, "%*s", 17, " ");
+    }
 
   /* Print attribute */
   attr = binfo->attr;
   if (attr) 
     {
-
-      /*
-       * NEXTHOP start
-       */
-
       /*
        * For ENCAP routes, nexthop address family is not
        * neccessarily the same as the prefix address family.
        * Both SAFI_MPLS_VPN and SAFI_ENCAP use the MP nexthop field
        */
-      if ((safi == SAFI_ENCAP) || (safi == SAFI_MPLS_VPN)) {
-	if (attr->extra) {
-	    char	buf[BUFSIZ];
-	    int		af = NEXTHOP_FAMILY(attr->extra->mp_nexthop_len);
-
-	    switch (af) {
-		case AF_INET:
-		    vty_out (vty, "%s", inet_ntop(af,
-			&attr->extra->mp_nexthop_global_in, buf, BUFSIZ));
-		    break;
-		case AF_INET6:
-		    vty_out (vty, "%s", inet_ntop(af,
-			&attr->extra->mp_nexthop_global, buf, BUFSIZ));
-		    break;
-		default:
-		    vty_out(vty, "?");
-	    }
-	} else {
-	    vty_out(vty, "?");
-	}
-      } else {
-
-	  if (p->family == AF_INET)
-	    {
-		vty_out (vty, "%-16s", inet_ntoa (attr->nexthop));
-	    }
-	  else if (p->family == AF_INET6)
-	    {
-	      int len;
+      if ((safi == SAFI_ENCAP) || (safi == SAFI_MPLS_VPN))
+        {
+	  if (attr->extra)
+            {
 	      char buf[BUFSIZ];
+              int af = NEXTHOP_FAMILY(attr->extra->mp_nexthop_len);
 
-	      len = vty_out (vty, "%s",
-			     inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
-			     buf, BUFSIZ));
-	      len = 16 - len;
-	      if (len < 1)
-		vty_out (vty, "%s%*s", VTY_NEWLINE, 36, " ");
+              switch (af)
+                {
+                  case AF_INET:
+                    vty_out (vty, "%s", inet_ntop(af,
+                             &attr->extra->mp_nexthop_global_in, buf, BUFSIZ));
+                  break;
+                  case AF_INET6:
+                    vty_out (vty, "%s", inet_ntop(af,
+                             &attr->extra->mp_nexthop_global, buf, BUFSIZ));
+                  break;
+                  default:
+                    vty_out(vty, "?");
+                  break;
+                }
+            }
+          else
+            vty_out(vty, "?");
+        }
+      /* IPv4 Next Hop */
+      else if (p->family == AF_INET && !BGP_ATTR_NEXTHOP_AFI_IP6(attr))
+	{
+          if (json_paths)
+            {
+              json_nexthop_global = json_object_new_object();
+
+	      if (safi == SAFI_MPLS_VPN)
+                json_object_string_add(json_nexthop_global, "ip", inet_ntoa (attr->extra->mp_nexthop_global_in));
+              else
+                json_object_string_add(json_nexthop_global, "ip", inet_ntoa (attr->nexthop));
+
+              json_object_string_add(json_nexthop_global, "afi", "ipv4");
+              json_object_boolean_true_add(json_nexthop_global, "used");
+            }
+          else
+            {
+	      if (safi == SAFI_MPLS_VPN)
+	        vty_out (vty, "%-16s",
+                         inet_ntoa (attr->extra->mp_nexthop_global_in));
 	      else
-		vty_out (vty, "%*s", len, " ");
-	    }
-         else
-	   {
-	     vty_out(vty, "?");
-	   }
-      }
+	        vty_out (vty, "%-16s", inet_ntoa (attr->nexthop));
+            }
+	}
 
-      /*
-       * NEXTHOP end
-       */
+      /* IPv6 Next Hop */
+      else if (p->family == AF_INET6 || BGP_ATTR_NEXTHOP_AFI_IP6(attr))
+	{
+	  int len;
+	  char buf[BUFSIZ];
 
+          if (json_paths)
+            {
+              json_nexthop_global = json_object_new_object();
+              json_object_string_add(json_nexthop_global, "ip",
+                                     inet_ntop (AF_INET6,
+                                                &attr->extra->mp_nexthop_global,
+                                                buf, BUFSIZ));
+              json_object_string_add(json_nexthop_global, "afi", "ipv6");
+              json_object_string_add(json_nexthop_global, "scope", "global");
 
+              /* We display both LL & GL if both have been received */
+              if ((attr->extra->mp_nexthop_len == 32) || (binfo->peer->conf_if))
+                {
+                  json_nexthop_ll = json_object_new_object();
+                  json_object_string_add(json_nexthop_ll, "ip",
+                                         inet_ntop (AF_INET6,
+                                                    &attr->extra->mp_nexthop_local,
+                                                    buf, BUFSIZ));
+                  json_object_string_add(json_nexthop_ll, "afi", "ipv6");
+                  json_object_string_add(json_nexthop_ll, "scope", "link-local");
+
+                  if ((IPV6_ADDR_CMP (&attr->extra->mp_nexthop_global,
+                                      &attr->extra->mp_nexthop_local) != 0) &&
+                                      !attr->extra->mp_nexthop_prefer_global)
+                    json_object_boolean_true_add(json_nexthop_ll, "used");
+                  else
+                    json_object_boolean_true_add(json_nexthop_global, "used");
+                }
+              else
+                json_object_boolean_true_add(json_nexthop_global, "used");
+            }
+          else
+            {
+              /* Display LL if LL/Global both in table unless prefer-global is set */
+	      if (((attr->extra->mp_nexthop_len == 32) &&
+                   !attr->extra->mp_nexthop_prefer_global) ||
+                   (binfo->peer->conf_if))
+		{
+		  if (binfo->peer->conf_if)
+		    {
+		      len = vty_out (vty, "%s",
+				     binfo->peer->conf_if);
+		      len = 7 - len; /* len of IPv6 addr + max len of def ifname */
+
+		      if (len < 1)
+			vty_out (vty, "%s%*s", VTY_NEWLINE, 45, " ");
+		      else
+			vty_out (vty, "%*s", len, " ");
+		    }
+		  else
+		    {
+		      len = vty_out (vty, "%s",
+				     inet_ntop (AF_INET6,
+						&attr->extra->mp_nexthop_local,
+						buf, BUFSIZ));
+		      len = 16 - len;
+
+		      if (len < 1)
+			vty_out (vty, "%s%*s", VTY_NEWLINE, 36, " ");
+		      else
+			vty_out (vty, "%*s", len, " ");
+		    }
+		}
+ 	      else
+		{
+		  len = vty_out (vty, "%s",
+				 inet_ntop (AF_INET6,
+					    &attr->extra->mp_nexthop_global,
+					    buf, BUFSIZ));
+		  len = 16 - len;
+
+		  if (len < 1)
+		    vty_out (vty, "%s%*s", VTY_NEWLINE, 36, " ");
+		  else
+		    vty_out (vty, "%*s", len, " ");
+		}
+            }
+	}
+
+      /* MED/Metric */
       if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_MULTI_EXIT_DISC))
-	vty_out (vty, "%10u ", attr->med);
+        if (json_paths)
+          json_object_int_add(json_path, "med", attr->med);
+        else
+	  vty_out (vty, "%10u", attr->med);
       else
+        if (!json_paths)
 	  vty_out (vty, "          ");
 
+      /* Local Pref */
       if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_LOCAL_PREF))
-	vty_out (vty, "%7u ", attr->local_pref);
+        if (json_paths)
+          json_object_int_add(json_path, "localpref", attr->local_pref);
+        else
+	  vty_out (vty, "%7u", attr->local_pref);
       else
+        if (!json_paths)
 	  vty_out (vty, "       ");
 
-      vty_out (vty, "%7u ", (attr->extra ? attr->extra->weight : 0));
-    
+      if (json_paths)
+        {
+          if (attr->extra)
+            json_object_int_add(json_path, "weight", attr->extra->weight);
+          else
+            json_object_int_add(json_path, "weight", 0);
+        }
+      else
+        vty_out (vty, "%7u ", (attr->extra ? attr->extra->weight : 0));
+
+      if (json_paths) {
+	char buf[BUFSIZ];
+	json_object_string_add(json_path, "peerId", sockunion2str (&binfo->peer->su, buf, SU_ADDRSTRLEN));
+      }
+
       /* Print aspath */
       if (attr->aspath)
-        aspath_print_vty (vty, "%s", attr->aspath, " ");
+        {
+          if (json_paths)
+            json_object_string_add(json_path, "aspath", attr->aspath->str);
+          else
+            aspath_print_vty (vty, "%s", attr->aspath, " ");
+        }
 
       /* Print origin */
-      vty_out (vty, "%s", bgp_origin_str[attr->origin]);
+      if (json_paths)
+        json_object_string_add(json_path, "origin", bgp_origin_long_str[attr->origin]);
+      else
+        vty_out (vty, "%s", bgp_origin_str[attr->origin]);
     }
-  vty_out (vty, "%s", VTY_NEWLINE);
+  else
+    {
+      if (json_paths)
+        json_object_string_add(json_path, "alert", "No attributes");
+      else
+        vty_out (vty, "No attributes to print%s", VTY_NEWLINE);
+    }
+
+  if (json_paths)
+    {
+      if (json_nexthop_global || json_nexthop_ll)
+        {
+          json_nexthops = json_object_new_array();
+
+          if (json_nexthop_global)
+            json_object_array_add(json_nexthops, json_nexthop_global);
+
+          if (json_nexthop_ll)
+            json_object_array_add(json_nexthops, json_nexthop_ll);
+
+          json_object_object_add(json_path, "nexthops", json_nexthops);
+        }
+
+      json_object_array_add(json_paths, json_path);
+    }
+  else
+    {
+    vty_out (vty, "%s", VTY_NEWLINE);
+#if ENABLE_BGP_VNC
+      /* prints an additional line, indented, with VNC info, if present */
+      if ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP))
+        rfapi_vty_out_vncinfo(vty, p, binfo, safi);
+#endif
+    }
 }  
 
 /* called from terminal list command */
 void
-route_vty_out_tmp (struct vty *vty, struct prefix *p,
-		   struct attr *attr, safi_t safi)
+route_vty_out_tmp (struct vty *vty, struct prefix *p, struct attr *attr, safi_t safi,
+                   u_char use_json, json_object *json_ar)
 {
+  json_object *json_status = NULL;
+  json_object *json_net = NULL;
+  char buff[BUFSIZ];
   /* Route status display. */
-  vty_out (vty, "*");
-  vty_out (vty, ">");
-  vty_out (vty, " ");
+  if (use_json)
+    {
+      json_status = json_object_new_object();
+      json_net = json_object_new_object();
+    }
+  else
+    {
+      vty_out (vty, "*");
+      vty_out (vty, ">");
+      vty_out (vty, " ");
+    }
 
   /* print prefix and mask */
-  route_vty_out_route (p, vty);
+  if (use_json)
+    json_object_string_add(json_net, "addrPrefix", inet_ntop (p->family, &p->u.prefix, buff, BUFSIZ));
+  else
+    route_vty_out_route (p, vty);
 
   /* Print attribute */
   if (attr) 
     {
-      if (p->family == AF_INET)
-	{
-	  if ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP))
-	    vty_out (vty, "%-16s",
-                     inet_ntoa (attr->extra->mp_nexthop_global_in));
-	  else
-	    vty_out (vty, "%-16s", inet_ntoa (attr->nexthop));
-	}
-      else if (p->family == AF_INET6)
+      if (use_json)
         {
-          int len;
-          char buf[BUFSIZ];
-          
-          assert (attr->extra);
+          if (p->family == AF_INET &&
+              (safi == SAFI_MPLS_VPN ||
+               safi == SAFI_ENCAP ||
+               !BGP_ATTR_NEXTHOP_AFI_IP6(attr)))
+            {
+              if (safi == SAFI_MPLS_VPN || safi == SAFI_ENCAP)
+                json_object_string_add(json_net, "nextHop", inet_ntoa (attr->extra->mp_nexthop_global_in));
+              else
+                json_object_string_add(json_net, "nextHop", inet_ntoa (attr->nexthop));
+            }
+          else if (p->family == AF_INET6 || BGP_ATTR_NEXTHOP_AFI_IP6(attr))
+            {
+              char buf[BUFSIZ];
 
-          len = vty_out (vty, "%s",
-                         inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
-                         buf, BUFSIZ));
-          len = 16 - len;
-          if (len < 1)
-            vty_out (vty, "%s%*s", VTY_NEWLINE, 36, " ");
+              json_object_string_add(json_net, "netHopGloabal", inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
+                                  buf, BUFSIZ));
+            }
+
+          if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_MULTI_EXIT_DISC))
+            json_object_int_add(json_net, "metric", attr->med);
+
+          if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_LOCAL_PREF))
+            json_object_int_add(json_net, "localPref", attr->local_pref);
+
+          if (attr->extra)
+            json_object_int_add(json_net, "weight", attr->extra->weight);
           else
-            vty_out (vty, "%*s", len, " ");
+            json_object_int_add(json_net, "weight", 0);
+
+          /* Print aspath */
+          if (attr->aspath)
+            json_object_string_add(json_net, "asPath", attr->aspath->str);
+
+          /* Print origin */
+          json_object_string_add(json_net, "bgpOriginCode", bgp_origin_str[attr->origin]);
         }
-
-      if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_MULTI_EXIT_DISC))
-	vty_out (vty, "%10u ", attr->med);
       else
-	vty_out (vty, "          ");
+        {
+          if (p->family == AF_INET &&
+              (safi == SAFI_MPLS_VPN ||
+               safi == SAFI_ENCAP ||
+               !BGP_ATTR_NEXTHOP_AFI_IP6(attr)))
+            {
+              if (safi == SAFI_MPLS_VPN || safi == SAFI_ENCAP)
+                vty_out (vty, "%-16s",
+                         inet_ntoa (attr->extra->mp_nexthop_global_in));
+              else
+                vty_out (vty, "%-16s", inet_ntoa (attr->nexthop));
+            }
+          else if (p->family == AF_INET6 || BGP_ATTR_NEXTHOP_AFI_IP6(attr))
+            {
+              int len;
+              char buf[BUFSIZ];
 
-      if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_LOCAL_PREF))
-	vty_out (vty, "%7u ", attr->local_pref);
-      else
-	vty_out (vty, "       ");
-      
-      vty_out (vty, "%7u ", (attr->extra ? attr->extra->weight : 0));
-      
-      /* Print aspath */
-      if (attr->aspath)
-        aspath_print_vty (vty, "%s", attr->aspath, " ");
+              assert (attr->extra);
 
-      /* Print origin */
-      vty_out (vty, "%s", bgp_origin_str[attr->origin]);
+              len = vty_out (vty, "%s",
+                             inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
+                             buf, BUFSIZ));
+              len = 16 - len;
+              if (len < 1)
+                vty_out (vty, "%s%*s", VTY_NEWLINE, 36, " ");
+              else
+                vty_out (vty, "%*s", len, " ");
+            }
+          if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_MULTI_EXIT_DISC))
+            vty_out (vty, "%10u", attr->med);
+          else
+            vty_out (vty, "          ");
+
+          if (attr->flag & ATTR_FLAG_BIT (BGP_ATTR_LOCAL_PREF))
+            vty_out (vty, "%7u", attr->local_pref);
+          else
+            vty_out (vty, "       ");
+
+          vty_out (vty, "%7u ", (attr->extra ? attr->extra->weight : 0));
+
+          /* Print aspath */
+          if (attr->aspath)
+            aspath_print_vty (vty, "%s", attr->aspath, " ");
+
+          /* Print origin */
+          vty_out (vty, "%s", bgp_origin_str[attr->origin]);
+        }
     }
-
-  vty_out (vty, "%s", VTY_NEWLINE);
+  if (use_json)
+    {
+      json_object_boolean_true_add(json_status, "*");
+      json_object_boolean_true_add(json_status, ">");
+      json_object_object_add(json_net, "appliedStatusSymbols", json_status);
+      char buf_cut[BUFSIZ];
+      json_object_object_add(json_ar, inet_ntop (p->family, &p->u.prefix, buf_cut, BUFSIZ), json_net);
+    }
+  else
+    vty_out (vty, "%s", VTY_NEWLINE);
 }  
 
 void
 route_vty_out_tag (struct vty *vty, struct prefix *p,
-		   struct bgp_info *binfo, int display, safi_t safi)
+		   struct bgp_info *binfo, int display, safi_t safi, json_object *json)
 {
+  json_object *json_out = NULL;
   struct attr *attr;
   u_int32_t label = 0;
   
   if (!binfo->extra)
     return;
+
+  if (json)
+    json_out = json_object_new_object();
   
   /* short status lead text */ 
-  route_vty_short_status_out (vty, binfo);
+  route_vty_short_status_out (vty, binfo, json_out);
     
   /* print prefix and mask */
-  if (! display)
-    route_vty_out_route (p, vty);
-  else
-    vty_out (vty, "%*s", 17, " ");
+  if (json == NULL)
+    {
+      if (! display)
+        route_vty_out_route (p, vty);
+      else
+        vty_out (vty, "%*s", 17, " ");
+    }
 
   /* Print attribute */
   attr = binfo->attr;
   if (attr) 
     {
-      if (p->family == AF_INET)
+      if (p->family == AF_INET
+          && (safi == SAFI_MPLS_VPN || !BGP_ATTR_NEXTHOP_AFI_IP6(attr)))
 	{
-	  if ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP))
-	    vty_out (vty, "%-16s",
-                     inet_ntoa (attr->extra->mp_nexthop_global_in));
+	  if (safi == SAFI_MPLS_VPN || safi == SAFI_ENCAP)
+            {
+              if (json)
+                json_object_string_add(json_out, "mpNexthopGlobalIn", inet_ntoa (attr->extra->mp_nexthop_global_in));
+              else
+                vty_out (vty, "%-16s", inet_ntoa (attr->extra->mp_nexthop_global_in));
+            }
 	  else
-	    vty_out (vty, "%-16s", inet_ntoa (attr->nexthop));
+            {
+              if (json)
+                json_object_string_add(json_out, "nexthop", inet_ntoa (attr->nexthop));
+              else
+                vty_out (vty, "%-16s", inet_ntoa (attr->nexthop));
+            }
 	}
-      else if (p->family == AF_INET6)
+      else if (p->family == AF_INET6 || BGP_ATTR_NEXTHOP_AFI_IP6(attr))
 	{
 	  assert (attr->extra);
-	  char buf[BUFSIZ];
-	  char buf1[BUFSIZ];
-	  if (attr->extra->mp_nexthop_len == 16)
-	    vty_out (vty, "%s", 
-		     inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
-                     buf, BUFSIZ));
-	  else if (attr->extra->mp_nexthop_len == 32)
-	    vty_out (vty, "%s(%s)",
-		     inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
-		                buf, BUFSIZ),
-		     inet_ntop (AF_INET6, &attr->extra->mp_nexthop_local,
-		                buf1, BUFSIZ));
-	  
+	  char buf_a[BUFSIZ];
+	  char buf_b[BUFSIZ];
+          char buf_c[BUFSIZ];
+	  if (attr->extra->mp_nexthop_len == BGP_ATTR_NHLEN_IPV6_GLOBAL)
+            {
+              if (json)
+                json_object_string_add(json_out, "mpNexthopGlobalIn",
+                                       inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global, buf_a, BUFSIZ));
+              else
+                vty_out (vty, "%s",
+                         inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
+                                    buf_a, BUFSIZ));
+            }
+	  else if (attr->extra->mp_nexthop_len == BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL)
+            {
+              if (json)
+                {
+                  inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
+                             buf_a, BUFSIZ);
+                  inet_ntop (AF_INET6, &attr->extra->mp_nexthop_local,
+                             buf_b, BUFSIZ);
+                  sprintf(buf_c, "%s(%s)", buf_a, buf_b);
+                  json_object_string_add(json_out, "mpNexthopGlobalLocal", buf_c);
+                }
+              else
+                vty_out (vty, "%s(%s)",
+                         inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
+                                    buf_a, BUFSIZ),
+                         inet_ntop (AF_INET6, &attr->extra->mp_nexthop_local,
+                                    buf_b, BUFSIZ));
+            }
+
 	}
     }
 
   label = decode_label (binfo->extra->tag);
 
-  vty_out (vty, "notag/%d", label);
-
-  vty_out (vty, "%s", VTY_NEWLINE);
+  if (json)
+    {
+      if (label)
+        json_object_int_add(json_out, "notag", label);
+      json_object_array_add(json, json_out);
+    }
+  else
+    {
+      vty_out (vty, "notag/%d", label);
+      vty_out (vty, "%s", VTY_NEWLINE);
+    }
 }  
 
 /* dampening route */
 static void
-damp_route_vty_out (struct vty *vty, struct prefix *p,
-		    struct bgp_info *binfo, int display, safi_t safi)
+damp_route_vty_out (struct vty *vty, struct prefix *p, struct bgp_info *binfo,
+                    int display, safi_t safi, u_char use_json, json_object *json)
 {
   struct attr *attr;
   int len;
   char timebuf[BGP_UPTIME_LEN];
 
   /* short status lead text */ 
-  route_vty_short_status_out (vty, binfo);
+  route_vty_short_status_out (vty, binfo, json);
   
   /* print prefix and mask */
-  if (! display)
-    route_vty_out_route (p, vty);
-  else
-    vty_out (vty, "%*s", 17, " ");
+  if (!use_json)
+    {
+      if (! display)
+        route_vty_out_route (p, vty);
+      else
+        vty_out (vty, "%*s", 17, " ");
+    }
 
   len = vty_out (vty, "%s", binfo->peer->host);
   len = 17 - len;
   if (len < 1)
-    vty_out (vty, "%s%*s", VTY_NEWLINE, 34, " ");
+    {
+      if (!use_json)
+        vty_out (vty, "%s%*s", VTY_NEWLINE, 34, " ");
+    }
   else
-    vty_out (vty, "%*s", len, " ");
+    {
+      if (use_json)
+        json_object_int_add(json, "peerHost", len);
+      else
+        vty_out (vty, "%*s", len, " ");
+    }
 
-  vty_out (vty, "%s ", bgp_damp_reuse_time_vty (vty, binfo, timebuf, BGP_UPTIME_LEN));
+  if (use_json)
+    bgp_damp_reuse_time_vty (vty, binfo, timebuf, BGP_UPTIME_LEN, use_json, json);
+  else
+    vty_out (vty, "%s ", bgp_damp_reuse_time_vty (vty, binfo, timebuf, BGP_UPTIME_LEN, use_json, json));
 
   /* Print attribute */
   attr = binfo->attr;
@@ -6208,18 +6370,27 @@ damp_route_vty_out (struct vty *vty, struct prefix *p,
     {
       /* Print aspath */
       if (attr->aspath)
-	aspath_print_vty (vty, "%s", attr->aspath, " ");
+        {
+          if (use_json)
+            json_object_string_add(json, "asPath", attr->aspath->str);
+          else
+            aspath_print_vty (vty, "%s", attr->aspath, " ");
+        }
 
       /* Print origin */
-      vty_out (vty, "%s", bgp_origin_str[attr->origin]);
+      if (use_json)
+        json_object_string_add(json, "origin", bgp_origin_str[attr->origin]);
+      else
+        vty_out (vty, "%s", bgp_origin_str[attr->origin]);
     }
-  vty_out (vty, "%s", VTY_NEWLINE);
+  if (!use_json)
+    vty_out (vty, "%s", VTY_NEWLINE);
 }
 
 /* flap route */
 static void
-flap_route_vty_out (struct vty *vty, struct prefix *p,
-		    struct bgp_info *binfo, int display, safi_t safi)
+flap_route_vty_out (struct vty *vty, struct prefix *p, struct bgp_info *binfo,
+                    int display, safi_t safi, u_char use_json, json_object *json)
 {
   struct attr *attr;
   struct bgp_damp_info *bdi;
@@ -6232,36 +6403,66 @@ flap_route_vty_out (struct vty *vty, struct prefix *p,
   bdi = binfo->extra->damp_info;
 
   /* short status lead text */
-  route_vty_short_status_out (vty, binfo);
+  route_vty_short_status_out (vty, binfo, json);
   
   /* print prefix and mask */
-  if (! display)
-    route_vty_out_route (p, vty);
-  else
-    vty_out (vty, "%*s", 17, " ");
+  if (!use_json)
+    {
+      if (! display)
+        route_vty_out_route (p, vty);
+      else
+        vty_out (vty, "%*s", 17, " ");
+    }
 
   len = vty_out (vty, "%s", binfo->peer->host);
   len = 16 - len;
   if (len < 1)
-    vty_out (vty, "%s%*s", VTY_NEWLINE, 33, " ");
+    {
+      if (!use_json)
+        vty_out (vty, "%s%*s", VTY_NEWLINE, 33, " ");
+    }
   else
-    vty_out (vty, "%*s", len, " ");
+    {
+      if (use_json)
+        json_object_int_add(json, "peerHost", len);
+      else
+        vty_out (vty, "%*s", len, " ");
+    }
 
   len = vty_out (vty, "%d", bdi->flap);
   len = 5 - len;
   if (len < 1)
-    vty_out (vty, " ");
+    {
+      if (!use_json)
+        vty_out (vty, " ");
+    }
   else
-    vty_out (vty, "%*s ", len, " ");
-    
-  vty_out (vty, "%s ", peer_uptime (bdi->start_time,
-	   timebuf, BGP_UPTIME_LEN));
+    {
+      if (use_json)
+        json_object_int_add(json, "bdiFlap", len);
+      else
+        vty_out (vty, "%*s", len, " ");
+    }
+
+  if (use_json)
+    peer_uptime (bdi->start_time, timebuf, BGP_UPTIME_LEN, use_json, json);
+  else
+    vty_out (vty, "%s ", peer_uptime (bdi->start_time,
+             timebuf, BGP_UPTIME_LEN, 0, NULL));
 
   if (CHECK_FLAG (binfo->flags, BGP_INFO_DAMPED)
       && ! CHECK_FLAG (binfo->flags, BGP_INFO_HISTORY))
-    vty_out (vty, "%s ", bgp_damp_reuse_time_vty (vty, binfo, timebuf, BGP_UPTIME_LEN));
+    {
+      if (use_json)
+        bgp_damp_reuse_time_vty (vty, binfo, timebuf, BGP_UPTIME_LEN, use_json, json);
+      else
+        vty_out (vty, "%s ", bgp_damp_reuse_time_vty (vty, binfo, timebuf, BGP_UPTIME_LEN, use_json, json));
+    }
   else
-    vty_out (vty, "%*s ", 8, " ");
+    {
+      if (!use_json)
+        vty_out (vty, "%*s ", 8, " ");
+    }
 
   /* Print attribute */
   attr = binfo->attr;
@@ -6269,26 +6470,110 @@ flap_route_vty_out (struct vty *vty, struct prefix *p,
     {
       /* Print aspath */
       if (attr->aspath)
-	aspath_print_vty (vty, "%s", attr->aspath, " ");
+        {
+          if (use_json)
+            json_object_string_add(json, "asPath", attr->aspath->str);
+          else
+            aspath_print_vty (vty, "%s", attr->aspath, " ");
+        }
 
       /* Print origin */
-      vty_out (vty, "%s", bgp_origin_str[attr->origin]);
+      if (use_json)
+        json_object_string_add(json, "origin", bgp_origin_str[attr->origin]);
+      else
+        vty_out (vty, "%s", bgp_origin_str[attr->origin]);
     }
-  vty_out (vty, "%s", VTY_NEWLINE);
+  if (!use_json)
+    vty_out (vty, "%s", VTY_NEWLINE);
+}
+
+static void
+route_vty_out_advertised_to (struct vty *vty, struct peer *peer, int *first,
+                             const char *header, json_object *json_adv_to)
+{
+  char buf1[INET6_ADDRSTRLEN];
+  json_object *json_peer = NULL;
+
+  if (json_adv_to)
+    {
+      /* 'advertised-to' is a dictionary of peers we have advertised this
+       * prefix too.  The key is the peer's IP or swpX, the value is the
+       * hostname if we know it and "" if not.
+       */
+      json_peer = json_object_new_object();
+
+      if (peer->hostname)
+        json_object_string_add(json_peer, "hostname", peer->hostname);
+
+      if (peer->conf_if)
+        json_object_object_add(json_adv_to, peer->conf_if, json_peer);
+      else
+        json_object_object_add(json_adv_to,
+                               sockunion2str (&peer->su, buf1, SU_ADDRSTRLEN),
+                               json_peer);
+    }
+  else
+    {
+      if (*first)
+        {
+          vty_out (vty, "%s", header);
+          *first = 0;
+        }
+
+      if (peer->hostname && bgp_flag_check(peer->bgp, BGP_FLAG_SHOW_HOSTNAME))
+        {
+          if (peer->conf_if)
+            vty_out (vty, " %s(%s)", peer->hostname, peer->conf_if);
+          else
+            vty_out (vty, " %s(%s)", peer->hostname,
+                     sockunion2str (&peer->su, buf1, SU_ADDRSTRLEN));
+        }
+      else
+        {
+          if (peer->conf_if)
+            vty_out (vty, " %s", peer->conf_if);
+          else
+            vty_out (vty, " %s", sockunion2str (&peer->su, buf1, SU_ADDRSTRLEN));
+        }
+    }
 }
 
 static void
 route_vty_out_detail (struct vty *vty, struct bgp *bgp, struct prefix *p, 
-		      struct bgp_info *binfo, afi_t afi, safi_t safi)
+		      struct bgp_info *binfo, afi_t afi, safi_t safi,
+                      json_object *json_paths)
 {
   char buf[INET6_ADDRSTRLEN];
   char buf1[BUFSIZ];
   struct attr *attr;
   int sockunion_vty_out (struct vty *, union sockunion *);
-#ifdef HAVE_CLOCK_MONOTONIC
   time_t tbuf;
-#endif
-	
+  json_object *json_bestpath = NULL;
+  json_object *json_cluster_list = NULL;
+  json_object *json_cluster_list_list = NULL;
+  json_object *json_ext_community = NULL;
+  json_object *json_last_update = NULL;
+  json_object *json_nexthop_global = NULL;
+  json_object *json_nexthop_ll = NULL;
+  json_object *json_nexthops = NULL;
+  json_object *json_path = NULL;
+  json_object *json_peer = NULL;
+  json_object *json_string = NULL;
+  json_object *json_adv_to = NULL;
+  int first = 0;
+  struct listnode *node, *nnode;
+  struct peer *peer;
+  int addpath_capable;
+  int has_adj;
+  unsigned int first_as;
+
+  if (json_paths)
+    {
+      json_path = json_object_new_object();
+      json_peer = json_object_new_object();
+      json_nexthop_global = json_object_new_object();
+    }
+
   attr = binfo->attr;
 
   if (attr)
@@ -6296,178 +6581,635 @@ route_vty_out_detail (struct vty *vty, struct bgp *bgp, struct prefix *p,
       /* Line1 display AS-path, Aggregator */
       if (attr->aspath)
 	{
-	  vty_out (vty, "  ");
-	  if (aspath_count_hops (attr->aspath) == 0)
-	    vty_out (vty, "Local");
-	  else
-	    aspath_print_vty (vty, "%s", attr->aspath, "");
+          if (json_paths)
+           {
+            json_object_lock(attr->aspath->json);
+            json_object_object_add(json_path, "aspath", attr->aspath->json);
+           }
+          else
+            {
+              if (attr->aspath->segments)
+                aspath_print_vty (vty, "  %s", attr->aspath, "");
+              else
+                vty_out (vty, "  Local");
+            }
 	}
 
       if (CHECK_FLAG (binfo->flags, BGP_INFO_REMOVED))
-        vty_out (vty, ", (removed)");
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "removed");
+          else
+            vty_out (vty, ", (removed)");
+        }
+
       if (CHECK_FLAG (binfo->flags, BGP_INFO_STALE))
-	vty_out (vty, ", (stale)");
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "stale");
+          else
+	    vty_out (vty, ", (stale)");
+        }
+
       if (CHECK_FLAG (attr->flag, ATTR_FLAG_BIT (BGP_ATTR_AGGREGATOR)))
-	vty_out (vty, ", (aggregated by %u %s)", 
-	         attr->extra->aggregator_as,
-		 inet_ntoa (attr->extra->aggregator_addr));
+        {
+          if (json_paths)
+            {
+              json_object_int_add(json_path, "aggregatorAs", attr->extra->aggregator_as);
+              json_object_string_add(json_path, "aggregatorId", inet_ntoa (attr->extra->aggregator_addr));
+            }
+          else
+            {
+	      vty_out (vty, ", (aggregated by %u %s)",
+	               attr->extra->aggregator_as,
+		       inet_ntoa (attr->extra->aggregator_addr));
+            }
+        }
+
       if (CHECK_FLAG (binfo->peer->af_flags[afi][safi], PEER_FLAG_REFLECTOR_CLIENT))
-	vty_out (vty, ", (Received from a RR-client)");
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "rxedFromRrClient");
+          else
+	    vty_out (vty, ", (Received from a RR-client)");
+        }
+
       if (CHECK_FLAG (binfo->peer->af_flags[afi][safi], PEER_FLAG_RSERVER_CLIENT))
-	vty_out (vty, ", (Received from a RS-client)");
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "rxedFromRsClient");
+          else
+	    vty_out (vty, ", (Received from a RS-client)");
+        }
+
       if (CHECK_FLAG (binfo->flags, BGP_INFO_HISTORY))
-	vty_out (vty, ", (history entry)");
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "dampeningHistoryEntry");
+          else
+	    vty_out (vty, ", (history entry)");
+        }
       else if (CHECK_FLAG (binfo->flags, BGP_INFO_DAMPED))
-	vty_out (vty, ", (suppressed due to dampening)");
-      vty_out (vty, "%s", VTY_NEWLINE);
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "dampeningSuppressed");
+          else
+	    vty_out (vty, ", (suppressed due to dampening)");
+        }
+
+      if (!json_paths)
+        vty_out (vty, "%s", VTY_NEWLINE);
 	  
       /* Line2 display Next-hop, Neighbor, Router-id */
-      if (p->family == AF_INET)
+      /* Display the nexthop */
+      if (p->family == AF_INET &&
+          (safi == SAFI_MPLS_VPN ||
+           safi == SAFI_ENCAP ||
+           !BGP_ATTR_NEXTHOP_AFI_IP6(attr)))
 	{
-	  vty_out (vty, "    %s", ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP)) ?
-		   inet_ntoa (attr->extra->mp_nexthop_global_in) :
-		   inet_ntoa (attr->nexthop));
+          if (safi == SAFI_MPLS_VPN || safi == SAFI_ENCAP)
+            {
+              if (json_paths)
+                json_object_string_add(json_nexthop_global, "ip", inet_ntoa (attr->extra->mp_nexthop_global_in));
+              else
+	        vty_out (vty, "    %s", inet_ntoa (attr->extra->mp_nexthop_global_in));
+            }
+          else
+            {
+              if (json_paths)
+                json_object_string_add(json_nexthop_global, "ip", inet_ntoa (attr->nexthop));
+              else
+	        vty_out (vty, "    %s", inet_ntoa (attr->nexthop));
+            }
+
+          if (json_paths)
+            json_object_string_add(json_nexthop_global, "afi", "ipv4");
 	}
       else
 	{
 	  assert (attr->extra);
-	  vty_out (vty, "    %s",
-		   inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
-			      buf, INET6_ADDRSTRLEN));
+          if (json_paths)
+            {
+              json_object_string_add(json_nexthop_global, "ip",
+                                     inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
+                                                buf, INET6_ADDRSTRLEN));
+              json_object_string_add(json_nexthop_global, "afi", "ipv6");
+              json_object_string_add(json_nexthop_global, "scope", "global");
+            }
+          else
+            {
+	      vty_out (vty, "    %s",
+		       inet_ntop (AF_INET6, &attr->extra->mp_nexthop_global,
+			          buf, INET6_ADDRSTRLEN));
+            }
 	}
 
+      /* Display the IGP cost or 'inaccessible' */
+      if (! CHECK_FLAG (binfo->flags, BGP_INFO_VALID))
+        {
+          if (json_paths)
+            json_object_boolean_false_add(json_nexthop_global, "accessible");
+          else
+            vty_out (vty, " (inaccessible)");
+        }
+      else
+        {
+          if (binfo->extra && binfo->extra->igpmetric)
+            {
+              if (json_paths)
+                json_object_int_add(json_nexthop_global, "metric", binfo->extra->igpmetric);
+              else
+                vty_out (vty, " (metric %u)", binfo->extra->igpmetric);
+            }
+
+          /* IGP cost is 0, display this only for json */
+          else
+            {
+              if (json_paths)
+                json_object_int_add(json_nexthop_global, "metric", 0);
+            }
+
+          if (json_paths)
+            json_object_boolean_true_add(json_nexthop_global, "accessible");
+        }
+
+      /* Display peer "from" output */
+      /* This path was originated locally */
       if (binfo->peer == bgp->peer_self)
 	{
-	  vty_out (vty, " from %s ", 
-		   p->family == AF_INET ? "0.0.0.0" : "::");
-	  vty_out (vty, "(%s)", inet_ntoa(bgp->router_id));
+
+          if (p->family == AF_INET && !BGP_ATTR_NEXTHOP_AFI_IP6(attr))
+            {
+              if (json_paths)
+                json_object_string_add(json_peer, "peerId", "0.0.0.0");
+              else
+	        vty_out (vty, " from 0.0.0.0 ");
+            }
+          else
+            {
+              if (json_paths)
+                json_object_string_add(json_peer, "peerId", "::");
+              else
+	        vty_out (vty, " from :: ");
+            }
+
+          if (json_paths)
+            json_object_string_add(json_peer, "routerId", inet_ntoa(bgp->router_id));
+          else
+	    vty_out (vty, "(%s)", inet_ntoa(bgp->router_id));
 	}
+
+      /* We RXed this path from one of our peers */
       else
 	{
-	  if (! CHECK_FLAG (binfo->flags, BGP_INFO_VALID))
-	    vty_out (vty, " (inaccessible)"); 
-	  else if (binfo->extra && binfo->extra->igpmetric)
-	    vty_out (vty, " (metric %u)", binfo->extra->igpmetric);
-	  if (!sockunion2str (&binfo->peer->su, buf, sizeof(buf))) {
-	    buf[0] = '?';
-	    buf[1] = 0;
-	  }
-	  vty_out (vty, " from %s", buf);
-	  if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_ORIGINATOR_ID))
-	    vty_out (vty, " (%s)", inet_ntoa (attr->extra->originator_id));
-	  else
-	    vty_out (vty, " (%s)", inet_ntop (AF_INET, &binfo->peer->remote_id, buf1, BUFSIZ));
-	}
-      vty_out (vty, "%s", VTY_NEWLINE);
 
-      /* display nexthop local */
-      if (attr->extra && attr->extra->mp_nexthop_len == 32)
-	{
-	  vty_out (vty, "    (%s)%s",
-		   inet_ntop (AF_INET6, &attr->extra->mp_nexthop_local,
-			      buf, INET6_ADDRSTRLEN),
-		   VTY_NEWLINE);
+          if (json_paths)
+            {
+              json_object_string_add(json_peer, "peerId", sockunion2str (&binfo->peer->su, buf, SU_ADDRSTRLEN));
+              json_object_string_add(json_peer, "routerId", inet_ntop (AF_INET, &binfo->peer->remote_id, buf1, BUFSIZ));
+
+              if (binfo->peer->hostname)
+                json_object_string_add(json_peer, "hostname", binfo->peer->hostname);
+
+              if (binfo->peer->domainname)
+                json_object_string_add(json_peer, "domainname", binfo->peer->domainname);
+
+              if (binfo->peer->conf_if)
+                json_object_string_add(json_peer, "interface", binfo->peer->conf_if);
+            }
+          else
+            {
+              if (binfo->peer->conf_if)
+		{
+		  if (binfo->peer->hostname &&
+		      bgp_flag_check(binfo->peer->bgp, BGP_FLAG_SHOW_HOSTNAME))
+		    vty_out (vty, " from %s(%s)", binfo->peer->hostname,
+			     binfo->peer->conf_if);
+		  else
+		    vty_out (vty, " from %s", binfo->peer->conf_if);
+		}
+              else
+		{
+		  if (binfo->peer->hostname &&
+		      bgp_flag_check(binfo->peer->bgp, BGP_FLAG_SHOW_HOSTNAME))
+		    vty_out (vty, " from %s(%s)", binfo->peer->hostname,
+			     binfo->peer->host);
+		  else
+		    vty_out (vty, " from %s", sockunion2str (&binfo->peer->su, buf, SU_ADDRSTRLEN));
+		}
+
+              if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_ORIGINATOR_ID))
+                vty_out (vty, " (%s)", inet_ntoa (attr->extra->originator_id));
+              else
+                vty_out (vty, " (%s)", inet_ntop (AF_INET, &binfo->peer->remote_id, buf1, BUFSIZ));
+            }
 	}
+
+      if (!json_paths)
+        vty_out (vty, "%s", VTY_NEWLINE);
+
+      /* display the link-local nexthop */
+      if (attr->extra && attr->extra->mp_nexthop_len == BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL)
+	{
+          if (json_paths)
+            {
+              json_nexthop_ll = json_object_new_object();
+              json_object_string_add(json_nexthop_ll, "ip",
+                                     inet_ntop (AF_INET6, &attr->extra->mp_nexthop_local,
+                                                buf, INET6_ADDRSTRLEN));
+              json_object_string_add(json_nexthop_ll, "afi", "ipv6");
+              json_object_string_add(json_nexthop_ll, "scope", "link-local");
+
+              json_object_boolean_true_add(json_nexthop_ll, "accessible");
+
+              if (!attr->extra->mp_nexthop_prefer_global)
+                json_object_boolean_true_add(json_nexthop_ll, "used");
+              else
+                json_object_boolean_true_add(json_nexthop_global, "used");
+            }
+          else
+            {
+	      vty_out (vty, "    (%s) %s%s",
+                       inet_ntop (AF_INET6, &attr->extra->mp_nexthop_local,
+			          buf, INET6_ADDRSTRLEN),
+                       attr->extra->mp_nexthop_prefer_global ?
+                                   "(prefer-global)" : "(used)",
+		       VTY_NEWLINE);
+            }
+	}
+      /* If we do not have a link-local nexthop then we must flag the global as "used" */
+      else
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_nexthop_global, "used");
+        }
 
       /* Line 3 display Origin, Med, Locpref, Weight, Tag, valid, Int/Ext/Local, Atomic, best */
-      vty_out (vty, "      Origin %s", bgp_origin_long_str[attr->origin]);
+      if (json_paths)
+        json_object_string_add(json_path, "origin", bgp_origin_long_str[attr->origin]);
+      else
+        vty_out (vty, "      Origin %s", bgp_origin_long_str[attr->origin]);
 	  
       if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_MULTI_EXIT_DISC))
-	vty_out (vty, ", metric %u", attr->med);
+        {
+          if (json_paths)
+            json_object_int_add(json_path, "med", attr->med);
+          else
+	    vty_out (vty, ", metric %u", attr->med);
+        }
 	  
       if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_LOCAL_PREF))
-	vty_out (vty, ", localpref %u", attr->local_pref);
+        {
+          if (json_paths)
+            json_object_int_add(json_path, "localpref", attr->local_pref);
+          else
+	    vty_out (vty, ", localpref %u", attr->local_pref);
+        }
       else
-	vty_out (vty, ", localpref %u", bgp->default_local_pref);
+        {
+          if (json_paths)
+            json_object_int_add(json_path, "localpref", bgp->default_local_pref);
+          else
+	    vty_out (vty, ", localpref %u", bgp->default_local_pref);
+        }
 
       if (attr->extra && attr->extra->weight != 0)
-	vty_out (vty, ", weight %u", attr->extra->weight);
+        {
+          if (json_paths)
+            json_object_int_add(json_path, "weight", attr->extra->weight);
+          else
+	    vty_out (vty, ", weight %u", attr->extra->weight);
+        }
 
       if (attr->extra && attr->extra->tag != 0)
-        vty_out (vty, ", tag %d", attr->extra->tag);
+        {
+          if (json_paths)
+            json_object_int_add(json_path, "tag", attr->extra->tag);
+          else
+            vty_out (vty, ", tag %"ROUTE_TAG_PRI, attr->extra->tag);
+        }
 	
       if (! CHECK_FLAG (binfo->flags, BGP_INFO_VALID))
-	vty_out (vty, ", invalid");
+        {
+          if (json_paths)
+            json_object_boolean_false_add(json_path, "valid");
+          else
+	    vty_out (vty, ", invalid");
+        }
       else if (! CHECK_FLAG (binfo->flags, BGP_INFO_HISTORY))
-	vty_out (vty, ", valid");
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "valid");
+          else
+	    vty_out (vty, ", valid");
+        }
 
       if (binfo->peer != bgp->peer_self)
 	{
-	  if (binfo->peer->as == binfo->peer->local_as)
-	    vty_out (vty, ", internal");
-	  else 
-	    vty_out (vty, ", %s", 
-		     (bgp_confederation_peers_check(bgp, binfo->peer->as) ? "confed-external" : "external"));
+          if (binfo->peer->as == binfo->peer->local_as)
+            {
+              if (CHECK_FLAG(bgp->config, BGP_CONFIG_CONFEDERATION))
+                {
+                  if (json_paths)
+                    json_object_string_add(json_peer, "type", "confed-internal");
+                  else
+                    vty_out (vty, ", confed-internal");
+                }
+              else
+                {
+                  if (json_paths)
+                    json_object_string_add(json_peer, "type", "internal");
+                  else
+                    vty_out (vty, ", internal");
+                }
+            }
+          else
+            {
+              if (bgp_confederation_peers_check(bgp, binfo->peer->as))
+                {
+                  if (json_paths)
+                    json_object_string_add(json_peer, "type", "confed-external");
+                  else
+                    vty_out (vty, ", confed-external");
+                }
+              else
+                {
+                  if (json_paths)
+                    json_object_string_add(json_peer, "type", "external");
+                  else
+                    vty_out (vty, ", external");
+                }
+            }
 	}
       else if (binfo->sub_type == BGP_ROUTE_AGGREGATE)
-	vty_out (vty, ", aggregated, local");
+        {
+          if (json_paths)
+            {
+              json_object_boolean_true_add(json_path, "aggregated");
+              json_object_boolean_true_add(json_path, "local");
+            }
+          else
+            {
+	      vty_out (vty, ", aggregated, local");
+            }
+        }
       else if (binfo->type != ZEBRA_ROUTE_BGP)
-	vty_out (vty, ", sourced");
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "sourced");
+          else
+	    vty_out (vty, ", sourced");
+        }
       else
-	vty_out (vty, ", sourced, local");
+        {
+          if (json_paths)
+            {
+              json_object_boolean_true_add(json_path, "sourced");
+              json_object_boolean_true_add(json_path, "local");
+            }
+          else
+            {
+	      vty_out (vty, ", sourced, local");
+            }
+        }
 
       if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_ATOMIC_AGGREGATE))
-	vty_out (vty, ", atomic-aggregate");
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "atomicAggregate");
+          else
+	    vty_out (vty, ", atomic-aggregate");
+        }
 	  
       if (CHECK_FLAG (binfo->flags, BGP_INFO_MULTIPATH) ||
 	  (CHECK_FLAG (binfo->flags, BGP_INFO_SELECTED) &&
 	   bgp_info_mpath_count (binfo)))
-	vty_out (vty, ", multipath");
+        {
+          if (json_paths)
+            json_object_boolean_true_add(json_path, "multipath");
+          else
+	    vty_out (vty, ", multipath");
+        }
+
+      // Mark the bestpath(s)
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_DMED_SELECTED))
+        {
+          first_as = aspath_get_first_as(attr->aspath);
+
+          if (json_paths)
+            {
+              if (!json_bestpath)
+                json_bestpath = json_object_new_object();
+              json_object_int_add(json_bestpath, "bestpathFromAs", first_as);
+            }
+          else
+            {
+              if (first_as)
+	        vty_out (vty, ", bestpath-from-AS %d", first_as);
+              else
+	        vty_out (vty, ", bestpath-from-AS Local");
+            }
+        }
 
       if (CHECK_FLAG (binfo->flags, BGP_INFO_SELECTED))
-	vty_out (vty, ", best");
+        {
+          if (json_paths)
+            {
+              if (!json_bestpath)
+                json_bestpath = json_object_new_object();
+              json_object_boolean_true_add(json_bestpath, "overall");
+            }
+          else
+	    vty_out (vty, ", best");
+        }
 
-      vty_out (vty, "%s", VTY_NEWLINE);
+      if (json_bestpath)
+        json_object_object_add(json_path, "bestpath", json_bestpath);
+
+      if (!json_paths)
+        vty_out (vty, "%s", VTY_NEWLINE);
 	  
       /* Line 4 display Community */
       if (attr->community)
-	vty_out (vty, "      Community: %s%s", attr->community->str,
-		 VTY_NEWLINE);
+        {
+          if (json_paths)
+            {
+              json_object_lock(attr->community->json);
+              json_object_object_add(json_path, "community", attr->community->json);
+            }
+          else
+            {
+	      vty_out (vty, "      Community: %s%s", attr->community->str,
+		       VTY_NEWLINE);
+            }
+        }
 	  
       /* Line 5 display Extended-community */
       if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_EXT_COMMUNITIES))
-	vty_out (vty, "      Extended Community: %s%s", 
-	         attr->extra->ecommunity->str, VTY_NEWLINE);
-	  
+        {
+          if (json_paths)
+            {
+              json_ext_community = json_object_new_object();
+              json_object_string_add(json_ext_community, "string", attr->extra->ecommunity->str);
+              json_object_object_add(json_path, "extendedCommunity", json_ext_community);
+            }
+          else
+            {
+	       vty_out (vty, "      Extended Community: %s%s",
+	                attr->extra->ecommunity->str, VTY_NEWLINE);
+            }
+        }
+
       /* Line 6 display Originator, Cluster-id */
       if ((attr->flag & ATTR_FLAG_BIT(BGP_ATTR_ORIGINATOR_ID)) ||
 	  (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_CLUSTER_LIST)))
 	{
 	  assert (attr->extra);
 	  if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_ORIGINATOR_ID))
-	    vty_out (vty, "      Originator: %s", 
-	             inet_ntoa (attr->extra->originator_id));
+            {
+              if (json_paths)
+                json_object_string_add(json_path, "originatorId", inet_ntoa (attr->extra->originator_id));
+              else
+	        vty_out (vty, "      Originator: %s",
+	                 inet_ntoa (attr->extra->originator_id));
+            }
 
 	  if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_CLUSTER_LIST))
 	    {
 	      int i;
-	      vty_out (vty, ", Cluster list: ");
-	      for (i = 0; i < attr->extra->cluster->length / 4; i++)
-		vty_out (vty, "%s ", 
-		         inet_ntoa (attr->extra->cluster->list[i]));
-	    }
-	  vty_out (vty, "%s", VTY_NEWLINE);
-	}
-      
-      if (binfo->extra && binfo->extra->damp_info)
-	bgp_damp_info_vty (vty, binfo);
 
-      /* Line 7 display Uptime */
-#ifdef HAVE_CLOCK_MONOTONIC
+              if (json_paths)
+                {
+                  json_cluster_list = json_object_new_object();
+                  json_cluster_list_list = json_object_new_array();
+
+	          for (i = 0; i < attr->extra->cluster->length / 4; i++)
+                    {
+                      json_string = json_object_new_string(inet_ntoa (attr->extra->cluster->list[i]));
+                      json_object_array_add(json_cluster_list_list, json_string);
+                    }
+
+                  /* struct cluster_list does not have "str" variable like
+                   * aspath and community do.  Add this someday if someone
+                   * asks for it.
+                  json_object_string_add(json_cluster_list, "string", attr->extra->cluster->str);
+                   */
+                  json_object_object_add(json_cluster_list, "list", json_cluster_list_list);
+                  json_object_object_add(json_path, "clusterList", json_cluster_list);
+                }
+              else
+                {
+	          vty_out (vty, ", Cluster list: ");
+
+	          for (i = 0; i < attr->extra->cluster->length / 4; i++)
+                    {
+		       vty_out (vty, "%s ",
+		                inet_ntoa (attr->extra->cluster->list[i]));
+                    }
+                }
+	    }
+
+          if (!json_paths)
+	    vty_out (vty, "%s", VTY_NEWLINE);
+	}
+
+      if (binfo->extra && binfo->extra->damp_info)
+	bgp_damp_info_vty (vty, binfo, json_path);
+
+      /* Line 7 display Addpath IDs */
+      if (binfo->addpath_rx_id || binfo->addpath_tx_id)
+        {
+          if (json_paths)
+            {
+              json_object_int_add(json_path, "addpathRxId", binfo->addpath_rx_id);
+              json_object_int_add(json_path, "addpathTxId", binfo->addpath_tx_id);
+            }
+          else
+            {
+              vty_out (vty, "      AddPath ID: RX %u, TX %u%s",
+                       binfo->addpath_rx_id, binfo->addpath_tx_id,
+                       VTY_NEWLINE);
+            }
+        }
+
+      /* If we used addpath to TX a non-bestpath we need to display
+       * "Advertised to" on a path-by-path basis */
+      if (bgp->addpath_tx_used[afi][safi])
+        {
+          first = 1;
+
+          for (ALL_LIST_ELEMENTS (bgp->peer, node, nnode, peer))
+            {
+              addpath_capable = bgp_addpath_encode_tx (peer, afi, safi);
+              has_adj = bgp_adj_out_lookup (peer, binfo->net, binfo->addpath_tx_id);
+
+              if ((addpath_capable && has_adj) ||
+                  (!addpath_capable && has_adj && CHECK_FLAG (binfo->flags, BGP_INFO_SELECTED)))
+                {
+                    if (json_path && !json_adv_to)
+                      json_adv_to = json_object_new_object();
+
+                    route_vty_out_advertised_to(vty, peer, &first,
+                                                "      Advertised to:",
+                                                json_adv_to);
+                }
+            }
+
+          if (json_path)
+            {
+              if (json_adv_to)
+                {
+                  json_object_object_add(json_path, "advertisedTo", json_adv_to);
+                }
+            }
+          else
+            {
+              if (!first)
+                {
+	          vty_out (vty, "%s", VTY_NEWLINE);
+                }
+            }
+        }
+
+      /* Line 8 display Uptime */
       tbuf = time(NULL) - (bgp_clock() - binfo->uptime);
-      vty_out (vty, "      Last update: %s", ctime(&tbuf));
-#else
-      vty_out (vty, "      Last update: %s", ctime(&binfo->uptime));
-#endif /* HAVE_CLOCK_MONOTONIC */
+      if (json_paths)
+        {
+          json_last_update = json_object_new_object();
+          json_object_int_add(json_last_update, "epoch", tbuf);
+          json_object_string_add(json_last_update, "string", ctime(&tbuf));
+          json_object_object_add(json_path, "lastUpdate", json_last_update);
+        }
+      else
+        vty_out (vty, "      Last update: %s", ctime(&tbuf));
     }
-  vty_out (vty, "%s", VTY_NEWLINE);
+
+  /* We've constructed the json object for this path, add it to the json
+   * array of paths
+   */
+  if (json_paths)
+    {
+      if (json_nexthop_global || json_nexthop_ll)
+        {
+          json_nexthops = json_object_new_array();
+
+          if (json_nexthop_global)
+            json_object_array_add(json_nexthops, json_nexthop_global);
+
+          if (json_nexthop_ll)
+            json_object_array_add(json_nexthops, json_nexthop_ll);
+
+          json_object_object_add(json_path, "nexthops", json_nexthops);
+        }
+
+      json_object_object_add(json_path, "peer", json_peer);
+      json_object_array_add(json_paths, json_path);
+    }
+  else
+    vty_out (vty, "%s", VTY_NEWLINE);
 }
 
-#define BGP_SHOW_SCODE_HEADER "Status codes: s suppressed, d damped, "\
-			      "h history, * valid, > best, = multipath,%s"\
-		"              i internal, r RIB-failure, S Stale, R Removed%s"
-#define BGP_SHOW_OCODE_HEADER "Origin codes: i - IGP, e - EGP, ? - incomplete%s%s"
-#define BGP_SHOW_HEADER "   Network          Next Hop            Metric LocPrf Weight Path%s"
+#define BGP_SHOW_HEADER_CSV "Flags, Network, Next Hop, Metric, LocPrf, Weight, Path%s"
 #define BGP_SHOW_DAMP_HEADER "   Network          From             Reuse    Path%s"
 #define BGP_SHOW_FLAP_HEADER "   Network          From            Flaps Duration Reuse    Path%s"
 
@@ -6487,22 +7229,41 @@ enum bgp_show_type
   bgp_show_type_community_list,
   bgp_show_type_community_list_exact,
   bgp_show_type_flap_statistics,
-  bgp_show_type_flap_address,
-  bgp_show_type_flap_prefix,
-  bgp_show_type_flap_cidr_only,
-  bgp_show_type_flap_regexp,
-  bgp_show_type_flap_filter_list,
-  bgp_show_type_flap_prefix_list,
-  bgp_show_type_flap_prefix_longer,
-  bgp_show_type_flap_route_map,
   bgp_show_type_flap_neighbor,
   bgp_show_type_dampend_paths,
   bgp_show_type_damp_neighbor
 };
 
 static int
-bgp_show_table (struct vty *vty, struct bgp_table *table, struct in_addr *router_id,
-	  enum bgp_show_type type, void *output_arg)
+bgp_show_prefix_list (struct vty *vty, const char *name,
+                      const char *prefix_list_str, afi_t afi,
+                      safi_t safi, enum bgp_show_type type);
+static int
+bgp_show_filter_list (struct vty *vty, const char *name,
+                      const char *filter, afi_t afi,
+                      safi_t safi, enum bgp_show_type type);
+static int
+bgp_show_route_map (struct vty *vty, const char *name,
+                    const char *rmap_str, afi_t afi,
+                    safi_t safi, enum bgp_show_type type);
+static int
+bgp_show_community_list (struct vty *vty, const char *name,
+                         const char *com, int exact,
+                         afi_t afi, safi_t safi);
+static int
+bgp_show_prefix_longer (struct vty *vty, const char *name,
+                        const char *prefix, afi_t afi,
+                        safi_t safi, enum bgp_show_type type);
+static int
+bgp_show_regexp (struct vty *vty, const char *regstr, afi_t afi,
+		 safi_t safi, enum bgp_show_type type);
+static int
+bgp_show_community (struct vty *vty, const char *view_name, int argc,
+		    struct cmd_token **argv, int exact, afi_t afi, safi_t safi);
+
+static int
+bgp_show_table (struct vty *vty, struct bgp *bgp, struct bgp_table *table,
+                enum bgp_show_type type, void *output_arg, u_char use_json)
 {
   struct bgp_info *ri;
   struct bgp_node *rn;
@@ -6510,6 +7271,20 @@ bgp_show_table (struct vty *vty, struct bgp_table *table, struct in_addr *router
   int display;
   unsigned long output_count;
   unsigned long total_count;
+  struct prefix *p;
+  char buf[BUFSIZ];
+  char buf2[BUFSIZ];
+  json_object *json_paths = NULL;
+  int first = 1;
+
+  if (use_json)
+    {
+      vty_out (vty, "{ \"vrfId\": %d, \"vrfName\": \"%s\", \"tableVersion\": %" PRId64 ", \"routerId\": \"%s\", \"routes\": { ",
+	       bgp->vrf_id == VRF_UNKNOWN ? -1 : bgp->vrf_id,
+	       bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT ? "Default" : bgp->name,
+	       table->version, inet_ntoa (bgp->router_id));
+      json_paths = json_object_new_object();
+    }
 
   /* This is first entry point, so reset total line. */
   output_count = 0;
@@ -6519,241 +7294,273 @@ bgp_show_table (struct vty *vty, struct bgp_table *table, struct in_addr *router
   for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn)) 
     if (rn->info != NULL)
       {
-	display = 0;
-
-	for (ri = rn->info; ri; ri = ri->next)
+        display = 0;
+	if (!first && use_json)
 	  {
-            total_count++;
-	    if (type == bgp_show_type_flap_statistics
-		|| type == bgp_show_type_flap_address
-		|| type == bgp_show_type_flap_prefix
-		|| type == bgp_show_type_flap_cidr_only
-		|| type == bgp_show_type_flap_regexp
-		|| type == bgp_show_type_flap_filter_list
-		|| type == bgp_show_type_flap_prefix_list
-		|| type == bgp_show_type_flap_prefix_longer
-		|| type == bgp_show_type_flap_route_map
-		|| type == bgp_show_type_flap_neighbor
-		|| type == bgp_show_type_dampend_paths
-		|| type == bgp_show_type_damp_neighbor)
-	      {
-		if (!(ri->extra && ri->extra->damp_info))
-		  continue;
-	      }
-	    if (type == bgp_show_type_regexp
-		|| type == bgp_show_type_flap_regexp)
-	      {
-		regex_t *regex = output_arg;
-		    
-		if (bgp_regexec (regex, ri->attr->aspath) == REG_NOMATCH)
-		  continue;
-	      }
-	    if (type == bgp_show_type_prefix_list
-		|| type == bgp_show_type_flap_prefix_list)
-	      {
-		struct prefix_list *plist = output_arg;
-		    
-		if (prefix_list_apply (plist, &rn->p) != PREFIX_PERMIT)
-		  continue;
-	      }
-	    if (type == bgp_show_type_filter_list
-		|| type == bgp_show_type_flap_filter_list)
-	      {
-		struct as_list *as_list = output_arg;
-
-		if (as_list_apply (as_list, ri->attr->aspath) != AS_FILTER_PERMIT)
-		  continue;
-	      }
-	    if (type == bgp_show_type_route_map
-		|| type == bgp_show_type_flap_route_map)
-	      {
-		struct route_map *rmap = output_arg;
-		struct bgp_info binfo;
-		struct attr dummy_attr;
-		struct attr_extra dummy_extra;
-		int ret;
-
-		dummy_attr.extra = &dummy_extra;
-		bgp_attr_dup (&dummy_attr, ri->attr);
-
-		binfo.peer = ri->peer;
-		binfo.attr = &dummy_attr;
-
-		ret = route_map_apply (rmap, &rn->p, RMAP_BGP, &binfo);
-		if (ret == RMAP_DENYMATCH)
-		  continue;
-	      }
-	    if (type == bgp_show_type_neighbor
-		|| type == bgp_show_type_flap_neighbor
-		|| type == bgp_show_type_damp_neighbor)
-	      {
-		union sockunion *su = output_arg;
-
-		if (ri->peer->su_remote == NULL || ! sockunion_same(ri->peer->su_remote, su))
-		  continue;
-	      }
-	    if (type == bgp_show_type_cidr_only
-		|| type == bgp_show_type_flap_cidr_only)
-	      {
-		u_int32_t destination;
-
-		destination = ntohl (rn->p.u.prefix4.s_addr);
-		if (IN_CLASSC (destination) && rn->p.prefixlen == 24)
-		  continue;
-		if (IN_CLASSB (destination) && rn->p.prefixlen == 16)
-		  continue;
-		if (IN_CLASSA (destination) && rn->p.prefixlen == 8)
-		  continue;
-	      }
-	    if (type == bgp_show_type_prefix_longer
-		|| type == bgp_show_type_flap_prefix_longer)
-	      {
-		struct prefix *p = output_arg;
-
-		if (! prefix_match (p, &rn->p))
-		  continue;
-	      }
-	    if (type == bgp_show_type_community_all)
-	      {
-		if (! ri->attr->community)
-		  continue;
-	      }
-	    if (type == bgp_show_type_community)
-	      {
-		struct community *com = output_arg;
-
-		if (! ri->attr->community ||
-		    ! community_match (ri->attr->community, com))
-		  continue;
-	      }
-	    if (type == bgp_show_type_community_exact)
-	      {
-		struct community *com = output_arg;
-
-		if (! ri->attr->community ||
-		    ! community_cmp (ri->attr->community, com))
-		  continue;
-	      }
-	    if (type == bgp_show_type_community_list)
-	      {
-		struct community_list *list = output_arg;
-
-		if (! community_list_match (ri->attr->community, list))
-		  continue;
-	      }
-	    if (type == bgp_show_type_community_list_exact)
-	      {
-		struct community_list *list = output_arg;
-
-		if (! community_list_exact_match (ri->attr->community, list))
-		  continue;
-	      }
-	    if (type == bgp_show_type_flap_address
-		|| type == bgp_show_type_flap_prefix)
-	      {
-		struct prefix *p = output_arg;
-
-		if (! prefix_match (&rn->p, p))
-		  continue;
-
-		if (type == bgp_show_type_flap_prefix)
-		  if (p->prefixlen != rn->p.prefixlen)
-		    continue;
-	      }
-	    if (type == bgp_show_type_dampend_paths
-		|| type == bgp_show_type_damp_neighbor)
-	      {
-		if (! CHECK_FLAG (ri->flags, BGP_INFO_DAMPED)
-		    || CHECK_FLAG (ri->flags, BGP_INFO_HISTORY))
-		  continue;
-	      }
-
-	    if (header)
-	      {
-		vty_out (vty, "BGP table version is 0, local router ID is %s%s", inet_ntoa (*router_id), VTY_NEWLINE);
-		vty_out (vty, BGP_SHOW_SCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
-		vty_out (vty, BGP_SHOW_OCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
-		if (type == bgp_show_type_dampend_paths
-		    || type == bgp_show_type_damp_neighbor)
-		  vty_out (vty, BGP_SHOW_DAMP_HEADER, VTY_NEWLINE);
-		else if (type == bgp_show_type_flap_statistics
-			 || type == bgp_show_type_flap_address
-			 || type == bgp_show_type_flap_prefix
-			 || type == bgp_show_type_flap_cidr_only
-			 || type == bgp_show_type_flap_regexp
-			 || type == bgp_show_type_flap_filter_list
-			 || type == bgp_show_type_flap_prefix_list
-			 || type == bgp_show_type_flap_prefix_longer
-			 || type == bgp_show_type_flap_route_map
-			 || type == bgp_show_type_flap_neighbor)
-		  vty_out (vty, BGP_SHOW_FLAP_HEADER, VTY_NEWLINE);
-		else
-		  vty_out (vty, BGP_SHOW_HEADER, VTY_NEWLINE);
-		header = 0;
-	      }
-
-	    if (type == bgp_show_type_dampend_paths
-		|| type == bgp_show_type_damp_neighbor)
-	      damp_route_vty_out (vty, &rn->p, ri, display, SAFI_UNICAST);
-	    else if (type == bgp_show_type_flap_statistics
-		     || type == bgp_show_type_flap_address
-		     || type == bgp_show_type_flap_prefix
-		     || type == bgp_show_type_flap_cidr_only
-		     || type == bgp_show_type_flap_regexp
-		     || type == bgp_show_type_flap_filter_list
-		     || type == bgp_show_type_flap_prefix_list
-		     || type == bgp_show_type_flap_prefix_longer
-		     || type == bgp_show_type_flap_route_map
-		     || type == bgp_show_type_flap_neighbor)
-	      flap_route_vty_out (vty, &rn->p, ri, display, SAFI_UNICAST);
-	    else
-	      route_vty_out (vty, &rn->p, ri, display, SAFI_UNICAST);
-	    display++;
+	    vty_out (vty, ",");
 	  }
-	if (display)
-	  output_count++;
-      }
+        if (use_json)
+          json_paths = json_object_new_array();
+        else
+          json_paths = NULL;
 
-  /* No route is displayed */
-  if (output_count == 0)
+        for (ri = rn->info; ri; ri = ri->next)
+          {
+            total_count++;
+            if (type == bgp_show_type_flap_statistics
+                || type == bgp_show_type_flap_neighbor
+                || type == bgp_show_type_dampend_paths
+                || type == bgp_show_type_damp_neighbor)
+              {
+                if (!(ri->extra && ri->extra->damp_info))
+                  continue;
+              }
+            if (type == bgp_show_type_regexp)
+              {
+                regex_t *regex = output_arg;
+
+                if (bgp_regexec (regex, ri->attr->aspath) == REG_NOMATCH)
+                  continue;
+              }
+            if (type == bgp_show_type_prefix_list)
+              {
+                struct prefix_list *plist = output_arg;
+
+                if (prefix_list_apply (plist, &rn->p) != PREFIX_PERMIT)
+                  continue;
+              }
+            if (type == bgp_show_type_filter_list)
+              {
+                struct as_list *as_list = output_arg;
+
+                if (as_list_apply (as_list, ri->attr->aspath) != AS_FILTER_PERMIT)
+                  continue;
+              }
+            if (type == bgp_show_type_route_map)
+              {
+                struct route_map *rmap = output_arg;
+                struct bgp_info binfo;
+                struct attr dummy_attr;
+                struct attr_extra dummy_extra;
+                int ret;
+
+                dummy_attr.extra = &dummy_extra;
+                bgp_attr_dup (&dummy_attr, ri->attr);
+
+                binfo.peer = ri->peer;
+                binfo.attr = &dummy_attr;
+
+                ret = route_map_apply (rmap, &rn->p, RMAP_BGP, &binfo);
+                if (ret == RMAP_DENYMATCH)
+                  continue;
+              }
+            if (type == bgp_show_type_neighbor
+                || type == bgp_show_type_flap_neighbor
+                || type == bgp_show_type_damp_neighbor)
+              {
+                union sockunion *su = output_arg;
+
+                if (ri->peer->su_remote == NULL || ! sockunion_same(ri->peer->su_remote, su))
+                  continue;
+              }
+            if (type == bgp_show_type_cidr_only)
+              {
+                u_int32_t destination;
+
+                destination = ntohl (rn->p.u.prefix4.s_addr);
+                if (IN_CLASSC (destination) && rn->p.prefixlen == 24)
+                  continue;
+                if (IN_CLASSB (destination) && rn->p.prefixlen == 16)
+                  continue;
+                if (IN_CLASSA (destination) && rn->p.prefixlen == 8)
+                  continue;
+              }
+            if (type == bgp_show_type_prefix_longer)
+              {
+                struct prefix *p = output_arg;
+
+                if (! prefix_match (p, &rn->p))
+                  continue;
+              }
+            if (type == bgp_show_type_community_all)
+              {
+                if (! ri->attr->community)
+                  continue;
+              }
+            if (type == bgp_show_type_community)
+              {
+                struct community *com = output_arg;
+
+                if (! ri->attr->community ||
+                    ! community_match (ri->attr->community, com))
+                  continue;
+              }
+            if (type == bgp_show_type_community_exact)
+              {
+                struct community *com = output_arg;
+
+                if (! ri->attr->community ||
+                    ! community_cmp (ri->attr->community, com))
+                  continue;
+              }
+            if (type == bgp_show_type_community_list)
+              {
+                struct community_list *list = output_arg;
+
+                if (! community_list_match (ri->attr->community, list))
+                  continue;
+              }
+            if (type == bgp_show_type_community_list_exact)
+              {
+                struct community_list *list = output_arg;
+
+                if (! community_list_exact_match (ri->attr->community, list))
+                  continue;
+              }
+            if (type == bgp_show_type_dampend_paths
+                || type == bgp_show_type_damp_neighbor)
+              {
+                if (! CHECK_FLAG (ri->flags, BGP_INFO_DAMPED)
+                    || CHECK_FLAG (ri->flags, BGP_INFO_HISTORY))
+                  continue;
+              }
+
+            if (!use_json && header)
+              {
+                vty_out (vty, "BGP table version is %" PRIu64 ", local router ID is %s%s", table->version, inet_ntoa (bgp->router_id), VTY_NEWLINE);
+                vty_out (vty, BGP_SHOW_SCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
+                vty_out (vty, BGP_SHOW_OCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
+                if (type == bgp_show_type_dampend_paths
+                    || type == bgp_show_type_damp_neighbor)
+                  vty_out (vty, BGP_SHOW_DAMP_HEADER, VTY_NEWLINE);
+                else if (type == bgp_show_type_flap_statistics
+                         || type == bgp_show_type_flap_neighbor)
+                  vty_out (vty, BGP_SHOW_FLAP_HEADER, VTY_NEWLINE);
+                else
+                  vty_out (vty, BGP_SHOW_HEADER, VTY_NEWLINE);
+                header = 0;
+              }
+
+            if (type == bgp_show_type_dampend_paths
+                || type == bgp_show_type_damp_neighbor)
+              damp_route_vty_out (vty, &rn->p, ri, display, SAFI_UNICAST, use_json, json_paths);
+            else if (type == bgp_show_type_flap_statistics
+                     || type == bgp_show_type_flap_neighbor)
+              flap_route_vty_out (vty, &rn->p, ri, display, SAFI_UNICAST, use_json, json_paths);
+            else
+              route_vty_out (vty, &rn->p, ri, display, SAFI_UNICAST, json_paths);
+            display++;
+          }
+
+        if (display)
+          {
+            output_count++;
+            if (use_json)
+              {
+                p = &rn->p;
+                sprintf(buf2, "%s/%d", inet_ntop (p->family, &p->u.prefix, buf, BUFSIZ), p->prefixlen);
+		vty_out (vty, "\"%s\": ", buf2);
+		vty_out (vty, "%s", json_object_to_json_string (json_paths));
+		json_object_free (json_paths);
+		first = 0;
+
+              }
+          }
+        }
+
+  if (use_json)
     {
-      if (type == bgp_show_type_normal)
-        vty_out (vty, "No BGP prefixes displayed, %ld exist%s", total_count, VTY_NEWLINE);
+      json_object_free (json_paths);
+      vty_out (vty, " } }%s", VTY_NEWLINE);
     }
   else
-    vty_out (vty, "%sDisplayed  %ld out of %ld total prefixes%s",
-	     VTY_NEWLINE, output_count, total_count, VTY_NEWLINE);
+    {
+      /* No route is displayed */
+      if (output_count == 0)
+        {
+          if (type == bgp_show_type_normal)
+            vty_out (vty, "No BGP prefixes displayed, %ld exist%s", total_count, VTY_NEWLINE);
+        }
+      else
+        vty_out (vty, "%sDisplayed  %ld routes and %ld total paths%s",
+                 VTY_NEWLINE, output_count, total_count, VTY_NEWLINE);
+    }
 
   return CMD_SUCCESS;
 }
 
 static int
 bgp_show (struct vty *vty, struct bgp *bgp, afi_t afi, safi_t safi,
-         enum bgp_show_type type, void *output_arg)
+          enum bgp_show_type type, void *output_arg, u_char use_json)
 {
   struct bgp_table *table;
 
-  if (bgp == NULL) {
-    bgp = bgp_get_default ();
-  }
+  if (bgp == NULL)
+    {
+      bgp = bgp_get_default ();
+    }
 
   if (bgp == NULL)
     {
-      vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
+      if (!use_json)
+        vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-
   table = bgp->rib[afi][safi];
 
-  return bgp_show_table (vty, table, &bgp->router_id, type, output_arg);
+  return bgp_show_table (vty, bgp, table, type, output_arg,
+                         use_json);
+}
+
+static void
+bgp_show_all_instances_routes_vty (struct vty *vty, afi_t afi, safi_t safi,
+                                   u_char use_json)
+{
+  struct listnode *node, *nnode;
+  struct bgp *bgp;
+  struct bgp_table *table;
+  int is_first = 1;
+
+  if (use_json)
+    vty_out (vty, "{%s", VTY_NEWLINE);
+
+  for (ALL_LIST_ELEMENTS (bm->bgp, node, nnode, bgp))
+    {
+      if (use_json)
+        {
+          if (! is_first)
+            vty_out (vty, ",%s", VTY_NEWLINE);
+          else
+            is_first = 0;
+
+          vty_out(vty, "\"%s\":", (bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)
+                  ? "Default" : bgp->name);
+        }
+      else
+        {
+          vty_out (vty, "%sInstance %s:%s",
+                   VTY_NEWLINE,
+                   (bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)
+                   ? "Default" : bgp->name,
+                   VTY_NEWLINE);
+        }
+      table = bgp->rib[afi][safi];
+      bgp_show_table (vty, bgp, table,
+                      bgp_show_type_normal, NULL, use_json);
+
+    }
+
+  if (use_json)
+    vty_out (vty, "}%s", VTY_NEWLINE);
 }
 
 /* Header of detailed BGP route information */
 static void
 route_vty_out_detail_header (struct vty *vty, struct bgp *bgp,
 			     struct bgp_node *rn,
-                             struct prefix_rd *prd, afi_t afi, safi_t safi)
+                             struct prefix_rd *prd, afi_t afi, safi_t safi,
+                             json_object *json)
 {
   struct bgp_info *ri;
   struct prefix *p;
@@ -6767,15 +7574,25 @@ route_vty_out_detail_header (struct vty *vty, struct bgp *bgp,
   int no_export = 0;
   int no_advertise = 0;
   int local_as = 0;
-  int first = 0;
-  int printrd = ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP));
+  int first = 1;
+  json_object *json_adv_to = NULL;
 
   p = &rn->p;
-  vty_out (vty, "BGP routing table entry for %s%s%s/%d%s",
-	   (printrd ?  prefix_rd2str (prd, buf1, RD_ADDRSTRLEN) : ""),
-	   printrd ?  ":" : "",
-	   inet_ntop (p->family, &p->u.prefix, buf2, INET6_ADDRSTRLEN),
-	   p->prefixlen, VTY_NEWLINE);
+
+  if (json)
+    {
+      json_object_string_add(json, "prefix", inet_ntop (p->family, &p->u.prefix, buf2, INET6_ADDRSTRLEN));
+      json_object_int_add(json, "prefixlen", p->prefixlen);
+    }
+  else
+    {
+      vty_out (vty, "BGP routing table entry for %s%s%s/%d%s",
+	       ((safi == SAFI_MPLS_VPN || safi == SAFI_ENCAP) ?
+	       prefix_rd2str (prd, buf1, RD_ADDRSTRLEN) : ""),
+	       safi == SAFI_MPLS_VPN ? ":" : "",
+	       inet_ntop (p->family, &p->u.prefix, buf2, INET6_ADDRSTRLEN),
+	       p->prefixlen, VTY_NEWLINE);
+    }
 
   for (ri = rn->info; ri; ri = ri->next)
     {
@@ -6797,39 +7614,64 @@ route_vty_out_detail_header (struct vty *vty, struct bgp *bgp,
 	}
     }
 
-  vty_out (vty, "Paths: (%d available", count);
-  if (best)
+  if (!json)
     {
-      vty_out (vty, ", best #%d", best);
-      if (safi == SAFI_UNICAST)
-	vty_out (vty, ", table Default-IP-Routing-Table");
-    }
-  else
-    vty_out (vty, ", no best path");
-  if (no_advertise)
-    vty_out (vty, ", not advertised to any peer");
-  else if (no_export)
-    vty_out (vty, ", not advertised to EBGP peer");
-  else if (local_as)
-    vty_out (vty, ", not advertised outside local AS");
-  if (suppress)
-    vty_out (vty, ", Advertisements suppressed by an aggregate.");
-  vty_out (vty, ")%s", VTY_NEWLINE);
+      vty_out (vty, "Paths: (%d available", count);
+      if (best)
+        {
+          vty_out (vty, ", best #%d", best);
+          if (safi == SAFI_UNICAST)
+            vty_out (vty, ", table %s",
+                     (bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)
+                     ? "Default-IP-Routing-Table" : bgp->name);
+        }
+      else
+        vty_out (vty, ", no best path");
 
-  /* advertised peer */
-  for (ALL_LIST_ELEMENTS (bgp->peer, node, nnode, peer))
-    {
-      if (bgp_adj_out_lookup (peer, p, afi, safi, rn))
-	{
-	  if (! first)
-	    vty_out (vty, "  Advertised to non peer-group peers:%s ", VTY_NEWLINE);
-	  vty_out (vty, " %s", sockunion2str (&peer->su, buf1, SU_ADDRSTRLEN));
-	  first = 1;
-	}
+      if (no_advertise)
+        vty_out (vty, ", not advertised to any peer");
+      else if (no_export)
+        vty_out (vty, ", not advertised to EBGP peer");
+      else if (local_as)
+        vty_out (vty, ", not advertised outside local AS");
+
+      if (suppress)
+        vty_out (vty, ", Advertisements suppressed by an aggregate.");
+      vty_out (vty, ")%s", VTY_NEWLINE);
     }
-  if (! first)
-    vty_out (vty, "  Not advertised to any peer");
-  vty_out (vty, "%s", VTY_NEWLINE);
+
+  /* If we are not using addpath then we can display Advertised to and that will
+   * show what peers we advertised the bestpath to.  If we are using addpath
+   * though then we must display Advertised to on a path-by-path basis. */
+  if (!bgp->addpath_tx_used[afi][safi])
+    {
+      for (ALL_LIST_ELEMENTS (bgp->peer, node, nnode, peer))
+        {
+          if (bgp_adj_out_lookup (peer, rn, 0))
+            {
+              if (json && !json_adv_to)
+                json_adv_to = json_object_new_object();
+
+              route_vty_out_advertised_to(vty, peer, &first,
+                                          "  Advertised to non peer-group peers:\n ",
+                                          json_adv_to);
+            }
+        }
+
+      if (json)
+        {
+          if (json_adv_to)
+            {
+              json_object_object_add(json, "advertisedTo", json_adv_to);
+            }
+        }
+      else
+        {
+          if (first)
+            vty_out (vty, "  Not advertised to any peer");
+          vty_out (vty, "%s", VTY_NEWLINE);
+        }
+    }
 }
 
 /* Display specified route of BGP table. */
@@ -6837,7 +7679,8 @@ static int
 bgp_show_route_in_table (struct vty *vty, struct bgp *bgp, 
                          struct bgp_table *rib, const char *ip_str,
                          afi_t afi, safi_t safi, struct prefix_rd *prd,
-                         int prefix_check, enum bgp_path_type pathtype)
+                         int prefix_check, enum bgp_path_type pathtype,
+                         u_char use_json)
 {
   int ret;
   int header;
@@ -6847,8 +7690,9 @@ bgp_show_route_in_table (struct vty *vty, struct bgp *bgp,
   struct bgp_node *rm;
   struct bgp_info *ri;
   struct bgp_table *table;
+  json_object *json = NULL;
+  json_object *json_paths = NULL;
 
-  memset (&match, 0, sizeof (struct prefix)); /* keep valgrind happy */
   /* Check IP address argument. */
   ret = str2prefix (ip_str, &match);
   if (! ret)
@@ -6859,7 +7703,13 @@ bgp_show_route_in_table (struct vty *vty, struct bgp *bgp,
 
   match.family = afi2family (afi);
 
-  if ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP))
+  if (use_json)
+    {
+      json = json_object_new_object();
+      json_paths = json_object_new_array();
+    }
+
+  if (safi == SAFI_MPLS_VPN || safi == SAFI_ENCAP)
     {
       for (rn = bgp_table_top (rib); rn; rn = bgp_route_next (rn))
         {
@@ -6883,8 +7733,7 @@ bgp_show_route_in_table (struct vty *vty, struct bgp *bgp,
                       if (header)
                         {
                           route_vty_out_detail_header (vty, bgp, rm, (struct prefix_rd *)&rn->p,
-                                                       AFI_IP, safi);
-
+                                                       AFI_IP, safi, json);
                           header = 0;
                         }
                       display++;
@@ -6893,7 +7742,7 @@ bgp_show_route_in_table (struct vty *vty, struct bgp *bgp,
                           (pathtype == BGP_PATH_BESTPATH && CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)) ||
                           (pathtype == BGP_PATH_MULTIPATH &&
                            (CHECK_FLAG (ri->flags, BGP_INFO_MULTIPATH) || CHECK_FLAG (ri->flags, BGP_INFO_SELECTED))))
-                        route_vty_out_detail (vty, bgp, &rm->p, ri, AFI_IP, safi);
+                        route_vty_out_detail (vty, bgp, &rm->p, ri, AFI_IP, safi, json_paths);
                     }
 
                   bgp_unlock_node (rm);
@@ -6913,7 +7762,7 @@ bgp_show_route_in_table (struct vty *vty, struct bgp *bgp,
                 {
                   if (header)
                     {
-                      route_vty_out_detail_header (vty, bgp, rn, NULL, afi, safi);
+                      route_vty_out_detail_header (vty, bgp, rn, NULL, afi, safi, json);
                       header = 0;
                     }
                   display++;
@@ -6922,7 +7771,7 @@ bgp_show_route_in_table (struct vty *vty, struct bgp *bgp,
                       (pathtype == BGP_PATH_BESTPATH && CHECK_FLAG (ri->flags, BGP_INFO_SELECTED)) ||
                       (pathtype == BGP_PATH_MULTIPATH &&
                        (CHECK_FLAG (ri->flags, BGP_INFO_MULTIPATH) || CHECK_FLAG (ri->flags, BGP_INFO_SELECTED))))
-                    route_vty_out_detail (vty, bgp, &rn->p, ri, afi, safi);
+                    route_vty_out_detail (vty, bgp, &rn->p, ri, afi, safi, json_paths);
                 }
             }
 
@@ -6930,10 +7779,21 @@ bgp_show_route_in_table (struct vty *vty, struct bgp *bgp,
         }
     }
 
-  if (! display)
+  if (use_json)
     {
-      vty_out (vty, "%% Network not in table%s", VTY_NEWLINE);
-      return CMD_WARNING;
+      if (display)
+        json_object_object_add(json, "paths", json_paths);
+
+      vty_out (vty, "%s%s", json_object_to_json_string_ext(json, JSON_C_TO_STRING_PRETTY), VTY_NEWLINE);
+      json_object_free(json);
+    }
+  else
+    {
+      if (!display)
+        {
+          vty_out (vty, "%% Network not in table%s", VTY_NEWLINE);
+          return CMD_WARNING;
+        }
     }
 
   return CMD_SUCCESS;
@@ -6943,7 +7803,8 @@ bgp_show_route_in_table (struct vty *vty, struct bgp *bgp,
 static int
 bgp_show_route (struct vty *vty, const char *view_name, const char *ip_str,
 		afi_t afi, safi_t safi, struct prefix_rd *prd,
-		int prefix_check, enum bgp_path_type pathtype)
+		int prefix_check, enum bgp_path_type pathtype,
+                u_char use_json)
 {
   struct bgp *bgp;
 
@@ -6953,7 +7814,7 @@ bgp_show_route (struct vty *vty, const char *view_name, const char *ip_str,
       bgp = bgp_lookup_by_name (view_name);
       if (bgp == NULL)
 	{
-	  vty_out (vty, "Can't find BGP view %s%s", view_name, VTY_NEWLINE);
+	  vty_out (vty, "Can't find BGP instance %s%s", view_name, VTY_NEWLINE);
 	  return CMD_WARNING;
 	}
     }
@@ -6968,1401 +7829,374 @@ bgp_show_route (struct vty *vty, const char *view_name, const char *ip_str,
     }
  
   return bgp_show_route_in_table (vty, bgp, bgp->rib[afi][safi], ip_str, 
-                                  afi, safi, prd, prefix_check, pathtype);
+                                  afi, safi, prd, prefix_check, pathtype,
+                                  use_json);
 }
 
 /* BGP route print out function. */
-DEFUN (show_ip_bgp,
-       show_ip_bgp_cmd,
-       "show ip bgp",
-       SHOW_STR
-       IP_STR
-       BGP_STR)
-{
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST, bgp_show_type_normal, NULL);
-}
-
 DEFUN (show_ip_bgp_ipv4,
        show_ip_bgp_ipv4_cmd,
-       "show ip bgp ipv4 (unicast|multicast)",
+       "show [ip] bgp [<view|vrf> WORD] [<ipv4|ipv6> [<unicast|multicast|vpn|encap>]]\
+          [<\
+             cidr-only\
+             |dampening <flap-statistics|dampened-paths|parameters>\
+             |route-map WORD\
+             |prefix-list WORD\
+             |filter-list WORD\
+             |community [<AA:NN|local-AS|no-advertise|no-export> [exact-match]]\
+             |community-list <(1-500)|WORD> [exact-match]\
+             |A.B.C.D/M longer-prefixes\
+             |X:X::X:X/M longer-prefixes>\
+          ] [json]",
        SHOW_STR
        IP_STR
        BGP_STR
-       "Address family\n"
+       BGP_INSTANCE_HELP_STR
+       "Address Family\n"
+       "Address Family\n"
        "Address Family modifier\n"
-       "Address Family modifier\n")
+       "Address Family modifier\n"
+       "Address Family modifier\n"
+       "Address Family modifier\n"
+       "Display only routes with non-natural netmasks\n"
+       "Display detailed information about dampening\n"
+       "Display flap statistics of routes\n"
+       "Display paths suppressed due to dampening\n"
+       "Display dampening parameters\n"
+       "Display routes matching the route-map\n"
+       "A route-map to match on\n"
+       "Display routes conforming to the prefix-list\n"
+       "Prefix-list name\n"
+       "Display routes conforming to the filter-list\n"
+       "Regular expression access list name\n"
+       "Display routes matching the communities\n"
+       COMMUNITY_AANN_STR
+       "Do not send outside local AS (well-known community)\n"
+       "Do not advertise to any peer (well-known community)\n"
+       "Do not export to next AS (well-known community)\n"
+       "Exact match of the communities\n"
+       "Display routes matching the community-list\n"
+       "community-list number\n"
+       "community-list name\n"
+       "Exact match of the communities\n"
+       "IPv4 prefix\n"
+       "Display route and more specific routes\n"
+       "IPv6 prefix\n"
+       "Display route and more specific routes\n"
+       JSON_STR)
 {
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST, bgp_show_type_normal,
-                     NULL);
- 
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST, bgp_show_type_normal, NULL);
+  char *vrf = NULL;
+  afi_t afi = AFI_IP6;
+  safi_t safi = SAFI_UNICAST;
+  int exact_match = 0;
+  enum bgp_show_type sh_type = bgp_show_type_normal;
+
+  int idx = 0;
+
+  if (argv_find (argv, argc, "ip", &idx))
+    afi = AFI_IP;
+  if (argv_find (argv, argc, "view", &idx) || argv_find (argv, argc, "vrf", &idx))
+    vrf = argv[++idx]->arg;
+  if (argv_find (argv, argc, "ipv4", &idx) || argv_find (argv, argc, "ipv6", &idx))
+  {
+    afi = strmatch(argv[idx]->text, "ipv6") ? AFI_IP6 : AFI_IP;
+    if (argv_find (argv, argc, "unicast", &idx) || argv_find (argv, argc, "multicast", &idx))
+      safi = bgp_vty_safi_from_arg (argv[idx]->text);
+  }
+  else if (argv_find (argv, argc, "encap", &idx) || argv_find (argv, argc, "vpnv4", &idx))
+  {
+    afi = AFI_IP;
+    safi = strmatch (argv[idx]->text, "encap") ? SAFI_ENCAP : SAFI_MPLS_VPN;
+    // advance idx if necessary
+    argv_find (argv, argc, "unicast", &idx);
+  }
+
+  int uj = use_json (argc, argv);
+  if (uj) argc--;
+
+  struct bgp *bgp = bgp_lookup_by_name (vrf);
+  if (bgp == NULL)
+   {
+     vty_out (vty, "Can't find BGP instance %s%s", vrf, VTY_NEWLINE);
+     return CMD_WARNING;
+   }
+
+  if (++idx < argc)
+  {
+    if (strmatch(argv[idx]->text, "cidr-only"))
+      return bgp_show (vty, bgp, afi, safi, bgp_show_type_cidr_only, NULL, uj);
+
+    else if (strmatch(argv[idx]->text, "dampening"))
+    {
+      if (argv_find (argv, argc, "dampened-paths", &idx))
+        return bgp_show (vty, bgp, afi, safi, bgp_show_type_dampend_paths, NULL, uj);
+      else if (argv_find (argv, argc, "flap-statistics", &idx))
+        return bgp_show (vty, bgp, afi, safi, bgp_show_type_flap_statistics, NULL, uj);
+      else if (argv_find (argv, argc, "parameters", &idx))
+        return bgp_show_dampening_parameters (vty, AFI_IP, SAFI_UNICAST);
+    }
+
+    else if (strmatch(argv[idx]->text, "prefix-list"))
+      return bgp_show_prefix_list (vty, vrf, argv[idx + 1]->arg, afi, safi, bgp_show_type_prefix_list);
+
+    else if (strmatch(argv[idx]->text, "filter-list"))
+      return bgp_show_filter_list (vty, vrf, argv[idx + 1]->arg, afi, safi, bgp_show_type_filter_list);
+
+    else if (strmatch(argv[idx]->text, "route-map"))
+      return bgp_show_route_map (vty, vrf, argv[idx + 1]->arg, afi, safi, bgp_show_type_route_map);
+
+    else if (strmatch(argv[idx]->text, "community"))
+    {
+      /* show a specific community */
+      if (argv[idx + 1]->type == VARIABLE_TKN ||
+          strmatch(argv[idx + 1]->text, "local-AS") ||
+          strmatch(argv[idx + 1]->text, "no-advertise") ||
+          strmatch(argv[idx + 1]->text, "no-export"))
+        {
+          if (strmatch(argv[idx + 2]->text, "exact_match")) 
+            exact_match = 1;
+          return bgp_show_community (vty, vrf, argc, argv, exact_match, afi, safi);
+        }
+      /* show all communities */
+      else
+        return bgp_show (vty, bgp, afi, safi, bgp_show_type_community_all, NULL, uj);
+    }
+    else if (strmatch(argv[idx]->text, "community-list"))
+      {
+        const char *clist_number_or_name = argv[++idx]->arg;
+        if (++idx < argc && strmatch (argv[idx]->arg, "exact-match"))
+          exact_match = 1;
+        return bgp_show_community_list (vty, vrf, clist_number_or_name, exact_match, afi, safi);
+      }
+    /* prefix-longer */
+    else if (argv[idx]->type == IPV4_TKN || argv[idx]->type == IPV6_TKN)
+      return bgp_show_prefix_longer (vty, vrf, argv[idx + 1]->arg, afi, safi, bgp_show_type_prefix_longer);
+  }
+
+  return bgp_show (vty, bgp, afi, safi, sh_type, NULL, uj);
 }
 
 DEFUN (show_ip_bgp_route,
        show_ip_bgp_route_cmd,
-       "show ip bgp A.B.C.D",
+       "show [ip] bgp [<view|vrf> WORD] [<ipv4|ipv6> [<unicast|multicast|vpn|encap>]]"
+       "<A.B.C.D|A.B.C.D/M|X:X::X:X|X:X::X:X/M> [<bestpath|multipath>] [json]",
        SHOW_STR
        IP_STR
        BGP_STR
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_ip_bgp_route_pathtype,
-       show_ip_bgp_route_pathtype_cmd,
-       "show ip bgp A.B.C.D (bestpath|multipath)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-{
-  if (strncmp (argv[1], "b", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_UNICAST, NULL, 0, BGP_PATH_BESTPATH);
-  else
-    return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_UNICAST, NULL, 0, BGP_PATH_MULTIPATH);
-}
-
-DEFUN (show_bgp_ipv4_safi_route_pathtype,
-       show_bgp_ipv4_safi_route_pathtype_cmd,
-       "show bgp ipv4 (unicast|multicast) A.B.C.D (bestpath|multipath)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
+       BGP_INSTANCE_HELP_STR
+       "Address Family\n"
+       "Address Family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    if (strncmp (argv[2], "b", 1) == 0)
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MULTICAST, NULL, 0, BGP_PATH_BESTPATH);
-    else
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MULTICAST, NULL, 0, BGP_PATH_MULTIPATH);
-  else
-    if (strncmp (argv[2], "b", 1) == 0)
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_UNICAST, NULL, 0, BGP_PATH_BESTPATH);
-    else
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_UNICAST, NULL, 0, BGP_PATH_MULTIPATH);
-}
-
-DEFUN (show_ip_bgp_ipv4_route,
-       show_ip_bgp_ipv4_route_cmd,
-       "show ip bgp ipv4 (unicast|multicast) A.B.C.D",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Network in the BGP routing table to display\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MULTICAST, NULL, 0, BGP_PATH_ALL);
-
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_ip_bgp_vpnv4_all_route,
-       show_ip_bgp_vpnv4_all_route_cmd,
-       "show ip bgp vpnv4 all A.B.C.D",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display VPNv4 NLRI specific information\n"
-       "Display information about all VPNv4 NLRIs\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_MPLS_VPN, NULL, 0, BGP_PATH_ALL);
-}
-
-
-DEFUN (show_ip_bgp_vpnv4_rd_route,
-       show_ip_bgp_vpnv4_rd_route_cmd,
-       "show ip bgp vpnv4 rd ASN:nn_or_IP-address:nn A.B.C.D",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display VPNv4 NLRI specific information\n"
-       "Display information for a route distinguisher\n"
-       "VPN Route Distinguisher\n"
-       "Network in the BGP routing table to display\n")
-{
-  int ret;
-  struct prefix_rd prd;
-
-  ret = str2prefix_rd (argv[0], &prd);
-  if (! ret)
-    {
-      vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MPLS_VPN, &prd, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_ip_bgp_prefix,
-       show_ip_bgp_prefix_cmd,
-       "show ip bgp A.B.C.D/M",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_ip_bgp_prefix_pathtype,
-       show_ip_bgp_prefix_pathtype_cmd,
-       "show ip bgp A.B.C.D/M (bestpath|multipath)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-{
-  if (strncmp (argv[1], "b", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_BESTPATH);
-  else
-    return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_MULTIPATH);
-}
-
-DEFUN (show_ip_bgp_ipv4_prefix,
-       show_ip_bgp_ipv4_prefix_cmd,
-       "show ip bgp ipv4 (unicast|multicast) A.B.C.D/M",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MULTICAST, NULL, 1, BGP_PATH_ALL);
-
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_ip_bgp_ipv4_prefix_pathtype,
-       show_ip_bgp_ipv4_prefix_pathtype_cmd,
-       "show ip bgp ipv4 (unicast|multicast) A.B.C.D/M (bestpath|multipath)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    if (strncmp (argv[2], "b", 1) == 0)
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MULTICAST, NULL, 1, BGP_PATH_BESTPATH);
-    else
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MULTICAST, NULL, 1, BGP_PATH_MULTIPATH);
-  else
-    if (strncmp (argv[2], "b", 1) == 0)
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_BESTPATH);
-    else
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_MULTIPATH);
-}
-
-ALIAS (show_ip_bgp_ipv4_prefix_pathtype,
-       show_bgp_ipv4_safi_prefix_pathtype_cmd,
-       "show bgp ipv4 (unicast|multicast) A.B.C.D/M (bestpath|multipath)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-
-DEFUN (show_ip_bgp_vpnv4_all_prefix,
-       show_ip_bgp_vpnv4_all_prefix_cmd,
-       "show ip bgp vpnv4 all A.B.C.D/M",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display VPNv4 NLRI specific information\n"
-       "Display information about all VPNv4 NLRIs\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_MPLS_VPN, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_ip_bgp_vpnv4_rd_prefix,
-       show_ip_bgp_vpnv4_rd_prefix_cmd,
-       "show ip bgp vpnv4 rd ASN:nn_or_IP-address:nn A.B.C.D/M",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display VPNv4 NLRI specific information\n"
-       "Display information for a route distinguisher\n"
-       "VPN Route Distinguisher\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  int ret;
-  struct prefix_rd prd;
-
-  ret = str2prefix_rd (argv[0], &prd);
-  if (! ret)
-    {
-      vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MPLS_VPN, &prd, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_ip_bgp_view,
-       show_ip_bgp_view_cmd,
-       "show ip bgp view WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n")
-{
-  struct bgp *bgp;
-
-  /* BGP structure lookup. */
-  bgp = bgp_lookup_by_name (argv[0]);
-  if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-
-  return bgp_show (vty, bgp, AFI_IP, SAFI_UNICAST, bgp_show_type_normal, NULL);
-}
-
-DEFUN (show_ip_bgp_view_route,
-       show_ip_bgp_view_route_cmd,
-       "show ip bgp view WORD A.B.C.D",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, argv[0], argv[1], AFI_IP, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_ip_bgp_view_prefix,
-       show_ip_bgp_view_prefix_cmd,
-       "show ip bgp view WORD A.B.C.D/M",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_show_route (vty, argv[0], argv[1], AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp,
-       show_bgp_cmd,
-       "show bgp",
-       SHOW_STR
-       BGP_STR)
-{
-  return bgp_show (vty, NULL, AFI_IP6, SAFI_UNICAST, bgp_show_type_normal,
-                   NULL);
-}
-
-ALIAS (show_bgp,
-       show_bgp_ipv6_cmd,
-       "show bgp ipv6",
-       SHOW_STR
-       BGP_STR
-       "Address family\n")
-
-/* old command */
-DEFUN (show_ipv6_bgp,
-       show_ipv6_bgp_cmd,
-       "show ipv6 bgp",
-       SHOW_STR
-       IP_STR
-       BGP_STR)
-{
-  return bgp_show (vty, NULL, AFI_IP6, SAFI_UNICAST, bgp_show_type_normal,
-                   NULL);
-}
-
-DEFUN (show_bgp_route,
-       show_bgp_route_cmd,
-       "show bgp X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv4_safi,
-       show_bgp_ipv4_safi_cmd,
-       "show bgp ipv4 (unicast|multicast)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST, bgp_show_type_normal,
-                     NULL);
- 
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST, bgp_show_type_normal, NULL);
-}
-
-DEFUN (show_bgp_ipv4_safi_route,
-       show_bgp_ipv4_safi_route_cmd,
-       "show bgp ipv4 (unicast|multicast) A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Network in the BGP routing table to display\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MULTICAST, NULL, 0, BGP_PATH_ALL);
-
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_route_pathtype,
-       show_bgp_route_pathtype_cmd,
-       "show bgp X:X::X:X (bestpath|multipath)",
-       SHOW_STR
-       BGP_STR
-       "Network in the BGP routing table to display\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-{
-  if (strncmp (argv[1], "b", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_BESTPATH);
-  else
-    return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_MULTIPATH);
-}
-
-ALIAS (show_bgp_route_pathtype,
-       show_bgp_ipv6_route_pathtype_cmd,
-       "show bgp ipv6 X:X::X:X (bestpath|multipath)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Network in the BGP routing table to display\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-
-DEFUN (show_bgp_ipv6_safi_route_pathtype,
-       show_bgp_ipv6_safi_route_pathtype_cmd,
-       "show bgp ipv6 (unicast|multicast) X:X::X:X (bestpath|multipath)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
        "Network in the BGP routing table to display\n"
+       "IPv4 prefix\n"
+       "Network in the BGP routing table to display\n"
+       "IPv6 prefix\n"
        "Display only the bestpath\n"
-       "Display only multipaths\n")
+       "Display only multipaths\n"
+       JSON_STR)
 {
-  if (strncmp (argv[0], "m", 1) == 0)
-    if (strncmp (argv[2], "b", 1) == 0)
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_MULTICAST, NULL, 0, BGP_PATH_BESTPATH);
-    else
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_MULTICAST, NULL, 0, BGP_PATH_MULTIPATH);
+  int prefix_check = 0;
+
+  afi_t afi = AFI_IP6;
+  safi_t safi = SAFI_UNICAST;
+  char *vrf = NULL;
+  char *prefix = NULL;
+
+  enum bgp_path_type path_type;
+  u_char uj = use_json(argc, argv);
+
+  int idx = 0;
+
+  /* show [ip] bgp */
+  if (argv_find (argv, argc, "ip", &idx))
+    afi = AFI_IP;
+  /* [<view|vrf> WORD] */
+  if (argv_find (argv, argc, "view", &idx) || argv_find (argv, argc, "vrf", &idx))
+    vrf = argv[++idx]->arg;
+  /* [<ipv4 [<unicast|multicast>]|ipv6 [<unicast|multicast>]|encap [unicast]|vpnv4 [unicast]>] */
+  if (argv_find (argv, argc, "ipv4", &idx) || argv_find (argv, argc, "ipv6", &idx))
+  {
+    afi = strmatch(argv[idx]->text, "ipv6") ? AFI_IP6 : AFI_IP;
+    if (argv_find (argv, argc, "unicast", &idx) || argv_find (argv, argc, "multicast", &idx))
+      safi = strmatch (argv[idx]->text, "unicast") ? SAFI_UNICAST : SAFI_MULTICAST;
+  }
+  else if (argv_find (argv, argc, "encap", &idx) || argv_find (argv, argc, "vpnv4", &idx))
+  {
+    afi = AFI_IP;
+    safi = strmatch (argv[idx]->text, "encap") ? SAFI_ENCAP : SAFI_MPLS_VPN;
+    // advance idx if necessary
+    argv_find (argv, argc, "unicast", &idx);
+  }
+
+  /* <A.B.C.D|A.B.C.D/M|X:X::X:X|X:X::X:X/M> */
+  if (argv_find (argv, argc, "A.B.C.D", &idx) || argv_find (argv, argc, "X:X::X:X", &idx))
+    prefix_check = 0;
+  else if (argv_find (argv, argc, "A.B.C.D/M", &idx) || argv_find (argv, argc, "X:X::X:X/M", &idx))
+    prefix_check = 1;
+
+  if ((argv[idx]->type == IPV6_TKN || argv[idx]->type == IPV6_PREFIX_TKN) && afi != AFI_IP6)
+  {
+    vty_out (vty, "%% Cannot specify IPv6 address or prefix with IPv4 AFI%s", VTY_NEWLINE);
+    return CMD_WARNING;
+  }
+  if ((argv[idx]->type == IPV4_TKN || argv[idx]->type == IPV4_PREFIX_TKN) && afi != AFI_IP)
+  {
+    vty_out (vty, "%% Cannot specify IPv4 address or prefix with IPv6 AFI%s", VTY_NEWLINE);
+    return CMD_WARNING;
+  }
+
+  prefix = argv[idx]->arg;
+
+  /* [<bestpath|multipath>] */
+  if (argv_find (argv, argc, "bestpath", &idx))
+    path_type = BGP_PATH_BESTPATH;
+  else if (argv_find (argv, argc, "multipath", &idx))
+    path_type = BGP_PATH_MULTIPATH;
   else
-    if (strncmp (argv[2], "b", 1) == 0)
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_BESTPATH);
-    else
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_MULTIPATH);
+    path_type = BGP_PATH_ALL;
+
+  return bgp_show_route (vty, vrf, prefix, afi, safi, NULL, prefix_check, path_type, uj);
 }
 
-DEFUN (show_bgp_ipv4_vpn_route,
-       show_bgp_ipv4_vpn_route_cmd,
-       "show bgp ipv4 vpn A.B.C.D",
+DEFUN (show_ip_bgp_regexp,
+       show_ip_bgp_regexp_cmd,
+       "show [ip] bgp [<ipv4 [<unicast|multicast|vpn|encap>]|ipv6 [<unicast|multicast|vpn|encap>]|encap [unicast]|vpnv4 [unicast]>] regexp REGEX...",
        SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Display VPN NLRI specific information\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_MPLS_VPN, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv6_vpn_route,
-       show_bgp_ipv6_vpn_route_cmd,
-       "show bgp ipv6 vpn X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Display VPN NLRI specific information\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_MPLS_VPN, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv4_vpn_rd_route,
-       show_bgp_ipv4_vpn_rd_route_cmd,
-       "show bgp ipv4 vpn rd ASN:nn_or_IP-address:nn A.B.C.D",
-       SHOW_STR
-       BGP_STR
        IP_STR
-       "Display VPN NLRI specific information\n"
-       "Display information for a route distinguisher\n"
-       "VPN Route Distinguisher\n"
-       "Network in the BGP routing table to display\n")
-{
-  int ret;
-  struct prefix_rd prd;
-
-  ret = str2prefix_rd (argv[0], &prd);
-  if (! ret)
-    {
-      vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MPLS_VPN, &prd, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv6_vpn_rd_route,
-       show_bgp_ipv6_vpn_rd_route_cmd,
-       "show bgp ipv6 vpn rd ASN:nn_or_IP-address:nn X:X::X:X",
-       SHOW_STR
        BGP_STR
        "Address Family\n"
-       "Display VPN NLRI specific information\n"
-       "Display information for a route distinguisher\n"
-       "VPN Route Distinguisher\n"
-       "Network in the BGP routing table to display\n")
-{
-  int ret;
-  struct prefix_rd prd;
-
-  ret = str2prefix_rd (argv[0], &prd);
-  if (! ret)
-    {
-      vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_MPLS_VPN, &prd, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_prefix_pathtype,
-       show_bgp_prefix_pathtype_cmd,
-       "show bgp X:X::X:X/M (bestpath|multipath)",
-       SHOW_STR
-       BGP_STR
-       "IPv6 prefix <network>/<length>\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-{
-  if (strncmp (argv[1], "b", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_BESTPATH);
-  else
-    return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_MULTIPATH);
-}
-
-ALIAS (show_bgp_prefix_pathtype,
-       show_bgp_ipv6_prefix_pathtype_cmd,
-       "show bgp ipv6 X:X::X:X/M (bestpath|multipath)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "IPv6 prefix <network>/<length>\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-
-DEFUN (show_bgp_ipv6_safi_prefix_pathtype,
-       show_bgp_ipv6_safi_prefix_pathtype_cmd,
-       "show bgp ipv6 (unicast|multicast) X:X::X:X/M (bestpath|multipath)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
-       "Display only the bestpath\n"
-       "Display only multipaths\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    if (strncmp (argv[2], "b", 1) == 0)
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_MULTICAST, NULL, 1, BGP_PATH_BESTPATH);
-    else
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_MULTICAST, NULL, 1, BGP_PATH_MULTIPATH);
-  else
-    if (strncmp (argv[2], "b", 1) == 0)
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_BESTPATH);
-    else
-      return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_MULTIPATH);
-}
-
-DEFUN (show_bgp_ipv4_encap_route,
-       show_bgp_ipv4_encap_route_cmd,
-       "show bgp ipv4 encap A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display ENCAP NLRI specific information\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_ENCAP, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv6_encap_route,
-       show_bgp_ipv6_encap_route_cmd,
-       "show bgp ipv6 encap X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       IP6_STR
-       "Display ENCAP NLRI specific information\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_ENCAP, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv4_safi_rd_route,
-       show_bgp_ipv4_safi_rd_route_cmd,
-       "show bgp ipv4 (encap|vpn) rd ASN:nn_or_IP-address:nn A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display information for a route distinguisher\n"
-       "ENCAP Route Distinguisher\n"
-       "Network in the BGP routing table to display\n")
-{
-  int ret;
-  struct prefix_rd prd;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  ret = str2prefix_rd (argv[1], &prd);
-  if (! ret)
-    {
-      vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-  return bgp_show_route (vty, NULL, argv[2], AFI_IP, safi, &prd, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv6_safi_rd_route,
-       show_bgp_ipv6_safi_rd_route_cmd,
-       "show bgp ipv6 (encap|vpn) rd ASN:nn_or_IP-address:nn X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display information for a route distinguisher\n"
-       "ENCAP Route Distinguisher\n"
-       "Network in the BGP routing table to display\n")
-{
-  int ret;
-  struct prefix_rd prd;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  ret = str2prefix_rd (argv[1], &prd);
-  if (! ret)
-    {
-      vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-  return bgp_show_route (vty, NULL, argv[2], AFI_IP6, SAFI_ENCAP, &prd, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv4_prefix,
-       show_bgp_ipv4_prefix_cmd,
-       "show bgp ipv4 A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv4_safi_prefix,
-       show_bgp_ipv4_safi_prefix_cmd,
-       "show bgp ipv4 (unicast|multicast) A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_MULTICAST, NULL, 1, BGP_PATH_ALL);
-
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv4_vpn_prefix,
-       show_bgp_ipv4_vpn_prefix_cmd,
-       "show bgp ipv4 vpn A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display VPN NLRI specific information\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_MPLS_VPN, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv6_vpn_prefix,
-       show_bgp_ipv6_vpn_prefix_cmd,
-       "show bgp ipv6 vpn X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
        "Address Family\n"
-       "Display VPN NLRI specific information\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_MPLS_VPN, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv4_encap_prefix,
-       show_bgp_ipv4_encap_prefix_cmd,
-       "show bgp ipv4 encap A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display ENCAP NLRI specific information\n"
-       "Display information about ENCAP NLRIs\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP, SAFI_ENCAP, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv6_encap_prefix,
-       show_bgp_ipv6_encap_prefix_cmd,
-       "show bgp ipv6 encap X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display ENCAP NLRI specific information\n"
-       "Display information about ENCAP NLRIs\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_ENCAP, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv4_safi_rd_prefix,
-       show_bgp_ipv4_safi_rd_prefix_cmd,
-       "show bgp ipv4 (encap|vpn) rd ASN:nn_or_IP-address:nn A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display information for a route distinguisher\n"
-       "ENCAP Route Distinguisher\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  int ret;
-  struct prefix_rd prd;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  ret = str2prefix_rd (argv[1], &prd);
-  if (! ret)
-    {
-      vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-  return bgp_show_route (vty, NULL, argv[2], AFI_IP, safi, &prd, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv6_safi_rd_prefix,
-       show_bgp_ipv6_safi_rd_prefix_cmd,
-       "show bgp ipv6 (encap|vpn) rd ASN:nn_or_IP-address:nn X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display information for a route distinguisher\n"
-       "ENCAP Route Distinguisher\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  int ret;
-  struct prefix_rd prd;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  ret = str2prefix_rd (argv[1], &prd);
-  if (! ret)
-    {
-      vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-  return bgp_show_route (vty, NULL, argv[2], AFI_IP6, safi, &prd, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_afi_safi_view,
-       show_bgp_afi_safi_view_cmd,
-       "show bgp view WORD (ipv4|ipv6) (encap|mulicast|unicast|vpn)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "BGP view name\n"
-       "Address Family\n"
-       "Address Family\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       )
-{
-  struct bgp *bgp;
-  safi_t	safi;
-  afi_t		afi;
-
-  if (bgp_parse_afi(argv[1], &afi)) {
-    vty_out (vty, "Error: Bad AFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  if (bgp_parse_safi(argv[2], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[1], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  /* BGP structure lookup. */
-  bgp = bgp_lookup_by_name (argv[0]);
-  if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-
-  return bgp_show (vty, bgp, afi, safi, bgp_show_type_normal, NULL);
-}
-
-DEFUN (show_bgp_view_afi_safi_route,
-       show_bgp_view_afi_safi_route_cmd,
-       "show bgp view WORD (ipv4|ipv6) (encap|multicast|unicast|vpn) A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address Family\n"
-       "Address Family\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Network in the BGP routing table to display\n")
-{
-  safi_t	safi;
-  afi_t		afi;
-
-  if (bgp_parse_afi(argv[1], &afi)) {
-    vty_out (vty, "Error: Bad AFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  if (bgp_parse_safi(argv[2], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[1], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_route (vty, argv[0], argv[3], afi, safi, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_view_afi_safi_prefix,
-       show_bgp_view_afi_safi_prefix_cmd,
-       "show bgp view WORD (ipv4|ipv6) (encap|multicast|unicast|vpn) A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address Family\n"
-       "Address Family\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  safi_t	safi;
-  afi_t		afi;
-
-  if (bgp_parse_afi(argv[1], &afi)) {
-    vty_out (vty, "Error: Bad AFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  if (bgp_parse_safi(argv[2], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[1], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_route (vty, argv[0], argv[3], afi, safi, NULL, 1, BGP_PATH_ALL);
-}
-
-/* new001 */
-DEFUN (show_bgp_afi,
-       show_bgp_afi_cmd,
-       "show bgp (ipv4|ipv6)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family\n")
-{
-  afi_t	afi;
-
-  if (bgp_parse_afi(argv[0], &afi)) {
-    vty_out (vty, "Error: Bad AFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show (vty, NULL, afi, SAFI_UNICAST, bgp_show_type_normal,
-                   NULL);
-}
-
-DEFUN (show_bgp_ipv6_safi,
-       show_bgp_ipv6_safi_cmd,
-       "show bgp ipv6 (unicast|multicast)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show (vty, NULL, AFI_IP6, SAFI_MULTICAST, bgp_show_type_normal,
-                     NULL);
-
-  return bgp_show (vty, NULL, AFI_IP6, SAFI_UNICAST, bgp_show_type_normal, NULL);
-}
-
-DEFUN (show_bgp_ipv6_route,
-       show_bgp_ipv6_route_cmd,
-       "show bgp ipv6 X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_ipv6_safi_route,
-       show_bgp_ipv6_safi_route_cmd,
-       "show bgp ipv6 (unicast|multicast) X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
-       "Network in the BGP routing table to display\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_MULTICAST, NULL, 0, BGP_PATH_ALL);
-
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-/* old command */
-DEFUN (show_ipv6_bgp_route,
-       show_ipv6_bgp_route_cmd,
-       "show ipv6 bgp X:X::X:X",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_prefix,
-       show_bgp_prefix_cmd,
-       "show bgp X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "IPv6 prefix <network>/<length>\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-
-/* new002 */
-DEFUN (show_bgp_ipv6_prefix,
-       show_bgp_ipv6_prefix_cmd,
-       "show bgp ipv6 X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-DEFUN (show_bgp_ipv6_safi_prefix,
-       show_bgp_ipv6_safi_prefix_cmd,
-       "show bgp ipv6 (unicast|multicast) X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
+       "Address Family\n"
+       "Address Family modifier\n"
+       "Address Family\n"
+       "Address Family modifier\n"
+       "Display routes matching the AS path regular expression\n"
+       "A regular-expression to match the BGP AS paths\n")
 {
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_MULTICAST, NULL, 1, BGP_PATH_ALL);
+  afi_t afi = AFI_IP6;
+  safi_t safi = SAFI_UNICAST;
 
-  return bgp_show_route (vty, NULL, argv[1], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
+  int idx = 0;
+
+  /* [<ipv4 [<unicast|multicast>]|ipv6 [<unicast|multicast>]|encap [unicast]|vpnv4 [unicast]>] */
+  if (argv_find (argv, argc, "ipv4", &idx) || argv_find (argv, argc, "ipv6", &idx))
+  {
+    afi = strmatch(argv[idx]->text, "ipv6") ? AFI_IP6 : AFI_IP;
+    if (argv_find (argv, argc, "unicast", &idx) || argv_find (argv, argc, "multicast", &idx))
+      safi = strmatch (argv[idx]->text, "unicast") ? SAFI_UNICAST : SAFI_MULTICAST;
+  }
+  else if (argv_find (argv, argc, "encap", &idx) || argv_find (argv, argc, "vpnv4", &idx))
+  {
+    afi = AFI_IP;
+    safi = strmatch (argv[idx]->text, "encap") ? SAFI_ENCAP : SAFI_MPLS_VPN;
+    // advance idx if necessary
+    argv_find (argv, argc, "unicast", &idx);
+  }
+
+  // get index of regex
+  argv_find (argv, argc, "regexp", &idx);
+  idx++;
+
+  char *regstr = argv_concat (argv, argc, idx);
+  int rc = bgp_show_regexp (vty, (const char *) regstr, afi, safi, bgp_show_type_regexp);
+  XFREE (MTYPE_TMP, regstr);
+  return rc;
 }
 
-/* old command */
-DEFUN (show_ipv6_bgp_prefix,
-       show_ipv6_bgp_prefix_cmd,
-       "show ipv6 bgp X:X::X:X/M",
+DEFUN (show_ip_bgp_instance_all,
+       show_ip_bgp_instance_all_cmd,
+       "show [ip] bgp <view|vrf> all [<ipv4 [<unicast|multicast>]|ipv6 [<unicast|multicast>]|encap [unicast]|vpnv4 [unicast]>] [json]",
        SHOW_STR
        IP_STR
        BGP_STR
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
+       BGP_INSTANCE_ALL_HELP_STR
+       "Address Family\n"
+       "Address Family modifier\n"
+       "Address Family modifier\n"
+       "Address Family\n"
+       "Address Family modifier\n"
+       "Address Family modifier\n"
+       "Address Family\n"
+       "Address Family modifier\n"
+       "Address Family\n"
+       "Address Family modifier\n"
+       JSON_STR)
 {
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
+  afi_t afi = AFI_IP;
+  safi_t safi = SAFI_UNICAST;
+
+  int idx = 0;
+
+  /* show [ip] bgp */
+  if (argv_find (argv, argc, "ip", &idx))
+    afi = AFI_IP;
+  /* [<ipv4 [<unicast|multicast>]|ipv6 [<unicast|multicast>]|encap [unicast]|vpnv4 [unicast]>] */
+  if (argv_find (argv, argc, "ipv4", &idx) || argv_find (argv, argc, "ipv6", &idx))
+  {
+    afi = strmatch(argv[idx]->text, "ipv6") ? AFI_IP6 : AFI_IP;
+    if (argv_find (argv, argc, "unicast", &idx) || argv_find (argv, argc, "multicast", &idx))
+      safi = strmatch (argv[idx]->text, "unicast") ? SAFI_UNICAST : SAFI_MULTICAST;
+  }
+  else if (argv_find (argv, argc, "encap", &idx) || argv_find (argv, argc, "vpnv4", &idx))
+  {
+    afi = AFI_IP;
+    safi = strmatch (argv[idx]->text, "encap") ? SAFI_ENCAP : SAFI_MPLS_VPN;
+    // advance idx if necessary
+    argv_find (argv, argc, "unicast", &idx);
+  }
+
+  u_char uj = use_json(argc, argv);
+
+  bgp_show_all_instances_routes_vty (vty, afi, safi, uj);
+  return CMD_SUCCESS;
 }
 
-DEFUN (show_bgp_view,
-       show_bgp_view_cmd,
-       "show bgp view WORD",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n")
-{
-  struct bgp *bgp;
-
-  /* BGP structure lookup. */
-  bgp = bgp_lookup_by_name (argv[0]);
-  if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-  
-  return bgp_show (vty, bgp, AFI_IP6, SAFI_UNICAST, bgp_show_type_normal, NULL);
-}
-
-DEFUN (show_bgp_view_ipv6,
-       show_bgp_view_ipv6_cmd,
-       "show bgp view WORD ipv6",
-       SHOW_STR
-       BGP_STR             
-       "BGP view\n"
-       "View name\n"
-       "Address family\n")
-{
-  struct bgp *bgp;
-
-  /* BGP structure lookup. */
-  bgp = bgp_lookup_by_name (argv[0]);
-  if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-  
-  return bgp_show (vty, bgp, AFI_IP6, SAFI_UNICAST, bgp_show_type_normal, NULL);
-}
-  
-DEFUN (show_bgp_view_route,
-       show_bgp_view_route_cmd,
-       "show bgp view WORD X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, argv[0], argv[1], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_view_ipv6_route,
-       show_bgp_view_ipv6_route_cmd,
-       "show bgp view WORD ipv6 X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_route (vty, argv[0], argv[1], AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp,
-       show_ipv6_mbgp_cmd,
-       "show ipv6 mbgp",
-       SHOW_STR
-       IP_STR
-       MBGP_STR)
-{
-  return bgp_show (vty, NULL, AFI_IP6, SAFI_MULTICAST, bgp_show_type_normal,
-                   NULL);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp_route,
-       show_ipv6_mbgp_route_cmd,
-       "show ipv6 mbgp X:X::X:X",
-       SHOW_STR
-       IP_STR
-       MBGP_STR
-       "Network in the MBGP routing table to display\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_MULTICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp_prefix,
-       show_ipv6_mbgp_prefix_cmd,
-       "show ipv6 mbgp X:X::X:X/M",
-       SHOW_STR
-       IP_STR
-       MBGP_STR
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
-{
-  return bgp_show_route (vty, NULL, argv[0], AFI_IP6, SAFI_MULTICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_view_prefix,
-       show_bgp_view_prefix_cmd,
-       "show bgp view WORD X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"       
-       "IPv6 prefix <network>/<length>\n")
-{
-  return bgp_show_route (vty, argv[0], argv[1], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_view_ipv6_prefix,
-       show_bgp_view_ipv6_prefix_cmd,
-       "show bgp view WORD ipv6 X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "IPv6 prefix <network>/<length>\n")  
-{
-  return bgp_show_route (vty, argv[0], argv[1], AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
 
 static int
-bgp_show_regexp (struct vty *vty, int argc, const char **argv, afi_t afi,
+bgp_show_regexp (struct vty *vty, const char *regstr, afi_t afi,
 		 safi_t safi, enum bgp_show_type type)
 {
-  int i;
-  struct buffer *b;
-  char *regstr;
-  int first;
+  return CMD_SUCCESS;
+
   regex_t *regex;
   int rc;
   
-  first = 0;
-  b = buffer_new (1024);
-  for (i = 0; i < argc; i++)
-    {
-      if (first)
-	buffer_putc (b, ' ');
-      else
-	{
-	  if ((strcmp (argv[i], "unicast") == 0) || (strcmp (argv[i], "multicast") == 0))
-	    continue;
-	  first = 1;
-	}
-
-      buffer_putstr (b, argv[i]);
-    }
-  buffer_putc (b, '\0');
-
-  regstr = buffer_getstr (b);
-  buffer_free (b);
-
   regex = bgp_regcomp (regstr);
-  XFREE(MTYPE_TMP, regstr);
   if (! regex)
     {
-      vty_out (vty, "Can't compile regexp %s%s", argv[0],
-	       VTY_NEWLINE);
+      vty_out (vty, "Can't compile regexp %s%s", regstr, VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  rc = bgp_show (vty, NULL, afi, safi, type, regex);
+  rc = bgp_show (vty, NULL, afi, safi, type, regex, 0);
   bgp_regex_free (regex);
   return rc;
 }
 
-
-DEFUN (show_ip_bgp_regexp, 
-       show_ip_bgp_regexp_cmd,
-       "show ip bgp regexp .LINE",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  return bgp_show_regexp (vty, argc, argv, AFI_IP, SAFI_UNICAST,
-			  bgp_show_type_regexp);
-}
-
-DEFUN (show_ip_bgp_flap_regexp, 
-       show_ip_bgp_flap_regexp_cmd,
-       "show ip bgp flap-statistics regexp .LINE",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display flap statistics of routes\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  return bgp_show_regexp (vty, argc, argv, AFI_IP, SAFI_UNICAST,
-			  bgp_show_type_flap_regexp);
-}
-
-ALIAS (show_ip_bgp_flap_regexp,
-       show_ip_bgp_damp_flap_regexp_cmd,
-       "show ip bgp dampening flap-statistics regexp .LINE",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-
-DEFUN (show_ip_bgp_ipv4_regexp, 
-       show_ip_bgp_ipv4_regexp_cmd,
-       "show ip bgp ipv4 (unicast|multicast) regexp .LINE",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_regexp (vty, argc, argv, AFI_IP, SAFI_MULTICAST,
-			    bgp_show_type_regexp);
-
-  return bgp_show_regexp (vty, argc, argv, AFI_IP, SAFI_UNICAST,
-			  bgp_show_type_regexp);
-}
-
-DEFUN (show_bgp_regexp, 
-       show_bgp_regexp_cmd,
-       "show bgp regexp .LINE",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  return bgp_show_regexp (vty, argc, argv, AFI_IP6, SAFI_UNICAST,
-			  bgp_show_type_regexp);
-}
-
-/* old command */
-DEFUN (show_ipv6_bgp_regexp, 
-       show_ipv6_bgp_regexp_cmd,
-       "show ipv6 bgp regexp .LINE",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  return bgp_show_regexp (vty, argc, argv, AFI_IP6, SAFI_UNICAST,
-			  bgp_show_type_regexp);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp_regexp, 
-       show_ipv6_mbgp_regexp_cmd,
-       "show ipv6 mbgp regexp .LINE",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the MBGP AS paths\n")
-{
-  return bgp_show_regexp (vty, argc, argv, AFI_IP6, SAFI_MULTICAST,
-			  bgp_show_type_regexp);
-}
-
-DEFUN (show_bgp_ipv4_safi_flap_regexp,
-       show_bgp_ipv4_safi_flap_regexp_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) flap-statistics regexp .LINE",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[1], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-    return bgp_show_regexp (vty, argc-1, argv+1, AFI_IP, safi,
-	bgp_show_type_flap_regexp);
-}
-
-ALIAS (show_bgp_ipv4_safi_flap_regexp,
-       show_bgp_ipv4_safi_damp_flap_regexp_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening flap-statistics regexp .LINE",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-
-DEFUN (show_bgp_ipv6_safi_flap_regexp,
-       show_bgp_ipv6_safi_flap_regexp_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) flap-statistics regexp .LINE",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[1], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-    return bgp_show_regexp (vty, argc-1, argv+1, AFI_IP6, safi,
-	bgp_show_type_flap_regexp);
-}
-
-ALIAS (show_bgp_ipv6_safi_flap_regexp,
-       show_bgp_ipv6_safi_damp_flap_regexp_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampening flap-statistics regexp .LINE",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-
-DEFUN (show_bgp_ipv4_safi_regexp, 
-       show_bgp_ipv4_safi_regexp_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) regexp .LINE",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  return bgp_show_regexp (vty, argc-1, argv+1, AFI_IP, safi,
-			  bgp_show_type_regexp);
-}
-
-DEFUN (show_bgp_ipv6_safi_regexp, 
-       show_bgp_ipv6_safi_regexp_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) regexp .LINE",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  return bgp_show_regexp (vty, argc-1, argv+1, AFI_IP6, safi,
-			  bgp_show_type_regexp);
-}
-
-DEFUN (show_bgp_ipv6_regexp, 
-       show_bgp_ipv6_regexp_cmd,
-       "show bgp ipv6 regexp .LINE",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the AS path regular expression\n"
-       "A regular-expression to match the BGP AS paths\n")
-{
-  return bgp_show_regexp (vty, argc, argv, AFI_IP6, SAFI_UNICAST,
-			  bgp_show_type_regexp);
-}
-
 static int
-bgp_show_prefix_list (struct vty *vty, const char *prefix_list_str, afi_t afi,
+bgp_show_prefix_list (struct vty *vty, const char *name,
+                      const char *prefix_list_str, afi_t afi,
 		      safi_t safi, enum bgp_show_type type)
 {
   struct prefix_list *plist;
+  struct bgp *bgp = NULL;
+
+  if (name && !(bgp = bgp_lookup_by_name(name)))
+    {
+      vty_out (vty, "%% No such BGP instance exists%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
 
   plist = prefix_list_lookup (afi, prefix_list_str);
   if (plist == NULL)
@@ -8372,252 +8206,22 @@ bgp_show_prefix_list (struct vty *vty, const char *prefix_list_str, afi_t afi,
       return CMD_WARNING;
     }
 
-  return bgp_show (vty, NULL, afi, safi, type, plist);
-}
-DEFUN (show_ip_bgp_prefix_list, 
-       show_ip_bgp_prefix_list_cmd,
-       "show ip bgp prefix-list WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-{
-  return bgp_show_prefix_list (vty, argv[0], AFI_IP, SAFI_UNICAST,
-			       bgp_show_type_prefix_list);
-}
-
-DEFUN (show_ip_bgp_flap_prefix_list, 
-       show_ip_bgp_flap_prefix_list_cmd,
-       "show ip bgp flap-statistics prefix-list WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-{
-  return bgp_show_prefix_list (vty, argv[0], AFI_IP, SAFI_UNICAST,
-			       bgp_show_type_flap_prefix_list);
-}
-
-ALIAS (show_ip_bgp_flap_prefix_list,
-       show_ip_bgp_damp_flap_prefix_list_cmd,
-       "show ip bgp dampening flap-statistics prefix-list WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-
-DEFUN (show_ip_bgp_ipv4_prefix_list, 
-       show_ip_bgp_ipv4_prefix_list_cmd,
-       "show ip bgp ipv4 (unicast|multicast) prefix-list WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_prefix_list (vty, argv[1], AFI_IP, SAFI_MULTICAST,
-			         bgp_show_type_prefix_list);
-
-  return bgp_show_prefix_list (vty, argv[1], AFI_IP, SAFI_UNICAST,
-			       bgp_show_type_prefix_list);
-}
-
-DEFUN (show_bgp_prefix_list, 
-       show_bgp_prefix_list_cmd,
-       "show bgp prefix-list WORD",
-       SHOW_STR
-       BGP_STR
-       "Display routes conforming to the prefix-list\n"
-       "IPv6 prefix-list name\n")
-{
-  return bgp_show_prefix_list (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-			       bgp_show_type_prefix_list);
-}
-
-ALIAS (show_bgp_prefix_list, 
-       show_bgp_ipv6_prefix_list_cmd,
-       "show bgp ipv6 prefix-list WORD",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes conforming to the prefix-list\n"
-       "IPv6 prefix-list name\n")
-
-/* old command */
-DEFUN (show_ipv6_bgp_prefix_list, 
-       show_ipv6_bgp_prefix_list_cmd,
-       "show ipv6 bgp prefix-list WORD",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the prefix-list\n"
-       "IPv6 prefix-list name\n")
-{
-  return bgp_show_prefix_list (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-			       bgp_show_type_prefix_list);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp_prefix_list, 
-       show_ipv6_mbgp_prefix_list_cmd,
-       "show ipv6 mbgp prefix-list WORD",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the prefix-list\n"
-       "IPv6 prefix-list name\n")
-{
-  return bgp_show_prefix_list (vty, argv[0], AFI_IP6, SAFI_MULTICAST,
-			       bgp_show_type_prefix_list);
-}
-
-DEFUN (show_bgp_ipv4_prefix_list, 
-       show_bgp_ipv4_prefix_list_cmd,
-       "show bgp ipv4 prefix-list WORD",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-{
-  return bgp_show_prefix_list (vty, argv[0], AFI_IP, SAFI_UNICAST,
-			       bgp_show_type_prefix_list);
-}
-
-DEFUN (show_bgp_ipv4_safi_flap_prefix_list, 
-       show_bgp_ipv4_safi_flap_prefix_list_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) flap-statistics prefix-list WORD",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_list (vty, argv[1], AFI_IP, safi,
-			       bgp_show_type_flap_prefix_list);
-}
-
-ALIAS (show_bgp_ipv4_safi_flap_prefix_list, 
-       show_bgp_ipv4_safi_damp_flap_prefix_list_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening flap-statistics prefix-list WORD",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-
-DEFUN (show_bgp_ipv6_safi_flap_prefix_list, 
-       show_bgp_ipv6_safi_flap_prefix_list_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) flap-statistics prefix-list WORD",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_list (vty, argv[1], AFI_IP6, safi,
-			       bgp_show_type_flap_prefix_list);
-}
-ALIAS (show_bgp_ipv6_safi_flap_prefix_list, 
-       show_bgp_ipv6_safi_damp_flap_prefix_list_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampening flap-statistics prefix-list WORD",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-
-DEFUN (show_bgp_ipv4_safi_prefix_list, 
-       show_bgp_ipv4_safi_prefix_list_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) prefix-list WORD",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_list (vty, argv[1], AFI_IP, safi,
-			       bgp_show_type_prefix_list);
-}
-
-DEFUN (show_bgp_ipv6_safi_prefix_list, 
-       show_bgp_ipv6_safi_prefix_list_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) prefix-list WORD",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes conforming to the prefix-list\n"
-       "IP prefix-list name\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_list (vty, argv[1], AFI_IP6, safi,
-			       bgp_show_type_prefix_list);
+  return bgp_show (vty, bgp, afi, safi, type, plist, 0);
 }
 
 static int
-bgp_show_filter_list (struct vty *vty, const char *filter, afi_t afi,
+bgp_show_filter_list (struct vty *vty, const char *name,
+                      const char *filter, afi_t afi,
 		      safi_t safi, enum bgp_show_type type)
 {
   struct as_list *as_list;
+  struct bgp *bgp = NULL;
+
+  if (name && !(bgp = bgp_lookup_by_name(name)))
+    {
+      vty_out (vty, "%% No such BGP instance exists%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
 
   as_list = as_list_lookup (filter);
   if (as_list == NULL)
@@ -8626,110 +8230,12 @@ bgp_show_filter_list (struct vty *vty, const char *filter, afi_t afi,
       return CMD_WARNING;
     }
 
-  return bgp_show (vty, NULL, afi, safi, type, as_list);
-}
-
-DEFUN (show_ip_bgp_filter_list, 
-       show_ip_bgp_filter_list_cmd,
-       "show ip bgp filter-list WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  return bgp_show_filter_list (vty, argv[0], AFI_IP, SAFI_UNICAST,
-			       bgp_show_type_filter_list);
-}
-
-DEFUN (show_ip_bgp_flap_filter_list, 
-       show_ip_bgp_flap_filter_list_cmd,
-       "show ip bgp flap-statistics filter-list WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  return bgp_show_filter_list (vty, argv[0], AFI_IP, SAFI_UNICAST,
-			       bgp_show_type_flap_filter_list);
-}
-
-ALIAS (show_ip_bgp_flap_filter_list, 
-       show_ip_bgp_damp_flap_filter_list_cmd,
-       "show ip bgp dampening flap-statistics filter-list WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-
-DEFUN (show_ip_bgp_ipv4_filter_list, 
-       show_ip_bgp_ipv4_filter_list_cmd,
-       "show ip bgp ipv4 (unicast|multicast) filter-list WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_filter_list (vty, argv[1], AFI_IP, SAFI_MULTICAST,
-			         bgp_show_type_filter_list);
-  
-  return bgp_show_filter_list (vty, argv[1], AFI_IP, SAFI_UNICAST,
-			       bgp_show_type_filter_list);
-}
-
-DEFUN (show_bgp_filter_list, 
-       show_bgp_filter_list_cmd,
-       "show bgp filter-list WORD",
-       SHOW_STR
-       BGP_STR
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  return bgp_show_filter_list (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-			       bgp_show_type_filter_list);
-}
-
-/* old command */
-DEFUN (show_ipv6_bgp_filter_list, 
-       show_ipv6_bgp_filter_list_cmd,
-       "show ipv6 bgp filter-list WORD",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  return bgp_show_filter_list (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-			       bgp_show_type_filter_list);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp_filter_list, 
-       show_ipv6_mbgp_filter_list_cmd,
-       "show ipv6 mbgp filter-list WORD",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  return bgp_show_filter_list (vty, argv[0], AFI_IP6, SAFI_MULTICAST,
-			       bgp_show_type_filter_list);
+  return bgp_show (vty, bgp, afi, safi, type, as_list, 0);
 }
 
 DEFUN (show_ip_bgp_dampening_info,
        show_ip_bgp_dampening_params_cmd,
-       "show ip bgp dampening parameters",
+       "show [ip] bgp dampening parameters",
        SHOW_STR
        IP_STR
        BGP_STR
@@ -8739,218 +8245,41 @@ DEFUN (show_ip_bgp_dampening_info,
     return bgp_show_dampening_parameters (vty, AFI_IP, SAFI_UNICAST);
 }
 
-DEFUN (show_bgp_ipv4_filter_list, 
-       show_bgp_ipv4_filter_list_cmd,
-       "show bgp ipv4 filter-list WORD",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  return bgp_show_filter_list (vty, argv[0], AFI_IP, SAFI_UNICAST,
-			       bgp_show_type_filter_list);
-}
 
-DEFUN (show_bgp_ipv4_safi_flap_filter_list, 
-       show_bgp_ipv4_safi_flap_filter_list_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) flap-statistics filter-list WORD",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_filter_list (vty, argv[1], AFI_IP, safi,
-			       bgp_show_type_flap_filter_list);
-}
-
-ALIAS (show_bgp_ipv4_safi_flap_filter_list, 
-       show_bgp_ipv4_safi_damp_flap_filter_list_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening flap-statistics filter-list WORD",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-
-DEFUN (show_bgp_ipv6_safi_flap_filter_list, 
-       show_bgp_ipv6_safi_flap_filter_list_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) flap-statistics filter-list WORD",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_filter_list (vty, argv[1], AFI_IP6, safi,
-			       bgp_show_type_flap_filter_list);
-}
-ALIAS (show_bgp_ipv6_safi_flap_filter_list, 
-       show_bgp_ipv6_safi_damp_flap_filter_list_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampening flap-statistics filter-list WORD",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-
-DEFUN (show_bgp_ipv4_safi_filter_list, 
-       show_bgp_ipv4_safi_filter_list_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) filter-list WORD",
-       SHOW_STR
-       BGP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_filter_list (vty, argv[1], AFI_IP, safi,
-			         bgp_show_type_filter_list);
-}
-
-DEFUN (show_bgp_ipv6_safi_filter_list, 
-       show_bgp_ipv6_safi_filter_list_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) filter-list WORD",
-       SHOW_STR
-       BGP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_filter_list (vty, argv[1], AFI_IP6, safi,
-			         bgp_show_type_filter_list);
-}
-
-DEFUN (show_bgp_ipv6_filter_list, 
-       show_bgp_ipv6_filter_list_cmd,
-       "show bgp ipv6 filter-list WORD",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes conforming to the filter-list\n"
-       "Regular expression access list name\n")
-{
-  return bgp_show_filter_list (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-			       bgp_show_type_filter_list);
-}
-
-
-DEFUN (show_ip_bgp_ipv4_dampening_parameters, 
+DEFUN (show_ip_bgp_ipv4_dampening_parameters,
        show_ip_bgp_ipv4_dampening_parameters_cmd,
-       "show ip bgp ipv4 (unicast|multicast) dampening parameters",
+       "show [ip] bgp ipv4 <unicast|multicast> dampening parameters",
        SHOW_STR
        IP_STR
        BGP_STR
-       "Address family\n"
+       "Address Family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
        "Display detailed information about dampening\n"
        "Display detail of configured dampening parameters\n")
 {
-    if (strncmp(argv[0], "m", 1) == 0)
+  int idx_safi = 4;
+    if (strncmp(argv[idx_safi]->arg, "m", 1) == 0)
       return bgp_show_dampening_parameters (vty, AFI_IP, SAFI_MULTICAST);
 
     return bgp_show_dampening_parameters (vty, AFI_IP, SAFI_UNICAST);
 }
 
-
-DEFUN (show_ip_bgp_ipv4_dampening_flap_stats,
-       show_ip_bgp_ipv4_dampening_flap_stats_cmd,
-       "show ip bgp ipv4 (unicast|multicast) dampening flap-statistics",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n")
-{
-    if (strncmp(argv[0], "m", 1) == 0)      
-      return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST,
-                     bgp_show_type_flap_statistics, NULL);
-
-    return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST,
-                 bgp_show_type_flap_statistics, NULL);
-}
-
-DEFUN (show_ip_bgp_ipv4_dampening_dampd_paths, 
-       show_ip_bgp_ipv4_dampening_dampd_paths_cmd,
-       "show ip bgp ipv4 (unicast|multicast) dampening dampened-paths",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display paths suppressed due to dampening\n")
-{
-    if (strncmp(argv[0], "m", 1) == 0)      
-      return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST,
-                     bgp_show_type_dampend_paths, NULL);
-
-    return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST,
-                 bgp_show_type_dampend_paths, NULL);
-}
-
 static int
-bgp_show_route_map (struct vty *vty, const char *rmap_str, afi_t afi,
+bgp_show_route_map (struct vty *vty, const char *name,
+                    const char *rmap_str, afi_t afi,
 		    safi_t safi, enum bgp_show_type type)
 {
   struct route_map *rmap;
+  struct bgp *bgp = NULL;
+
+  if (name && !(bgp = bgp_lookup_by_name(name)))
+    {
+
+
+      vty_out (vty, "%% No such BGP instance exists%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
 
   rmap = route_map_lookup_by_name (rmap_str);
   if (! rmap)
@@ -8960,470 +8289,12 @@ bgp_show_route_map (struct vty *vty, const char *rmap_str, afi_t afi,
       return CMD_WARNING;
     }
 
-  return bgp_show (vty, NULL, afi, safi, type, rmap);
-}
-
-DEFUN (show_ip_bgp_route_map, 
-       show_ip_bgp_route_map_cmd,
-       "show ip bgp route-map WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  return bgp_show_route_map (vty, argv[0], AFI_IP, SAFI_UNICAST,
-			     bgp_show_type_route_map);
-}
-
-DEFUN (show_ip_bgp_flap_route_map, 
-       show_ip_bgp_flap_route_map_cmd,
-       "show ip bgp flap-statistics route-map WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display flap statistics of routes\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  return bgp_show_route_map (vty, argv[0], AFI_IP, SAFI_UNICAST,
-			     bgp_show_type_flap_route_map);
-}
-
-ALIAS (show_ip_bgp_flap_route_map, 
-       show_ip_bgp_damp_flap_route_map_cmd,
-       "show ip bgp dampening flap-statistics route-map WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-
-DEFUN (show_ip_bgp_ipv4_route_map, 
-       show_ip_bgp_ipv4_route_map_cmd,
-       "show ip bgp ipv4 (unicast|multicast) route-map WORD",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_route_map (vty, argv[1], AFI_IP, SAFI_MULTICAST,
-			       bgp_show_type_route_map);
-
-  return bgp_show_route_map (vty, argv[1], AFI_IP, SAFI_UNICAST,
-			     bgp_show_type_route_map);
-}
-
-DEFUN (show_bgp_route_map, 
-       show_bgp_route_map_cmd,
-       "show bgp route-map WORD",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  return bgp_show_route_map (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-			     bgp_show_type_route_map);
-}
-
-DEFUN (show_ip_bgp_cidr_only,
-       show_ip_bgp_cidr_only_cmd,
-       "show ip bgp cidr-only",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display only routes with non-natural netmasks\n")
-{
-    return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST,
-		     bgp_show_type_cidr_only, NULL);
-}
-
-DEFUN (show_ip_bgp_flap_cidr_only,
-       show_ip_bgp_flap_cidr_only_cmd,
-       "show ip bgp flap-statistics cidr-only",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display flap statistics of routes\n"
-       "Display only routes with non-natural netmasks\n")
-{
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST,
-		   bgp_show_type_flap_cidr_only, NULL);
-}
-
-ALIAS (show_ip_bgp_flap_cidr_only,
-       show_ip_bgp_damp_flap_cidr_only_cmd,
-       "show ip bgp dampening flap-statistics cidr-only",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display only routes with non-natural netmasks\n")
-
-DEFUN (show_ip_bgp_ipv4_cidr_only,
-       show_ip_bgp_ipv4_cidr_only_cmd,
-       "show ip bgp ipv4 (unicast|multicast) cidr-only",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display only routes with non-natural netmasks\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST,
-		     bgp_show_type_cidr_only, NULL);
-
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST,
-		     bgp_show_type_cidr_only, NULL);
-}
-
-DEFUN (show_ip_bgp_community_all,
-       show_ip_bgp_community_all_cmd,
-       "show ip bgp community",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the communities\n")
-{
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST,
-		     bgp_show_type_community_all, NULL);
-}
-
-DEFUN (show_ip_bgp_ipv4_community_all,
-       show_ip_bgp_ipv4_community_all_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST,
-		     bgp_show_type_community_all, NULL);
- 
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST,
-		   bgp_show_type_community_all, NULL);
-}
-
-DEFUN (show_bgp_community_all,
-       show_bgp_community_all_cmd,
-       "show bgp community",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the communities\n")
-{
-  return bgp_show (vty, NULL, AFI_IP6, SAFI_UNICAST,
-		   bgp_show_type_community_all, NULL);
-}
-
-ALIAS (show_bgp_community_all,
-       show_bgp_ipv6_community_all_cmd,
-       "show bgp ipv6 community",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the communities\n")
-
-/* old command */
-DEFUN (show_ipv6_bgp_community_all,
-       show_ipv6_bgp_community_all_cmd,
-       "show ipv6 bgp community",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the communities\n")
-{
-  return bgp_show (vty, NULL, AFI_IP6, SAFI_UNICAST,
-		   bgp_show_type_community_all, NULL);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp_community_all,
-       show_ipv6_mbgp_community_all_cmd,
-       "show ipv6 mbgp community",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the communities\n")
-{
-  return bgp_show (vty, NULL, AFI_IP6, SAFI_MULTICAST,
-		   bgp_show_type_community_all, NULL);
-}
-
-DEFUN (show_bgp_ipv4_route_map, 
-       show_bgp_ipv4_route_map_cmd,
-       "show bgp ipv4 route-map WORD",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  return bgp_show_route_map (vty, argv[0], AFI_IP, SAFI_UNICAST,
-			     bgp_show_type_route_map);
-}
-
-DEFUN (show_bgp_ipv4_safi_flap_route_map, 
-       show_bgp_ipv4_safi_flap_route_map_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) flap-statistics route-map WORD",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_route_map (vty, argv[1], AFI_IP, safi,
-			     bgp_show_type_flap_route_map);
-}
-
-ALIAS (show_bgp_ipv4_safi_flap_route_map, 
-       show_bgp_ipv4_safi_damp_flap_route_map_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening flap-statistics route-map WORD",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-
-DEFUN (show_bgp_ipv6_safi_flap_route_map, 
-       show_bgp_ipv6_safi_flap_route_map_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) flap-statistics route-map WORD",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_route_map (vty, argv[1], AFI_IP6, safi,
-			     bgp_show_type_flap_route_map);
-}
-ALIAS (show_bgp_ipv6_safi_flap_route_map, 
-       show_bgp_ipv6_safi_damp_flap_route_map_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampening flap-statistics route-map WORD",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-
-DEFUN (show_bgp_ipv4_safi_route_map, 
-       show_bgp_ipv4_safi_route_map_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) route-map WORD",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_route_map (vty, argv[1], AFI_IP, safi,
-			     bgp_show_type_route_map);
-}
-
-DEFUN (show_bgp_ipv6_safi_route_map, 
-       show_bgp_ipv6_safi_route_map_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) route-map WORD",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  safi_t	safi;
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_route_map (vty, argv[1], AFI_IP6, safi,
-			     bgp_show_type_route_map);
-}
-
-DEFUN (show_bgp_ipv6_route_map, 
-       show_bgp_ipv6_route_map_cmd,
-       "show bgp ipv6 route-map WORD",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the route-map\n"
-       "A route-map to match on\n")
-{
-  return bgp_show_route_map (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-			     bgp_show_type_route_map);
-}
-
-DEFUN (show_bgp_ipv4_cidr_only,
-       show_bgp_ipv4_cidr_only_cmd,
-       "show bgp ipv4 cidr-only",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display only routes with non-natural netmasks\n")
-{
-    return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST,
-		     bgp_show_type_cidr_only, NULL);
-}
-
-DEFUN (show_bgp_ipv4_safi_flap_cidr_only,
-       show_bgp_ipv4_safi_flap_cidr_only_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) flap-statistics cidr-only",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display flap statistics of routes\n"
-       "Display only routes with non-natural netmasks\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show (vty, NULL, AFI_IP, safi, bgp_show_type_flap_cidr_only, NULL);
-}
-
-ALIAS (show_bgp_ipv4_safi_flap_cidr_only,
-       show_bgp_ipv4_safi_damp_flap_cidr_only_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening flap-statistics cidr-only",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Display only routes with non-natural netmasks\n")
-
-DEFUN (show_bgp_ipv4_safi_cidr_only,
-       show_bgp_ipv4_safi_cidr_only_cmd,
-       "show bgp ipv4 (unicast|multicast) cidr-only",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display only routes with non-natural netmasks\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show (vty, NULL, AFI_IP, SAFI_MULTICAST,
-		     bgp_show_type_cidr_only, NULL);
-
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST,
-		     bgp_show_type_cidr_only, NULL);
-}
-
-/* new046 */
-DEFUN (show_bgp_afi_safi_community_all,
-       show_bgp_afi_safi_community_all_cmd,
-       "show bgp (ipv4|ipv6) (encap|multicast|unicast|vpn) community",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n")
-{
-  safi_t	safi;
-  afi_t		afi;
-
-  if (bgp_parse_afi(argv[0], &afi)) {
-    vty_out (vty, "Error: Bad AFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  if (bgp_parse_safi(argv[1], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[1], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  return bgp_show (vty, NULL, afi, safi, bgp_show_type_community_all, NULL);
-}
-DEFUN (show_bgp_afi_community_all,
-       show_bgp_afi_community_all_cmd,
-       "show bgp (ipv4|ipv6) community",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family\n"
-       "Display routes matching the communities\n")
-{
-  afi_t		afi;
-  safi_t	safi = SAFI_UNICAST;
-
-  if (bgp_parse_afi(argv[0], &afi)) {
-    vty_out (vty, "Error: Bad AFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show (vty, NULL, afi, safi, bgp_show_type_community_all, NULL);
+  return bgp_show (vty, bgp, afi, safi, type, rmap, 0);
 }
 
 static int
 bgp_show_community (struct vty *vty, const char *view_name, int argc,
-		    const char **argv, int exact, afi_t afi, safi_t safi)
+		    struct cmd_token **argv, int exact, afi_t afi, safi_t safi)
 {
   struct community *com;
   struct buffer *b;
@@ -9438,7 +8309,7 @@ bgp_show_community (struct vty *vty, const char *view_name, int argc,
       bgp = bgp_lookup_by_name (view_name);
       if (bgp == NULL)
 	{
-	  vty_out (vty, "Can't find BGP view %s%s", view_name, VTY_NEWLINE);
+	  vty_out (vty, "Can't find BGP instance %s%s", view_name, VTY_NEWLINE);
 	  return CMD_WARNING;
 	}
     }
@@ -9459,12 +8330,12 @@ bgp_show_community (struct vty *vty, const char *view_name, int argc,
         buffer_putc (b, ' ');
       else
 	{
-	  if ((strcmp (argv[i], "unicast") == 0) || (strcmp (argv[i], "multicast") == 0))
+	  if ((strcmp (argv[i]->arg, "unicast") == 0) || (strcmp (argv[i]->arg, "multicast") == 0))
 	    continue;
 	  first = 1;
 	}
       
-      buffer_putstr (b, argv[i]);
+      buffer_putstr (b, argv[i]->arg);
     }
   buffer_putc (b, '\0');
 
@@ -9481,1630 +8352,22 @@ bgp_show_community (struct vty *vty, const char *view_name, int argc,
 
   return bgp_show (vty, bgp, afi, safi,
                    (exact ? bgp_show_type_community_exact :
-		            bgp_show_type_community), com);
+		    bgp_show_type_community), com, 0);
 }
-
-DEFUN (show_ip_bgp_community,
-       show_ip_bgp_community_cmd,
-       "show ip bgp community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 0, AFI_IP, SAFI_UNICAST);
-}
-
-ALIAS (show_ip_bgp_community,
-       show_ip_bgp_community2_cmd,
-       "show ip bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-	
-ALIAS (show_ip_bgp_community,
-       show_ip_bgp_community3_cmd,
-       "show ip bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-	
-ALIAS (show_ip_bgp_community,
-       show_ip_bgp_community4_cmd,
-       "show ip bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-DEFUN (show_ip_bgp_ipv4_community,
-       show_ip_bgp_ipv4_community_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_community (vty, NULL, argc, argv, 0, AFI_IP, SAFI_MULTICAST);
- 
-  return bgp_show_community (vty, NULL, argc, argv, 0, AFI_IP, SAFI_UNICAST);
-}
-
-ALIAS (show_ip_bgp_ipv4_community,
-       show_ip_bgp_ipv4_community2_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-	
-ALIAS (show_ip_bgp_ipv4_community,
-       show_ip_bgp_ipv4_community3_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-	
-ALIAS (show_ip_bgp_ipv4_community,
-       show_ip_bgp_ipv4_community4_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-DEFUN (show_ip_bgp_community_exact,
-       show_ip_bgp_community_exact_cmd,
-       "show ip bgp community (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 1, AFI_IP, SAFI_UNICAST);
-}
-
-ALIAS (show_ip_bgp_community_exact,
-       show_ip_bgp_community2_exact_cmd,
-       "show ip bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_ip_bgp_community_exact,
-       show_ip_bgp_community3_exact_cmd,
-       "show ip bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_ip_bgp_community_exact,
-       show_ip_bgp_community4_exact_cmd,
-       "show ip bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-DEFUN (show_ip_bgp_ipv4_community_exact,
-       show_ip_bgp_ipv4_community_exact_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_community (vty, NULL, argc, argv, 1, AFI_IP, SAFI_MULTICAST);
- 
-  return bgp_show_community (vty, NULL, argc, argv, 1, AFI_IP, SAFI_UNICAST);
-}
-
-ALIAS (show_ip_bgp_ipv4_community_exact,
-       show_ip_bgp_ipv4_community2_exact_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_ip_bgp_ipv4_community_exact,
-       show_ip_bgp_ipv4_community3_exact_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-       
-ALIAS (show_ip_bgp_ipv4_community_exact,
-       show_ip_bgp_ipv4_community4_exact_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-DEFUN (show_bgp_community,
-       show_bgp_community_cmd,
-       "show bgp community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 0, AFI_IP6, SAFI_UNICAST);
-}
-
-ALIAS (show_bgp_community,
-       show_bgp_ipv6_community_cmd,
-       "show bgp ipv6 community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-ALIAS (show_bgp_community,
-       show_bgp_community2_cmd,
-       "show bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-ALIAS (show_bgp_community,
-       show_bgp_ipv6_community2_cmd,
-       "show bgp ipv6 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-ALIAS (show_bgp_community,
-       show_bgp_community3_cmd,
-       "show bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-ALIAS (show_bgp_community,
-       show_bgp_ipv6_community3_cmd,
-       "show bgp ipv6 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-ALIAS (show_bgp_community,
-       show_bgp_community4_cmd,
-       "show bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-ALIAS (show_bgp_community,
-       show_bgp_ipv6_community4_cmd,
-       "show bgp ipv6 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-/* old command */
-DEFUN (show_ipv6_bgp_community,
-       show_ipv6_bgp_community_cmd,
-       "show ipv6 bgp community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 0, AFI_IP6, SAFI_UNICAST);
-}
-
-/* old command */
-ALIAS (show_ipv6_bgp_community,
-       show_ipv6_bgp_community2_cmd,
-       "show ipv6 bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-/* old command */
-ALIAS (show_ipv6_bgp_community,
-       show_ipv6_bgp_community3_cmd,
-       "show ipv6 bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-/* old command */
-ALIAS (show_ipv6_bgp_community,
-       show_ipv6_bgp_community4_cmd,
-       "show ipv6 bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-DEFUN (show_bgp_community_exact,
-       show_bgp_community_exact_cmd,
-       "show bgp community (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 1, AFI_IP6, SAFI_UNICAST);
-}
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_ipv6_community_exact_cmd,
-       "show bgp ipv6 community (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_community2_exact_cmd,
-       "show bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_ipv6_community2_exact_cmd,
-       "show bgp ipv6 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_community3_exact_cmd,
-       "show bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_ipv6_community3_exact_cmd,
-       "show bgp ipv6 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_community4_exact_cmd,
-       "show bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_ipv6_community4_exact_cmd,
-       "show bgp ipv6 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-/* old command */
-DEFUN (show_ipv6_bgp_community_exact,
-       show_ipv6_bgp_community_exact_cmd,
-       "show ipv6 bgp community (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 1, AFI_IP6, SAFI_UNICAST);
-}
-
-/* old command */
-ALIAS (show_ipv6_bgp_community_exact,
-       show_ipv6_bgp_community2_exact_cmd,
-       "show ipv6 bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-/* old command */
-ALIAS (show_ipv6_bgp_community_exact,
-       show_ipv6_bgp_community3_exact_cmd,
-       "show ipv6 bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-/* old command */
-ALIAS (show_ipv6_bgp_community_exact,
-       show_ipv6_bgp_community4_exact_cmd,
-       "show ipv6 bgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
- 
-/* old command */
-DEFUN (show_ipv6_mbgp_community,
-       show_ipv6_mbgp_community_cmd,
-       "show ipv6 mbgp community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 0, AFI_IP6, SAFI_MULTICAST);
-}
-
-/* old command */
-ALIAS (show_ipv6_mbgp_community,
-       show_ipv6_mbgp_community2_cmd,
-       "show ipv6 mbgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-/* old command */
-ALIAS (show_ipv6_mbgp_community,
-       show_ipv6_mbgp_community3_cmd,
-       "show ipv6 mbgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-/* old command */
-ALIAS (show_ipv6_mbgp_community,
-       show_ipv6_mbgp_community4_cmd,
-       "show ipv6 mbgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-/* old command */
-DEFUN (show_ipv6_mbgp_community_exact,
-       show_ipv6_mbgp_community_exact_cmd,
-       "show ipv6 mbgp community (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 1, AFI_IP6, SAFI_MULTICAST);
-}
-
-/* old command */
-ALIAS (show_ipv6_mbgp_community_exact,
-       show_ipv6_mbgp_community2_exact_cmd,
-       "show ipv6 mbgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-/* old command */
-ALIAS (show_ipv6_mbgp_community_exact,
-       show_ipv6_mbgp_community3_exact_cmd,
-       "show ipv6 mbgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-/* old command */
-ALIAS (show_ipv6_mbgp_community_exact,
-       show_ipv6_mbgp_community4_exact_cmd,
-       "show ipv6 mbgp community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-DEFUN (show_bgp_ipv4_community,
-       show_bgp_ipv4_community_cmd,
-       "show bgp ipv4 community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 0, AFI_IP, SAFI_UNICAST);
-}
-
-ALIAS (show_bgp_ipv4_community,
-       show_bgp_ipv4_community2_cmd,
-       "show bgp ipv4 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-	
-ALIAS (show_bgp_ipv4_community,
-       show_bgp_ipv4_community3_cmd,
-       "show bgp ipv4 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-	
-ALIAS (show_bgp_ipv4_community,
-       show_bgp_ipv4_community4_cmd,
-       "show bgp ipv4 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-DEFUN (show_bgp_ipv4_safi_community,
-       show_bgp_ipv4_safi_community_cmd,
-       "show bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_community (vty, NULL, argc, argv, 0, AFI_IP, SAFI_MULTICAST);
- 
-  return bgp_show_community (vty, NULL, argc, argv, 0, AFI_IP, SAFI_UNICAST);
-}
-
-ALIAS (show_bgp_ipv4_safi_community,
-       show_bgp_ipv4_safi_community2_cmd,
-       "show bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-	
-ALIAS (show_bgp_ipv4_safi_community,
-       show_bgp_ipv4_safi_community3_cmd,
-       "show bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-	
-ALIAS (show_bgp_ipv4_safi_community,
-       show_bgp_ipv4_safi_community4_cmd,
-       "show bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-DEFUN (show_bgp_view_afi_safi_community_all,
-       show_bgp_view_afi_safi_community_all_cmd,
-       "show bgp view WORD (ipv4|ipv6) (unicast|multicast) community",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n")
-{
-  int afi;
-  int safi;
-  struct bgp *bgp;
-
-  /* BGP structure lookup. */
-  bgp = bgp_lookup_by_name (argv[0]);
-  if (bgp == NULL)
-    {
-      vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  afi = (strncmp (argv[1], "ipv6", 4) == 0) ? AFI_IP6 : AFI_IP;
-  safi = (strncmp (argv[2], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  return bgp_show (vty, bgp, afi, safi, bgp_show_type_community_all, NULL);
-}
-
-DEFUN (show_bgp_view_afi_safi_community,
-       show_bgp_view_afi_safi_community_cmd,
-       "show bgp view WORD (ipv4|ipv6) (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-{
-  int afi;
-  int safi;
-
-  afi = (strncmp (argv[1], "ipv6", 4) == 0) ? AFI_IP6 : AFI_IP;
-  safi = (strncmp (argv[2], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  return bgp_show_community (vty, argv[0], argc-3, &argv[3], 0, afi, safi);
-}
-
-ALIAS (show_bgp_view_afi_safi_community,
-       show_bgp_view_afi_safi_community2_cmd,
-       "show bgp view WORD (ipv4|ipv6) (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-ALIAS (show_bgp_view_afi_safi_community,
-       show_bgp_view_afi_safi_community3_cmd,
-       "show bgp view WORD (ipv4|ipv6) (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-ALIAS (show_bgp_view_afi_safi_community,
-       show_bgp_view_afi_safi_community4_cmd,
-       "show bgp view WORD (ipv4|ipv6) (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-DEFUN (show_bgp_ipv4_community_exact,
-       show_bgp_ipv4_community_exact_cmd,
-       "show bgp ipv4 community (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-{
-  return bgp_show_community (vty, NULL, argc, argv, 1, AFI_IP, SAFI_UNICAST);
-}
-
-ALIAS (show_bgp_ipv4_community_exact,
-       show_bgp_ipv4_community2_exact_cmd,
-       "show bgp ipv4 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_ipv4_community_exact,
-       show_bgp_ipv4_community3_exact_cmd,
-       "show bgp ipv4 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_ipv4_community_exact,
-       show_bgp_ipv4_community4_exact_cmd,
-       "show bgp ipv4 community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-DEFUN (show_bgp_ipv4_safi_community4_exact,
-       show_bgp_ipv4_safi_community_exact_cmd,
-       "show bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_community (vty, NULL, argc, argv, 1, AFI_IP, SAFI_MULTICAST);
- 
-  return bgp_show_community (vty, NULL, argc, argv, 1, AFI_IP, SAFI_UNICAST);
-}
-
-ALIAS (show_bgp_ipv4_safi_community4_exact,
-       show_bgp_ipv4_safi_community2_exact_cmd,
-       "show bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_ipv4_safi_community4_exact,
-       show_bgp_ipv4_safi_community3_exact_cmd,
-       "show bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-       
-ALIAS (show_bgp_ipv4_safi_community4_exact,
-       show_bgp_ipv4_safi_community4_exact_cmd,
-       "show bgp ipv4 (unicast|multicast) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-DEFUN (show_bgp_ipv6_safi_community,
-       show_bgp_ipv6_safi_community_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_community (vty, NULL, argc-1, argv+1, 0, AFI_IP6, safi);
-}
-
-ALIAS (show_bgp_ipv6_safi_community,
-       show_bgp_ipv6_safi_community2_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-	
-ALIAS (show_bgp_ipv6_safi_community,
-       show_bgp_ipv6_safi_community3_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-ALIAS (show_bgp_ipv6_safi_community,
-       show_bgp_ipv6_safi_community4_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n")
-
-
-DEFUN (show_bgp_ipv6_safi_community_exact,
-       show_bgp_ipv6_safi_community_exact_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_community (vty, NULL, argc-1, argv+1, 1, AFI_IP6, safi);
-}
-
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_ipv6_safi_community2_exact_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_ipv6_safi_community3_exact_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
-
-ALIAS (show_bgp_community_exact,
-       show_bgp_ipv6_safi_community4_exact_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) (AA:NN|local-AS|no-advertise|no-export) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the communities\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "community number\n"
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Exact match of the communities")
 
 static int
-bgp_show_community_list (struct vty *vty, const char *com, int exact,
+bgp_show_community_list (struct vty *vty, const char *name,
+                         const char *com, int exact,
 			 afi_t afi, safi_t safi)
 {
   struct community_list *list;
+  struct bgp *bgp = NULL;
+
+  if (name && !(bgp = bgp_lookup_by_name(name)))
+    {
+      vty_out (vty, "%% No such BGP instance exists%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
 
   list = community_list_lookup (bgp_clist, com, COMMUNITY_LIST_MASTER);
   if (list == NULL)
@@ -11114,294 +8377,25 @@ bgp_show_community_list (struct vty *vty, const char *com, int exact,
       return CMD_WARNING;
     }
 
-  return bgp_show (vty, NULL, afi, safi,
+  return bgp_show (vty, bgp, afi, safi,
                    (exact ? bgp_show_type_community_list_exact :
-		            bgp_show_type_community_list), list);
-}
-
-DEFUN (show_ip_bgp_community_list,
-       show_ip_bgp_community_list_cmd,
-       "show ip bgp community-list (<1-500>|WORD)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n")
-{
-  return bgp_show_community_list (vty, argv[0], 0, AFI_IP, SAFI_UNICAST);
-}
-
-DEFUN (show_ip_bgp_ipv4_community_list,
-       show_ip_bgp_ipv4_community_list_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community-list (<1-500>|WORD)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_community_list (vty, argv[1], 0, AFI_IP, SAFI_MULTICAST);
-  
-  return bgp_show_community_list (vty, argv[1], 0, AFI_IP, SAFI_UNICAST);
-}
-
-DEFUN (show_ip_bgp_community_list_exact,
-       show_ip_bgp_community_list_exact_cmd,
-       "show ip bgp community-list (<1-500>|WORD) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n"
-       "Exact match of the communities\n")
-{
-  return bgp_show_community_list (vty, argv[0], 1, AFI_IP, SAFI_UNICAST);
-}
-
-DEFUN (show_ip_bgp_ipv4_community_list_exact,
-       show_ip_bgp_ipv4_community_list_exact_cmd,
-       "show ip bgp ipv4 (unicast|multicast) community-list (<1-500>|WORD) exact-match",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n"
-       "Exact match of the communities\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_community_list (vty, argv[1], 1, AFI_IP, SAFI_MULTICAST);
- 
-  return bgp_show_community_list (vty, argv[1], 1, AFI_IP, SAFI_UNICAST);
-}
-
-DEFUN (show_bgp_community_list,
-       show_bgp_community_list_cmd,
-       "show bgp community-list (<1-500>|WORD)",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n")
-{
-  return bgp_show_community_list (vty, argv[0], 0, AFI_IP6, SAFI_UNICAST);
-}
-
-ALIAS (show_bgp_community_list,
-       show_bgp_ipv6_community_list_cmd,
-       "show bgp ipv6 community-list (<1-500>|WORD)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n")
-
-/* old command */
-DEFUN (show_ipv6_bgp_community_list,
-       show_ipv6_bgp_community_list_cmd,
-       "show ipv6 bgp community-list WORD",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the community-list\n"
-       "community-list name\n")
-{
-  return bgp_show_community_list (vty, argv[0], 0, AFI_IP6, SAFI_UNICAST);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp_community_list,
-       show_ipv6_mbgp_community_list_cmd,
-       "show ipv6 mbgp community-list WORD",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the community-list\n"
-       "community-list name\n")
-{
-  return bgp_show_community_list (vty, argv[0], 0, AFI_IP6, SAFI_MULTICAST);
-}
-
-DEFUN (show_bgp_community_list_exact,
-       show_bgp_community_list_exact_cmd,
-       "show bgp community-list (<1-500>|WORD) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n"
-       "Exact match of the communities\n")
-{
-  return bgp_show_community_list (vty, argv[0], 1, AFI_IP6, SAFI_UNICAST);
-}
-
-ALIAS (show_bgp_community_list_exact,
-       show_bgp_ipv6_community_list_exact_cmd,
-       "show bgp ipv6 community-list (<1-500>|WORD) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n"
-       "Exact match of the communities\n")
-
-/* old command */
-DEFUN (show_ipv6_bgp_community_list_exact,
-       show_ipv6_bgp_community_list_exact_cmd,
-       "show ipv6 bgp community-list WORD exact-match",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Display routes matching the community-list\n"
-       "community-list name\n"
-       "Exact match of the communities\n")
-{
-  return bgp_show_community_list (vty, argv[0], 1, AFI_IP6, SAFI_UNICAST);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp_community_list_exact,
-       show_ipv6_mbgp_community_list_exact_cmd,
-       "show ipv6 mbgp community-list WORD exact-match",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Display routes matching the community-list\n"
-       "community-list name\n"
-       "Exact match of the communities\n")
-{
-  return bgp_show_community_list (vty, argv[0], 1, AFI_IP6, SAFI_MULTICAST);
-}
-
-DEFUN (show_bgp_ipv4_community_list,
-       show_bgp_ipv4_community_list_cmd,
-       "show bgp ipv4 community-list (<1-500>|WORD)",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n")
-{
-  return bgp_show_community_list (vty, argv[0], 0, AFI_IP, SAFI_UNICAST);
-}
-
-DEFUN (show_bgp_ipv4_safi_community_list,
-       show_bgp_ipv4_safi_community_list_cmd,
-       "show bgp ipv4 (unicast|multicast) community-list (<1-500>|WORD)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_community_list (vty, argv[1], 0, AFI_IP, SAFI_MULTICAST);
-  
-  return bgp_show_community_list (vty, argv[1], 0, AFI_IP, SAFI_UNICAST);
-}
-
-DEFUN (show_bgp_ipv4_community_list_exact,
-       show_bgp_ipv4_community_list_exact_cmd,
-       "show bgp ipv4 community-list (<1-500>|WORD) exact-match",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n"
-       "Exact match of the communities\n")
-{
-  return bgp_show_community_list (vty, argv[0], 1, AFI_IP, SAFI_UNICAST);
-}
-
-DEFUN (show_bgp_ipv4_safi_community_list_exact,
-       show_bgp_ipv4_safi_community_list_exact_cmd,
-       "show bgp ipv4 (unicast|multicast) community-list (<1-500>|WORD) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n"
-       "Exact match of the communities\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_community_list (vty, argv[1], 1, AFI_IP, SAFI_MULTICAST);
- 
-  return bgp_show_community_list (vty, argv[1], 1, AFI_IP, SAFI_UNICAST);
-}
-
-DEFUN (show_bgp_ipv6_safi_community_list,
-       show_bgp_ipv6_safi_community_list_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community-list (<1-500>|WORD)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_community_list (vty, argv[1], 0, AFI_IP6, safi);
-}
-
-DEFUN (show_bgp_ipv6_safi_community_list_exact,
-       show_bgp_ipv6_safi_community_list_exact_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) community-list (<1-500>|WORD) exact-match",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Display routes matching the community-list\n"
-       "community-list number\n"
-       "community-list name\n"
-       "Exact match of the communities\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_community_list (vty, argv[1], 1, AFI_IP6, safi);
+		    bgp_show_type_community_list), list, 0);
 }
 
 static int
-bgp_show_prefix_longer (struct vty *vty, const char *prefix, afi_t afi,
+bgp_show_prefix_longer (struct vty *vty, const char *name,
+                        const char *prefix, afi_t afi,
 			safi_t safi, enum bgp_show_type type)
 {
   int ret;
   struct prefix *p;
+  struct bgp *bgp = NULL;
+
+  if (name && !(bgp = bgp_lookup_by_name(name)))
+    {
+      vty_out (vty, "%% No such BGP instance exists%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
 
   p = prefix_new();
 
@@ -11412,455 +8406,14 @@ bgp_show_prefix_longer (struct vty *vty, const char *prefix, afi_t afi,
       return CMD_WARNING;
     }
 
-  ret = bgp_show (vty, NULL, afi, safi, type, p);
+  ret = bgp_show (vty, bgp, afi, safi, type, p, 0);
   prefix_free(p);
   return ret;
 }
 
-DEFUN (show_ip_bgp_prefix_longer,
-       show_ip_bgp_prefix_longer_cmd,
-       "show ip bgp A.B.C.D/M longer-prefixes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-{
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP, SAFI_UNICAST,
-				 bgp_show_type_prefix_longer);
-}
-
-DEFUN (show_ip_bgp_flap_prefix_longer,
-       show_ip_bgp_flap_prefix_longer_cmd,
-       "show ip bgp flap-statistics A.B.C.D/M longer-prefixes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-{
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP, SAFI_UNICAST,
-				 bgp_show_type_flap_prefix_longer);
-}
-
-ALIAS (show_ip_bgp_flap_prefix_longer,
-       show_ip_bgp_damp_flap_prefix_longer_cmd,
-       "show ip bgp dampening flap-statistics A.B.C.D/M longer-prefixes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-
-DEFUN (show_ip_bgp_ipv4_prefix_longer,
-       show_ip_bgp_ipv4_prefix_longer_cmd,
-       "show ip bgp ipv4 (unicast|multicast) A.B.C.D/M longer-prefixes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-{
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_prefix_longer (vty, argv[1], AFI_IP, SAFI_MULTICAST,
-				   bgp_show_type_prefix_longer);
-
-  return bgp_show_prefix_longer (vty, argv[1], AFI_IP, SAFI_UNICAST,
-				 bgp_show_type_prefix_longer);
-}
-
-DEFUN (show_ip_bgp_flap_address,
-       show_ip_bgp_flap_address_cmd,
-       "show ip bgp flap-statistics A.B.C.D",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display flap statistics of routes\n"
-       "Network in the BGP routing table to display\n")
-{
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP, SAFI_UNICAST,
-				 bgp_show_type_flap_address);
-}
-
-ALIAS (show_ip_bgp_flap_address,
-       show_ip_bgp_damp_flap_address_cmd,
-       "show ip bgp dampening flap-statistics A.B.C.D",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Network in the BGP routing table to display\n")
-
-DEFUN (show_ip_bgp_flap_prefix,
-       show_ip_bgp_flap_prefix_cmd,
-       "show ip bgp flap-statistics A.B.C.D/M",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP, SAFI_UNICAST,
-				 bgp_show_type_flap_prefix);
-}
-
-ALIAS (show_ip_bgp_flap_prefix,
-       show_ip_bgp_damp_flap_prefix_cmd,
-       "show ip bgp dampening flap-statistics A.B.C.D/M",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-
-DEFUN (show_bgp_prefix_longer,
-       show_bgp_prefix_longer_cmd,
-       "show bgp X:X::X:X/M longer-prefixes",
-       SHOW_STR
-       BGP_STR
-       "IPv6 prefix <network>/<length>\n"
-       "Display route and more specific routes\n")
-{
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-				 bgp_show_type_prefix_longer);
-}
-
-/* old command */
-DEFUN (show_ipv6_bgp_prefix_longer,
-       show_ipv6_bgp_prefix_longer_cmd,
-       "show ipv6 bgp X:X::X:X/M longer-prefixes",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
-       "Display route and more specific routes\n")
-{
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-				 bgp_show_type_prefix_longer);
-}
-
-/* old command */
-DEFUN (show_ipv6_mbgp_prefix_longer,
-       show_ipv6_mbgp_prefix_longer_cmd,
-       "show ipv6 mbgp X:X::X:X/M longer-prefixes",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n"
-       "Display route and more specific routes\n")
-{
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP6, SAFI_MULTICAST,
-				 bgp_show_type_prefix_longer);
-}
-
-DEFUN (show_bgp_ipv4_prefix_longer,
-       show_bgp_ipv4_prefix_longer_cmd,
-       "show bgp ipv4 A.B.C.D/M longer-prefixes",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-{
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP, SAFI_UNICAST,
-				 bgp_show_type_prefix_longer);
-}
-
-DEFUN (show_bgp_ipv4_safi_flap_prefix_longer,
-       show_bgp_ipv4_safi_flap_prefix_longer_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) flap-statistics A.B.C.D/M longer-prefixes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_longer (vty, argv[1], AFI_IP, safi,
-				 bgp_show_type_flap_prefix_longer);
-}
-
-ALIAS (show_bgp_ipv4_safi_flap_prefix_longer,
-       show_bgp_ipv4_safi_damp_flap_prefix_longer_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening flap-statistics A.B.C.D/M longer-prefixes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-
-DEFUN (show_bgp_ipv6_safi_flap_prefix_longer,
-       show_bgp_ipv6_safi_flap_prefix_longer_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) flap-statistics X:X::X:X/M longer-prefixes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_longer (vty, argv[1], AFI_IP6, safi,
-				 bgp_show_type_flap_prefix_longer);
-}
-ALIAS (show_bgp_ipv6_safi_flap_prefix_longer,
-       show_bgp_ipv6_safi_damp_flap_prefix_longer_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampening flap-statistics X:X::X:X/M longer-prefixes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-
-DEFUN (show_bgp_ipv4_safi_prefix_longer,
-       show_bgp_ipv4_safi_prefix_longer_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) A.B.C.D/M longer-prefixes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  return bgp_show_prefix_longer (vty, argv[1], AFI_IP, safi,
-				   bgp_show_type_prefix_longer);
-}
-
-DEFUN (show_bgp_ipv6_safi_prefix_longer,
-       show_bgp_ipv6_safi_prefix_longer_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) X:X::X:X/M longer-prefixes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
-       "Display route and more specific routes\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  return bgp_show_prefix_longer (vty, argv[1], AFI_IP6, safi,
-				   bgp_show_type_prefix_longer);
-}
-
-DEFUN (show_bgp_ipv4_safi_flap_address,
-       show_bgp_ipv4_safi_flap_address_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) flap-statistics A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n"
-       "Network in the BGP routing table to display\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_longer (vty, argv[1], AFI_IP, safi,
-				 bgp_show_type_flap_address);
-}
-ALIAS (show_bgp_ipv4_safi_flap_address,
-       show_bgp_ipv4_safi_damp_flap_address_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening flap-statistics A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Network in the BGP routing table to display\n")
-
-DEFUN (show_bgp_ipv6_flap_address,
-       show_bgp_ipv6_flap_address_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) flap-statistics A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n"
-       "Network in the BGP routing table to display\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[1], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_longer (vty, argv[1], AFI_IP, safi,
-				 bgp_show_type_flap_address);
-}
-ALIAS (show_bgp_ipv6_flap_address,
-       show_bgp_ipv6_damp_flap_address_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampening flap-statistics A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "Network in the BGP routing table to display\n")
-
-DEFUN (show_bgp_ipv4_safi_flap_prefix,
-       show_bgp_ipv4_safi_flap_prefix_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) flap-statistics A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[1], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP, safi,
-				 bgp_show_type_flap_prefix);
-}
-
-ALIAS (show_bgp_ipv4_safi_flap_prefix,
-       show_bgp_ipv4_safi_damp_flap_prefix_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening flap-statistics A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-
-DEFUN (show_bgp_ipv6_safi_flap_prefix,
-       show_bgp_ipv6_safi_flap_prefix_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) flap-statistics X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[1], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP6, safi,
-				 bgp_show_type_flap_prefix);
-}
-
-ALIAS (show_bgp_ipv6_safi_flap_prefix,
-       show_bgp_ipv6_safi_damp_flap_prefix_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampening flap-statistics X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-
-DEFUN (show_bgp_ipv6_prefix_longer,
-       show_bgp_ipv6_prefix_longer_cmd,
-       "show bgp ipv6 X:X::X:X/M longer-prefixes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "IPv6 prefix <network>/<length>\n"
-       "Display route and more specific routes\n")
-{
-  return bgp_show_prefix_longer (vty, argv[0], AFI_IP6, SAFI_UNICAST,
-				 bgp_show_type_prefix_longer);
-}
-
 static struct peer *
 peer_lookup_in_view (struct vty *vty, const char *view_name, 
-                     const char *ip_str)
+                     const char *ip_str, u_char use_json)
 {
   int ret;
   struct bgp *bgp;
@@ -11873,7 +8426,16 @@ peer_lookup_in_view (struct vty *vty, const char *view_name,
       bgp = bgp_lookup_by_name (view_name);
       if (! bgp)
         {
-          vty_out (vty, "Can't find BGP view %s%s", view_name, VTY_NEWLINE);
+          if (use_json)
+            {
+              json_object *json_no = NULL;
+              json_no = json_object_new_object();
+              json_object_string_add(json_no, "warning", "Can't find BGP view");
+              vty_out (vty, "%s%s", json_object_to_json_string(json_no), VTY_NEWLINE);
+              json_object_free(json_no);
+            }
+          else
+            vty_out (vty, "Can't find BGP instance %s%s", view_name, VTY_NEWLINE);
           return NULL;
         }      
     }
@@ -11882,7 +8444,16 @@ peer_lookup_in_view (struct vty *vty, const char *view_name,
       bgp = bgp_get_default ();
       if (! bgp)
         {
-          vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
+          if (use_json)
+            {
+              json_object *json_no = NULL;
+              json_no = json_object_new_object();
+              json_object_string_add(json_no, "warning", "No BGP process configured");
+              vty_out (vty, "%s%s", json_object_to_json_string(json_no), VTY_NEWLINE);
+              json_object_free(json_no);
+            }
+          else
+            vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
           return NULL;
         }
     }
@@ -11891,15 +8462,43 @@ peer_lookup_in_view (struct vty *vty, const char *view_name,
   ret = str2sockunion (ip_str, &su);
   if (ret < 0)
     {
-      vty_out (vty, "Malformed address: %s%s", ip_str, VTY_NEWLINE);
-      return NULL;
+      peer = peer_lookup_by_conf_if (bgp, ip_str);
+      if (!peer)
+        {
+          peer = peer_lookup_by_hostname(bgp, ip_str);
+
+          if (!peer)
+            {
+              if (use_json)
+                {
+                  json_object *json_no = NULL;
+                  json_no = json_object_new_object();
+                  json_object_string_add(json_no, "malformedAddressOrName", ip_str);
+                  vty_out (vty, "%s%s", json_object_to_json_string(json_no), VTY_NEWLINE);
+                  json_object_free(json_no);
+                }
+              else
+                vty_out (vty, "%% Malformed address or name: %s%s", ip_str, VTY_NEWLINE);
+              return NULL;
+            }
+        }
+      return peer;
     }
 
   /* Peer structure lookup. */
   peer = peer_lookup (bgp, &su);
   if (! peer)
     {
-      vty_out (vty, "No such neighbor%s", VTY_NEWLINE);
+      if (use_json)
+        {
+          json_object *json_no = NULL;
+          json_no = json_object_new_object();
+          json_object_string_add(json_no, "warning","No such neighbor");
+          vty_out (vty, "%s%s", json_object_to_json_string(json_no), VTY_NEWLINE);
+          json_object_free(json_no);
+        }
+      else
+        vty_out (vty, "No such neighbor%s", VTY_NEWLINE);
       return NULL;
     }
   
@@ -12077,8 +8676,8 @@ bgp_table_stats (struct vty *vty, struct bgp *bgp, afi_t afi, safi_t safi)
   
   if (!bgp->rib[afi][safi])
     {
-      vty_out (vty, "%% No RIB exists for the specified AFI(%d)/SAFI(%d) %s",
-               afi, safi, VTY_NEWLINE);
+      vty_out (vty, "%% No RIB exist's for the AFI(%d)/SAFI(%d)%s",
+	       afi, safi, VTY_NEWLINE);
       return CMD_WARNING;
     }
   
@@ -12169,44 +8768,21 @@ bgp_table_stats_vty (struct vty *vty, const char *name,
 
   if (!bgp)
     {
-      vty_out (vty, "%% No such BGP instance exists%s", VTY_NEWLINE);
+      vty_out (vty, "%% No such BGP instance exist%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
-  if (strncmp (afi_str, "ipv", 3) == 0)
-    {
-      if (strncmp (afi_str, "ipv4", 4) == 0)
-        afi = AFI_IP;
-      else if (strncmp (afi_str, "ipv6", 4) == 0)
-        afi = AFI_IP6;
-      else
-        {
-          vty_out (vty, "%% Invalid address family %s%s",
-                   afi_str, VTY_NEWLINE);
-          return CMD_WARNING;
-        }
-      switch (safi_str[0]) {
-	case 'm':
-	    safi = SAFI_MULTICAST;
-	    break;
-	case 'u':
-	    safi = SAFI_UNICAST;
-	    break;
-	case 'v':
-	    safi =  SAFI_MPLS_VPN;
-	    break;
-	case 'e':
-	    safi = SAFI_ENCAP;
-	    break;
-	default:
-	    vty_out (vty, "%% Invalid subsequent address family %s%s",
-                   safi_str, VTY_NEWLINE);
-            return CMD_WARNING;
-      }
-    }
-  else
+  afi  = bgp_vty_afi_from_arg(afi_str);
+  if (afi == AFI_MAX)
     {
       vty_out (vty, "%% Invalid address family \"%s\"%s",
                afi_str, VTY_NEWLINE);
+      return CMD_WARNING;
+    }
+  safi = bgp_vty_safi_from_arg(safi_str);
+  if (safi == SAFI_MAX)
+    {
+      vty_out (vty, "%% Invalid subsequent address family %s%s",
+               safi_str, VTY_NEWLINE);
       return CMD_WARNING;
     }
 
@@ -12215,55 +8791,42 @@ bgp_table_stats_vty (struct vty *vty, const char *name,
 
 DEFUN (show_bgp_statistics,
        show_bgp_statistics_cmd,
-       "show bgp (ipv4|ipv6) (encap|multicast|unicast|vpn) statistics",
+       "show [ip] bgp <ipv4|ipv6> <encap|multicast|unicast|vpn> statistics",
        SHOW_STR
+       IP_STR
        BGP_STR
-       "Address family\n"
-       "Address family\n"
+       "Address Family\n"
+       "Address Family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
        "BGP RIB advertisement statistics\n")
 {
-  return bgp_table_stats_vty (vty, NULL, argv[0], argv[1]);
+  int idx_afi = 2;
+  int idx_safi = 3;
+  return bgp_table_stats_vty (vty, NULL, argv[idx_afi]->arg, argv[idx_safi]->arg);
 }
-
-ALIAS (show_bgp_statistics,
-       show_bgp_statistics_vpnv4_cmd,
-       "show bgp (ipv4) (vpnv4) statistics",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "BGP RIB advertisement statistics\n")
 
 DEFUN (show_bgp_statistics_view,
        show_bgp_statistics_view_cmd,
-       "show bgp view WORD (ipv4|ipv6) (encap|multicast|unicast|vpn) statistics",
+       "show [ip] bgp <view|vrf> WORD <ipv4|ipv6> <unicast|multicast|vpn|encap> statistics",
        SHOW_STR
+       IP_STR
        BGP_STR
-       "BGP view\n"
-       "Address family\n"
-       "Address family\n"
+       BGP_INSTANCE_HELP_STR
+       "Address Family\n"
+       "Address Family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
        "BGP RIB advertisement statistics\n")
 {
-  return bgp_table_stats_vty (vty, NULL, argv[0], argv[1]);
+  int idx_word = 3;
+  int idx_afi = 4;
+  return bgp_table_stats_vty (vty, NULL, argv[idx_word]->arg, argv[idx_afi]->arg);
 }
-
-ALIAS (show_bgp_statistics_view,
-       show_bgp_statistics_view_vpnv4_cmd,
-       "show bgp view WORD (ipv4) (vpnv4) statistics",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "Address family\n"
-       "Address Family modifier\n"
-       "BGP RIB advertisement statistics\n")
 
 enum bgp_pcounts
 {
@@ -12342,8 +8905,7 @@ bgp_peer_count_walker (struct thread *t)
             {
               pc->count[PCOUNT_COUNTED]++;
               if (CHECK_FLAG (ri->flags, BGP_INFO_UNUSEABLE))
-                plog_warn (peer->log,
-                           "%s [pcount] %s/%d is counted but flags 0x%x",
+                zlog_warn ("%s [pcount] %s/%d is counted but flags 0x%x",
                            peer->host,
                            inet_ntop(rn->p.family, &rn->p.u.prefix,
                                      buf, SU_ADDRSTRLEN),
@@ -12353,8 +8915,7 @@ bgp_peer_count_walker (struct thread *t)
           else
             {
               if (!CHECK_FLAG (ri->flags, BGP_INFO_UNUSEABLE))
-                plog_warn (peer->log,
-                           "%s [pcount] %s/%d not counted but flags 0x%x",
+                zlog_warn ("%s [pcount] %s/%d not counted but flags 0x%x",
                            peer->host,
                            inet_ntop(rn->p.family, &rn->p.u.prefix,
                                      buf, SU_ADDRSTRLEN),
@@ -12367,15 +8928,31 @@ bgp_peer_count_walker (struct thread *t)
 }
 
 static int
-bgp_peer_counts (struct vty *vty, struct peer *peer, afi_t afi, safi_t safi)
+bgp_peer_counts (struct vty *vty, struct peer *peer, afi_t afi, safi_t safi, u_char use_json)
 {
   struct peer_pcounts pcounts = { .peer = peer };
   unsigned int i;
+  json_object *json = NULL;
+  json_object *json_loop = NULL;
+
+  if (use_json)
+    {
+      json = json_object_new_object();
+      json_loop = json_object_new_object();
+    }
   
   if (!peer || !peer->bgp || !peer->afc[afi][safi]
       || !peer->bgp->rib[afi][safi])
     {
-      vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
+      if (use_json)
+        {
+          json_object_string_add(json, "warning", "No such neighbor or address family");
+          vty_out (vty, "%s%s", json_object_to_json_string(json), VTY_NEWLINE);
+          json_object_free(json);
+        }
+      else
+        vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
+
       return CMD_WARNING;
     }
   
@@ -12384,27 +8961,59 @@ bgp_peer_counts (struct vty *vty, struct peer *peer, afi_t afi, safi_t safi)
   pcounts.table = peer->bgp->rib[afi][safi];
   
   /* in-place call via thread subsystem so as to record execution time
-   * stats for the thread-walk (i.e. ensure this can't be blamed on
-   * on just vty_read()).
-   */
+ *    * stats for the thread-walk (i.e. ensure this can't be blamed on
+ *       * on just vty_read()).
+ *          */
   thread_execute (bm->master, bgp_peer_count_walker, &pcounts, 0);
-  
-  vty_out (vty, "Prefix counts for %s, %s%s", 
-           peer->host, afi_safi_print (afi, safi), VTY_NEWLINE);
-  vty_out (vty, "PfxCt: %ld%s", peer->pcount[afi][safi], VTY_NEWLINE);
-  vty_out (vty, "%sCounts from RIB table walk:%s%s", 
-           VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
 
-  for (i = 0; i < PCOUNT_MAX; i++)
-      vty_out (vty, "%20s: %-10d%s",
-               pcount_strs[i], pcounts.count[i], VTY_NEWLINE);
-
-  if (pcounts.count[PCOUNT_PFCNT] != peer->pcount[afi][safi])
+  if (use_json)
     {
-      vty_out (vty, "%s [pcount] PfxCt drift!%s",
-               peer->host, VTY_NEWLINE);
-      vty_out (vty, "Please report this bug, with the above command output%s",
-              VTY_NEWLINE);
+      json_object_string_add(json, "prefixCountsFor", peer->host);
+      json_object_string_add(json, "multiProtocol", afi_safi_print (afi, safi));
+      json_object_int_add(json, "pfxCounter", peer->pcount[afi][safi]);
+
+      for (i = 0; i < PCOUNT_MAX; i++)
+        json_object_int_add(json_loop, pcount_strs[i], pcounts.count[i]);
+
+      json_object_object_add(json, "ribTableWalkCounters", json_loop);
+
+      if (pcounts.count[PCOUNT_PFCNT] != peer->pcount[afi][safi])
+        {
+          json_object_string_add(json, "pfxctDriftFor", peer->host);
+          json_object_string_add(json, "recommended", "Please report this bug, with the above command output");
+        }
+      vty_out (vty, "%s%s", json_object_to_json_string(json), VTY_NEWLINE);
+      json_object_free(json);
+    }
+  else
+    {
+
+      if (peer->hostname && bgp_flag_check(peer->bgp, BGP_FLAG_SHOW_HOSTNAME))
+        {
+          vty_out (vty, "Prefix counts for %s/%s, %s%s",
+                   peer->hostname, peer->host, afi_safi_print (afi, safi),
+                   VTY_NEWLINE);
+        }
+      else
+        {
+          vty_out (vty, "Prefix counts for %s, %s%s",
+                   peer->host, afi_safi_print (afi, safi), VTY_NEWLINE);
+        }
+
+      vty_out (vty, "PfxCt: %ld%s", peer->pcount[afi][safi], VTY_NEWLINE);
+      vty_out (vty, "%sCounts from RIB table walk:%s%s",
+               VTY_NEWLINE, VTY_NEWLINE, VTY_NEWLINE);
+
+      for (i = 0; i < PCOUNT_MAX; i++)
+        vty_out (vty, "%20s: %-10d%s", pcount_strs[i], pcounts.count[i], VTY_NEWLINE);
+
+      if (pcounts.count[PCOUNT_PFCNT] != peer->pcount[afi][safi])
+        {
+          vty_out (vty, "%s [pcount] PfxCt drift!%s",
+                   peer->host, VTY_NEWLINE);
+          vty_out (vty, "Please report this bug, with the above command output%s",
+                   VTY_NEWLINE);
+        }
     }
                
   return CMD_SUCCESS;
@@ -12412,1134 +9021,589 @@ bgp_peer_counts (struct vty *vty, struct peer *peer, afi_t afi, safi_t safi)
 
 DEFUN (show_ip_bgp_neighbor_prefix_counts,
        show_ip_bgp_neighbor_prefix_counts_cmd,
-       "show ip bgp neighbors (A.B.C.D|X:X::X:X) prefix-counts",
+       "show [ip] bgp neighbors <A.B.C.D|X:X::X:X|WORD> prefix-counts [json]",
        SHOW_STR
        IP_STR
        BGP_STR
        "Detailed information on TCP and BGP neighbor connections\n"
        "Neighbor to display information about\n"
        "Neighbor to display information about\n"
-       "Display detailed prefix count information\n")
+       "Neighbor on BGP configured interface\n"
+       "Display detailed prefix count information\n"
+       JSON_STR)
 {
+  int idx_peer = 4;
   struct peer *peer;
+  u_char uj = use_json(argc, argv);
 
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);  
+  peer = peer_lookup_in_view (vty, NULL, argv[idx_peer]->arg, uj);
   if (! peer) 
     return CMD_WARNING;
  
-  return bgp_peer_counts (vty, peer, AFI_IP, SAFI_UNICAST);
+  return bgp_peer_counts (vty, peer, AFI_IP, SAFI_UNICAST, uj);
+}
+
+DEFUN (show_ip_bgp_instance_neighbor_prefix_counts,
+       show_ip_bgp_instance_neighbor_prefix_counts_cmd,
+       "show [ip] bgp <view|vrf> WORD neighbors <A.B.C.D|X:X::X:X|WORD> prefix-counts [json]",
+       SHOW_STR
+       IP_STR
+       BGP_STR
+       BGP_INSTANCE_HELP_STR
+       "Detailed information on TCP and BGP neighbor connections\n"
+       "Neighbor to display information about\n"
+       "Neighbor to display information about\n"
+       "Neighbor on BGP configured interface\n"
+       "Display detailed prefix count information\n"
+       JSON_STR)
+{
+  int idx_word = 4;
+  int idx_peer = 6;
+  struct peer *peer;
+  u_char uj = use_json(argc, argv);
+
+  peer = peer_lookup_in_view (vty, argv[idx_word]->arg, argv[idx_peer]->arg, uj);
+  if (! peer)
+    return CMD_WARNING;
+
+  return bgp_peer_counts (vty, peer, AFI_IP, SAFI_UNICAST, uj);
 }
 
 DEFUN (show_bgp_ipv6_neighbor_prefix_counts,
        show_bgp_ipv6_neighbor_prefix_counts_cmd,
-       "show bgp ipv6 neighbors (A.B.C.D|X:X::X:X) prefix-counts",
+       "show [ip] bgp ipv6 neighbors <A.B.C.D|X:X::X:X|WORD> prefix-counts [json]",
        SHOW_STR
+       IP_STR
        BGP_STR
-       "Address family\n"
+       "Address Family\n"
        "Detailed information on TCP and BGP neighbor connections\n"
        "Neighbor to display information about\n"
        "Neighbor to display information about\n"
-       "Display detailed prefix count information\n")
+       "Neighbor on BGP configured interface\n"
+       "Display detailed prefix count information\n"
+       JSON_STR)
 {
+  int idx_peer = 4;
   struct peer *peer;
+  u_char uj = use_json(argc, argv);
 
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);  
+  peer = peer_lookup_in_view (vty, NULL, argv[idx_peer]->arg, uj);
   if (! peer) 
     return CMD_WARNING;
  
-  return bgp_peer_counts (vty, peer, AFI_IP6, SAFI_UNICAST);
+  return bgp_peer_counts (vty, peer, AFI_IP6, SAFI_UNICAST, uj);
+}
+
+DEFUN (show_bgp_instance_ipv6_neighbor_prefix_counts,
+       show_bgp_instance_ipv6_neighbor_prefix_counts_cmd,
+       "show [ip] bgp <view|vrf> WORD ipv6 neighbors <A.B.C.D|X:X::X:X|WORD> prefix-counts [json]",
+       SHOW_STR
+       IP_STR
+       BGP_STR
+       BGP_INSTANCE_HELP_STR
+       "Address Family\n"
+       "Detailed information on TCP and BGP neighbor connections\n"
+       "Neighbor to display information about\n"
+       "Neighbor to display information about\n"
+       "Neighbor on BGP configured interface\n"
+       "Display detailed prefix count information\n"
+       JSON_STR)
+{
+  int idx_word = 3;
+  int idx_peer = 6;
+  struct peer *peer;
+  u_char uj = use_json(argc, argv);
+
+  peer = peer_lookup_in_view (vty, argv[idx_word]->arg, argv[idx_peer]->arg, uj);
+  if (! peer)
+    return CMD_WARNING;
+
+  return bgp_peer_counts (vty, peer, AFI_IP6, SAFI_UNICAST, uj);
 }
 
 DEFUN (show_ip_bgp_ipv4_neighbor_prefix_counts,
        show_ip_bgp_ipv4_neighbor_prefix_counts_cmd,
-       "show ip bgp ipv4 (unicast|multicast) neighbors (A.B.C.D|X:X::X:X) prefix-counts",
+       "show [ip] bgp ipv4 <unicast|multicast> neighbors <A.B.C.D|X:X::X:X|WORD> prefix-counts [json]",
        SHOW_STR
        IP_STR
        BGP_STR
-       "Address family\n"
+       "Address Family\n"
        "Address Family modifier\n"
        "Address Family modifier\n"
        "Detailed information on TCP and BGP neighbor connections\n"
        "Neighbor to display information about\n"
        "Neighbor to display information about\n"
-       "Display detailed prefix count information\n")
+       "Neighbor on BGP configured interface\n"
+       "Display detailed prefix count information\n"
+       JSON_STR)
 {
+  int idx_safi = 4;
+  int idx_peer = 6;
   struct peer *peer;
+  u_char uj = use_json(argc, argv);
 
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
+  peer = peer_lookup_in_view (vty, NULL, argv[idx_peer]->arg, uj);
   if (! peer)
     return CMD_WARNING;
 
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_peer_counts (vty, peer, AFI_IP, SAFI_MULTICAST);
+  if (strncmp (argv[idx_safi]->arg, "m", 1) == 0)
+    return bgp_peer_counts (vty, peer, AFI_IP, SAFI_MULTICAST, uj);
 
-  return bgp_peer_counts (vty, peer, AFI_IP, SAFI_UNICAST);
+  return bgp_peer_counts (vty, peer, AFI_IP, SAFI_UNICAST, uj);
 }
 
-DEFUN (show_ip_bgp_vpnv4_neighbor_prefix_counts,
-       show_ip_bgp_vpnv4_neighbor_prefix_counts_cmd,
-       "show ip bgp vpnv4 all neighbors (A.B.C.D|X:X::X:X) prefix-counts",
+#ifdef KEEP_OLD_VPN_COMMANDS
+DEFUN (show_ip_bgp_vpn_neighbor_prefix_counts,
+       show_ip_bgp_vpn_neighbor_prefix_counts_cmd,
+       "show [ip] bgp <vpnv4|vpnv6> all neighbors <A.B.C.D|X:X::X:X|WORD> prefix-counts [json]",
        SHOW_STR
        IP_STR
        BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
+       BGP_VPNVX_HELP_STR
+       "Display information about all VPNv4 NLRIs\n"
        "Detailed information on TCP and BGP neighbor connections\n"
        "Neighbor to display information about\n"
        "Neighbor to display information about\n"
-       "Display detailed prefix count information\n")
+       "Neighbor on BGP configured interface\n"
+       "Display detailed prefix count information\n"
+       JSON_STR)
 {
+  int idx_peer = 6;
   struct peer *peer;
+  u_char uj = use_json(argc, argv);
 
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);
+  peer = peer_lookup_in_view (vty, NULL, argv[idx_peer]->arg, uj);
   if (! peer)
     return CMD_WARNING;
   
-  return bgp_peer_counts (vty, peer, AFI_IP, SAFI_MPLS_VPN);
+  return bgp_peer_counts (vty, peer, AFI_IP, SAFI_MPLS_VPN, uj);
 }
 
-DEFUN (show_bgp_ipv4_safi_neighbor_prefix_counts,
-       show_bgp_ipv4_safi_neighbor_prefix_counts_cmd,
-       "show bgp ipv4 (unicast|multicast) neighbors (A.B.C.D|X:X::X:X) prefix-counts",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display detailed prefix count information\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-
-  return bgp_peer_counts (vty, peer, AFI_IP, safi);
-}
-
-DEFUN (show_bgp_ipv6_safi_neighbor_prefix_counts,
-       show_bgp_ipv6_safi_neighbor_prefix_counts_cmd,
-       "show bgp ipv6 (unicast|multicast) neighbors (A.B.C.D|X:X::X:X) prefix-counts",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display detailed prefix count information\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-
-  return bgp_peer_counts (vty, peer, AFI_IP6, safi);
-}
-
-DEFUN (show_ip_bgp_encap_neighbor_prefix_counts,
-       show_ip_bgp_encap_neighbor_prefix_counts_cmd,
-       "show ip bgp encap all neighbors (A.B.C.D|X:X::X:X) prefix-counts",
+DEFUN (show_ip_bgp_vpn_all_route_prefix,
+       show_ip_bgp_vpn_all_route_prefix_cmd,
+       "show [ip] bgp <vpnv4|vpnv6> all <A.B.C.D|A.B.C.D/M> [json]",
        SHOW_STR
        IP_STR
        BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display detailed prefix count information\n")
+       BGP_VPNVX_HELP_STR
+       "Display information about all VPNv4 NLRIs\n"
+       "Network in the BGP routing table to display\n"
+       "Network in the BGP routing table to display\n"
+       JSON_STR)
 {
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);
-  if (! peer)
-    return CMD_WARNING;
-  
-  return bgp_peer_counts (vty, peer, AFI_IP, SAFI_ENCAP);
+  int idx = 0;
+  char *network = NULL;
+  network = argv_find (argv, argc, "A.B.C.D", &idx) ? argv[idx]->arg : NULL;
+  network = argv_find (argv, argc, "A.B.C.D/M", &idx) ? argv[idx]->arg : NULL;
+  return bgp_show_route (vty, NULL, network, AFI_IP, SAFI_MPLS_VPN, NULL, 0, BGP_PATH_ALL, use_json(argc, argv));
 }
-
+#endif /* KEEP_OLD_VPN_COMMANDS */
 
 static void
 show_adj_route (struct vty *vty, struct peer *peer, afi_t afi, safi_t safi,
-		int in)
+                int in, const char *rmap_name, u_char use_json, json_object *json)
 {
   struct bgp_table *table;
   struct bgp_adj_in *ain;
   struct bgp_adj_out *adj;
   unsigned long output_count;
+  unsigned long filtered_count;
   struct bgp_node *rn;
   int header1 = 1;
   struct bgp *bgp;
   int header2 = 1;
+  struct attr attr;
+  struct attr_extra extra;
+  int ret;
+  struct update_subgroup *subgrp;
+  json_object *json_scode = NULL;
+  json_object *json_ocode = NULL;
+  json_object *json_ar = NULL;
+  struct peer_af *paf;
+
+  if (use_json)
+    {
+      json_scode = json_object_new_object();
+      json_ocode = json_object_new_object();
+      json_ar = json_object_new_object();
+
+      json_object_string_add(json_scode, "suppressed", "s");
+      json_object_string_add(json_scode, "damped", "d");
+      json_object_string_add(json_scode, "history", "h");
+      json_object_string_add(json_scode, "valid", "*");
+      json_object_string_add(json_scode, "best", ">");
+      json_object_string_add(json_scode, "multipath", "=");
+      json_object_string_add(json_scode, "internal", "i");
+      json_object_string_add(json_scode, "ribFailure", "r");
+      json_object_string_add(json_scode, "stale", "S");
+      json_object_string_add(json_scode, "removed", "R");
+
+      json_object_string_add(json_ocode, "igp", "i");
+      json_object_string_add(json_ocode, "egp", "e");
+      json_object_string_add(json_ocode, "incomplete", "?");
+    }
 
   bgp = peer->bgp;
 
   if (! bgp)
-    return;
+    {
+      if (use_json)
+        {
+          json_object_string_add(json, "alert", "no BGP");
+          vty_out (vty, "%s%s", json_object_to_json_string(json), VTY_NEWLINE);
+          json_object_free(json);
+        }
+      else
+        vty_out (vty, "%% No bgp%s", VTY_NEWLINE);
+      return;
+    }
 
   table = bgp->rib[afi][safi];
 
-  output_count = 0;
-	
-  if (! in && CHECK_FLAG (peer->af_sflags[afi][safi],
-			  PEER_STATUS_DEFAULT_ORIGINATE))
-    {
-      vty_out (vty, "BGP table version is 0, local router ID is %s%s", inet_ntoa (bgp->router_id), VTY_NEWLINE);
-      vty_out (vty, BGP_SHOW_SCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
-      vty_out (vty, BGP_SHOW_OCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
+  output_count = filtered_count = 0;
+  subgrp = peer_subgroup(peer, afi, safi);
 
-      vty_out (vty, "Originating default network 0.0.0.0%s%s",
-	       VTY_NEWLINE, VTY_NEWLINE);
+  if (!in && subgrp && CHECK_FLAG (subgrp->sflags, SUBGRP_STATUS_DEFAULT_ORIGINATE))
+    {
+      if (use_json)
+        {
+          json_object_int_add(json, "bgpTableVersion", table->version);
+          json_object_string_add(json, "bgpLocalRouterId", inet_ntoa (bgp->router_id));
+          json_object_object_add(json, "bgpStatusCodes", json_scode);
+          json_object_object_add(json, "bgpOriginCodes", json_ocode);
+          json_object_string_add(json, "bgpOriginatingDefaultNetwork", "0.0.0.0");
+        }
+      else
+        {
+          vty_out (vty, "BGP table version is %" PRIu64 ", local router ID is %s%s", table->version, inet_ntoa (bgp->router_id), VTY_NEWLINE);
+          vty_out (vty, BGP_SHOW_SCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
+          vty_out (vty, BGP_SHOW_OCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
+
+          vty_out (vty, "Originating default network 0.0.0.0%s%s",
+                   VTY_NEWLINE, VTY_NEWLINE);
+        }
       header1 = 0;
     }
 
+  attr.extra = &extra;
   for (rn = bgp_table_top (table); rn; rn = bgp_route_next (rn))
-    if (in)
-      {
-	for (ain = rn->adj_in; ain; ain = ain->next)
-	  if (ain->peer == peer)
-	    {
-	      if (header1)
-		{
-		  vty_out (vty, "BGP table version is 0, local router ID is %s%s", inet_ntoa (bgp->router_id), VTY_NEWLINE);
-		  vty_out (vty, BGP_SHOW_SCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
-		  vty_out (vty, BGP_SHOW_OCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
-		  header1 = 0;
-		}
-	      if (header2)
-		{
-		  vty_out (vty, BGP_SHOW_HEADER, VTY_NEWLINE);
-		  header2 = 0;
-		}
-	      if (ain->attr)
-		{ 
-		  route_vty_out_tmp (vty, &rn->p, ain->attr, safi);
-		  output_count++;
-		}
-	    }
-      }
-    else
-      {
-	for (adj = rn->adj_out; adj; adj = adj->next)
-	  if (adj->peer == peer)
-	    {
-	      if (header1)
-		{
-		  vty_out (vty, "BGP table version is 0, local router ID is %s%s", inet_ntoa (bgp->router_id), VTY_NEWLINE);
-		  vty_out (vty, BGP_SHOW_SCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
-		  vty_out (vty, BGP_SHOW_OCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
-		  header1 = 0;
-		}
-	      if (header2)
-		{
-		  vty_out (vty, BGP_SHOW_HEADER, VTY_NEWLINE);
-		  header2 = 0;
-		}
-	      if (adj->attr)
-		{	
-		  route_vty_out_tmp (vty, &rn->p, adj->attr, safi);
-		  output_count++;
-		}
-	    }
-      }
-  
+    {
+      if (in)
+        {
+          for (ain = rn->adj_in; ain; ain = ain->next)
+            {
+              if (ain->peer == peer)
+                {
+                  if (header1)
+                    {
+                      if (use_json)
+                        {
+                          json_object_int_add(json, "bgpTableVersion", 0);
+                          json_object_string_add(json, "bgpLocalRouterId", inet_ntoa (bgp->router_id));
+                          json_object_object_add(json, "bgpStatusCodes", json_scode);
+                          json_object_object_add(json, "bgpOriginCodes", json_ocode);
+                        }
+                      else
+                        {
+                          vty_out (vty, "BGP table version is 0, local router ID is %s%s", inet_ntoa (bgp->router_id), VTY_NEWLINE);
+                          vty_out (vty, BGP_SHOW_SCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
+                          vty_out (vty, BGP_SHOW_OCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
+                        }
+                      header1 = 0;
+                    }
+                  if (header2)
+                    {
+                      if (!use_json)
+                        vty_out (vty, BGP_SHOW_HEADER, VTY_NEWLINE);
+                      header2 = 0;
+                    }
+                  if (ain->attr)
+                    {
+                      bgp_attr_dup(&attr, ain->attr);
+                      if (bgp_input_modifier(peer, &rn->p, &attr, afi, safi, rmap_name) != RMAP_DENY)
+                        {
+                          route_vty_out_tmp (vty, &rn->p, &attr, safi, use_json, json_ar);
+                          output_count++;
+                        }
+                      else
+                        filtered_count++;
+                    }
+                }
+            }
+        }
+      else
+        {
+          for (adj = rn->adj_out; adj; adj = adj->next)
+            SUBGRP_FOREACH_PEER(adj->subgroup, paf)
+              if (paf->peer == peer)
+                {
+                  if (header1)
+                    {
+                      if (use_json)
+                        {
+                          json_object_int_add(json, "bgpTableVersion", table->version);
+                          json_object_string_add(json, "bgpLocalRouterId", inet_ntoa (bgp->router_id));
+                          json_object_object_add(json, "bgpStatusCodes", json_scode);
+                          json_object_object_add(json, "bgpOriginCodes", json_ocode);
+                        }
+                      else
+                        {
+                          vty_out (vty, "BGP table version is %" PRIu64 ", local router ID is %s%s", table->version,
+                                   inet_ntoa (bgp->router_id), VTY_NEWLINE);
+                          vty_out (vty, BGP_SHOW_SCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
+                          vty_out (vty, BGP_SHOW_OCODE_HEADER, VTY_NEWLINE, VTY_NEWLINE);
+                        }
+                      header1 = 0;
+                    }
+
+                  if (header2)
+                    {
+                      if (!use_json)
+                        vty_out (vty, BGP_SHOW_HEADER, VTY_NEWLINE);
+                      header2 = 0;
+                    }
+
+                  if (adj->attr)
+                    {
+                      bgp_attr_dup(&attr, adj->attr);
+                      ret = bgp_output_modifier(peer, &rn->p, &attr, afi, safi, rmap_name);
+                      if (ret != RMAP_DENY)
+                        {
+                          route_vty_out_tmp (vty, &rn->p, &attr, safi, use_json, json_ar);
+                          output_count++;
+                        }
+                      else
+                        filtered_count++;
+                    }
+                }
+        }
+    }
+  if (use_json)
+    json_object_object_add(json, "advertisedRoutes", json_ar);
+
   if (output_count != 0)
-    vty_out (vty, "%sTotal number of prefixes %ld%s",
-	     VTY_NEWLINE, output_count, VTY_NEWLINE);
+    {
+      if (use_json)
+        json_object_int_add(json, "totalPrefixCounter", output_count);
+      else
+        vty_out (vty, "%sTotal number of prefixes %ld%s",
+                 VTY_NEWLINE, output_count, VTY_NEWLINE);
+    }
+  if (use_json)
+    {
+      vty_out (vty, "%s%s", json_object_to_json_string(json), VTY_NEWLINE);
+      json_object_free(json);
+    }
+
 }
 
 static int
-peer_adj_routes (struct vty *vty, struct peer *peer, afi_t afi, safi_t safi, int in)
-{    
-  if (! peer || ! peer->afc[afi][safi])
+peer_adj_routes (struct vty *vty, struct peer *peer, afi_t afi, safi_t safi,
+                 int in, const char *rmap_name, u_char use_json)
+{
+  json_object *json = NULL;
+
+  if (use_json)
+    json = json_object_new_object();
+
+  if (!peer || !peer->afc[afi][safi])
     {
-      vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
+      if (use_json)
+        {
+          json_object_string_add(json, "warning", "No such neighbor or address family");
+          vty_out (vty, "%s%s", json_object_to_json_string(json), VTY_NEWLINE);
+          json_object_free(json);
+        }
+      else
+        vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
+
       return CMD_WARNING;
     }
 
-  if (in && ! CHECK_FLAG (peer->af_flags[afi][safi], PEER_FLAG_SOFT_RECONFIG))
+  if (in && !CHECK_FLAG(peer->af_flags[afi][safi], PEER_FLAG_SOFT_RECONFIG))
     {
-      vty_out (vty, "%% Inbound soft reconfiguration not enabled%s",
-	       VTY_NEWLINE);
+      if (use_json)
+        {
+          json_object_string_add(json, "warning", "Inbound soft reconfiguration not enabled");
+          vty_out (vty, "%s%s", json_object_to_json_string(json), VTY_NEWLINE);
+          json_object_free(json);
+        }
+      else
+        vty_out (vty, "%% Inbound soft reconfiguration not enabled%s", VTY_NEWLINE);
+
       return CMD_WARNING;
     }
 
-  show_adj_route (vty, peer, afi, safi, in);
+  show_adj_route (vty, peer, afi, safi, in, rmap_name, use_json, json);
 
   return CMD_SUCCESS;
 }
 
-DEFUN (show_ip_bgp_view_neighbor_advertised_route,
-       show_ip_bgp_view_neighbor_advertised_route_cmd,
-       "show ip bgp view WORD neighbors (A.B.C.D|X:X::X:X) advertised-routes",
+DEFUN (show_ip_bgp_instance_neighbor_advertised_route,
+       show_ip_bgp_instance_neighbor_advertised_route_cmd,
+       "show [ip] bgp [<view|vrf> WORD] [<ipv4 [<unicast|multicast>]|ipv6 [<unicast|multicast>]|encap [unicast]|vpnv4 [unicast]>] neighbors <A.B.C.D|X:X::X:X|WORD> [<received-routes|advertised-routes> [route-map WORD]] [json]",
        SHOW_STR
        IP_STR
        BGP_STR
-       "BGP view\n"
-       "View name\n"
+       BGP_INSTANCE_HELP_STR
+       "Address Family\n"
+       "Address Family modifier\n"
+       "Address Family modifier\n"
+       "Address Family\n"
+       "Address Family modifier\n"
+       "Address Family modifier\n"
+       "Address Family\n"
+       "Address Family modifier\n"
+       "Address Family\n"
+       "Address Family modifier\n"
        "Detailed information on TCP and BGP neighbor connections\n"
        "Neighbor to display information about\n"
        "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
+       "Neighbor on BGP configured interface\n"
+       "Display the received routes from neighbor\n"
+       "Display the routes advertised to a BGP neighbor\n"
+       "Route-map to modify the attributes\n"
+       "Name of the route map\n"
+       JSON_STR)
 {
+  afi_t afi = AFI_IP6;
+  safi_t safi = SAFI_UNICAST;
+  char *vrf = NULL;
+  char *rmap_name = NULL;
+  char *peerstr = NULL;
+  int rcvd = 0;
+
   struct peer *peer;
 
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
+  int idx = 0;
+
+  /* show [ip] bgp */
+  if (argv_find (argv, argc, "ip", &idx))
+    afi = AFI_IP;
+  /* [<view|vrf> WORD] */
+  if (argv_find (argv, argc, "view", &idx) || argv_find (argv, argc, "vrf", &idx))
+    vrf = argv[++idx]->arg;
+  /* [<ipv4 [<unicast|multicast>]|ipv6 [<unicast|multicast>]|encap [unicast]|vpnv4 [unicast]>] */
+  if (argv_find (argv, argc, "ipv4", &idx) || argv_find (argv, argc, "ipv6", &idx))
+  {
+    afi = strmatch(argv[idx]->text, "ipv6") ? AFI_IP6 : AFI_IP;
+    if (argv_find (argv, argc, "unicast", &idx) || argv_find (argv, argc, "multicast", &idx))
+      safi = strmatch (argv[idx]->text, "unicast") ? SAFI_UNICAST : SAFI_MULTICAST;
+  }
+  else if (argv_find (argv, argc, "encap", &idx) || argv_find (argv, argc, "vpnv4", &idx))
+  {
+    afi = AFI_IP;
+    safi = strmatch (argv[idx]->text, "encap") ? SAFI_ENCAP : SAFI_MPLS_VPN;
+    // advance idx if necessary
+    argv_find (argv, argc, "unicast", &idx);
+  }
+
+  /* neighbors <A.B.C.D|X:X::X:X|WORD> */
+  argv_find (argv, argc, "neighbors", &idx);
+  peerstr = argv[++idx]->arg;
+
+  u_char uj = use_json(argc, argv);
+
+  peer = peer_lookup_in_view (vty, vrf, peerstr, uj);
 
   if (! peer) 
-    return CMD_WARNING;
- 
-  return peer_adj_routes (vty, peer, AFI_IP, SAFI_UNICAST, 0);
-}
-
-ALIAS (show_ip_bgp_view_neighbor_advertised_route,
-       show_ip_bgp_neighbor_advertised_route_cmd,
-       "show ip bgp neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-
-DEFUN (show_ip_bgp_ipv4_neighbor_advertised_route,
-       show_ip_bgp_ipv4_neighbor_advertised_route_cmd,
-       "show ip bgp ipv4 (unicast|multicast) neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-{
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-
-  if (strncmp (argv[0], "m", 1) == 0)
-    return peer_adj_routes (vty, peer, AFI_IP, SAFI_MULTICAST, 0);
-
-  return peer_adj_routes (vty, peer, AFI_IP, SAFI_UNICAST, 0);
-}
-
-DEFUN (show_bgp_view_neighbor_advertised_route,
-       show_bgp_view_neighbor_advertised_route_cmd,
-       "show bgp view WORD neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;    
-
-  return peer_adj_routes (vty, peer, AFI_IP6, SAFI_UNICAST, 0);
-}
-
-DEFUN (show_bgp_view_neighbor_received_routes,
-       show_bgp_view_neighbor_received_routes_cmd,
-       "show bgp view WORD neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  return peer_adj_routes (vty, peer, AFI_IP6, SAFI_UNICAST, 1);
-}
-
-ALIAS (show_bgp_view_neighbor_advertised_route,
-       show_bgp_neighbor_advertised_route_cmd,
-       "show bgp neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-       
-ALIAS (show_bgp_view_neighbor_advertised_route,
-       show_bgp_ipv6_neighbor_advertised_route_cmd,
-       "show bgp ipv6 neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-
-/* old command */
-ALIAS (show_bgp_view_neighbor_advertised_route,
-       ipv6_bgp_neighbor_advertised_route_cmd,
-       "show ipv6 bgp neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-  
-/* old command */
-DEFUN (ipv6_mbgp_neighbor_advertised_route,
-       ipv6_mbgp_neighbor_advertised_route_cmd,
-       "show ipv6 mbgp neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-{
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);
-  if (! peer)
-    return CMD_WARNING;  
-
-  return peer_adj_routes (vty, peer, AFI_IP6, SAFI_MULTICAST, 0);
-}
-
-DEFUN (show_ip_bgp_view_neighbor_received_routes,
-       show_ip_bgp_view_neighbor_received_routes_cmd,
-       "show ip bgp view WORD neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  return peer_adj_routes (vty, peer, AFI_IP, SAFI_UNICAST, 1);
-}
-
-ALIAS (show_ip_bgp_view_neighbor_received_routes,
-       show_ip_bgp_neighbor_received_routes_cmd,
-       "show ip bgp neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-
-ALIAS (show_bgp_view_neighbor_received_routes,
-       show_bgp_ipv6_neighbor_received_routes_cmd,
-       "show bgp ipv6 neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-
-DEFUN (show_bgp_neighbor_received_prefix_filter,
-       show_bgp_neighbor_received_prefix_filter_cmd,
-       "show bgp neighbors (A.B.C.D|X:X::X:X) received prefix-filter",
-       SHOW_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display information received from a BGP neighbor\n"
-       "Display the prefixlist filter\n")
-{
-  char name[BUFSIZ];
-  union sockunion su;
-  struct peer *peer;
-  int count, ret;
-
-  ret = str2sockunion (argv[0], &su);
-  if (ret < 0)
     {
-      vty_out (vty, "Malformed address: %s%s", argv[0], VTY_NEWLINE);
+      vty_out (vty, "No such neighbor%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  peer = peer_lookup (NULL, &su);
-  if (! peer)
-    return CMD_WARNING;
+  if (argv_find (argv, argc, "received-routes", &idx))
+    rcvd = 1;
+  if (argv_find (argv, argc, "advertised-routes", &idx))
+    rcvd = 0;
+  if (argv_find (argv, argc, "route-map", &idx))
+    rmap_name = argv[++idx]->arg;
 
-  sprintf (name, "%s.%d.%d", peer->host, AFI_IP6, SAFI_UNICAST);
-  count =  prefix_bgp_show_prefix_list (NULL, AFI_IP6, name);
-  if (count)
-    {
-      vty_out (vty, "Address family: IPv6 Unicast%s", VTY_NEWLINE);
-      prefix_bgp_show_prefix_list (vty, AFI_IP6, name);
-    }
-
-  return CMD_SUCCESS;
-}
-
-/* old command */
-ALIAS (show_bgp_view_neighbor_received_routes,
-       ipv6_bgp_neighbor_received_routes_cmd,
-       "show ipv6 bgp neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-
-/* old command */
-DEFUN (ipv6_mbgp_neighbor_received_routes,
-       ipv6_mbgp_neighbor_received_routes_cmd,
-       "show ipv6 mbgp neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-{
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);
-  if (! peer)
-    return CMD_WARNING;
-
-  return peer_adj_routes (vty, peer, AFI_IP6, SAFI_MULTICAST, 1);
-}
-
-DEFUN (show_bgp_view_neighbor_received_prefix_filter,
-       show_bgp_view_neighbor_received_prefix_filter_cmd,
-       "show bgp view WORD neighbors (A.B.C.D|X:X::X:X) received prefix-filter",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display information received from a BGP neighbor\n"
-       "Display the prefixlist filter\n")
-{
-  char name[BUFSIZ];
-  union sockunion su;
-  struct peer *peer;
-  struct bgp *bgp;
-  int count, ret;
-
-  /* BGP structure lookup. */
-  bgp = bgp_lookup_by_name (argv[0]);
-  if (bgp == NULL)
-  {  
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-  
-  ret = str2sockunion (argv[1], &su);
-  if (ret < 0)
-    {
-      vty_out (vty, "Malformed address: %s%s", argv[1], VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  peer = peer_lookup (bgp, &su);
-  if (! peer)
-    return CMD_WARNING;
-
-  sprintf (name, "%s.%d.%d", peer->host, AFI_IP6, SAFI_UNICAST);
-  count =  prefix_bgp_show_prefix_list (NULL, AFI_IP6, name);
-  if (count)
-    {
-      vty_out (vty, "Address family: IPv6 Unicast%s", VTY_NEWLINE);
-      prefix_bgp_show_prefix_list (vty, AFI_IP6, name);
-    }
-
-  return CMD_SUCCESS;
-}
-
-
-DEFUN (show_ip_bgp_ipv4_neighbor_received_routes,
-       show_ip_bgp_ipv4_neighbor_received_routes_cmd,
-       "show ip bgp ipv4 (unicast|multicast) neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-{
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-  
-  if (strncmp (argv[0], "m", 1) == 0)
-    return peer_adj_routes (vty, peer, AFI_IP, SAFI_MULTICAST, 1);
-
-  return peer_adj_routes (vty, peer, AFI_IP, SAFI_UNICAST, 1);
-}
-
-DEFUN (show_bgp_ipv4_safi_neighbor_advertised_route,
-       show_bgp_ipv4_safi_neighbor_advertised_route_cmd,
-       "show bgp ipv4 (multicast|unicast) neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       BGP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-
-  return peer_adj_routes (vty, peer, AFI_IP, safi, 0);
-}
-
-DEFUN (show_bgp_ipv6_safi_neighbor_advertised_route,
-       show_bgp_ipv6_safi_neighbor_advertised_route_cmd,
-       "show bgp ipv6 (multicast|unicast) neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       BGP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-
-  return peer_adj_routes (vty, peer, AFI_IP6, safi, 0);
-}
-
-DEFUN (show_bgp_view_ipv6_neighbor_advertised_route,
-       show_bgp_view_ipv6_neighbor_advertised_route_cmd,
-       "show bgp view WORD ipv6 neighbors (A.B.C.D|X:X::X:X) advertised-routes",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the routes advertised to a BGP neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;    
-
-  return peer_adj_routes (vty, peer, AFI_IP6, SAFI_UNICAST, 0);
-}
-
-DEFUN (show_bgp_view_ipv6_neighbor_received_routes,
-       show_bgp_view_ipv6_neighbor_received_routes_cmd,
-       "show bgp view WORD ipv6 neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  return peer_adj_routes (vty, peer, AFI_IP6, SAFI_UNICAST, 1);
-}
-
-DEFUN (show_bgp_ipv4_safi_neighbor_received_routes,
-       show_bgp_ipv4_safi_neighbor_received_routes_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-  
-  return peer_adj_routes (vty, peer, AFI_IP, safi, 1);
-}
-
-DEFUN (show_bgp_ipv6_safi_neighbor_received_routes,
-       show_bgp_ipv6_safi_neighbor_received_routes_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-  
-  return peer_adj_routes (vty, peer, AFI_IP6, safi, 1);
-}
-
-DEFUN (show_bgp_view_afi_safi_neighbor_adv_recd_routes,
-       show_bgp_view_afi_safi_neighbor_adv_recd_routes_cmd,
-       "show bgp view WORD (ipv4|ipv6) (unicast|multicast) neighbors (A.B.C.D|X:X::X:X) (advertised-routes|received-routes)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address family\n"
-       "Address family modifier\n"
-       "Address family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the advertised routes to neighbor\n"
-       "Display the received routes from neighbor\n")
-{
-  int afi;
-  int safi;
-  int in;
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, argv[0], argv[3]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  afi = (strncmp (argv[1], "ipv6", 4) == 0) ? AFI_IP6 : AFI_IP;
-  safi = (strncmp (argv[2], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  in = (strncmp (argv[4], "r", 1) == 0) ? 1 : 0;
-
-  return peer_adj_routes (vty, peer, afi, safi, in);
+  return peer_adj_routes (vty, peer, afi, safi, rcvd, rmap_name, uj);
 }
 
 DEFUN (show_ip_bgp_neighbor_received_prefix_filter,
        show_ip_bgp_neighbor_received_prefix_filter_cmd,
-       "show ip bgp neighbors (A.B.C.D|X:X::X:X) received prefix-filter",
+       "show [ip] bgp [<ipv4|ipv6> [unicast]] neighbors <A.B.C.D|X:X::X:X|WORD> received prefix-filter [json]",
        SHOW_STR
        IP_STR
        BGP_STR
+       "Address Family\n"
+       "Address Family\n"
+       "Address Family modifier\n"
        "Detailed information on TCP and BGP neighbor connections\n"
        "Neighbor to display information about\n"
        "Neighbor to display information about\n"
+       "Neighbor on BGP configured interface\n"
        "Display information received from a BGP neighbor\n"
-       "Display the prefixlist filter\n")
+       "Display the prefixlist filter\n"
+       JSON_STR)
 {
+  afi_t afi = AFI_IP6;
+  safi_t safi = SAFI_UNICAST;
+  char *peerstr = NULL;
+
   char name[BUFSIZ];
   union sockunion su;
   struct peer *peer;
   int count, ret;
 
-  ret = str2sockunion (argv[0], &su);
+  int idx = 0;
+
+  /* show [ip] bgp */
+  if (argv_find (argv, argc, "ip", &idx))
+    afi = AFI_IP;
+  /* [<ipv4|ipv6> [unicast]] */
+  if (argv_find (argv, argc, "ipv4", &idx))
+    afi = AFI_IP;
+  if (argv_find (argv, argc, "ipv6", &idx))
+    afi = AFI_IP6;
+  /* neighbors <A.B.C.D|X:X::X:X|WORD> */
+  argv_find (argv, argc, "neighbors", &idx);
+  peerstr = argv[++idx]->arg;
+
+  u_char uj = use_json(argc, argv);
+
+  ret = str2sockunion (peerstr, &su);
   if (ret < 0)
     {
-      vty_out (vty, "Malformed address: %s%s", argv[0], VTY_NEWLINE);
-      return CMD_WARNING;
+      peer = peer_lookup_by_conf_if (NULL, peerstr);
+      if (! peer)
+        {
+          if (uj)
+            vty_out (vty, "{}%s", VTY_NEWLINE);
+          else
+            vty_out (vty, "%% Malformed address or name: %s%s", peerstr, VTY_NEWLINE);
+          return CMD_WARNING;
+        }
+    }
+  else
+    {
+      peer = peer_lookup (NULL, &su);
+      if (! peer)
+        {
+          if (uj)
+            vty_out (vty, "{}%s", VTY_NEWLINE);
+          else
+            vty_out (vty, "No peer%s", VTY_NEWLINE);
+          return CMD_WARNING;
+        }
     }
 
-  peer = peer_lookup (NULL, &su);
-  if (! peer)
-    return CMD_WARNING;
-
-  sprintf (name, "%s.%d.%d", peer->host, AFI_IP, SAFI_UNICAST);
-  count =  prefix_bgp_show_prefix_list (NULL, AFI_IP, name);
+  sprintf (name, "%s.%d.%d", peer->host, afi, safi);
+  count =  prefix_bgp_show_prefix_list (NULL, afi, name, uj);
   if (count)
     {
-      vty_out (vty, "Address family: IPv4 Unicast%s", VTY_NEWLINE);
-      prefix_bgp_show_prefix_list (vty, AFI_IP, name);
+      if (!uj)
+        vty_out (vty, "Address Family: %s%s", afi_safi_print(afi, safi), VTY_NEWLINE);
+      prefix_bgp_show_prefix_list (vty, afi, name, uj);
     }
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (show_ip_bgp_ipv4_neighbor_received_prefix_filter,
-       show_ip_bgp_ipv4_neighbor_received_prefix_filter_cmd,
-       "show ip bgp ipv4 (unicast|multicast) neighbors (A.B.C.D|X:X::X:X) received prefix-filter",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display information received from a BGP neighbor\n"
-       "Display the prefixlist filter\n")
-{
-  char name[BUFSIZ];
-  union sockunion su;
-  struct peer *peer;
-  int count, ret;
-
-  ret = str2sockunion (argv[1], &su);
-  if (ret < 0)
+  else
     {
-      vty_out (vty, "Malformed address: %s%s", argv[1], VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  peer = peer_lookup (NULL, &su);
-  if (! peer)
-    return CMD_WARNING;
-
-  if (strncmp (argv[0], "m", 1) == 0)
-    {
-      sprintf (name, "%s.%d.%d", peer->host, AFI_IP, SAFI_MULTICAST);
-      count =  prefix_bgp_show_prefix_list (NULL, AFI_IP, name);
-      if (count)
-	{
-	  vty_out (vty, "Address family: IPv4 Multicast%s", VTY_NEWLINE);
-	  prefix_bgp_show_prefix_list (vty, AFI_IP, name);
-	}
-    }
-  else 
-    {
-      sprintf (name, "%s.%d.%d", peer->host, AFI_IP, SAFI_UNICAST);
-      count =  prefix_bgp_show_prefix_list (NULL, AFI_IP, name);
-      if (count)
-	{
-	  vty_out (vty, "Address family: IPv4 Unicast%s", VTY_NEWLINE);
-	  prefix_bgp_show_prefix_list (vty, AFI_IP, name);
-	}
-    }
-
-  return CMD_SUCCESS;
-}
-
-ALIAS (show_bgp_view_neighbor_received_routes,
-       show_bgp_neighbor_received_routes_cmd,
-       "show bgp neighbors (A.B.C.D|X:X::X:X) received-routes",
-       SHOW_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the received routes from neighbor\n")
-
-DEFUN (show_bgp_ipv4_safi_neighbor_received_prefix_filter,
-       show_bgp_ipv4_safi_neighbor_received_prefix_filter_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) neighbors (A.B.C.D|X:X::X:X) received prefix-filter",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display information received from a BGP neighbor\n"
-       "Display the prefixlist filter\n")
-{
-  char name[BUFSIZ];
-  union sockunion su;
-  struct peer *peer;
-  int count, ret;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  ret = str2sockunion (argv[1], &su);
-  if (ret < 0)
-    {
-      vty_out (vty, "Malformed address: %s%s", argv[1], VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  peer = peer_lookup (NULL, &su);
-  if (! peer)
-    return CMD_WARNING;
-
-  sprintf (name, "%s.%d.%d", peer->host, AFI_IP, safi);
-  count =  prefix_bgp_show_prefix_list (NULL, AFI_IP, name);
-  if (count) {
-      vty_out (vty, "Address family: IPv4 %s%s", safi2str(safi), VTY_NEWLINE);
-      prefix_bgp_show_prefix_list (vty, AFI_IP, name);
-  }
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (show_bgp_ipv6_safi_neighbor_received_prefix_filter,
-       show_bgp_ipv6_safi_neighbor_received_prefix_filter_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) neighbors (A.B.C.D|X:X::X:X) received prefix-filter",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display information received from a BGP neighbor\n"
-       "Display the prefixlist filter\n")
-{
-  char name[BUFSIZ];
-  union sockunion su;
-  struct peer *peer;
-  int count, ret;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  ret = str2sockunion (argv[1], &su);
-  if (ret < 0)
-    {
-      vty_out (vty, "Malformed address: %s%s", argv[1], VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  peer = peer_lookup (NULL, &su);
-  if (! peer)
-    return CMD_WARNING;
-
-  sprintf (name, "%s.%d.%d", peer->host, AFI_IP6, safi);
-  count =  prefix_bgp_show_prefix_list (NULL, AFI_IP6, name);
-  if (count) {
-      vty_out (vty, "Address family: IPv6 %s%s", safi2str(safi), VTY_NEWLINE);
-      prefix_bgp_show_prefix_list (vty, AFI_IP6, name);
-  }
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (show_bgp_ipv6_neighbor_received_prefix_filter,
-       show_bgp_ipv6_neighbor_received_prefix_filter_cmd,
-       "show bgp ipv6 neighbors (A.B.C.D|X:X::X:X) received prefix-filter",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display information received from a BGP neighbor\n"
-       "Display the prefixlist filter\n")
-{
-  char name[BUFSIZ];
-  union sockunion su;
-  struct peer *peer;
-  int count, ret;
-
-  ret = str2sockunion (argv[0], &su);
-  if (ret < 0)
-    {
-      vty_out (vty, "Malformed address: %s%s", argv[0], VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  peer = peer_lookup (NULL, &su);
-  if (! peer)
-    return CMD_WARNING;
-
-  sprintf (name, "%s.%d.%d", peer->host, AFI_IP6, SAFI_UNICAST);
-  count =  prefix_bgp_show_prefix_list (NULL, AFI_IP6, name);
-  if (count)
-    {
-      vty_out (vty, "Address family: IPv6 Unicast%s", VTY_NEWLINE);
-      prefix_bgp_show_prefix_list (vty, AFI_IP6, name);
-    }
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (show_bgp_view_ipv6_neighbor_received_prefix_filter,
-       show_bgp_view_ipv6_neighbor_received_prefix_filter_cmd,
-       "show bgp view WORD ipv6 neighbors (A.B.C.D|X:X::X:X) received prefix-filter",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display information received from a BGP neighbor\n"
-       "Display the prefixlist filter\n")
-{
-  char name[BUFSIZ];
-  union sockunion su;
-  struct peer *peer;
-  struct bgp *bgp;
-  int count, ret;
-
-  /* BGP structure lookup. */
-  bgp = bgp_lookup_by_name (argv[0]);
-  if (bgp == NULL)
-  {  
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-  
-  ret = str2sockunion (argv[1], &su);
-  if (ret < 0)
-    {
-      vty_out (vty, "Malformed address: %s%s", argv[1], VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  peer = peer_lookup (bgp, &su);
-  if (! peer)
-    return CMD_WARNING;
-
-  sprintf (name, "%s.%d.%d", peer->host, AFI_IP6, SAFI_UNICAST);
-  count =  prefix_bgp_show_prefix_list (NULL, AFI_IP6, name);
-  if (count)
-    {
-      vty_out (vty, "Address family: IPv6 Unicast%s", VTY_NEWLINE);
-      prefix_bgp_show_prefix_list (vty, AFI_IP6, name);
+      if (uj)
+        vty_out (vty, "{}%s", VTY_NEWLINE);
+      else
+        vty_out (vty, "No functional output%s", VTY_NEWLINE);
     }
 
   return CMD_SUCCESS;
@@ -13547,1620 +9611,106 @@ DEFUN (show_bgp_view_ipv6_neighbor_received_prefix_filter,
 
 static int
 bgp_show_neighbor_route (struct vty *vty, struct peer *peer, afi_t afi,
-			 safi_t safi, enum bgp_show_type type)
+			 safi_t safi, enum bgp_show_type type, u_char use_json)
 {
   if (! peer || ! peer->afc[afi][safi])
     {
-      vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
+      if (use_json)
+        {
+          json_object *json_no = NULL;
+          json_no = json_object_new_object();
+          json_object_string_add(json_no, "warning", "No such neighbor or address family");
+          vty_out (vty, "%s%s", json_object_to_json_string(json_no), VTY_NEWLINE);
+          json_object_free(json_no);
+        }
+      else
+        vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
- 
-  return bgp_show (vty, peer->bgp, afi, safi, type, &peer->su);
+
+  return bgp_show (vty, peer->bgp, afi, safi, type, &peer->su, use_json);
 }
+
 DEFUN (show_ip_bgp_neighbor_routes,
        show_ip_bgp_neighbor_routes_cmd,
-       "show ip bgp neighbors (A.B.C.D|X:X::X:X) routes",
+       "show [ip] bgp [<view|vrf> WORD] [<ipv4 [<unicast|multicast>]|ipv6 [<unicast|multicast>]|encap [unicast]|vpnv4 [unicast]>] neighbors <A.B.C.D|X:X::X:X|WORD> <flap-statistics|dampened-routes|routes> [json]",
        SHOW_STR
        IP_STR
        BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display routes learned from neighbor\n")
-{
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);
-  if (! peer)
-    return CMD_WARNING;
-    
-  return bgp_show_neighbor_route (vty, peer, AFI_IP, SAFI_UNICAST,
-				  bgp_show_type_neighbor);
-}
-
-DEFUN (show_ip_bgp_neighbor_flap,
-       show_ip_bgp_neighbor_flap_cmd,
-       "show ip bgp neighbors (A.B.C.D|X:X::X:X) flap-statistics",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display flap statistics of the routes learned from neighbor\n")
-{
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);
-  if (! peer)
-    return CMD_WARNING;
-    
-  return bgp_show_neighbor_route (vty, peer, AFI_IP, SAFI_UNICAST,
-				  bgp_show_type_flap_neighbor);
-}
-
-DEFUN (show_ip_bgp_neighbor_damp,
-       show_ip_bgp_neighbor_damp_cmd,
-       "show ip bgp neighbors (A.B.C.D|X:X::X:X) dampened-routes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the dampened routes received from neighbor\n")
-{
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);
-  if (! peer)
-    return CMD_WARNING;
-    
-  return bgp_show_neighbor_route (vty, peer, AFI_IP, SAFI_UNICAST,
-				  bgp_show_type_damp_neighbor);
-}
-
-DEFUN (show_ip_bgp_ipv4_neighbor_routes,
-       show_ip_bgp_ipv4_neighbor_routes_cmd,
-       "show ip bgp ipv4 (unicast|multicast) neighbors (A.B.C.D|X:X::X:X) routes",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display routes learned from neighbor\n")
-{
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
- 
-  if (strncmp (argv[0], "m", 1) == 0)
-    return bgp_show_neighbor_route (vty, peer, AFI_IP, SAFI_MULTICAST,
-				    bgp_show_type_neighbor);
-
-  return bgp_show_neighbor_route (vty, peer, AFI_IP, SAFI_UNICAST,
-				  bgp_show_type_neighbor);
-}
-
-DEFUN (show_ip_bgp_view_rsclient,
-       show_ip_bgp_view_rsclient_cmd,
-       "show ip bgp view WORD rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR)
-{
-  struct bgp_table *table;
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  table = peer->rib[AFI_IP][SAFI_UNICAST];
-
-  return bgp_show_table (vty, table, &peer->remote_id, bgp_show_type_normal, NULL);
-}
-
-ALIAS (show_ip_bgp_view_rsclient,
-       show_ip_bgp_rsclient_cmd,
-       "show ip bgp rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR)
-
-DEFUN (show_bgp_view_ipv4_safi_rsclient,
-       show_bgp_view_ipv4_safi_rsclient_cmd,
-       "show bgp view WORD ipv4 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR)
-{
-  struct bgp_table *table;
-  struct peer *peer;
-  safi_t safi;
-
-  if (argc == 3) {
-    peer = peer_lookup_in_view (vty, argv[0], argv[2]);
-    safi = (strncmp (argv[1], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  } else {
-    peer = peer_lookup_in_view (vty, NULL, argv[1]);
-    safi = (strncmp (argv[0], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  }
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP][safi])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP][safi],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  table = peer->rib[AFI_IP][safi];
-
-  return bgp_show_table (vty, table, &peer->remote_id, bgp_show_type_normal, NULL);
-}
-
-ALIAS (show_bgp_view_ipv4_safi_rsclient,
-       show_bgp_ipv4_safi_rsclient_cmd,
-       "show bgp ipv4 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR)
-
-DEFUN (show_ip_bgp_view_rsclient_route,
-       show_ip_bgp_view_rsclient_route_cmd,
-       "show ip bgp view WORD rsclient (A.B.C.D|X:X::X:X) A.B.C.D",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-
-  /* BGP structure lookup. */
-  if (argc == 3)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-
-  if (argc == 3)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-}
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
- 
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP][SAFI_UNICAST], 
-                                  (argc == 3) ? argv[2] : argv[1],
-                                  AFI_IP, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-ALIAS (show_ip_bgp_view_rsclient_route,
-       show_ip_bgp_rsclient_route_cmd,
-       "show ip bgp rsclient (A.B.C.D|X:X::X:X) A.B.C.D",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-
-DEFUN (show_bgp_ipv4_safi_neighbor_flap,
-       show_bgp_ipv4_safi_neighbor_flap_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) neighbors (A.B.C.D|X:X::X:X) flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display flap statistics of the routes learned from neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-    
-  return bgp_show_neighbor_route (vty, peer, AFI_IP, safi,
-				  bgp_show_type_flap_neighbor);
-}
-
-DEFUN (show_bgp_ipv6_safi_neighbor_flap,
-       show_bgp_ipv6_safi_neighbor_flap_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) neighbors (A.B.C.D|X:X::X:X) flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display flap statistics of the routes learned from neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-    
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, safi,
-				  bgp_show_type_flap_neighbor);
-}
-
-DEFUN (show_bgp_ipv4_safi_neighbor_damp,
-       show_bgp_ipv4_safi_neighbor_damp_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) neighbors (A.B.C.D|X:X::X:X) dampened-routes",
-       SHOW_STR
-       BGP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the dampened routes received from neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-    
-  return bgp_show_neighbor_route (vty, peer, AFI_IP, safi,
-				  bgp_show_type_damp_neighbor);
-}
-
-DEFUN (show_bgp_ipv6_safi_neighbor_damp,
-       show_bgp_ipv6_safi_neighbor_damp_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) neighbors (A.B.C.D|X:X::X:X) dampened-routes",
-       SHOW_STR
-       BGP_STR
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Address Family Modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the dampened routes received from neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
-    
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, safi,
-				  bgp_show_type_damp_neighbor);
-}
-
-DEFUN (show_bgp_ipv4_safi_neighbor_routes,
-       show_bgp_ipv4_safi_neighbor_routes_cmd,
-       "show bgp ipv4 (multicast|unicast) neighbors (A.B.C.D|X:X::X:X) routes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display routes learned from neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
- 
-  return bgp_show_neighbor_route (vty, peer, AFI_IP, safi,
-				  bgp_show_type_neighbor);
-}
-
-DEFUN (show_bgp_ipv6_safi_neighbor_routes,
-       show_bgp_ipv6_safi_neighbor_routes_cmd,
-       "show bgp ipv6 (multicast|unicast) neighbors (A.B.C.D|X:X::X:X) routes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       NEIGHBOR_ADDR_STR
-       NEIGHBOR_ADDR_STR
-       "Display routes learned from neighbor\n")
-{
-  struct peer *peer;
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  peer = peer_lookup_in_view (vty, NULL, argv[1]);
-  if (! peer)
-    return CMD_WARNING;
- 
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, safi,
-				  bgp_show_type_neighbor);
-}
-
-DEFUN (show_bgp_view_ipv4_safi_rsclient_route,
-       show_bgp_view_ipv4_safi_rsclient_route_cmd,
-       "show bgp view WORD ipv4 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X) A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-  safi_t safi;
-
-  /* BGP structure lookup. */
-  if (argc == 4)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-
-  if (argc == 4) {
-    peer = peer_lookup_in_view (vty, argv[0], argv[2]);
-    safi = (strncmp (argv[1], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  } else {
-    peer = peer_lookup_in_view (vty, NULL, argv[1]);
-    safi = (strncmp (argv[0], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  }
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP][safi])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-}
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP][safi],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP][safi],
-                                  (argc == 4) ? argv[3] : argv[2],
-                                  AFI_IP, safi, NULL, 0, BGP_PATH_ALL);
-}
-
-ALIAS (show_bgp_view_ipv4_safi_rsclient_route,
-       show_bgp_ipv4_safi_rsclient_route_cmd,
-       "show bgp ipv4 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X) A.B.C.D",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-
-
-DEFUN (show_bgp_view_ipv4_safi_rsclient_prefix,
-       show_bgp_view_ipv4_safi_rsclient_prefix_cmd,
-       "show bgp view WORD ipv4 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X) A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-  safi_t safi;
-
-  /* BGP structure lookup. */
-  if (argc == 4)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-
-  if (argc == 4) {
-    peer = peer_lookup_in_view (vty, argv[0], argv[2]);
-    safi = (strncmp (argv[1], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  } else {
-    peer = peer_lookup_in_view (vty, NULL, argv[1]);
-    safi = (strncmp (argv[0], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  }
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP][safi])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-}
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP][safi],
-              PEER_FLAG_RSERVER_CLIENT))
-{
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-    return CMD_WARNING;
-    }
-
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP][safi],
-                                  (argc == 4) ? argv[3] : argv[2],
-                                  AFI_IP, safi, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_ip_bgp_view_rsclient_prefix,
-       show_ip_bgp_view_rsclient_prefix_cmd,
-       "show ip bgp view WORD rsclient (A.B.C.D|X:X::X:X) A.B.C.D/M",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-
-  /* BGP structure lookup. */
-  if (argc == 3)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-
-  if (argc == 3)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-    
-  if (! peer->afc[AFI_IP][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-}
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-{
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-    return CMD_WARNING;
-    }
-    
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP][SAFI_UNICAST], 
-                                  (argc == 3) ? argv[2] : argv[1],
-                                  AFI_IP, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-ALIAS (show_ip_bgp_view_rsclient_prefix,
-       show_ip_bgp_rsclient_prefix_cmd,
-       "show ip bgp rsclient (A.B.C.D|X:X::X:X) A.B.C.D/M",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-
-ALIAS (show_bgp_view_ipv4_safi_rsclient_prefix,
-       show_bgp_ipv4_safi_rsclient_prefix_cmd,
-       "show bgp ipv4 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X) A.B.C.D/M",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
-
-DEFUN (show_bgp_view_ipv6_neighbor_routes,
-       show_bgp_view_ipv6_neighbor_routes_cmd,
-       "show bgp view WORD ipv6 neighbors (A.B.C.D|X:X::X:X) routes",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display routes learned from neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-   
-  if (! peer)
-    return CMD_WARNING;
-
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, SAFI_UNICAST,
-				  bgp_show_type_neighbor);
-}
-
-DEFUN (show_bgp_view_neighbor_damp,
-       show_bgp_view_neighbor_damp_cmd,
-       "show bgp view WORD neighbors (A.B.C.D|X:X::X:X) dampened-routes",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the dampened routes received from neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, SAFI_UNICAST,
-				  bgp_show_type_damp_neighbor);
-}
-
-DEFUN (show_bgp_view_ipv6_neighbor_damp,
-       show_bgp_view_ipv6_neighbor_damp_cmd,
-       "show bgp view WORD ipv6 neighbors (A.B.C.D|X:X::X:X) dampened-routes",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the dampened routes received from neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, SAFI_UNICAST,
-				  bgp_show_type_damp_neighbor);
-}
-
-DEFUN (show_bgp_view_ipv6_neighbor_flap,
-       show_bgp_view_ipv6_neighbor_flap_cmd,
-       "show bgp view WORD ipv6 neighbors (A.B.C.D|X:X::X:X) flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the dampened routes received from neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, SAFI_UNICAST,
-				  bgp_show_type_flap_neighbor);
-}
-
-DEFUN (show_bgp_view_neighbor_flap,
-       show_bgp_view_neighbor_flap_cmd,
-       "show bgp view WORD neighbors (A.B.C.D|X:X::X:X) flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display flap statistics of the routes learned from neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, SAFI_UNICAST,
-				  bgp_show_type_flap_neighbor);
-}
-
-ALIAS (show_bgp_view_neighbor_flap,
-       show_bgp_neighbor_flap_cmd,
-       "show bgp neighbors (A.B.C.D|X:X::X:X) flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display flap statistics of the routes learned from neighbor\n")
-
-ALIAS (show_bgp_view_neighbor_damp,
-       show_bgp_neighbor_damp_cmd,
-       "show bgp neighbors (A.B.C.D|X:X::X:X) dampened-routes",
-       SHOW_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the dampened routes received from neighbor\n")
-
-DEFUN (show_bgp_view_neighbor_routes,
-       show_bgp_view_neighbor_routes_cmd,
-       "show bgp view WORD neighbors (A.B.C.D|X:X::X:X) routes",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display routes learned from neighbor\n")
-{
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-   
-  if (! peer)
-    return CMD_WARNING;
-
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, SAFI_UNICAST,
-				  bgp_show_type_neighbor);
-}
-
-ALIAS (show_bgp_view_neighbor_routes,
-       show_bgp_neighbor_routes_cmd,
-       "show bgp neighbors (A.B.C.D|X:X::X:X) routes",
-       SHOW_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display routes learned from neighbor\n")
-
-ALIAS (show_bgp_view_neighbor_routes,
-       show_bgp_ipv6_neighbor_routes_cmd,
-       "show bgp ipv6 neighbors (A.B.C.D|X:X::X:X) routes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display routes learned from neighbor\n")
-
-/* old command */
-ALIAS (show_bgp_view_neighbor_routes,
-       ipv6_bgp_neighbor_routes_cmd,
-       "show ipv6 bgp neighbors (A.B.C.D|X:X::X:X) routes",
-       SHOW_STR
-       IPV6_STR
-       BGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display routes learned from neighbor\n")
-
-/* old command */
-DEFUN (ipv6_mbgp_neighbor_routes,
-       ipv6_mbgp_neighbor_routes_cmd,
-       "show ipv6 mbgp neighbors (A.B.C.D|X:X::X:X) routes",
-       SHOW_STR
-       IPV6_STR
-       MBGP_STR
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display routes learned from neighbor\n")
-{
-  struct peer *peer;
-
-  peer = peer_lookup_in_view (vty, NULL, argv[0]);
-  if (! peer)
-    return CMD_WARNING;
- 
-  return bgp_show_neighbor_route (vty, peer, AFI_IP6, SAFI_MULTICAST,
-				  bgp_show_type_neighbor);
-}
-
-ALIAS (show_bgp_view_neighbor_flap,
-       show_bgp_ipv6_neighbor_flap_cmd,
-       "show bgp ipv6 neighbors (A.B.C.D|X:X::X:X) flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display flap statistics of the routes learned from neighbor\n")
-
-ALIAS (show_bgp_view_neighbor_damp,
-       show_bgp_ipv6_neighbor_damp_cmd,
-       "show bgp ipv6 neighbors (A.B.C.D|X:X::X:X) dampened-routes",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Detailed information on TCP and BGP neighbor connections\n"
-       "Neighbor to display information about\n"
-       "Neighbor to display information about\n"
-       "Display the dampened routes received from neighbor\n")
-
-DEFUN (show_bgp_view_rsclient,
-       show_bgp_view_rsclient_cmd,
-       "show bgp view WORD rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR)
-{
-  struct bgp_table *table;
-  struct peer *peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP6][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP6][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  table = peer->rib[AFI_IP6][SAFI_UNICAST];
-
-  return bgp_show_table (vty, table, &peer->remote_id, bgp_show_type_normal, NULL);
-}
-
-ALIAS (show_bgp_view_rsclient,
-       show_bgp_rsclient_cmd,
-       "show bgp rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR)
-
-DEFUN (show_bgp_view_ipv4_rsclient,
-       show_bgp_view_ipv4_rsclient_cmd,
-       "show bgp view WORD ipv4 rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
+       BGP_INSTANCE_HELP_STR
        "Address Family\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR2)
-{
-  struct bgp_table	*table;
-  struct peer		*peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  table = peer->rib[AFI_IP][SAFI_UNICAST];
-
-  return bgp_show_table (vty, table, &peer->remote_id, bgp_show_type_normal, NULL);
-}
-DEFUN (show_bgp_view_ipv6_rsclient,
-       show_bgp_view_ipv6_rsclient_cmd,
-       "show bgp view WORD ipv6 rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "BGP view name\n"
+       "Address Family modifier\n"
+       "Address Family modifier\n"
        "Address Family\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR2)
-{
-  struct bgp_table	*table;
-  struct peer		*peer;
-
-  if (argc == 2)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP6][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP6][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  table = peer->rib[AFI_IP6][SAFI_UNICAST];
-
-  return bgp_show_table (vty, table, &peer->remote_id, bgp_show_type_normal, NULL);
-}
-
-ALIAS (show_bgp_view_ipv4_rsclient,
-       show_bgp_ipv4_rsclient_cmd,
-       "show bgp ipv4 rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
+       "Address Family modifier\n"
+       "Address Family modifier\n"
        "Address Family\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR2)
-
-ALIAS (show_bgp_view_ipv6_rsclient,
-       show_bgp_ipv6_rsclient_cmd,
-       "show bgp ipv6 rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
+       "Address Family modifier\n"
        "Address Family\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR2)
-
-DEFUN (show_bgp_view_ipv6_safi_rsclient,
-       show_bgp_view_ipv6_safi_rsclient_cmd,
-       "show bgp view WORD ipv6 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
        "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR)
+       "Detailed information on TCP and BGP neighbor connections\n"
+       "Neighbor to display information about\n"
+       "Neighbor to display information about\n"
+       "Neighbor on BGP configured interface\n"
+       "Display flap statistics of the routes learned from neighbor\n"
+       "Display the dampened routes received from neighbor\n"
+       "Display routes learned from neighbor\n"
+       JSON_STR)
 {
-  struct bgp_table *table;
-  struct peer *peer;
-  safi_t safi;
+  char *vrf = NULL;
+  char *peerstr = NULL;
 
-  if (argc == 3) {
-    peer = peer_lookup_in_view (vty, argv[0], argv[2]);
-    safi = (strncmp (argv[1], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  } else {
-    peer = peer_lookup_in_view (vty, NULL, argv[1]);
-    safi = (strncmp (argv[0], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
+  afi_t afi = AFI_IP6;
+  safi_t safi = SAFI_UNICAST;
+  struct peer *peer;
+  enum bgp_show_type sh_type = bgp_show_type_neighbor;
+
+  int idx = 0;
+
+  /* show [ip] bgp */
+  if (argv_find (argv, argc, "ip", &idx))
+    afi = AFI_IP;
+  /* [<view|vrf> WORD] */
+  if (argv_find (argv, argc, "view", &idx) || argv_find (argv, argc, "vrf", &idx))
+    vrf = argv[++idx]->arg;
+  /* [<ipv4 [<unicast|multicast>]|ipv6 [<unicast|multicast>]|encap [unicast]|vpnv4 [unicast]>] */
+  if (argv_find (argv, argc, "ipv4", &idx) || argv_find (argv, argc, "ipv6", &idx))
+  {
+    afi = strmatch(argv[idx]->text, "ipv6") ? AFI_IP6 : AFI_IP;
+    if (argv_find (argv, argc, "unicast", &idx) || argv_find (argv, argc, "multicast", &idx))
+      safi = strmatch (argv[idx]->text, "unicast") ? SAFI_UNICAST : SAFI_MULTICAST;
   }
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP6][safi])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP6][safi],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  table = peer->rib[AFI_IP6][safi];
-
-  return bgp_show_table (vty, table, &peer->remote_id, bgp_show_type_normal, NULL);
-}
-
-ALIAS (show_bgp_view_ipv6_safi_rsclient,
-       show_bgp_ipv6_safi_rsclient_cmd,
-       "show bgp ipv6 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X)",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR)
-
-DEFUN (show_bgp_view_rsclient_route,
-       show_bgp_view_rsclient_route_cmd,
-       "show bgp view WORD rsclient (A.B.C.D|X:X::X:X) X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-
-  /* BGP structure lookup. */
-  if (argc == 3)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-        {
-          vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-          return CMD_WARNING;
-        }
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-        {
-          vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-          return CMD_WARNING;
-        }
-    }
-
-  if (argc == 3)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP6][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP6][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP6][SAFI_UNICAST],
-                                  (argc == 3) ? argv[2] : argv[1],
-                                  AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_view_ipv6_rsclient_route,
-       show_bgp_view_ipv6_rsclient_route_cmd,
-       "show bgp view WORD ipv6 rsclient (A.B.C.D|X:X::X:X) X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "BGP view name\n"
-       "IP6_STR"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-
-  /* BGP structure lookup. */
-  if (argc == 3)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-        {
-          vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-          return CMD_WARNING;
-        }
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-        {
-          vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-          return CMD_WARNING;
-        }
-    }
-
-  if (argc == 3)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP6][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP6][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP6][SAFI_UNICAST],
-                                  (argc == 3) ? argv[2] : argv[1],
-                                  AFI_IP6, SAFI_UNICAST, NULL, 0, BGP_PATH_ALL);
-}
-
-ALIAS (show_bgp_view_ipv6_rsclient_route,
-       show_bgp_rsclient_route_cmd,
-       "show bgp rsclient (A.B.C.D|X:X::X:X) X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-
-ALIAS (show_bgp_view_ipv6_rsclient_route,
-       show_bgp_ipv6_rsclient_route_cmd,
-       "show bgp ipv6 rsclient (A.B.C.D|X:X::X:X) X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       IP6_STR
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-
-DEFUN (show_bgp_view_ipv6_safi_rsclient_route,
-       show_bgp_view_ipv6_safi_rsclient_route_cmd,
-       "show bgp view WORD ipv6 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X) X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-  safi_t safi;
-
-  /* BGP structure lookup. */
-  if (argc == 4)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-
-  if (argc == 4) {
-    peer = peer_lookup_in_view (vty, argv[0], argv[2]);
-    safi = (strncmp (argv[1], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  } else {
-    peer = peer_lookup_in_view (vty, NULL, argv[1]);
-    safi = (strncmp (argv[0], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
+  else if (argv_find (argv, argc, "encap", &idx) || argv_find (argv, argc, "vpnv4", &idx))
+  {
+    afi = AFI_IP;
+    safi = strmatch (argv[idx]->text, "encap") ? SAFI_ENCAP : SAFI_MPLS_VPN;
+    // advance idx if necessary
+    argv_find (argv, argc, "unicast", &idx);
   }
+  /* neighbors <A.B.C.D|X:X::X:X|WORD> */
+  argv_find (argv, argc, "neighbors", &idx);
+  peerstr = argv[++idx]->arg;
 
+  u_char uj = use_json(argc, argv);
+
+  peer = peer_lookup_in_view (vty, vrf, peerstr, uj);
   if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP6][safi])
     {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
+      vty_out (vty, "No such neighbor%s", VTY_NEWLINE);
       return CMD_WARNING;
+    }
+
+  if (argv_find (argv, argc, "flap-statistics", &idx))
+    sh_type = bgp_show_type_flap_neighbor;
+  else if (argv_find (argv, argc, "dampened-routes", &idx))
+    sh_type = bgp_show_type_damp_neighbor;
+  else if (argv_find (argv, argc, "routes", &idx))
+    sh_type = bgp_show_type_neighbor;
+
+  return bgp_show_neighbor_route (vty, peer, afi, safi, sh_type, uj);
 }
 
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP6][safi],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP6][safi],
-                                  (argc == 4) ? argv[3] : argv[2],
-                                  AFI_IP6, safi, NULL, 0, BGP_PATH_ALL);
-}
-
-ALIAS (show_bgp_view_ipv6_safi_rsclient_route,
-       show_bgp_ipv6_safi_rsclient_route_cmd,
-       "show bgp ipv6 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X) X:X::X:X",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "Network in the BGP routing table to display\n")
-
-
-DEFUN (show_bgp_view_rsclient_prefix,
-       show_bgp_view_rsclient_prefix_cmd,
-       "show bgp view WORD rsclient (A.B.C.D|X:X::X:X) X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-
-  /* BGP structure lookup. */
-  if (argc == 3)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-        {
-          vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-          return CMD_WARNING;
-        }
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-        {
-          vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-          return CMD_WARNING;
-        }
-    }
-
-  if (argc == 3)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP6][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP6][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP6][SAFI_UNICAST],
-                                  (argc == 3) ? argv[2] : argv[1],
-                                  AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-DEFUN (show_bgp_view_ipv6_rsclient_prefix,
-       show_bgp_view_ipv6_rsclient_prefix_cmd,
-       "show bgp view WORD ipv6 rsclient (A.B.C.D|X:X::X:X) X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       IP6_STR
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-
-  /* BGP structure lookup. */
-  if (argc == 3)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-        {
-          vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-          return CMD_WARNING;
-        }
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-        {
-          vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-          return CMD_WARNING;
-        }
-    }
-
-  if (argc == 3)
-    peer = peer_lookup_in_view (vty, argv[0], argv[1]);
-  else
-    peer = peer_lookup_in_view (vty, NULL, argv[0]);
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP6][SAFI_UNICAST])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP6][SAFI_UNICAST],
-              PEER_FLAG_RSERVER_CLIENT))
-    {
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-    }
-
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP6][SAFI_UNICAST],
-                                  (argc == 3) ? argv[2] : argv[1],
-                                  AFI_IP6, SAFI_UNICAST, NULL, 1, BGP_PATH_ALL);
-}
-
-ALIAS (show_bgp_view_ipv6_rsclient_prefix,
-       show_bgp_rsclient_prefix_cmd,
-       "show bgp rsclient (A.B.C.D|X:X::X:X) X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
-
-ALIAS (show_bgp_view_ipv6_rsclient_prefix,
-       show_bgp_ipv6_rsclient_prefix_cmd,
-       "show bgp ipv6 rsclient (A.B.C.D|X:X::X:X) X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
-
-DEFUN (show_bgp_view_ipv6_safi_rsclient_prefix,
-       show_bgp_view_ipv6_safi_rsclient_prefix_cmd,
-       "show bgp view WORD ipv6 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X) X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "BGP view\n"
-       "View name\n"
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IP prefix <network>/<length>, e.g., 3ffe::/16\n")
-{
-  struct bgp *bgp;
-  struct peer *peer;
-  safi_t safi;
-
-  /* BGP structure lookup. */
-  if (argc == 4)
-    {
-      bgp = bgp_lookup_by_name (argv[0]);
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "Can't find BGP view %s%s", argv[0], VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-  else
-    {
-      bgp = bgp_get_default ();
-      if (bgp == NULL)
-	{
-	  vty_out (vty, "No BGP process is configured%s", VTY_NEWLINE);
-	  return CMD_WARNING;
-	}
-    }
-
-  if (argc == 4) {
-    peer = peer_lookup_in_view (vty, argv[0], argv[2]);
-    safi = (strncmp (argv[1], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  } else {
-    peer = peer_lookup_in_view (vty, NULL, argv[1]);
-    safi = (strncmp (argv[0], "m", 1) == 0) ? SAFI_MULTICAST : SAFI_UNICAST;
-  }
-
-  if (! peer)
-    return CMD_WARNING;
-
-  if (! peer->afc[AFI_IP6][safi])
-    {
-      vty_out (vty, "%% Activate the neighbor for the address family first%s",
-            VTY_NEWLINE);
-      return CMD_WARNING;
-}
-
-  if ( ! CHECK_FLAG (peer->af_flags[AFI_IP6][safi],
-              PEER_FLAG_RSERVER_CLIENT))
-{
-      vty_out (vty, "%% Neighbor is not a Route-Server client%s",
-            VTY_NEWLINE);
-    return CMD_WARNING;
-    }
-
-  return bgp_show_route_in_table (vty, bgp, peer->rib[AFI_IP6][safi],
-                                  (argc == 4) ? argv[3] : argv[2],
-                                  AFI_IP6, safi, NULL, 1, BGP_PATH_ALL);
-}
-
-ALIAS (show_bgp_view_ipv6_safi_rsclient_prefix,
-       show_bgp_ipv6_safi_rsclient_prefix_cmd,
-       "show bgp ipv6 (unicast|multicast) rsclient (A.B.C.D|X:X::X:X) X:X::X:X/M",
-       SHOW_STR
-       BGP_STR
-       "Address family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Information about Route Server Client\n"
-       NEIGHBOR_ADDR_STR
-       "IP prefix <network>/<length>, e.g., 3ffe::/16\n")
-
-struct bgp_table *bgp_distance_table;
+struct bgp_table *bgp_distance_table[AFI_MAX][SAFI_MAX];
 
 struct bgp_distance
 {
@@ -15188,10 +9738,15 @@ bgp_distance_set (struct vty *vty, const char *distance_str,
                   const char *ip_str, const char *access_list_str)
 {
   int ret;
+  afi_t afi;
+  safi_t safi;
   struct prefix p;
   u_char distance;
   struct bgp_node *rn;
   struct bgp_distance *bdistance;
+
+  afi = bgp_node_afi (vty);
+  safi = bgp_node_safi (vty);
 
   ret = str2prefix (ip_str, &p);
   if (ret == 0)
@@ -15203,7 +9758,7 @@ bgp_distance_set (struct vty *vty, const char *distance_str,
   distance = atoi (distance_str);
 
   /* Get BGP distance node. */
-  rn = bgp_node_get (bgp_distance_table, (struct prefix *) &p);
+  rn = bgp_node_get (bgp_distance_table[afi][safi], (struct prefix *) &p);
   if (rn->info)
     {
       bdistance = rn->info;
@@ -15221,11 +9776,11 @@ bgp_distance_set (struct vty *vty, const char *distance_str,
   /* Reset access-list configuration. */
   if (bdistance->access_list)
     {
-      free (bdistance->access_list);
+      XFREE(MTYPE_AS_LIST, bdistance->access_list);
       bdistance->access_list = NULL;
     }
   if (access_list_str)
-    bdistance->access_list = strdup (access_list_str);
+    bdistance->access_list = XSTRDUP(MTYPE_AS_LIST, access_list_str);
 
   return CMD_SUCCESS;
 }
@@ -15235,10 +9790,15 @@ bgp_distance_unset (struct vty *vty, const char *distance_str,
                     const char *ip_str, const char *access_list_str)
 {
   int ret;
+  afi_t afi;
+  safi_t safi;
   struct prefix p;
-  u_char distance;
+  int distance;
   struct bgp_node *rn;
   struct bgp_distance *bdistance;
+
+  afi = bgp_node_afi (vty);
+  safi = bgp_node_safi (vty);
 
   ret = str2prefix (ip_str, &p);
   if (ret == 0)
@@ -15247,9 +9807,7 @@ bgp_distance_unset (struct vty *vty, const char *distance_str,
       return CMD_WARNING;
     }
 
-  distance = atoi (distance_str);
-
-  rn = bgp_node_lookup (bgp_distance_table, (struct prefix *)&p);
+  rn = bgp_node_lookup (bgp_distance_table[afi][safi], (struct prefix *)&p);
   if (! rn)
     {
       vty_out (vty, "Can't find specified prefix%s", VTY_NEWLINE);
@@ -15257,15 +9815,16 @@ bgp_distance_unset (struct vty *vty, const char *distance_str,
     }
 
   bdistance = rn->info;
-  
+  distance = atoi(distance_str);
+
   if (bdistance->distance != distance)
     {
        vty_out (vty, "Distance does not match configured%s", VTY_NEWLINE);
        return CMD_WARNING;
     }
-  
+
   if (bdistance->access_list)
-    free (bdistance->access_list);
+    XFREE(MTYPE_AS_LIST, bdistance->access_list);
   bgp_distance_free (bdistance);
 
   rn->info = NULL;
@@ -15277,10 +9836,11 @@ bgp_distance_unset (struct vty *vty, const char *distance_str,
 
 /* Apply BGP information to distance method. */
 u_char
-bgp_distance_apply (struct prefix *p, struct bgp_info *rinfo, struct bgp *bgp)
+bgp_distance_apply (struct prefix *p, struct bgp_info *rinfo, afi_t afi,
+		    safi_t safi, struct bgp *bgp)
 {
   struct bgp_node *rn;
-  struct prefix_ipv4 q;
+  struct prefix q;
   struct peer *peer;
   struct bgp_distance *bdistance;
   struct access_list *alist;
@@ -15289,21 +9849,11 @@ bgp_distance_apply (struct prefix *p, struct bgp_info *rinfo, struct bgp *bgp)
   if (! bgp)
     return 0;
 
-  if (p->family != AF_INET)
-    return 0;
-
   peer = rinfo->peer;
 
-  if (peer->su.sa.sa_family != AF_INET)
-    return 0;
-
-  memset (&q, 0, sizeof (struct prefix_ipv4));
-  q.family = AF_INET;
-  q.prefix = peer->su.sin.sin_addr;
-  q.prefixlen = IPV4_MAX_BITLEN;
-
   /* Check source address. */
-  rn = bgp_node_match (bgp_distance_table, (struct prefix *) &q);
+  sockunion2hostprefix (&peer->su, &q);
+  rn = bgp_node_match (bgp_distance_table[afi][safi], &q);
   if (rn)
     {
       bdistance = rn->info;
@@ -15311,7 +9861,7 @@ bgp_distance_apply (struct prefix *p, struct bgp_info *rinfo, struct bgp *bgp)
 
       if (bdistance->access_list)
 	{
-	  alist = access_list_lookup (AFI_IP, bdistance->access_list);
+	  alist = access_list_lookup (afi, bdistance->access_list);
 	  if (alist && access_list_apply (alist, p) == FILTER_PERMIT)
 	    return bdistance->distance;
 	}
@@ -15320,7 +9870,7 @@ bgp_distance_apply (struct prefix *p, struct bgp_info *rinfo, struct bgp *bgp)
     }
 
   /* Backdoor check. */
-  rn = bgp_node_lookup (bgp->route[AFI_IP][SAFI_UNICAST], p);
+  rn = bgp_node_lookup (bgp->route[afi][safi], p);
   if (rn)
     {
       bgp_static = rn->info;
@@ -15328,8 +9878,8 @@ bgp_distance_apply (struct prefix *p, struct bgp_info *rinfo, struct bgp *bgp)
 
       if (bgp_static->backdoor)
 	{
-	  if (bgp->distance_local)
-	    return bgp->distance_local;
+	  if (bgp->distance_local[afi][safi])
+	    return bgp->distance_local[afi][safi];
 	  else
 	    return ZEBRA_IBGP_DISTANCE_DEFAULT;
 	}
@@ -15337,115 +9887,46 @@ bgp_distance_apply (struct prefix *p, struct bgp_info *rinfo, struct bgp *bgp)
 
   if (peer->sort == BGP_PEER_EBGP)
     {
-      if (bgp->distance_ebgp)
-	return bgp->distance_ebgp;
+      if (bgp->distance_ebgp[afi][safi])
+	return bgp->distance_ebgp[afi][safi];
       return ZEBRA_EBGP_DISTANCE_DEFAULT;
     }
   else
     {
-      if (bgp->distance_ibgp)
-	return bgp->distance_ibgp;
+      if (bgp->distance_ibgp[afi][safi])
+	return bgp->distance_ibgp[afi][safi];
       return ZEBRA_IBGP_DISTANCE_DEFAULT;
     }
 }
-
-#ifdef HAVE_IPV6
-/* Apply BGP information to ipv6 distance method. */
-u_char
-ipv6_bgp_distance_apply (struct prefix *p, struct bgp_info *rinfo, struct bgp *bgp)
-{
-  struct bgp_node *rn;
-  struct prefix_ipv6 q;
-  struct peer *peer;
-  struct bgp_distance *bdistance;
-  struct access_list *alist;
-  struct bgp_static *bgp_static;
-
-  if (! bgp)
-    return 0;
-
-  if (p->family != AF_INET6)
-    return 0;
-
-  peer = rinfo->peer;
-
-  if (peer->su.sa.sa_family != AF_INET6)
-    return 0;
-
-  memset (&q, 0, sizeof (struct prefix_ipv6));
-  q.family = AF_INET;
-  q.prefix = peer->su.sin6.sin6_addr;
-  q.prefixlen = IPV6_MAX_BITLEN;
-
-  /* Check source address. */
-  rn = bgp_node_match (bgp_distance_table, (struct prefix *) &q);
-  if (rn)
-    {
-      bdistance = rn->info;
-      bgp_unlock_node (rn);
-
-      if (bdistance->access_list)
-        {
-          alist = access_list_lookup (AFI_IP6, bdistance->access_list);
-          if (alist && access_list_apply (alist, p) == FILTER_PERMIT)
-            return bdistance->distance;
-        }
-      else
-        return bdistance->distance;
-    }
-  /* Backdoor check. */
-  rn = bgp_node_lookup (bgp->route[AFI_IP6][SAFI_UNICAST], p);
-  if (rn)
-    {
-      bgp_static = rn->info;
-      bgp_unlock_node (rn);
-
-      if (bgp_static->backdoor)
-        {
-          if (bgp->ipv6_distance_local)
-            return bgp->ipv6_distance_local;
-          else
-            return ZEBRA_IBGP_DISTANCE_DEFAULT;
-        }
-    }
-
-  if (peer_sort (peer) == BGP_PEER_EBGP)
-    {
-      if (bgp->ipv6_distance_ebgp)
-        return bgp->ipv6_distance_ebgp;
-      return ZEBRA_EBGP_DISTANCE_DEFAULT;
-    }
-  else
-    {
-      if (bgp->ipv6_distance_ibgp)
-        return bgp->ipv6_distance_ibgp;
-      return ZEBRA_IBGP_DISTANCE_DEFAULT;
-    }
-}
-#endif /* HAVE_IPV6 */
 
 DEFUN (bgp_distance,
        bgp_distance_cmd,
-       "distance bgp <1-255> <1-255> <1-255>",
+       "distance bgp (1-255) (1-255) (1-255)",
        "Define an administrative distance\n"
        "BGP distance\n"
        "Distance for routes external to the AS\n"
        "Distance for routes internal to the AS\n"
        "Distance for local routes\n")
 {
-  struct bgp *bgp;
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
+  int idx_number = 2;
+  int idx_number_2 = 3;
+  int idx_number_3 = 4;
+  afi_t afi;
+  safi_t safi;
 
-  bgp = vty->index;
+  afi = bgp_node_afi (vty);
+  safi = bgp_node_safi (vty);
 
-  bgp->distance_ebgp = atoi (argv[0]);
-  bgp->distance_ibgp = atoi (argv[1]);
-  bgp->distance_local = atoi (argv[2]);
+  bgp->distance_ebgp[afi][safi] = atoi (argv[idx_number]->arg);
+  bgp->distance_ibgp[afi][safi] = atoi (argv[idx_number_2]->arg);
+  bgp->distance_local[afi][safi] = atoi (argv[idx_number_3]->arg);
   return CMD_SUCCESS;
 }
 
 DEFUN (no_bgp_distance,
        no_bgp_distance_cmd,
-       "no distance bgp <1-255> <1-255> <1-255>",
+       "no distance bgp [(1-255) (1-255) (1-255)]",
        NO_STR
        "Define an administrative distance\n"
        "BGP distance\n"
@@ -15453,170 +9934,129 @@ DEFUN (no_bgp_distance,
        "Distance for routes internal to the AS\n"
        "Distance for local routes\n")
 {
-  struct bgp *bgp;
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
+  afi_t afi;
+  safi_t safi;
 
-  bgp = vty->index;
+  afi = bgp_node_afi (vty);
+  safi = bgp_node_safi (vty);
 
-  bgp->distance_ebgp= 0;
-  bgp->distance_ibgp = 0;
-  bgp->distance_local = 0;
+  bgp->distance_ebgp[afi][safi] = 0;
+  bgp->distance_ibgp[afi][safi] = 0;
+  bgp->distance_local[afi][safi] = 0;
   return CMD_SUCCESS;
 }
 
-ALIAS (no_bgp_distance,
-       no_bgp_distance2_cmd,
-       "no distance bgp",
-       NO_STR
-       "Define an administrative distance\n"
-       "BGP distance\n")
 
 DEFUN (bgp_distance_source,
        bgp_distance_source_cmd,
-       "distance <1-255> A.B.C.D/M",
+       "distance (1-255) A.B.C.D/M",
        "Define an administrative distance\n"
        "Administrative distance\n"
        "IP source prefix\n")
 {
-  bgp_distance_set (vty, argv[0], argv[1], NULL);
+  int idx_number = 1;
+  int idx_ipv4_prefixlen = 2;
+  bgp_distance_set (vty, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, NULL);
   return CMD_SUCCESS;
 }
 
 DEFUN (no_bgp_distance_source,
        no_bgp_distance_source_cmd,
-       "no distance <1-255> A.B.C.D/M",
+       "no distance (1-255) A.B.C.D/M",
        NO_STR
        "Define an administrative distance\n"
        "Administrative distance\n"
        "IP source prefix\n")
 {
-  bgp_distance_unset (vty, argv[0], argv[1], NULL);
+  int idx_number = 2;
+  int idx_ipv4_prefixlen = 3;
+  bgp_distance_unset (vty, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, NULL);
   return CMD_SUCCESS;
 }
 
 DEFUN (bgp_distance_source_access_list,
        bgp_distance_source_access_list_cmd,
-       "distance <1-255> A.B.C.D/M WORD",
+       "distance (1-255) A.B.C.D/M WORD",
        "Define an administrative distance\n"
        "Administrative distance\n"
        "IP source prefix\n"
        "Access list name\n")
 {
-  bgp_distance_set (vty, argv[0], argv[1], argv[2]);
+  int idx_number = 1;
+  int idx_ipv4_prefixlen = 2;
+  int idx_word = 3;
+  bgp_distance_set (vty, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, argv[idx_word]->arg);
   return CMD_SUCCESS;
 }
 
 DEFUN (no_bgp_distance_source_access_list,
        no_bgp_distance_source_access_list_cmd,
-       "no distance <1-255> A.B.C.D/M WORD",
+       "no distance (1-255) A.B.C.D/M WORD",
        NO_STR
        "Define an administrative distance\n"
        "Administrative distance\n"
        "IP source prefix\n"
        "Access list name\n")
 {
-  bgp_distance_unset (vty, argv[0], argv[1], argv[2]);
+  int idx_number = 2;
+  int idx_ipv4_prefixlen = 3;
+  int idx_word = 4;
+  bgp_distance_unset (vty, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, argv[idx_word]->arg);
   return CMD_SUCCESS;
 }
-
-#ifdef HAVE_IPV6
-DEFUN (ipv6_bgp_distance,
-       ipv6_bgp_distance_cmd,
-       "distance bgp <1-255> <1-255> <1-255>",
-       "Define an administrative distance\n"
-       "BGP distance\n"
-       "Distance for routes external to the AS\n"
-       "Distance for routes internal to the AS\n"
-       "Distance for local routes\n")
-{
-  struct bgp *bgp;
-
-  bgp = vty->index;
-
-  bgp->ipv6_distance_ebgp = atoi (argv[0]);
-  bgp->ipv6_distance_ibgp = atoi (argv[1]);
-  bgp->ipv6_distance_local = atoi (argv[2]);
-  return CMD_SUCCESS;
-}
-
-DEFUN (no_ipv6_bgp_distance,
-       no_ipv6_bgp_distance_cmd,
-       "no distance bgp <1-255> <1-255> <1-255>",
-       NO_STR
-       "Define an administrative distance\n"
-       "BGP distance\n"
-       "Distance for routes external to the AS\n"
-       "Distance for routes internal to the AS\n"
-       "Distance for local routes\n")
-{
-  struct bgp *bgp;
-
-  bgp = vty->index;
-
-  bgp->ipv6_distance_ebgp= 0;
-  bgp->ipv6_distance_ibgp = 0;
-  bgp->ipv6_distance_local = 0;
-  return CMD_SUCCESS;
-}
-
-ALIAS (no_ipv6_bgp_distance,
-       no_ipv6_bgp_distance2_cmd,
-       "no distance bgp",
-       NO_STR
-       "Define an administrative distance\n"
-       "BGP distance\n")
 
 DEFUN (ipv6_bgp_distance_source,
        ipv6_bgp_distance_source_cmd,
-       "distance <1-255> X:X::X:X/M",
+       "distance (1-255) X:X::X:X/M",
        "Define an administrative distance\n"
        "Administrative distance\n"
        "IP source prefix\n")
 {
-  bgp_distance_set (vty, argv[0], argv[1], NULL);
+  bgp_distance_set (vty, argv[1]->arg, argv[2]->arg, NULL);
   return CMD_SUCCESS;
 }
 
 DEFUN (no_ipv6_bgp_distance_source,
        no_ipv6_bgp_distance_source_cmd,
-       "no distance <1-255> X:X::X:X/M",
+       "no distance (1-255) X:X::X:X/M",
        NO_STR
        "Define an administrative distance\n"
        "Administrative distance\n"
        "IP source prefix\n")
 {
-  bgp_distance_unset (vty, argv[0], argv[1], NULL);
+  bgp_distance_unset (vty, argv[2]->arg, argv[3]->arg, NULL);
   return CMD_SUCCESS;
 }
 
 DEFUN (ipv6_bgp_distance_source_access_list,
        ipv6_bgp_distance_source_access_list_cmd,
-       "distance <1-255> X:X::X:X/M WORD",
+       "distance (1-255) X:X::X:X/M WORD",
        "Define an administrative distance\n"
        "Administrative distance\n"
        "IP source prefix\n"
        "Access list name\n")
 {
-  bgp_distance_set (vty, argv[0], argv[1], argv[2]);
+  bgp_distance_set (vty, argv[1]->arg, argv[2]->arg, argv[3]->arg);
   return CMD_SUCCESS;
 }
 
 DEFUN (no_ipv6_bgp_distance_source_access_list,
        no_ipv6_bgp_distance_source_access_list_cmd,
-       "no distance <1-255> X:X::X:X/M WORD",
+       "no distance (1-255) X:X::X:X/M WORD",
        NO_STR
        "Define an administrative distance\n"
        "Administrative distance\n"
        "IP source prefix\n"
        "Access list name\n")
 {
-  bgp_distance_unset (vty, argv[0], argv[1], argv[2]);
+  bgp_distance_unset (vty, argv[2]->arg, argv[3]->arg, argv[4]->arg);
   return CMD_SUCCESS;
 }
-#endif
 
 DEFUN (bgp_damp_set,
        bgp_damp_set_cmd,
-       "bgp dampening <1-45> <1-20000> <1-20000> <1-255>",
+       "bgp dampening [(1-45) [(1-20000) (1-20000) (1-255)]]",
        "BGP Specific commands\n"
        "Enable route-flap dampening\n"
        "Half-life time for the penalty\n"
@@ -15624,26 +10064,28 @@ DEFUN (bgp_damp_set,
        "Value to start suppressing a route\n"
        "Maximum duration to suppress a stable route\n")
 {
-  struct bgp *bgp;
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
+  int idx_half_life = 2;
+  int idx_reuse = 3;
+  int idx_suppress = 4;
+  int idx_max_suppress = 5;
   int half = DEFAULT_HALF_LIFE * 60;
   int reuse = DEFAULT_REUSE;
   int suppress = DEFAULT_SUPPRESS;
   int max = 4 * half;
 
-  if (argc == 4)
+  if (argc == 6)
     {
-      half = atoi (argv[0]) * 60;
-      reuse = atoi (argv[1]);
-      suppress = atoi (argv[2]);
-      max = atoi (argv[3]) * 60;
+      half = atoi (argv[idx_half_life]->arg) * 60;
+      reuse = atoi (argv[idx_reuse]->arg);
+      suppress = atoi (argv[idx_suppress]->arg);
+      max = atoi (argv[idx_max_suppress]->arg) * 60;
     }
-  else if (argc == 1)
+  else if (argc == 3)
     {
-      half = atoi (argv[0]) * 60;
+      half = atoi (argv[idx_half_life]->arg) * 60;
       max = 4 * half;
     }
-
-  bgp = vty->index;
 
   if (suppress < reuse)
     {
@@ -15656,35 +10098,9 @@ DEFUN (bgp_damp_set,
 			  half, reuse, suppress, max);
 }
 
-ALIAS (bgp_damp_set,
-       bgp_damp_set2_cmd,
-       "bgp dampening <1-45>",
-       "BGP Specific commands\n"
-       "Enable route-flap dampening\n"
-       "Half-life time for the penalty\n")
-
-ALIAS (bgp_damp_set,
-       bgp_damp_set3_cmd,
-       "bgp dampening",
-       "BGP Specific commands\n"
-       "Enable route-flap dampening\n")
-
 DEFUN (bgp_damp_unset,
        bgp_damp_unset_cmd,
-       "no bgp dampening",
-       NO_STR
-       "BGP Specific commands\n"
-       "Enable route-flap dampening\n")
-{
-  struct bgp *bgp;
-
-  bgp = vty->index;
-  return bgp_damp_disable (bgp, bgp_node_afi (vty), bgp_node_safi (vty));
-}
-
-ALIAS (bgp_damp_unset,
-       bgp_damp_unset2_cmd,
-       "no bgp dampening <1-45> <1-20000> <1-20000> <1-255>",
+       "no bgp dampening [(1-45) [(1-20000) (1-20000) (1-255)]]",
        NO_STR
        "BGP Specific commands\n"
        "Enable route-flap dampening\n"
@@ -15692,184 +10108,10 @@ ALIAS (bgp_damp_unset,
        "Value to start reusing a route\n"
        "Value to start suppressing a route\n"
        "Maximum duration to suppress a stable route\n")
-
-DEFUN (show_ip_bgp_dampened_paths,
-       show_ip_bgp_dampened_paths_cmd,
-       "show ip bgp dampened-paths",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display paths suppressed due to dampening\n")
 {
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST, bgp_show_type_dampend_paths,
-                   NULL);
+  VTY_DECLVAR_CONTEXT(bgp, bgp);
+  return bgp_damp_disable (bgp, bgp_node_afi (vty), bgp_node_safi (vty));
 }
-
-ALIAS (show_ip_bgp_dampened_paths,
-       show_ip_bgp_damp_dampened_paths_cmd,
-       "show ip bgp dampening dampened-paths",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display paths suppressed due to dampening\n")
-
-DEFUN (show_ip_bgp_flap_statistics,
-       show_ip_bgp_flap_statistics_cmd,
-       "show ip bgp flap-statistics",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display flap statistics of routes\n")
-{
-  return bgp_show (vty, NULL, AFI_IP, SAFI_UNICAST,
-                   bgp_show_type_flap_statistics, NULL);
-}
-
-ALIAS (show_ip_bgp_flap_statistics,
-       show_ip_bgp_damp_flap_statistics_cmd,
-       "show ip bgp dampening flap-statistics",
-       SHOW_STR
-       IP_STR
-       BGP_STR
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n")
-
-DEFUN (show_bgp_ipv4_safi_dampened_paths,
-       show_bgp_ipv4_safi_dampened_paths_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampened-paths",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display paths suppressed due to dampening\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  return bgp_show (vty, NULL, AFI_IP, safi, bgp_show_type_dampend_paths, NULL);
-}
-ALIAS (show_bgp_ipv4_safi_dampened_paths,
-       show_bgp_ipv4_safi_damp_dampened_paths_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening dampened-paths",
-       SHOW_STR
-       BGP_STR
-       IP_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display paths suppressed due to dampening\n")
-
-DEFUN (show_bgp_ipv6_safi_dampened_paths,
-       show_bgp_ipv6_safi_dampened_paths_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampened-paths",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display paths suppressed due to dampening\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  return bgp_show (vty, NULL, AFI_IP6, safi, bgp_show_type_dampend_paths, NULL);
-}
-ALIAS (show_bgp_ipv6_safi_dampened_paths,
-       show_bgp_ipv6_safi_damp_dampened_paths_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampening dampened-paths",
-       SHOW_STR
-       BGP_STR
-       IPV6_STR
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display paths suppressed due to dampening\n")
-
-DEFUN (show_bgp_ipv4_safi_flap_statistics,
-       show_bgp_ipv4_safi_flap_statistics_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  return bgp_show (vty, NULL, AFI_IP, safi, bgp_show_type_flap_statistics, NULL);
-}
-ALIAS (show_bgp_ipv4_safi_flap_statistics,
-       show_bgp_ipv4_safi_damp_flap_statistics_cmd,
-       "show bgp ipv4 (encap|multicast|unicast|vpn) dampening flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n")
-
-DEFUN (show_bgp_ipv6_safi_flap_statistics,
-       show_bgp_ipv6_safi_flap_statistics_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display flap statistics of routes\n")
-{
-  safi_t	safi;
-
-  if (bgp_parse_safi(argv[0], &safi)) {
-    vty_out (vty, "Error: Bad SAFI: %s%s", argv[0], VTY_NEWLINE);
-    return CMD_WARNING;
-  }
-
-  return bgp_show (vty, NULL, AFI_IP6, safi, bgp_show_type_flap_statistics, NULL);
-}
-ALIAS (show_bgp_ipv6_safi_flap_statistics,
-       show_bgp_ipv6_safi_damp_flap_statistics_cmd,
-       "show bgp ipv6 (encap|multicast|unicast|vpn) dampening flap-statistics",
-       SHOW_STR
-       BGP_STR
-       "Address Family\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Address Family modifier\n"
-       "Display detailed information about dampening\n"
-       "Display flap statistics of routes\n")
 
 /* Display specified route of BGP table. */
 static int
@@ -15892,7 +10134,7 @@ bgp_clear_damp_route (struct vty *vty, const char *view_name,
       bgp = bgp_lookup_by_name (view_name);
       if (bgp == NULL)
 	{
-	  vty_out (vty, "%% Can't find BGP view %s%s", view_name, VTY_NEWLINE);
+	  vty_out (vty, "%% Can't find BGP instance %s%s", view_name, VTY_NEWLINE);
 	  return CMD_WARNING;
 	}
     }
@@ -15992,9 +10234,10 @@ DEFUN (clear_ip_bgp_dampening_prefix,
        IP_STR
        BGP_STR
        "Clear route flap dampening information\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
+       "IPv4 prefix\n")
 {
-  return bgp_clear_damp_route (vty, NULL, argv[0], AFI_IP,
+  int idx_ipv4_prefixlen = 4;
+  return bgp_clear_damp_route (vty, NULL, argv[idx_ipv4_prefixlen]->arg, AFI_IP,
 			       SAFI_UNICAST, NULL, 1);
 }
 
@@ -16007,7 +10250,8 @@ DEFUN (clear_ip_bgp_dampening_address,
        "Clear route flap dampening information\n"
        "Network to clear damping information\n")
 {
-  return bgp_clear_damp_route (vty, NULL, argv[0], AFI_IP,
+  int idx_ipv4 = 4;
+  return bgp_clear_damp_route (vty, NULL, argv[idx_ipv4]->arg, AFI_IP,
 			       SAFI_UNICAST, NULL, 0);
 }
 
@@ -16021,10 +10265,12 @@ DEFUN (clear_ip_bgp_dampening_address_mask,
        "Network to clear damping information\n"
        "Network mask\n")
 {
+  int idx_ipv4 = 4;
+  int idx_ipv4_2 = 5;
   int ret;
   char prefix_str[BUFSIZ];
 
-  ret = netmask_str2prefix_str (argv[0], argv[1], prefix_str);
+  ret = netmask_str2prefix_str (argv[idx_ipv4]->arg, argv[idx_ipv4_2]->arg, prefix_str);
   if (! ret)
     {
       vty_out (vty, "%% Inconsistent address and mask%s", VTY_NEWLINE);
@@ -16037,7 +10283,7 @@ DEFUN (clear_ip_bgp_dampening_address_mask,
 
 /* also used for encap safi */
 static int
-bgp_config_write_network_vpnv4 (struct vty *vty, struct bgp *bgp,
+bgp_config_write_network_vpn (struct vty *vty, struct bgp *bgp,
 				afi_t afi, safi_t safi, int *write)
 {
   struct bgp_node *prn;
@@ -16066,7 +10312,7 @@ bgp_config_write_network_vpnv4 (struct vty *vty, struct bgp *bgp,
 	    prefix_rd2str (prd, rdbuf, RD_ADDRSTRLEN);
 	    label = decode_label (bgp_static->tag);
 
-	    vty_out (vty, " network %s/%d rd %s tag %d",
+	    vty_out (vty, "  network %s/%d rd %s tag %d",
 		     inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN), 
 		     p->prefixlen,
 		     rdbuf, label);
@@ -16087,8 +10333,8 @@ bgp_config_write_network (struct vty *vty, struct bgp *bgp,
   struct bgp_aggregate *bgp_aggregate;
   char buf[SU_ADDRSTRLEN];
   
-  if (afi == AFI_IP && ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP)))
-    return bgp_config_write_network_vpnv4 (vty, bgp, afi, safi, write);
+  if ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP))
+    return bgp_config_write_network_vpn (vty, bgp, afi, safi, write);
 
   /* Network configuration. */
   for (rn = bgp_table_top (bgp->route[afi][safi]); rn; rn = bgp_route_next (rn)) 
@@ -16107,7 +10353,7 @@ bgp_config_write_network (struct vty *vty, struct bgp *bgp,
 
 	    destination = ntohl (p->u.prefix4.s_addr);
 	    masklen2ip (p->prefixlen, &netmask);
-	    vty_out (vty, " network %s",
+	    vty_out (vty, "  network %s",
 		     inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN));
 
 	    if ((IN_CLASSC (destination) && p->prefixlen == 24)
@@ -16122,7 +10368,7 @@ bgp_config_write_network (struct vty *vty, struct bgp *bgp,
 	  }
 	else
 	  {
-	    vty_out (vty, " network %s/%d",
+	    vty_out (vty, "  network %s/%d",
 		     inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN), 
 		     p->prefixlen);
 	  }
@@ -16152,13 +10398,13 @@ bgp_config_write_network (struct vty *vty, struct bgp *bgp,
 	    struct in_addr netmask;
 
 	    masklen2ip (p->prefixlen, &netmask);
-	    vty_out (vty, " aggregate-address %s %s",
+	    vty_out (vty, "  aggregate-address %s %s",
 		     inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
 		     inet_ntoa (netmask));
 	  }
 	else
 	  {
-	    vty_out (vty, " aggregate-address %s/%d",
+	    vty_out (vty, "  aggregate-address %s/%d",
 		     inet_ntop (p->family, &p->u.prefix, buf, SU_ADDRSTRLEN),
 		     p->prefixlen);
 	  }
@@ -16176,71 +10422,56 @@ bgp_config_write_network (struct vty *vty, struct bgp *bgp,
 }
 
 int
-bgp_config_write_distance (struct vty *vty, struct bgp *bgp,
-                           afi_t afi, safi_t safi, int *write)
+bgp_config_write_distance (struct vty *vty, struct bgp *bgp, afi_t afi,
+			   safi_t safi, int *write)
 {
   struct bgp_node *rn;
   struct bgp_distance *bdistance;
 
-  if (afi == AFI_IP && safi == SAFI_UNICAST)
-    {
-      /* Distance configuration. */
-      if (bgp->distance_ebgp
-          && bgp->distance_ibgp
-          && bgp->distance_local
-          && (bgp->distance_ebgp != ZEBRA_EBGP_DISTANCE_DEFAULT
-              || bgp->distance_ibgp != ZEBRA_IBGP_DISTANCE_DEFAULT
-              || bgp->distance_local != ZEBRA_IBGP_DISTANCE_DEFAULT))
-        vty_out (vty, " distance bgp %d %d %d%s",
-                 bgp->distance_ebgp, bgp->distance_ibgp, bgp->distance_local,
-                 VTY_NEWLINE);
-
-      for (rn = bgp_table_top (bgp_distance_table); rn; rn = bgp_route_next (rn))
-        if ((bdistance = rn->info) != NULL)
-          {
-            vty_out (vty, " distance %d %s/%d %s%s", bdistance->distance,
-                     inet_ntoa (rn->p.u.prefix4), rn->p.prefixlen,
-                     bdistance->access_list ? bdistance->access_list : "",
-                     VTY_NEWLINE);
-          }
-    }
-
-#ifdef HAVE_IPV6
-  else if (afi == AFI_IP6 && safi == SAFI_UNICAST)
+  /* Distance configuration. */
+  if (bgp->distance_ebgp[afi][safi]
+      && bgp->distance_ibgp[afi][safi]
+      && bgp->distance_local[afi][safi]
+      && (bgp->distance_ebgp[afi][safi] != ZEBRA_EBGP_DISTANCE_DEFAULT
+	  || bgp->distance_ibgp[afi][safi] != ZEBRA_IBGP_DISTANCE_DEFAULT
+	  || bgp->distance_local[afi][safi] != ZEBRA_IBGP_DISTANCE_DEFAULT))
     {
       bgp_config_write_family_header (vty, afi, safi, write);
-      if (bgp->ipv6_distance_ebgp
-          && bgp->ipv6_distance_ibgp
-          && bgp->ipv6_distance_local
-          && (bgp->ipv6_distance_ebgp != ZEBRA_EBGP_DISTANCE_DEFAULT
-              || bgp->ipv6_distance_ibgp != ZEBRA_IBGP_DISTANCE_DEFAULT
-              || bgp->ipv6_distance_local != ZEBRA_IBGP_DISTANCE_DEFAULT))
-        vty_out (vty, " distance bgp %d %d %d%s",
-                 bgp->ipv6_distance_ebgp, bgp->ipv6_distance_ibgp, bgp->ipv6_distance_local,
-                 VTY_NEWLINE);
-
-        for (rn = bgp_table_top (bgp_distance_table); rn; rn = bgp_route_next (rn))
-          if ((bdistance = rn->info) != NULL)
-            {
-              vty_out (vty, " distance %d %s/%d %s%s", bdistance->distance,
-                       inet6_ntoa (rn->p.u.prefix6), rn->p.prefixlen,
-                       bdistance->access_list ? bdistance->access_list : "",
-                       VTY_NEWLINE);
-            }
+      vty_out (vty, "  distance bgp %d %d %d%s",
+	       bgp->distance_ebgp[afi][safi], bgp->distance_ibgp[afi][safi],
+	       bgp->distance_local[afi][safi], VTY_NEWLINE);
     }
-#endif /* HAVE_IPV6 */
 
-  return 0;
+  for (rn = bgp_table_top (bgp_distance_table[afi][safi]); rn;
+       rn = bgp_route_next (rn))
+    if ((bdistance = rn->info) != NULL)
+      {
+	char buf[PREFIX_STRLEN];
+
+	bgp_config_write_family_header (vty, afi, safi, write);
+	vty_out (vty, "  distance %d %s %s%s", bdistance->distance,
+		 prefix2str (&rn->p, buf, sizeof (buf)),
+		 bdistance->access_list ? bdistance->access_list : "",
+		 VTY_NEWLINE);
+      }
+
+  return *write;
 }
 
 /* Allocate routing table structure and install commands. */
 void
 bgp_route_init (void)
 {
+  afi_t afi;
+  safi_t safi;
+
   /* Init BGP distance table. */
-  bgp_distance_table = bgp_table_init (AFI_IP, SAFI_UNICAST);
+  for (afi = AFI_IP; afi < AFI_MAX; afi++)
+    for (safi = SAFI_UNICAST; safi < SAFI_MAX; safi++)
+      bgp_distance_table[afi][safi] = bgp_table_init (afi, safi);
 
   /* IPv4 BGP commands. */
+  install_element (BGP_NODE, &bgp_table_map_cmd);
   install_element (BGP_NODE, &bgp_network_cmd);
   install_element (BGP_NODE, &bgp_network_mask_cmd);
   install_element (BGP_NODE, &bgp_network_mask_natural_cmd);
@@ -16250,735 +10481,148 @@ bgp_route_init (void)
   install_element (BGP_NODE, &bgp_network_backdoor_cmd);
   install_element (BGP_NODE, &bgp_network_mask_backdoor_cmd);
   install_element (BGP_NODE, &bgp_network_mask_natural_backdoor_cmd);
+  install_element (BGP_NODE, &no_bgp_table_map_cmd);
   install_element (BGP_NODE, &no_bgp_network_cmd);
   install_element (BGP_NODE, &no_bgp_network_mask_cmd);
   install_element (BGP_NODE, &no_bgp_network_mask_natural_cmd);
-  install_element (BGP_NODE, &no_bgp_network_route_map_cmd);
-  install_element (BGP_NODE, &no_bgp_network_mask_route_map_cmd);
-  install_element (BGP_NODE, &no_bgp_network_mask_natural_route_map_cmd);
-  install_element (BGP_NODE, &no_bgp_network_backdoor_cmd);
-  install_element (BGP_NODE, &no_bgp_network_mask_backdoor_cmd);
-  install_element (BGP_NODE, &no_bgp_network_mask_natural_backdoor_cmd);
 
   install_element (BGP_NODE, &aggregate_address_cmd);
   install_element (BGP_NODE, &aggregate_address_mask_cmd);
-  install_element (BGP_NODE, &aggregate_address_summary_only_cmd);
-  install_element (BGP_NODE, &aggregate_address_mask_summary_only_cmd);
-  install_element (BGP_NODE, &aggregate_address_as_set_cmd);
-  install_element (BGP_NODE, &aggregate_address_mask_as_set_cmd);
-  install_element (BGP_NODE, &aggregate_address_as_set_summary_cmd);
-  install_element (BGP_NODE, &aggregate_address_mask_as_set_summary_cmd);
-  install_element (BGP_NODE, &aggregate_address_summary_as_set_cmd);
-  install_element (BGP_NODE, &aggregate_address_mask_summary_as_set_cmd);
   install_element (BGP_NODE, &no_aggregate_address_cmd);
-  install_element (BGP_NODE, &no_aggregate_address_summary_only_cmd);
-  install_element (BGP_NODE, &no_aggregate_address_as_set_cmd);
-  install_element (BGP_NODE, &no_aggregate_address_as_set_summary_cmd);
-  install_element (BGP_NODE, &no_aggregate_address_summary_as_set_cmd);
   install_element (BGP_NODE, &no_aggregate_address_mask_cmd);
-  install_element (BGP_NODE, &no_aggregate_address_mask_summary_only_cmd);
-  install_element (BGP_NODE, &no_aggregate_address_mask_as_set_cmd);
-  install_element (BGP_NODE, &no_aggregate_address_mask_as_set_summary_cmd);
-  install_element (BGP_NODE, &no_aggregate_address_mask_summary_as_set_cmd);
 
   /* IPv4 unicast configuration.  */
+  install_element (BGP_IPV4_NODE, &bgp_table_map_cmd);
   install_element (BGP_IPV4_NODE, &bgp_network_cmd);
   install_element (BGP_IPV4_NODE, &bgp_network_mask_cmd);
   install_element (BGP_IPV4_NODE, &bgp_network_mask_natural_cmd);
   install_element (BGP_IPV4_NODE, &bgp_network_route_map_cmd);
   install_element (BGP_IPV4_NODE, &bgp_network_mask_route_map_cmd);
   install_element (BGP_IPV4_NODE, &bgp_network_mask_natural_route_map_cmd);
+  install_element (BGP_IPV4_NODE, &no_bgp_table_map_cmd);
   install_element (BGP_IPV4_NODE, &no_bgp_network_cmd);
   install_element (BGP_IPV4_NODE, &no_bgp_network_mask_cmd);
   install_element (BGP_IPV4_NODE, &no_bgp_network_mask_natural_cmd);
-  install_element (BGP_IPV4_NODE, &no_bgp_network_route_map_cmd);
-  install_element (BGP_IPV4_NODE, &no_bgp_network_mask_route_map_cmd);
-  install_element (BGP_IPV4_NODE, &no_bgp_network_mask_natural_route_map_cmd);
   
   install_element (BGP_IPV4_NODE, &aggregate_address_cmd);
   install_element (BGP_IPV4_NODE, &aggregate_address_mask_cmd);
-  install_element (BGP_IPV4_NODE, &aggregate_address_summary_only_cmd);
-  install_element (BGP_IPV4_NODE, &aggregate_address_mask_summary_only_cmd);
-  install_element (BGP_IPV4_NODE, &aggregate_address_as_set_cmd);
-  install_element (BGP_IPV4_NODE, &aggregate_address_mask_as_set_cmd);
-  install_element (BGP_IPV4_NODE, &aggregate_address_as_set_summary_cmd);
-  install_element (BGP_IPV4_NODE, &aggregate_address_mask_as_set_summary_cmd);
-  install_element (BGP_IPV4_NODE, &aggregate_address_summary_as_set_cmd);
-  install_element (BGP_IPV4_NODE, &aggregate_address_mask_summary_as_set_cmd);
   install_element (BGP_IPV4_NODE, &no_aggregate_address_cmd);
-  install_element (BGP_IPV4_NODE, &no_aggregate_address_summary_only_cmd);
-  install_element (BGP_IPV4_NODE, &no_aggregate_address_as_set_cmd);
-  install_element (BGP_IPV4_NODE, &no_aggregate_address_as_set_summary_cmd);
-  install_element (BGP_IPV4_NODE, &no_aggregate_address_summary_as_set_cmd);
   install_element (BGP_IPV4_NODE, &no_aggregate_address_mask_cmd);
-  install_element (BGP_IPV4_NODE, &no_aggregate_address_mask_summary_only_cmd);
-  install_element (BGP_IPV4_NODE, &no_aggregate_address_mask_as_set_cmd);
-  install_element (BGP_IPV4_NODE, &no_aggregate_address_mask_as_set_summary_cmd);
-  install_element (BGP_IPV4_NODE, &no_aggregate_address_mask_summary_as_set_cmd);
 
   /* IPv4 multicast configuration.  */
+  install_element (BGP_IPV4M_NODE, &bgp_table_map_cmd);
   install_element (BGP_IPV4M_NODE, &bgp_network_cmd);
   install_element (BGP_IPV4M_NODE, &bgp_network_mask_cmd);
   install_element (BGP_IPV4M_NODE, &bgp_network_mask_natural_cmd);
   install_element (BGP_IPV4M_NODE, &bgp_network_route_map_cmd);
   install_element (BGP_IPV4M_NODE, &bgp_network_mask_route_map_cmd);
   install_element (BGP_IPV4M_NODE, &bgp_network_mask_natural_route_map_cmd);
+  install_element (BGP_IPV4M_NODE, &no_bgp_table_map_cmd);
   install_element (BGP_IPV4M_NODE, &no_bgp_network_cmd);
   install_element (BGP_IPV4M_NODE, &no_bgp_network_mask_cmd);
   install_element (BGP_IPV4M_NODE, &no_bgp_network_mask_natural_cmd);
-  install_element (BGP_IPV4M_NODE, &no_bgp_network_route_map_cmd);
-  install_element (BGP_IPV4M_NODE, &no_bgp_network_mask_route_map_cmd);
-  install_element (BGP_IPV4M_NODE, &no_bgp_network_mask_natural_route_map_cmd);
   install_element (BGP_IPV4M_NODE, &aggregate_address_cmd);
   install_element (BGP_IPV4M_NODE, &aggregate_address_mask_cmd);
-  install_element (BGP_IPV4M_NODE, &aggregate_address_summary_only_cmd);
-  install_element (BGP_IPV4M_NODE, &aggregate_address_mask_summary_only_cmd);
-  install_element (BGP_IPV4M_NODE, &aggregate_address_as_set_cmd);
-  install_element (BGP_IPV4M_NODE, &aggregate_address_mask_as_set_cmd);
-  install_element (BGP_IPV4M_NODE, &aggregate_address_as_set_summary_cmd);
-  install_element (BGP_IPV4M_NODE, &aggregate_address_mask_as_set_summary_cmd);
-  install_element (BGP_IPV4M_NODE, &aggregate_address_summary_as_set_cmd);
-  install_element (BGP_IPV4M_NODE, &aggregate_address_mask_summary_as_set_cmd);
   install_element (BGP_IPV4M_NODE, &no_aggregate_address_cmd);
-  install_element (BGP_IPV4M_NODE, &no_aggregate_address_summary_only_cmd);
-  install_element (BGP_IPV4M_NODE, &no_aggregate_address_as_set_cmd);
-  install_element (BGP_IPV4M_NODE, &no_aggregate_address_as_set_summary_cmd);
-  install_element (BGP_IPV4M_NODE, &no_aggregate_address_summary_as_set_cmd);
   install_element (BGP_IPV4M_NODE, &no_aggregate_address_mask_cmd);
-  install_element (BGP_IPV4M_NODE, &no_aggregate_address_mask_summary_only_cmd);
-  install_element (BGP_IPV4M_NODE, &no_aggregate_address_mask_as_set_cmd);
-  install_element (BGP_IPV4M_NODE, &no_aggregate_address_mask_as_set_summary_cmd);
-  install_element (BGP_IPV4M_NODE, &no_aggregate_address_mask_summary_as_set_cmd);
 
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_vpn_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_vpn_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_vpn_rd_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_vpn_rd_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_encap_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_encap_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_rd_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_rd_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_vpn_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_vpn_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_encap_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_encap_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_rd_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_rd_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_afi_safi_view_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_afi_safi_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_afi_safi_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_regexp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_regexp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_filter_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_filter_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_filter_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_route_map_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_cidr_only_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_cidr_only_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community2_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community3_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community4_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community2_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community3_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community4_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_afi_safi_community_all_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_afi_safi_community_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_afi_safi_community2_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_afi_safi_community3_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_afi_safi_community4_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community2_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community3_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community4_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community2_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community3_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community4_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_community_list_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_community_list_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_afi_safi_neighbor_adv_recd_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_neighbor_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_neighbor_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_neighbor_received_prefix_filter_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_neighbor_received_prefix_filter_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_dampened_paths_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_dampened_paths_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_dampened_paths_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_damp_dampened_paths_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_flap_statistics_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_flap_statistics_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_flap_statistics_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_damp_flap_statistics_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_flap_address_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_flap_address_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_flap_address_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_flap_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_flap_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_flap_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_damp_flap_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_flap_cidr_only_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_flap_cidr_only_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_flap_regexp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_flap_regexp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_flap_regexp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_damp_flap_regexp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_flap_filter_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_flap_filter_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_flap_filter_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_damp_flap_filter_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_flap_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_flap_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_flap_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_damp_flap_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_flap_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_flap_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_flap_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_damp_flap_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_flap_route_map_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_flap_route_map_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_damp_flap_route_map_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_damp_flap_route_map_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_neighbor_flap_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_neighbor_flap_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_neighbor_damp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_neighbor_damp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_rsclient_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_rsclient_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv4_safi_rsclient_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv4_safi_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv4_safi_rsclient_prefix_cmd);
-  
-  /* Restricted node: VIEW_NODE - (set of dangerous commands) */
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_vpn_rd_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_vpn_rd_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_rd_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_rd_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_vpn_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_vpn_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_encap_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_encap_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_rd_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_rd_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_afi_safi_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_afi_safi_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_community_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_community2_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_community3_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_community4_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_community_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_community2_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_community3_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_community4_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_afi_safi_community_all_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_afi_safi_community_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_afi_safi_community2_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_afi_safi_community3_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_afi_safi_community4_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_community_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_community2_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_community3_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_community4_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_community_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_community2_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_community3_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_community4_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_rsclient_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_ipv4_safi_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_ipv4_safi_rsclient_prefix_cmd);
+  install_element (VIEW_NODE, &show_ip_bgp_instance_all_cmd);
+  install_element (VIEW_NODE, &show_ip_bgp_ipv4_cmd);
+  install_element (VIEW_NODE, &show_ip_bgp_route_cmd);
+  install_element (VIEW_NODE, &show_ip_bgp_regexp_cmd);
+  install_element (VIEW_NODE, &show_ip_bgp_instance_neighbor_advertised_route_cmd);
+  install_element (VIEW_NODE, &show_ip_bgp_neighbor_routes_cmd);
+  install_element (VIEW_NODE, &show_ip_bgp_neighbor_received_prefix_filter_cmd);
+  install_element (VIEW_NODE, &show_ip_bgp_dampening_params_cmd);
+  install_element (VIEW_NODE, &show_ip_bgp_ipv4_dampening_parameters_cmd);
+#ifdef KEEP_OLD_VPN_COMMANDS
+  install_element (VIEW_NODE, &show_ip_bgp_vpn_all_route_prefix_cmd);
+#endif /* KEEP_OLD_VPN_COMMANDS */
 
-  /* BGP dampening clear commands */
+ /* BGP dampening clear commands */
   install_element (ENABLE_NODE, &clear_ip_bgp_dampening_cmd);
   install_element (ENABLE_NODE, &clear_ip_bgp_dampening_prefix_cmd);
   install_element (ENABLE_NODE, &clear_ip_bgp_dampening_address_cmd);
   install_element (ENABLE_NODE, &clear_ip_bgp_dampening_address_mask_cmd);
 
+  /* prefix count */
+  install_element (ENABLE_NODE, &show_ip_bgp_neighbor_prefix_counts_cmd);
+  install_element (ENABLE_NODE, &show_ip_bgp_instance_neighbor_prefix_counts_cmd);
+  install_element (ENABLE_NODE, &show_ip_bgp_ipv4_neighbor_prefix_counts_cmd);
+#ifdef KEEP_OLD_VPN_COMMANDS
+  install_element (ENABLE_NODE, &show_ip_bgp_vpn_neighbor_prefix_counts_cmd);
+#endif /* KEEP_OLD_VPN_COMMANDS */
+  install_element (ENABLE_NODE, &show_bgp_ipv6_neighbor_prefix_counts_cmd);
+  install_element (ENABLE_NODE, &show_bgp_instance_ipv6_neighbor_prefix_counts_cmd);
+
   /* New config IPv6 BGP commands.  */
+  install_element (BGP_IPV6_NODE, &bgp_table_map_cmd);
   install_element (BGP_IPV6_NODE, &ipv6_bgp_network_cmd);
   install_element (BGP_IPV6_NODE, &ipv6_bgp_network_route_map_cmd);
+  install_element (BGP_IPV6_NODE, &no_bgp_table_map_cmd);
   install_element (BGP_IPV6_NODE, &no_ipv6_bgp_network_cmd);
-  install_element (BGP_IPV6_NODE, &no_ipv6_bgp_network_route_map_cmd);
 
   install_element (BGP_IPV6_NODE, &ipv6_aggregate_address_cmd);
-  install_element (BGP_IPV6_NODE, &ipv6_aggregate_address_summary_only_cmd);
   install_element (BGP_IPV6_NODE, &no_ipv6_aggregate_address_cmd);
-  install_element (BGP_IPV6_NODE, &no_ipv6_aggregate_address_summary_only_cmd);
 
   install_element (BGP_IPV6M_NODE, &ipv6_bgp_network_cmd);
   install_element (BGP_IPV6M_NODE, &no_ipv6_bgp_network_cmd);
 
-  /* Old config IPv6 BGP commands.  */
-  install_element (BGP_NODE, &old_ipv6_bgp_network_cmd);
-  install_element (BGP_NODE, &old_no_ipv6_bgp_network_cmd);
-
-  install_element (BGP_NODE, &old_ipv6_aggregate_address_cmd);
-  install_element (BGP_NODE, &old_ipv6_aggregate_address_summary_only_cmd);
-  install_element (BGP_NODE, &old_no_ipv6_aggregate_address_cmd);
-  install_element (BGP_NODE, &old_no_ipv6_aggregate_address_summary_only_cmd);
-
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_regexp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_filter_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_route_map_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community2_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community3_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community4_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community2_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community3_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community4_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_community_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_neighbor_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_neighbor_received_prefix_filter_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_neighbor_flap_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_neighbor_damp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_rsclient_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_rsclient_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_rsclient_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_rsclient_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_rsclient_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_neighbor_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_neighbor_received_prefix_filter_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_neighbor_flap_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_neighbor_damp_cmd); 
-  install_element (VIEW_NODE, &show_bgp_view_ipv4_rsclient_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_rsclient_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_safi_rsclient_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_safi_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_rsclient_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_ipv6_safi_rsclient_prefix_cmd);
-  
-  /* Restricted:
-   * VIEW_NODE - (set of dangerous commands) - (commands dependent on prev) 
-   */
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_community_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_community2_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_community3_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_community4_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_community_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_community2_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_community3_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_community4_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_rsclient_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_rsclient_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_ipv6_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_ipv6_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_ipv6_neighbor_received_prefix_filter_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_ipv6_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_ipv6_safi_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_ipv6_rsclient_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_ipv6_safi_rsclient_prefix_cmd);
-
   /* Statistics */
   install_element (ENABLE_NODE, &show_bgp_statistics_cmd);
-  install_element (ENABLE_NODE, &show_bgp_statistics_view_cmd);  
+  install_element (ENABLE_NODE, &show_bgp_statistics_view_cmd);
 
   install_element (BGP_NODE, &bgp_distance_cmd);
   install_element (BGP_NODE, &no_bgp_distance_cmd);
-  install_element (BGP_NODE, &no_bgp_distance2_cmd);
   install_element (BGP_NODE, &bgp_distance_source_cmd);
   install_element (BGP_NODE, &no_bgp_distance_source_cmd);
   install_element (BGP_NODE, &bgp_distance_source_access_list_cmd);
   install_element (BGP_NODE, &no_bgp_distance_source_access_list_cmd);
-#ifdef HAVE_IPV6
-  install_element (BGP_IPV6_NODE, &ipv6_bgp_distance_cmd);
-  install_element (BGP_IPV6_NODE, &no_ipv6_bgp_distance_cmd);
-  install_element (BGP_IPV6_NODE, &no_ipv6_bgp_distance2_cmd);
+  install_element (BGP_IPV4_NODE, &bgp_distance_cmd);
+  install_element (BGP_IPV4_NODE, &no_bgp_distance_cmd);
+  install_element (BGP_IPV4_NODE, &bgp_distance_source_cmd);
+  install_element (BGP_IPV4_NODE, &no_bgp_distance_source_cmd);
+  install_element (BGP_IPV4_NODE, &bgp_distance_source_access_list_cmd);
+  install_element (BGP_IPV4_NODE, &no_bgp_distance_source_access_list_cmd);
+  install_element (BGP_IPV4M_NODE, &bgp_distance_cmd);
+  install_element (BGP_IPV4M_NODE, &no_bgp_distance_cmd);
+  install_element (BGP_IPV4M_NODE, &bgp_distance_source_cmd);
+  install_element (BGP_IPV4M_NODE, &no_bgp_distance_source_cmd);
+  install_element (BGP_IPV4M_NODE, &bgp_distance_source_access_list_cmd);
+  install_element (BGP_IPV4M_NODE, &no_bgp_distance_source_access_list_cmd);
+  install_element (BGP_IPV6_NODE, &bgp_distance_cmd);
+  install_element (BGP_IPV6_NODE, &no_bgp_distance_cmd);
   install_element (BGP_IPV6_NODE, &ipv6_bgp_distance_source_cmd);
   install_element (BGP_IPV6_NODE, &no_ipv6_bgp_distance_source_cmd);
   install_element (BGP_IPV6_NODE, &ipv6_bgp_distance_source_access_list_cmd);
   install_element (BGP_IPV6_NODE, &no_ipv6_bgp_distance_source_access_list_cmd);
-#endif /* HAVE_IPV6 */
+  install_element (BGP_IPV6M_NODE, &bgp_distance_cmd);
+  install_element (BGP_IPV6M_NODE, &no_bgp_distance_cmd);
+  install_element (BGP_IPV6M_NODE, &ipv6_bgp_distance_source_cmd);
+  install_element (BGP_IPV6M_NODE, &no_ipv6_bgp_distance_source_cmd);
+  install_element (BGP_IPV6M_NODE, &ipv6_bgp_distance_source_access_list_cmd);
+  install_element (BGP_IPV6M_NODE, &no_ipv6_bgp_distance_source_access_list_cmd);
 
   install_element (BGP_NODE, &bgp_damp_set_cmd);
-  install_element (BGP_NODE, &bgp_damp_set2_cmd);
-  install_element (BGP_NODE, &bgp_damp_set3_cmd);
   install_element (BGP_NODE, &bgp_damp_unset_cmd);
-  install_element (BGP_NODE, &bgp_damp_unset2_cmd);
   install_element (BGP_IPV4_NODE, &bgp_damp_set_cmd);
-  install_element (BGP_IPV4_NODE, &bgp_damp_set2_cmd);
-  install_element (BGP_IPV4_NODE, &bgp_damp_set3_cmd);
   install_element (BGP_IPV4_NODE, &bgp_damp_unset_cmd);
-  install_element (BGP_IPV4_NODE, &bgp_damp_unset2_cmd);
 
   /* IPv4 Multicast Mode */
   install_element (BGP_IPV4M_NODE, &bgp_damp_set_cmd);
-  install_element (BGP_IPV4M_NODE, &bgp_damp_set2_cmd);
-  install_element (BGP_IPV4M_NODE, &bgp_damp_set3_cmd);
   install_element (BGP_IPV4M_NODE, &bgp_damp_unset_cmd);
-  install_element (BGP_IPV4M_NODE, &bgp_damp_unset2_cmd);
-
-  
-  /* Deprecated AS-Pathlimit commands */
-  install_element (BGP_NODE, &bgp_network_ttl_cmd);
-  install_element (BGP_NODE, &bgp_network_mask_ttl_cmd);
-  install_element (BGP_NODE, &bgp_network_mask_natural_ttl_cmd);
-  install_element (BGP_NODE, &bgp_network_backdoor_ttl_cmd);
-  install_element (BGP_NODE, &bgp_network_mask_backdoor_ttl_cmd);
-  install_element (BGP_NODE, &bgp_network_mask_natural_backdoor_ttl_cmd);
-  
-  install_element (BGP_NODE, &no_bgp_network_ttl_cmd);
-  install_element (BGP_NODE, &no_bgp_network_mask_ttl_cmd);
-  install_element (BGP_NODE, &no_bgp_network_mask_natural_ttl_cmd);
-  install_element (BGP_NODE, &no_bgp_network_backdoor_ttl_cmd);
-  install_element (BGP_NODE, &no_bgp_network_mask_backdoor_ttl_cmd);
-  install_element (BGP_NODE, &no_bgp_network_mask_natural_backdoor_ttl_cmd);
-  
-  install_element (BGP_IPV4_NODE, &bgp_network_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &bgp_network_mask_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &bgp_network_mask_natural_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &bgp_network_backdoor_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &bgp_network_mask_backdoor_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &bgp_network_mask_natural_backdoor_ttl_cmd);
-  
-  install_element (BGP_IPV4_NODE, &no_bgp_network_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &no_bgp_network_mask_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &no_bgp_network_mask_natural_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &no_bgp_network_backdoor_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &no_bgp_network_mask_backdoor_ttl_cmd);
-  install_element (BGP_IPV4_NODE, &no_bgp_network_mask_natural_backdoor_ttl_cmd);
-  
-  install_element (BGP_IPV4M_NODE, &bgp_network_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &bgp_network_mask_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &bgp_network_mask_natural_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &bgp_network_backdoor_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &bgp_network_mask_backdoor_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &bgp_network_mask_natural_backdoor_ttl_cmd);
-  
-  install_element (BGP_IPV4M_NODE, &no_bgp_network_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &no_bgp_network_mask_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &no_bgp_network_mask_natural_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &no_bgp_network_backdoor_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &no_bgp_network_mask_backdoor_ttl_cmd);
-  install_element (BGP_IPV4M_NODE, &no_bgp_network_mask_natural_backdoor_ttl_cmd);
-
-  install_element (BGP_IPV6_NODE, &ipv6_bgp_network_ttl_cmd);
-  install_element (BGP_IPV6_NODE, &no_ipv6_bgp_network_ttl_cmd);
-
-  /* old style commands */
-  install_element (VIEW_NODE, &show_ip_bgp_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_route_pathtype_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_route_pathtype_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_vpnv4_all_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_vpnv4_rd_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_prefix_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_prefix_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_prefix_pathtype_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv4_safi_prefix_pathtype_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_prefix_pathtype_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_vpnv4_all_prefix_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_vpnv4_rd_prefix_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_view_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_view_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_view_prefix_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_regexp_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_regexp_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_filter_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_filter_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_route_map_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_route_map_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_cidr_only_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_cidr_only_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community_all_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community_all_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community2_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community3_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community4_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community2_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community3_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community4_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community2_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community3_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community4_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community2_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community3_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community4_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_community_list_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_community_list_exact_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_neighbor_routes_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_neighbor_routes_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_neighbor_received_prefix_filter_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_neighbor_received_prefix_filter_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_dampening_params_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_dampening_parameters_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_dampened_paths_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_dampening_dampd_paths_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_dampening_flap_stats_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_damp_dampened_paths_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_flap_statistics_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_damp_flap_statistics_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_flap_address_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_damp_flap_address_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_flap_prefix_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_flap_cidr_only_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_damp_flap_cidr_only_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_flap_regexp_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_flap_filter_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_damp_flap_filter_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_flap_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_damp_flap_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_flap_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_damp_flap_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_flap_route_map_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_damp_flap_route_map_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_neighbor_flap_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_neighbor_damp_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_rsclient_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_rsclient_prefix_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_view_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_view_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_view_rsclient_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_view_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_view_rsclient_prefix_cmd);
-  
-  install_element (RESTRICTED_NODE, &show_ip_bgp_route_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_route_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_route_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_route_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_vpnv4_rd_route_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_prefix_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv4_safi_prefix_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_prefix_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_vpnv4_all_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_vpnv4_rd_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_view_route_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_view_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_community_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_community2_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_community3_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_community4_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_community_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_community2_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_community3_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_community4_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_community_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_community2_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_community3_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_community4_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_community_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_community2_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_community3_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_ipv4_community4_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_rsclient_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_view_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_ip_bgp_view_rsclient_prefix_cmd);
-  
-  install_element (VIEW_NODE, &show_ip_bgp_neighbor_prefix_counts_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_ipv4_neighbor_prefix_counts_cmd);
-  install_element (VIEW_NODE, &show_ip_bgp_vpnv4_neighbor_prefix_counts_cmd);
-
-  install_element (VIEW_NODE, &show_bgp_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_cmd);
-  install_element (VIEW_NODE, &show_bgp_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_route_pathtype_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_route_pathtype_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_route_pathtype_cmd);
-  install_element (VIEW_NODE, &show_bgp_prefix_pathtype_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_prefix_pathtype_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_prefix_pathtype_cmd);
-  install_element (VIEW_NODE, &show_bgp_regexp_cmd);
-  install_element (VIEW_NODE, &show_bgp_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_filter_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_route_map_cmd);
-  install_element (VIEW_NODE, &show_bgp_community_all_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_community_all_cmd);
-  install_element (VIEW_NODE, &show_bgp_community_cmd);
-  install_element (VIEW_NODE, &show_bgp_community2_cmd);
-  install_element (VIEW_NODE, &show_bgp_community3_cmd);
-  install_element (VIEW_NODE, &show_bgp_community4_cmd);
-  install_element (VIEW_NODE, &show_bgp_community_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_community2_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_community3_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_community4_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_community_list_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_safi_community_list_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_bgp_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_neighbor_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_neighbor_received_prefix_filter_cmd);
-  install_element (VIEW_NODE, &show_bgp_neighbor_flap_cmd);
-  install_element (VIEW_NODE, &show_bgp_neighbor_damp_cmd);
-  install_element (VIEW_NODE, &show_bgp_rsclient_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_prefix_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_neighbor_routes_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_neighbor_received_prefix_filter_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_neighbor_flap_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_neighbor_damp_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_rsclient_cmd);
-  
-  install_element (RESTRICTED_NODE, &show_bgp_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_route_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_route_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_route_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_prefix_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_prefix_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_safi_prefix_pathtype_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_community_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_community2_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_community3_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_community4_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_community_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_community2_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_community3_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_community4_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_neighbor_received_prefix_filter_cmd);
-
-  install_element (ENABLE_NODE, &show_bgp_statistics_vpnv4_cmd);
-  install_element (ENABLE_NODE, &show_bgp_statistics_view_vpnv4_cmd);
-
-  install_element (VIEW_NODE, &show_ipv6_bgp_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_route_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_prefix_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_regexp_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_filter_list_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community_all_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community2_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community3_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community4_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community2_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community3_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community4_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community_list_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_community_list_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_bgp_prefix_longer_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_route_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_prefix_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_regexp_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_prefix_list_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_filter_list_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community_all_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community2_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community3_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community4_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community2_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community3_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community4_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community_list_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_community_list_exact_cmd);
-  install_element (VIEW_NODE, &show_ipv6_mbgp_prefix_longer_cmd);
-  install_element (VIEW_NODE, &ipv6_bgp_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &ipv6_mbgp_neighbor_advertised_route_cmd);
-  install_element (VIEW_NODE, &ipv6_bgp_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &ipv6_mbgp_neighbor_received_routes_cmd);
-  install_element (VIEW_NODE, &ipv6_bgp_neighbor_routes_cmd);
-  install_element (VIEW_NODE, &ipv6_mbgp_neighbor_routes_cmd);
-  /* old with name safi collision */
-  install_element (VIEW_NODE, &show_bgp_ipv6_community_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_community2_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_community3_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_community4_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_community_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_community2_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_community3_exact_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_community4_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_community_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_community2_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_community3_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_community4_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_community_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_community2_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_community3_exact_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_ipv6_community4_exact_cmd);
-
-  install_element (VIEW_NODE, &show_bgp_ipv6_community_list_cmd);
-  install_element (VIEW_NODE, &show_bgp_ipv6_community_list_exact_cmd);
-
-  install_element (VIEW_NODE, &show_bgp_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_rsclient_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_rsclient_prefix_cmd);
-
-  install_element (VIEW_NODE, &show_bgp_view_rsclient_route_cmd);
-  install_element (VIEW_NODE, &show_bgp_view_rsclient_prefix_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_rsclient_route_cmd);
-  install_element (RESTRICTED_NODE, &show_bgp_view_rsclient_prefix_cmd);
 }
 
 void
 bgp_route_finish (void)
 {
-  bgp_table_unlock (bgp_distance_table);
-  bgp_distance_table = NULL;
+  afi_t afi;
+  safi_t safi;
+
+  for (afi = AFI_IP; afi < AFI_MAX; afi++)
+    for (safi = SAFI_UNICAST; safi < SAFI_MAX; safi++)
+      {
+	bgp_table_unlock (bgp_distance_table[afi][safi]);
+	bgp_distance_table[afi][safi] = NULL;
+      }
 }

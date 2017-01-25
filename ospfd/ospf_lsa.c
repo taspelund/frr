@@ -22,6 +22,7 @@
 
 #include <zebra.h>
 
+#include "monotime.h"
 #include "linklist.h"
 #include "prefix.h"
 #include "if.h"
@@ -63,40 +64,6 @@ get_metric (u_char *metric)
 
 
 struct timeval
-tv_adjust (struct timeval a)
-{
-  while (a.tv_usec >= 1000000)
-    {
-      a.tv_usec -= 1000000;
-      a.tv_sec++;
-    }
-
-  while (a.tv_usec < 0)
-    {
-      a.tv_usec += 1000000;
-      a.tv_sec--;
-    }
-
-  return a;
-}
-
-int
-tv_ceil (struct timeval a)
-{
-  a = tv_adjust (a);
-
-  return (a.tv_usec ? a.tv_sec + 1 : a.tv_sec);
-}
-
-int
-tv_floor (struct timeval a)
-{
-  a = tv_adjust (a);
-
-  return a.tv_sec;
-}
-
-struct timeval
 int2tv (int a)
 {
   struct timeval ret;
@@ -112,53 +79,25 @@ msec2tv (int a)
 {
   struct timeval ret;
 
-  ret.tv_sec = 0;
-  ret.tv_usec = a * 1000;
+  ret.tv_sec = a/1000;
+  ret.tv_usec = (a%1000) * 1000;
 
-  return tv_adjust (ret);
-}
-
-struct timeval
-tv_add (struct timeval a, struct timeval b)
-{
-  struct timeval ret;
-
-  ret.tv_sec = a.tv_sec + b.tv_sec;
-  ret.tv_usec = a.tv_usec + b.tv_usec;
-
-  return tv_adjust (ret);
-}
-
-struct timeval
-tv_sub (struct timeval a, struct timeval b)
-{
-  struct timeval ret;
-
-  ret.tv_sec = a.tv_sec - b.tv_sec;
-  ret.tv_usec = a.tv_usec - b.tv_usec;
-
-  return tv_adjust (ret);
-}
-
-int
-tv_cmp (struct timeval a, struct timeval b)
-{
-  return (a.tv_sec == b.tv_sec ?
-	  a.tv_usec - b.tv_usec : a.tv_sec - b.tv_sec);
+  return ret;
 }
 
 int
 ospf_lsa_refresh_delay (struct ospf_lsa *lsa)
 {
-  struct timeval delta, now;
+  struct timeval delta;
   int delay = 0;
 
-  quagga_gettime (QUAGGA_CLK_MONOTONIC, &now);
-  delta = tv_sub (now, lsa->tv_orig);
-
-  if (tv_cmp (delta, msec2tv (OSPF_MIN_LS_INTERVAL)) < 0)
+  if (monotime_since (&lsa->tv_orig, &delta) < OSPF_MIN_LS_INTERVAL * 1000LL)
     {
-      delay = tv_ceil (tv_sub (msec2tv (OSPF_MIN_LS_INTERVAL), delta));
+      struct timeval minv = msec2tv (OSPF_MIN_LS_INTERVAL);
+      timersub (&minv, &delta, &minv);
+
+      /* TBD: remove padding to full sec, return timeval instead */
+      delay = minv.tv_sec + !!minv.tv_usec;
 
       if (IS_DEBUG_OSPF (lsa, LSA_GENERATE))
         zlog_debug ("LSA[Type%d:%s]: Refresh timer delay %d seconds",
@@ -174,12 +113,10 @@ ospf_lsa_refresh_delay (struct ospf_lsa *lsa)
 int
 get_age (struct ospf_lsa *lsa)
 {
-  int age;
+  struct timeval rel;
 
-  age = ntohs (lsa->data->ls_age) 
-        + tv_floor (tv_sub (recent_relative_time (), lsa->tv_recv));
-
-  return age;
+  monotime_since (&lsa->tv_recv, &rel);
+  return ntohs (lsa->data->ls_age) + rel.tv_sec;
 }
 
 
@@ -228,7 +165,7 @@ ospf_lsa_new ()
   new->flags = 0;
   new->lock = 1;
   new->retransmit_counter = 0;
-  new->tv_recv = recent_relative_time ();
+  monotime(&new->tv_recv);
   new->tv_orig = new->tv_recv;
   new->refresh_list = -1;
   
@@ -543,7 +480,7 @@ lsa_link_ptop_set (struct stream *s, struct ospf_interface *oi)
 {
   int links = 0;
   struct ospf_neighbor *nbr;
-  struct in_addr id, mask;
+  struct in_addr id, mask, data;
   u_int16_t cost = ospf_link_cost (oi);
 
   if (IS_DEBUG_OSPF (lsa, LSA_GENERATE))
@@ -552,19 +489,34 @@ lsa_link_ptop_set (struct stream *s, struct ospf_interface *oi)
   if ((nbr = ospf_nbr_lookup_ptop (oi)))
     if (nbr->state == NSM_Full)
       {
-	/* For unnumbered point-to-point networks, the Link Data field
-	   should specify the interface's MIB-II ifIndex value. */
-	links += link_info_set (s, nbr->router_id, oi->address->u.prefix4,
-		                LSA_LINK_TYPE_POINTOPOINT, 0, cost);
+        if (CHECK_FLAG(oi->connected->flags, ZEBRA_IFA_UNNUMBERED))
+          {
+            /* For unnumbered point-to-point networks, the Link Data field
+               should specify the interface's MIB-II ifIndex value. */
+            data.s_addr = htonl(oi->ifp->ifindex);
+            links += link_info_set (s, nbr->router_id, data,
+                                    LSA_LINK_TYPE_POINTOPOINT, 0, cost);
+          }
+        else
+          {
+            links += link_info_set (s, nbr->router_id,
+                                    oi->address->u.prefix4,
+                                    LSA_LINK_TYPE_POINTOPOINT, 0, cost);
+          }
       }
 
-  /* Regardless of the state of the neighboring router, we must
-     add a Type 3 link (stub network).
-     N.B. Options 1 & 2 share basically the same logic. */
-  masklen2ip (oi->address->prefixlen, &mask);
-  id.s_addr = CONNECTED_PREFIX(oi->connected)->u.prefix4.s_addr & mask.s_addr;
-  links += link_info_set (s, id, mask, LSA_LINK_TYPE_STUB, 0,
-			  oi->output_cost);
+  /* no need for a stub link for unnumbered interfaces */
+  if (!CHECK_FLAG(oi->connected->flags, ZEBRA_IFA_UNNUMBERED))
+    {
+      /* Regardless of the state of the neighboring router, we must
+         add a Type 3 link (stub network).
+         N.B. Options 1 & 2 share basically the same logic. */
+      masklen2ip (oi->address->prefixlen, &mask);
+      id.s_addr = CONNECTED_PREFIX(oi->connected)->u.prefix4.s_addr & mask.s_addr;
+      links += link_info_set (s, id, mask, LSA_LINK_TYPE_STUB, 0,
+                              oi->output_cost);
+    }
+
   return links;
 }
 
@@ -1586,16 +1538,23 @@ ospf_get_nssa_ip (struct ospf_area *area)
 #define DEFAULT_METRIC_TYPE		     EXTERNAL_METRIC_TYPE_2
 
 int
-metric_type (struct ospf *ospf, u_char src)
+metric_type (struct ospf *ospf, u_char src, u_short instance)
 {
-  return (ospf->dmetric[src].type < 0 ?
-	  DEFAULT_METRIC_TYPE : ospf->dmetric[src].type);
+  struct ospf_redist *red;
+
+  red = ospf_redist_lookup(ospf, src, instance);
+
+  return ((!red || red->dmetric.type < 0) ?
+	  DEFAULT_METRIC_TYPE : red->dmetric.type);
 }
 
 int
-metric_value (struct ospf *ospf, u_char src)
+metric_value (struct ospf *ospf, u_char src, u_short instance)
 {
-  if (ospf->dmetric[src].value < 0)
+  struct ospf_redist *red;
+
+  red = ospf_redist_lookup(ospf, src, instance);
+  if (!red || red->dmetric.value < 0)
     {
       if (src == DEFAULT_ROUTE)
 	{
@@ -1610,7 +1569,7 @@ metric_value (struct ospf *ospf, u_char src)
 	return ospf->default_metric;
     }
 
-  return ospf->dmetric[src].value;
+  return red->dmetric.value;
 }
 
 /* Set AS-external-LSA body. */
@@ -1623,6 +1582,7 @@ ospf_external_lsa_body_set (struct stream *s, struct external_info *ei,
   u_int32_t mvalue;
   int mtype;
   int type;
+  u_short instance;
 
   /* Put Network Mask. */
   masklen2ip (p->prefixlen, &mask);
@@ -1630,12 +1590,13 @@ ospf_external_lsa_body_set (struct stream *s, struct external_info *ei,
 
   /* If prefix is default, specify DEFAULT_ROUTE. */
   type = is_prefix_default (&ei->p) ? DEFAULT_ROUTE : ei->type;
+  instance = is_prefix_default (&ei->p) ? 0 : ei->instance;
   
   mtype = (ROUTEMAP_METRIC_TYPE (ei) != -1) ?
-    ROUTEMAP_METRIC_TYPE (ei) : metric_type (ospf, type);
+    ROUTEMAP_METRIC_TYPE (ei) : metric_type (ospf, type, instance);
 
   mvalue = (ROUTEMAP_METRIC (ei) != -1) ?
-    ROUTEMAP_METRIC (ei) : metric_value (ospf, type);
+    ROUTEMAP_METRIC (ei) : metric_value (ospf, type, instance);
 
   /* Put type of external metric. */
   stream_putc (s, (mtype == EXTERNAL_METRIC_TYPE_2 ? 0x80 : 0));
@@ -2102,17 +2063,25 @@ ospf_external_lsa_originate_timer (struct thread *thread)
   struct external_info *ei;
   struct route_table *rt;
   int type = THREAD_VAL (thread);
+  struct list *ext_list;
+  struct listnode *node;
+  struct ospf_external *ext;
 
   ospf->t_external_lsa = NULL;
 
-  /* Originate As-external-LSA from all type of distribute source. */
-  if ((rt = EXTERNAL_INFO (type)))
-    for (rn = route_top (rt); rn; rn = route_next (rn))
-      if ((ei = rn->info) != NULL)
-	if (!is_prefix_default ((struct prefix_ipv4 *)&ei->p))
-	  if (!ospf_external_lsa_originate (ospf, ei))
-	    zlog_warn ("LSA: AS-external-LSA was not originated.");
-  
+  ext_list = om->external[type];
+  if (!ext_list)
+    return 0;
+
+  for (ALL_LIST_ELEMENTS_RO(ext_list, node, ext))
+    /* Originate As-external-LSA from all type of distribute source. */
+    if ((rt = ext->external_info))
+      for (rn = route_top (rt); rn; rn = route_next (rn))
+        if ((ei = rn->info) != NULL)
+          if (!is_prefix_default ((struct prefix_ipv4 *)&ei->p))
+            if (!ospf_external_lsa_originate (ospf, ei))
+              zlog_warn ("LSA: AS-external-LSA was not originated.");
+
   return 0;
 }
 
@@ -2129,17 +2098,30 @@ ospf_default_external_info (struct ospf *ospf)
 
   /* First, lookup redistributed default route. */
   for (type = 0; type <= ZEBRA_ROUTE_MAX; type++)
-    if (EXTERNAL_INFO (type) && type != ZEBRA_ROUTE_OSPF)
-      {
-	rn = route_node_lookup (EXTERNAL_INFO (type), (struct prefix *) &p);
-	if (rn != NULL)
-	  {
-	    route_unlock_node (rn);
-	    assert (rn->info);
-	    if (ospf_redistribute_check (ospf, rn->info, NULL))
-	      return rn->info;
-	  }
-      }
+    {
+      struct list *ext_list;
+      struct listnode *node;
+      struct ospf_external *ext;
+
+      if (type == ZEBRA_ROUTE_OSPF)
+        continue;
+
+      ext_list = om->external[type];
+      if (!ext_list)
+        continue;
+
+      for (ALL_LIST_ELEMENTS_RO(ext_list, node, ext))
+        {
+          rn = route_node_lookup (ext->external_info, (struct prefix *) &p);
+          if (rn != NULL)
+            {
+              route_unlock_node (rn);
+              assert (rn->info);
+              if (ospf_redistribute_check (ospf, rn->info, NULL))
+                return rn->info;
+            }
+        }
+    }
 
   return NULL;
 }
@@ -2163,7 +2145,7 @@ ospf_default_originate_timer (struct thread *thread)
       /* If there is no default route via redistribute,
 	 then originate AS-external-LSA with nexthop 0 (self). */
       nexthop.s_addr = 0;
-      ospf_external_info_add (DEFAULT_ROUTE, p, 0, nexthop, 0);
+      ospf_external_info_add (DEFAULT_ROUTE, 0, p, 0, nexthop, 0);
     }
 
   if ((ei = ospf_default_external_info (ospf)))
@@ -2295,15 +2277,18 @@ ospf_external_lsa_refresh_default (struct ospf *ospf)
 }
 
 void
-ospf_external_lsa_refresh_type (struct ospf *ospf, u_char type, int force)
+ospf_external_lsa_refresh_type (struct ospf *ospf, u_char type, u_short instance,
+                                int force)
 {
   struct route_node *rn;
   struct external_info *ei;
+  struct ospf_external *ext;
 
   if (type != DEFAULT_ROUTE)
-    if (EXTERNAL_INFO(type))
+    if ((ext = ospf_external_lookup(type, instance)) &&
+        EXTERNAL_INFO (ext))
       /* Refresh each redistributed AS-external-LSAs. */
-      for (rn = route_top (EXTERNAL_INFO (type)); rn; rn = route_next (rn))
+      for (rn = route_top (EXTERNAL_INFO (ext)); rn; rn = route_next (rn))
 	if ((ei = rn->info))
 	  if (!is_prefix_default (&ei->p))
 	    {
@@ -3323,7 +3308,7 @@ ospf_lsa_flush_self_originated (struct ospf_neighbor *nbr,
 	       self->data->type, inet_ntoa (self->data->id));
 }
 #else /* ORIGINAL_CODING */
-static int
+int
 ospf_lsa_flush_schedule (struct ospf *ospf, struct ospf_lsa *lsa)
 {
   if (lsa == NULL || !IS_LSA_SELF (lsa))
@@ -3644,37 +3629,36 @@ ospf_refresher_register_lsa (struct ospf *ospf, struct ospf_lsa *lsa)
   if (lsa->refresh_list < 0)
     {
       int delay;
+      int min_delay = OSPF_LS_REFRESH_TIME - (2 * OSPF_LS_REFRESH_JITTER);
+      int max_delay = OSPF_LS_REFRESH_TIME - OSPF_LS_REFRESH_JITTER;
 
-      if (LS_AGE (lsa) == 0 &&
-	  ntohl (lsa->data->ls_seqnum) == OSPF_INITIAL_SEQUENCE_NUMBER)
-	/* Randomize first update by  OSPF_LS_REFRESH_SHIFT factor */ 
-	delay = OSPF_LS_REFRESH_SHIFT + (random () % OSPF_LS_REFRESH_TIME);
-      else
-	/* Randomize another updates by +-OSPF_LS_REFRESH_JITTER factor */
-	delay = OSPF_LS_REFRESH_TIME - LS_AGE (lsa) - OSPF_LS_REFRESH_JITTER
-	  + (random () % (2*OSPF_LS_REFRESH_JITTER)); 
+      /* We want to refresh the LSA within OSPF_LS_REFRESH_TIME which is
+       * 1800s. Use jitter so that we send the LSA sometime between 1680s
+       * and 1740s.
+       */
+      delay = (random() % (max_delay - min_delay)) + min_delay;
 
-      if (delay < 0)
-	delay = 0;
-
-      current_index = ospf->lsa_refresh_queue.index + (quagga_time (NULL)
-                - ospf->lsa_refresher_started)/OSPF_LSA_REFRESHER_GRANULARITY;
+      current_index = ospf->lsa_refresh_queue.index + (monotime(NULL)
+                                                       - ospf->lsa_refresher_started)/OSPF_LSA_REFRESHER_GRANULARITY;
       
       index = (current_index + delay/OSPF_LSA_REFRESHER_GRANULARITY)
 	      % (OSPF_LSA_REFRESHER_SLOTS);
 
       if (IS_DEBUG_OSPF (lsa, LSA_REFRESH))
-	zlog_debug ("LSA[Refresh]: lsa %s with age %d added to index %d",
-		   inet_ntoa (lsa->data->id), LS_AGE (lsa), index);
+	zlog_debug ("LSA[Refresh:Type%d:%s]: age %d, added to index %d",
+		    lsa->data->type, inet_ntoa (lsa->data->id), LS_AGE (lsa), index);
+
       if (!ospf->lsa_refresh_queue.qs[index])
 	ospf->lsa_refresh_queue.qs[index] = list_new ();
+
       listnode_add (ospf->lsa_refresh_queue.qs[index],
                     ospf_lsa_lock (lsa)); /* lsa_refresh_queue */
       lsa->refresh_list = index;
+
       if (IS_DEBUG_OSPF (lsa, LSA_REFRESH))
-        zlog_debug ("LSA[Refresh:%s]: ospf_refresher_register_lsa(): "
+        zlog_debug ("LSA[Refresh:Type%d:%s]: ospf_refresher_register_lsa(): "
                    "setting refresh_list on lsa %p (slod %d)", 
-                   inet_ntoa (lsa->data->id), (void *)lsa, index);
+		    lsa->data->type, inet_ntoa (lsa->data->id), (void *)lsa, index);
     }
 }
 
@@ -3708,7 +3692,7 @@ ospf_lsa_refresh_walker (struct thread *t)
   struct list *lsa_to_refresh = list_new ();
 
   if (IS_DEBUG_OSPF (lsa, LSA_REFRESH))
-    zlog_debug ("LSA[Refresh]:ospf_lsa_refresh_walker(): start");
+    zlog_debug ("LSA[Refresh]: ospf_lsa_refresh_walker(): start");
 
   
   i = ospf->lsa_refresh_queue.index;
@@ -3718,7 +3702,7 @@ ospf_lsa_refresh_walker (struct thread *t)
      modulus. */
   ospf->lsa_refresh_queue.index =
    ((unsigned long)(ospf->lsa_refresh_queue.index +
-		    (quagga_time (NULL) - ospf->lsa_refresher_started)
+		    (monotime(NULL) - ospf->lsa_refresher_started)
 		    / OSPF_LSA_REFRESHER_GRANULARITY))
 		    % OSPF_LSA_REFRESHER_SLOTS;
 
@@ -3744,9 +3728,9 @@ ospf_lsa_refresh_walker (struct thread *t)
 	  for (ALL_LIST_ELEMENTS (refresh_list, node, nnode, lsa))
 	    {
 	      if (IS_DEBUG_OSPF (lsa, LSA_REFRESH))
-		zlog_debug ("LSA[Refresh:%s]: ospf_lsa_refresh_walker(): "
+		zlog_debug ("LSA[Refresh:Type%d:%s]: ospf_lsa_refresh_walker(): "
 		           "refresh lsa %p (slot %d)",
-		           inet_ntoa (lsa->data->id), (void *)lsa, i);
+			    lsa->data->type, inet_ntoa (lsa->data->id), (void *)lsa, i);
 
 	      assert (lsa->lock > 0);
 	      list_delete_node (refresh_list, node);
@@ -3759,7 +3743,7 @@ ospf_lsa_refresh_walker (struct thread *t)
 
   ospf->t_lsa_refresher = thread_add_timer (master, ospf_lsa_refresh_walker,
 					   ospf, ospf->lsa_refresh_interval);
-  ospf->lsa_refresher_started = quagga_time (NULL);
+  ospf->lsa_refresher_started = monotime(NULL);
 
   for (ALL_LIST_ELEMENTS (lsa_to_refresh, node, nnode, lsa))
     {

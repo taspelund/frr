@@ -18,17 +18,17 @@
  * You should have received a copy of the GNU General Public License
  * along with GNU Zebra; see the file COPYING.  If not, write to the Free
  * Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
- * 02111-1307, USA.  
+ * 02111-1307, USA.
  */
 
-/* 
+/*
  * This work includes work with the following copywrite:
  *
  * Copyright (C) 1997, 2000 Kunihiro Ishiguro
  *
  */
 
-/* 
+/*
  * Thanks to Jens Låås at Swedish University of Agricultural Sciences
  * for reviewing and tests.
  */
@@ -36,7 +36,7 @@
 
 #include <zebra.h>
 
-#ifdef HAVE_IRDP 
+#ifdef HAVE_IRDP
 
 #include "if.h"
 #include "vty.h"
@@ -44,6 +44,7 @@
 #include "prefix.h"
 #include "command.h"
 #include "memory.h"
+#include "zebra_memory.h"
 #include "stream.h"
 #include "ioctl.h"
 #include "connected.h"
@@ -60,10 +61,6 @@
 #include "if.h"
 #include "sockunion.h"
 #include "log.h"
-
-
-/* Master of threads. */
-extern struct zebra_t zebrad;
 
 extern int irdp_sock;
 
@@ -84,7 +81,7 @@ irdp_get_prefix(struct interface *ifp)
 {
   struct listnode *node;
   struct connected *ifc;
-  
+
   if (ifp->connected)
     for (ALL_LIST_ELEMENTS_RO (ifp->connected, node, ifc))
       return ifc->address;
@@ -94,9 +91,9 @@ irdp_get_prefix(struct interface *ifp)
 
 /* Join to the add/leave multicast group. */
 static int
-if_group (struct interface *ifp, 
-	  int sock, 
-	  u_int32_t group, 
+if_group (struct interface *ifp,
+	  int sock,
+	  u_int32_t group,
 	  int add_leave)
 {
   struct ip_mreq m;
@@ -119,7 +116,7 @@ if_group (struct interface *ifp,
 		    (char *) &m, sizeof (struct ip_mreq));
   if (ret < 0)
     zlog_warn ("IRDP: %s can't setsockopt %s: %s",
-	       add_leave == IP_ADD_MEMBERSHIP? "join group":"leave group", 
+	       add_leave == IP_ADD_MEMBERSHIP? "join group":"leave group",
 	       inet_2a(group, b1),
 	       safe_strerror (errno));
 
@@ -140,7 +137,7 @@ if_add_group (struct interface *ifp)
   }
 
   if(irdp->flags & IF_DEBUG_MISC )
-    zlog_debug("IRDP: Adding group %s for %s", 
+    zlog_debug("IRDP: Adding group %s for %s",
 	       inet_2a(htonl(INADDR_ALLRTRS_GROUP), b1),
 	       ifp->name);
   return 0;
@@ -159,7 +156,7 @@ if_drop_group (struct interface *ifp)
     return ret;
 
   if(irdp->flags & IF_DEBUG_MISC)
-    zlog_debug("IRDP: Leaving group %s for %s", 
+    zlog_debug("IRDP: Leaving group %s for %s",
 	       inet_2a(htonl(INADDR_ALLRTRS_GROUP), b1),
 	       ifp->name);
   return 0;
@@ -209,7 +206,7 @@ irdp_if_start(struct interface *ifp, int multicast, int set_defaults)
   }
   irdp->flags |= IF_ACTIVE;
 
-  if(!multicast) 
+  if(!multicast)
     irdp->flags |= IF_BROADCAST;
 
   if_add_update(ifp);
@@ -222,13 +219,13 @@ irdp_if_start(struct interface *ifp, int multicast, int set_defaults)
 
   if( multicast) {
     if_add_group(ifp);
-    
+
     if (! (ifp->flags & (IFF_MULTICAST|IFF_ALLMULTI))) {
       zlog_warn("IRDP: Interface not multicast enabled %s", ifp->name);
     }
   }
 
-  if(set_defaults) 
+  if(set_defaults)
     if_set_defaults(ifp);
 
   irdp->irdp_sent = 0;
@@ -242,9 +239,9 @@ irdp_if_start(struct interface *ifp, int multicast, int set_defaults)
         seed = ifc->address->u.prefix4.s_addr;
         break;
       }
-  
+
   srandom(seed);
-  timer =  (random () % IRDP_DEFAULT_INTERVAL) + 1; 
+  timer =  (random () % IRDP_DEFAULT_INTERVAL) + 1;
 
   irdp->AdvPrefList = list_new();
   irdp->AdvPrefList->del =  (void (*)(void *)) Adv_free; /* Destructor */
@@ -253,18 +250,18 @@ irdp_if_start(struct interface *ifp, int multicast, int set_defaults)
   /* And this for startup. Speed limit from 1991 :-). But it's OK*/
 
   if(irdp->irdp_sent < MAX_INITIAL_ADVERTISEMENTS &&
-     timer > MAX_INITIAL_ADVERT_INTERVAL ) 
+     timer > MAX_INITIAL_ADVERT_INTERVAL )
 	  timer= MAX_INITIAL_ADVERT_INTERVAL;
 
-  
+
   if(irdp->flags & IF_DEBUG_MISC)
-    zlog_debug("IRDP: Init timer for %s set to %u", 
-	       ifp->name, 
+    zlog_debug("IRDP: Init timer for %s set to %u",
+	       ifp->name,
 	       timer);
 
-  irdp->t_advertise = thread_add_timer(zebrad.master, 
-				       irdp_send_thread, 
-				       ifp, 
+  irdp->t_advertise = thread_add_timer(zebrad.master,
+				       irdp_send_thread,
+				       ifp,
 				       timer);
 }
 
@@ -273,7 +270,7 @@ irdp_if_stop(struct interface *ifp)
 {
   struct zebra_if *zi=ifp->info;
   struct irdp_interface *irdp=&zi->irdp;
-  
+
   if (irdp == NULL) {
     zlog_warn ("Interface %s structure is NULL", ifp->name);
     return;
@@ -284,7 +281,7 @@ irdp_if_stop(struct interface *ifp)
     return;
   }
 
-  if(! (irdp->flags & IF_BROADCAST)) 
+  if(! (irdp->flags & IF_BROADCAST))
     if_drop_group(ifp);
 
   irdp_advert_off(ifp);
@@ -310,9 +307,9 @@ irdp_if_shutdown(struct interface *ifp)
   irdp->flags |= IF_SHUTDOWN;
   irdp->flags &= ~IF_ACTIVE;
 
-  if(! (irdp->flags & IF_BROADCAST)) 
+  if(! (irdp->flags & IF_BROADCAST))
     if_drop_group(ifp);
-  
+
   /* Tell the hosts we are out of service */
   irdp_advert_off(ifp);
 }
@@ -330,7 +327,7 @@ irdp_if_no_shutdown(struct interface *ifp)
 
   irdp->flags &= ~IF_SHUTDOWN;
 
-  irdp_if_start(ifp, irdp->flags & IF_BROADCAST? FALSE : TRUE, FALSE); 
+  irdp_if_start(ifp, irdp->flags & IF_BROADCAST? FALSE : TRUE, FALSE);
 
 }
 
@@ -347,30 +344,30 @@ void irdp_config_write (struct vty *vty, struct interface *ifp)
 
   if(irdp->flags & IF_ACTIVE || irdp->flags & IF_SHUTDOWN) {
 
-    if( irdp->flags & IF_SHUTDOWN) 
+    if( irdp->flags & IF_SHUTDOWN)
       vty_out (vty, " ip irdp shutdown %s",  VTY_NEWLINE);
 
-    if( irdp->flags & IF_BROADCAST) 
+    if( irdp->flags & IF_BROADCAST)
       vty_out (vty, " ip irdp broadcast%s",  VTY_NEWLINE);
-    else 
+    else
       vty_out (vty, " ip irdp multicast%s",  VTY_NEWLINE);
 
-    vty_out (vty, " ip irdp preference %ld%s",  
+    vty_out (vty, " ip irdp preference %ld%s",
 	     irdp->Preference, VTY_NEWLINE);
 
     for (ALL_LIST_ELEMENTS_RO (irdp->AdvPrefList, node, adv))
       vty_out (vty, " ip irdp address %s preference %d%s",
                     inet_2a(adv->ip.s_addr, b1),
-                    adv->pref, 
+                    adv->pref,
                     VTY_NEWLINE);
 
-    vty_out (vty, " ip irdp holdtime %d%s",  
+    vty_out (vty, " ip irdp holdtime %d%s",
 	     irdp->Lifetime, VTY_NEWLINE);
 
-    vty_out (vty, " ip irdp minadvertinterval %ld%s",  
+    vty_out (vty, " ip irdp minadvertinterval %ld%s",
 	     irdp->MinAdvertInterval, VTY_NEWLINE);
 
-    vty_out (vty, " ip irdp maxadvertinterval %ld%s",  
+    vty_out (vty, " ip irdp maxadvertinterval %ld%s",
 	     irdp->MaxAdvertInterval, VTY_NEWLINE);
 
   }
@@ -381,14 +378,10 @@ DEFUN (ip_irdp_multicast,
        ip_irdp_multicast_cmd,
        "ip irdp multicast",
        IP_STR
-       "ICMP Router discovery on this interface using multicast\n")
+       "ICMP Router discovery on this interface\n"
+       "Use multicast mode\n")
 {
-  struct interface *ifp;
-
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
+  VTY_DECLVAR_CONTEXT (interface, ifp);
 
   irdp_if_start(ifp, TRUE, TRUE);
   return CMD_SUCCESS;
@@ -398,14 +391,10 @@ DEFUN (ip_irdp_broadcast,
        ip_irdp_broadcast_cmd,
        "ip irdp broadcast",
        IP_STR
-       "ICMP Router discovery on this interface using broadcast\n")
+       "ICMP Router discovery on this interface\n"
+       "Use broadcast mode\n")
 {
-  struct interface *ifp;
-
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
+  VTY_DECLVAR_CONTEXT (interface, ifp);
 
   irdp_if_start(ifp, FALSE, TRUE);
   return CMD_SUCCESS;
@@ -418,12 +407,7 @@ DEFUN (no_ip_irdp,
        IP_STR
        "Disable ICMP Router discovery on this interface\n")
 {
-  struct interface *ifp;
-
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
+  VTY_DECLVAR_CONTEXT (interface, ifp);
 
   irdp_if_stop(ifp);
   return CMD_SUCCESS;
@@ -433,14 +417,10 @@ DEFUN (ip_irdp_shutdown,
        ip_irdp_shutdown_cmd,
        "ip irdp shutdown",
        IP_STR
+       "ICMP Router discovery on this interface\n"
        "ICMP Router discovery shutdown on this interface\n")
 {
-  struct interface *ifp;
-
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
+  VTY_DECLVAR_CONTEXT (interface, ifp);
 
   irdp_if_shutdown(ifp);
   return CMD_SUCCESS;
@@ -451,14 +431,10 @@ DEFUN (no_ip_irdp_shutdown,
        "no ip irdp shutdown",
        NO_STR
        IP_STR
+       "ICMP Router discovery on this interface\n"
        "ICMP Router discovery no shutdown on this interface\n")
 {
-  struct interface *ifp;
-
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
+  VTY_DECLVAR_CONTEXT (interface, ifp);
 
   irdp_if_no_shutdown(ifp);
   return CMD_SUCCESS;
@@ -466,90 +442,81 @@ DEFUN (no_ip_irdp_shutdown,
 
 DEFUN (ip_irdp_holdtime,
        ip_irdp_holdtime_cmd,
-       "ip irdp holdtime <0-9000>",
+       "ip irdp holdtime (0-9000)",
        IP_STR
        "ICMP Router discovery on this interface\n"
        "Set holdtime value\n"
        "Holdtime value in seconds. Default is 1800 seconds\n")
 {
-  struct interface *ifp;
+  int idx_number = 3;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct zebra_if *zi;
   struct irdp_interface *irdp;
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
 
   zi=ifp->info;
   irdp=&zi->irdp;
 
-  irdp->Lifetime = atoi(argv[0]);
+  irdp->Lifetime = atoi(argv[idx_number]->arg);
   return CMD_SUCCESS;
 }
 
 DEFUN (ip_irdp_minadvertinterval,
        ip_irdp_minadvertinterval_cmd,
-       "ip irdp minadvertinterval <3-1800>",
+       "ip irdp minadvertinterval (3-1800)",
        IP_STR
        "ICMP Router discovery on this interface\n"
        "Set minimum time between advertisement\n"
        "Minimum advertisement interval in seconds\n")
 {
-  struct interface *ifp;
+  int idx_number = 3;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct zebra_if *zi;
   struct irdp_interface *irdp;
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
 
   zi=ifp->info;
   irdp=&zi->irdp;
 
-  if( (unsigned) atoi(argv[0]) <= irdp->MaxAdvertInterval) {
-      irdp->MinAdvertInterval = atoi(argv[0]);
+  if( (unsigned) atoi(argv[idx_number]->arg) <= irdp->MaxAdvertInterval) {
+      irdp->MinAdvertInterval = atoi(argv[idx_number]->arg);
 
       return CMD_SUCCESS;
   }
 
-  vty_out (vty, "ICMP warning maxadvertinterval is greater or equal than minadvertinterval%s", 
+  vty_out (vty, "ICMP warning maxadvertinterval is greater or equal than minadvertinterval%s",
 	     VTY_NEWLINE);
 
-  vty_out (vty, "Please correct!%s", 
+  vty_out (vty, "Please correct!%s",
 	     VTY_NEWLINE);
   return CMD_WARNING;
 }
 
 DEFUN (ip_irdp_maxadvertinterval,
        ip_irdp_maxadvertinterval_cmd,
-       "ip irdp maxadvertinterval <4-1800>",
+       "ip irdp maxadvertinterval (4-1800)",
        IP_STR
        "ICMP Router discovery on this interface\n"
        "Set maximum time between advertisement\n"
        "Maximum advertisement interval in seconds\n")
 {
-  struct interface *ifp;
+  int idx_number = 3;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct zebra_if *zi;
   struct irdp_interface *irdp;
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
 
   zi=ifp->info;
   irdp=&zi->irdp;
 
 
-  if( irdp->MinAdvertInterval <= (unsigned) atoi(argv[0]) ) {
-    irdp->MaxAdvertInterval = atoi(argv[0]);
+  if( irdp->MinAdvertInterval <= (unsigned) atoi(argv[idx_number]->arg) ) {
+    irdp->MaxAdvertInterval = atoi(argv[idx_number]->arg);
 
       return CMD_SUCCESS;
   }
 
-  vty_out (vty, "ICMP warning maxadvertinterval is greater or equal than minadvertinterval%s", 
+  vty_out (vty, "ICMP warning maxadvertinterval is greater or equal than minadvertinterval%s",
 	     VTY_NEWLINE);
 
-  vty_out (vty, "Please correct!%s", 
+  vty_out (vty, "Please correct!%s",
 	     VTY_NEWLINE);
   return CMD_WARNING;
 }
@@ -561,60 +528,55 @@ DEFUN (ip_irdp_maxadvertinterval,
 
 DEFUN (ip_irdp_preference,
        ip_irdp_preference_cmd,
-       "ip irdp preference <0-2147483647>",
+       "ip irdp preference (0-2147483647)",
        IP_STR
        "ICMP Router discovery on this interface\n"
        "Set default preference level for this interface\n"
        "Preference level\n")
 {
-  struct interface *ifp;
+  int idx_number = 3;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct zebra_if *zi;
   struct irdp_interface *irdp;
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
 
   zi=ifp->info;
   irdp=&zi->irdp;
 
-  irdp->Preference = atoi(argv[0]);
+  irdp->Preference = atoi(argv[idx_number]->arg);
   return CMD_SUCCESS;
 }
 
 DEFUN (ip_irdp_address_preference,
        ip_irdp_address_preference_cmd,
-       "ip irdp address A.B.C.D preference <0-2147483647>",
+       "ip irdp address A.B.C.D preference (0-2147483647)",
        IP_STR
-       "Alter ICMP Router discovery preference this interface\n"
-       "Specify IRDP non-default preference to advertise\n"
+       "Alter ICMP Router discovery preference on this interface\n"
        "Set IRDP address for advertise\n"
+       "IPv4 address\n"
+       "Specify IRDP non-default preference to advertise\n"
        "Preference level\n")
 {
+  int idx_ipv4 = 3;
+  int idx_number = 5;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct listnode *node;
-  struct in_addr ip; 
+  struct in_addr ip;
   int pref;
   int ret;
-  struct interface *ifp;
   struct zebra_if *zi;
   struct irdp_interface *irdp;
   struct Adv *adv;
 
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
-
   zi=ifp->info;
   irdp=&zi->irdp;
 
-  ret = inet_aton(argv[0], &ip);
+  ret = inet_aton(argv[idx_ipv4]->arg, &ip);
   if(!ret) return CMD_WARNING;
 
-  pref = atoi(argv[1]);
+  pref = atoi(argv[idx_number]->arg);
 
   for (ALL_LIST_ELEMENTS_RO (irdp->AdvPrefList, node, adv))
-    if(adv->ip.s_addr == ip.s_addr) 
+    if(adv->ip.s_addr == ip.s_addr)
       return CMD_SUCCESS;
 
   adv = Adv_new();
@@ -628,32 +590,29 @@ DEFUN (ip_irdp_address_preference,
 
 DEFUN (no_ip_irdp_address_preference,
        no_ip_irdp_address_preference_cmd,
-       "no ip irdp address A.B.C.D preference <0-2147483647>",
+       "no ip irdp address A.B.C.D preference (0-2147483647)",
        NO_STR
        IP_STR
-       "Alter ICMP Router discovery preference this interface\n"
-       "Removes IRDP non-default preference\n"
+       "Alter ICMP Router discovery preference on this interface\n"
        "Select IRDP address\n"
+       "IPv4 address\n"
+       "Reset ICMP Router discovery preference on this interface\n"
        "Old preference level\n")
 {
+  int idx_ipv4 = 4;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct listnode *node, *nnode;
-  struct in_addr ip; 
+  struct in_addr ip;
   int ret;
-  struct interface *ifp;
   struct zebra_if *zi;
   struct irdp_interface *irdp;
   struct Adv *adv;
 
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
-
   zi=ifp->info;
   irdp=&zi->irdp;
 
-  ret = inet_aton(argv[0], &ip);
-  if (!ret) 
+  ret = inet_aton(argv[idx_ipv4]->arg, &ip);
+  if (!ret)
     return CMD_WARNING;
 
   for (ALL_LIST_ELEMENTS (irdp->AdvPrefList, node, nnode, adv))
@@ -664,7 +623,7 @@ DEFUN (no_ip_irdp_address_preference,
           break;
         }
     }
-  
+
   return CMD_SUCCESS;
 }
 
@@ -672,15 +631,13 @@ DEFUN (ip_irdp_debug_messages,
        ip_irdp_debug_messages_cmd,
        "ip irdp debug messages",
        IP_STR
-       "ICMP Router discovery debug Averts. and Solicits (short)\n")
+       "ICMP Router discovery debug Averts. and Solicits (short)\n"
+       "IRDP debugging options\n"
+       "Enable debugging for IRDP messages\n")
 {
-  struct interface *ifp;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct zebra_if *zi;
   struct irdp_interface *irdp;
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
 
   zi=ifp->info;
   irdp=&zi->irdp;
@@ -694,15 +651,13 @@ DEFUN (ip_irdp_debug_misc,
        ip_irdp_debug_misc_cmd,
        "ip irdp debug misc",
        IP_STR
-       "ICMP Router discovery debug Averts. and Solicits (short)\n")
+       "ICMP Router discovery debug Averts. and Solicits (short)\n"
+       "IRDP debugging options\n"
+       "Enable debugging for miscellaneous IRDP events\n")
 {
-  struct interface *ifp;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct zebra_if *zi;
   struct irdp_interface *irdp;
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
 
   zi=ifp->info;
   irdp=&zi->irdp;
@@ -716,15 +671,13 @@ DEFUN (ip_irdp_debug_packet,
        ip_irdp_debug_packet_cmd,
        "ip irdp debug packet",
        IP_STR
-       "ICMP Router discovery debug Averts. and Solicits (short)\n")
+       "ICMP Router discovery debug Averts. and Solicits (short)\n"
+       "IRDP debugging options\n"
+       "Enable debugging for IRDP packets\n")
 {
-  struct interface *ifp;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct zebra_if *zi;
   struct irdp_interface *irdp;
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
 
   zi=ifp->info;
   irdp=&zi->irdp;
@@ -739,15 +692,13 @@ DEFUN (ip_irdp_debug_disable,
        ip_irdp_debug_disable_cmd,
        "ip irdp debug disable",
        IP_STR
-       "ICMP Router discovery debug Averts. and Solicits (short)\n")
+       "ICMP Router discovery debug Averts. and Solicits (short)\n"
+       "IRDP debugging options\n"
+       "Disable debugging for all IRDP events\n")
 {
-  struct interface *ifp;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   struct zebra_if *zi;
   struct irdp_interface *irdp;
-  ifp = (struct interface *) vty->index;
-  if(!ifp) {
-	  return CMD_WARNING;
-  }
 
   zi=ifp->info;
   irdp=&zi->irdp;

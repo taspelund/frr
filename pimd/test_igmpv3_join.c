@@ -16,9 +16,9 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-  
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
+
+#include <zebra.h>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -30,6 +30,7 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 
+#include "if.h"
 #include "pim_igmp_join.h"
 
 const char *prog_name = 0;

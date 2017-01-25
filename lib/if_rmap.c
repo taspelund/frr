@@ -27,6 +27,9 @@
 #include "if.h"
 #include "if_rmap.h"
 
+DEFINE_MTYPE_STATIC(LIB, IF_RMAP,      "Interface route map")
+DEFINE_MTYPE_STATIC(LIB, IF_RMAP_NAME, "I.f. route map name")
+
 struct hash *ifrmaphash;
 
 /* Hook functions. */
@@ -64,10 +67,13 @@ if_rmap_lookup (const char *ifname)
   struct if_rmap *if_rmap;
 
   /* temporary copy */
-  key.ifname = (char *)ifname;
+  key.ifname = (ifname) ? XSTRDUP (MTYPE_IF_RMAP_NAME, ifname) : NULL;
 
   if_rmap = hash_lookup (ifrmaphash, &key);
   
+  if (key.ifname)
+    XFREE(MTYPE_IF_RMAP_NAME, key.ifname);
+
   return if_rmap;
 }
 
@@ -86,7 +92,7 @@ if_rmap_hook_delete (void (*func) (struct if_rmap *))
 static void *
 if_rmap_hash_alloc (void *arg)
 {
-  struct if_rmap *ifarg = arg;
+  struct if_rmap *ifarg = (struct if_rmap *)arg;
   struct if_rmap *if_rmap;
 
   if_rmap = if_rmap_new ();
@@ -99,11 +105,17 @@ static struct if_rmap *
 if_rmap_get (const char *ifname)
 {
   struct if_rmap key;
+  struct if_rmap *ret;
 
   /* temporary copy */
-  key.ifname = (char *)ifname;
+  key.ifname = (ifname) ? XSTRDUP (MTYPE_IF_RMAP_NAME, ifname) : NULL;
 
-  return (struct if_rmap *) hash_get (ifrmaphash, &key, if_rmap_hash_alloc);
+  ret = hash_get (ifrmaphash, &key, if_rmap_hash_alloc);
+
+  if (key.ifname)
+    XFREE(MTYPE_IF_RMAP_NAME, key.ifname);
+
+  return ret;
 }
 
 static unsigned int
@@ -199,18 +211,21 @@ if_rmap_unset (const char *ifname, enum if_rmap_type type,
 
 DEFUN (if_rmap,
        if_rmap_cmd,
-       "route-map RMAP_NAME (in|out) IFNAME",
+       "route-map RMAP_NAME <in|out> IFNAME",
        "Route map set\n"
        "Route map name\n"
        "Route map set for input filtering\n"
        "Route map set for output filtering\n"
        "Route map interface name\n")
 {
+  int idx_rmap_name = 1;
+  int idx_in_out = 2;
+  int idx_ifname = 3;
   enum if_rmap_type type;
 
-  if (strncmp (argv[1], "i", 1) == 0)
+  if (strncmp (argv[idx_in_out]->text, "in", 1) == 0)
     type = IF_RMAP_IN;
-  else if (strncmp (argv[1], "o", 1) == 0)
+  else if (strncmp (argv[idx_in_out]->text, "out", 1) == 0)
     type = IF_RMAP_OUT;
   else
     {
@@ -218,23 +233,14 @@ DEFUN (if_rmap,
       return CMD_WARNING;
     }
 
-  if_rmap_set (argv[2], type, argv[0]);
+  if_rmap_set (argv[idx_ifname]->arg, type, argv[idx_rmap_name]->arg);
 
   return CMD_SUCCESS;
-}      
-
-ALIAS (if_rmap,
-       if_ipv6_rmap_cmd,
-       "route-map RMAP_NAME (in|out) IFNAME",
-       "Route map set\n"
-       "Route map name\n"
-       "Route map set for input filtering\n"
-       "Route map set for output filtering\n"
-       "Route map interface name\n")
+}
 
 DEFUN (no_if_rmap,
        no_if_rmap_cmd,
-       "no route-map ROUTEMAP_NAME (in|out) IFNAME",
+       "no route-map ROUTEMAP_NAME <in|out> IFNAME",
        NO_STR
        "Route map unset\n"
        "Route map name\n"
@@ -242,12 +248,15 @@ DEFUN (no_if_rmap,
        "Route map for output filtering\n"
        "Route map interface name\n")
 {
+  int idx_routemap_name = 2;
+  int idx_in_out = 3;
+  int idx_ifname = 4;
   int ret;
   enum if_rmap_type type;
 
-  if (strncmp (argv[1], "i", 1) == 0)
+  if (strncmp (argv[idx_in_out]->arg, "i", 1) == 0)
     type = IF_RMAP_IN;
-  else if (strncmp (argv[1], "o", 1) == 0)
+  else if (strncmp (argv[idx_in_out]->arg, "o", 1) == 0)
     type = IF_RMAP_OUT;
   else
     {
@@ -255,24 +264,15 @@ DEFUN (no_if_rmap,
       return CMD_WARNING;
     }
 
-  ret = if_rmap_unset (argv[2], type, argv[0]);
+  ret = if_rmap_unset (argv[idx_ifname]->arg, type, argv[idx_routemap_name]->arg);
   if (! ret)
     {
       vty_out (vty, "route-map doesn't exist%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
   return CMD_SUCCESS;
-}      
+}
 
-ALIAS (no_if_rmap,
-       no_if_ipv6_rmap_cmd,
-       "no route-map ROUTEMAP_NAME (in|out) IFNAME",
-       NO_STR
-       "Route map unset\n"
-       "Route map name\n"
-       "Route map for input filtering\n"
-       "Route map for output filtering\n"
-       "Route map interface name\n")
 
 /* Configuration write function. */
 int
@@ -321,8 +321,6 @@ if_rmap_init (int node)
 {
   ifrmaphash = hash_create (if_rmap_hash_make, if_rmap_hash_cmp);
   if (node == RIPNG_NODE) {
-    install_element (RIPNG_NODE, &if_ipv6_rmap_cmd);
-    install_element (RIPNG_NODE, &no_if_ipv6_rmap_cmd);
   } else if (node == RIP_NODE) {
     install_element (RIP_NODE, &if_rmap_cmd);
     install_element (RIP_NODE, &no_if_rmap_cmd);

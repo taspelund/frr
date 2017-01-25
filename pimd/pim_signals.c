@@ -16,8 +16,6 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-  
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
 
 #include <zebra.h>
@@ -27,6 +25,7 @@
 #include "sigevent.h"
 #include "memory.h"
 #include "log.h"
+#include "if.h"
 
 #include "pim_signals.h"
 #include "pimd.h"
@@ -56,7 +55,6 @@ static void pim_sigterm()
 
 static void pim_sigusr1()
 {
-  zlog_info ("SIGUSR1 received");
   zlog_rotate (NULL);
 }
 

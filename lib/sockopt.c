@@ -29,30 +29,30 @@
 #include "sockopt.h"
 #include "sockunion.h"
 
-int
+void
 setsockopt_so_recvbuf (int sock, int size)
 {
-  int ret;
-  
-  if ( (ret = setsockopt (sock, SOL_SOCKET, SO_RCVBUF, (char *)
-                          &size, sizeof (int))) < 0)
-    zlog_err ("fd %d: can't setsockopt SO_RCVBUF to %d: %s",
-	      sock,size,safe_strerror(errno));
+  int orig_req = size;
 
-  return ret;
+  while (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &size, sizeof (size)) == -1)
+    size /= 2;
+
+  if (size != orig_req)
+    zlog_warn ("%s: fd %d: SO_RCVBUF set to %d (requested %d)", __func__, sock,
+	       size, orig_req);
 }
 
-int
+void
 setsockopt_so_sendbuf (const int sock, int size)
 {
-  int ret = setsockopt (sock, SOL_SOCKET, SO_SNDBUF,
-    (char *)&size, sizeof (int));
-  
-  if (ret < 0)
-    zlog_err ("fd %d: can't setsockopt SO_SNDBUF to %d: %s",
-      sock, size, safe_strerror (errno));
+  int orig_req = size;
 
-  return ret;
+  while (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &size, sizeof (size)) == -1)
+    size /= 2;
+
+  if (size != orig_req)
+    zlog_warn ("%s: fd %d: SO_SNDBUF set to %d (requested %d)", __func__, sock,
+	       size, orig_req);
 }
 
 int
@@ -86,7 +86,6 @@ getsockopt_cmsg_data (struct msghdr *msgh, int level, int type)
   return NULL;
 }
 
-#ifdef HAVE_IPV6
 /* Set IPv6 packet info to the socket. */
 int
 setsockopt_ipv6_pktinfo (int sock, int val)
@@ -198,7 +197,6 @@ setsockopt_ipv6_tclass(int sock, int tclass)
 #endif
   return ret;
 }
-#endif /* HAVE_IPV6 */
 
 /*
  * Process multicast socket options for IPv4 in an OS-dependent manner.
@@ -224,6 +222,7 @@ setsockopt_ipv6_tclass(int sock, int tclass)
 int
 setsockopt_ipv4_multicast(int sock,
 			int optname, 
+			struct in_addr if_addr,
 			unsigned int mcast_addr,
 			ifindex_t ifindex)
 {
@@ -284,18 +283,20 @@ setsockopt_ipv4_multicast(int sock,
 #elif defined(HAVE_BSD_STRUCT_IP_MREQ_HACK) /* #if OS_TYPE */ 
   /* standard BSD API */
 
-  struct in_addr m;
   struct ip_mreq mreq;
   int ret;
 
   assert(optname == IP_ADD_MEMBERSHIP || optname == IP_DROP_MEMBERSHIP);
 
-  m.s_addr = htonl(ifindex);
 
   memset (&mreq, 0, sizeof(mreq));
   mreq.imr_multiaddr.s_addr = mcast_addr;
-  mreq.imr_interface = m;
-  
+#if !defined __OpenBSD__
+  mreq.imr_interface.s_addr = htonl (ifindex);
+#else
+  mreq.imr_interface.s_addr = if_addr.s_addr;
+#endif
+
   ret = setsockopt (sock, IPPROTO_IP, optname, (void *)&mreq, sizeof(mreq));
   if ((ret < 0) && (optname == IP_ADD_MEMBERSHIP) && (errno == EADDRINUSE))
     {
@@ -323,7 +324,8 @@ setsockopt_ipv4_multicast(int sock,
  * Set IP_MULTICAST_IF socket option in an OS-dependent manner.
  */
 int
-setsockopt_ipv4_multicast_if(int sock, ifindex_t ifindex)
+setsockopt_ipv4_multicast_if(int sock, struct in_addr if_addr,
+			     ifindex_t ifindex)
 {
 
 #ifdef HAVE_STRUCT_IP_MREQN_IMR_IFINDEX
@@ -340,7 +342,11 @@ setsockopt_ipv4_multicast_if(int sock, ifindex_t ifindex)
 #elif defined(HAVE_BSD_STRUCT_IP_MREQ_HACK)
   struct in_addr m;
 
-  m.s_addr = htonl(ifindex);
+#if !defined __OpenBSD__
+  m.s_addr = htonl (ifindex);
+#else
+  m.s_addr = if_addr.s_addr;
+#endif
 
   return setsockopt (sock, IPPROTO_IP, IP_MULTICAST_IF, (void *)&m, sizeof(m));
 #elif defined(SUNOS_5)
@@ -376,7 +382,20 @@ setsockopt_ipv4_multicast_if(int sock, ifindex_t ifindex)
   #error "Unsupported multicast API"
 #endif
 }
-  
+
+int
+setsockopt_ipv4_multicast_loop (int sock, u_char val)
+{
+  int ret;
+
+  ret = setsockopt (sock, IPPROTO_IP, IP_MULTICAST_LOOP, (void *) &val,
+		    sizeof (val));
+  if (ret < 0)
+    zlog_warn ("can't setsockopt IP_MULTICAST_LOOP");
+
+  return ret;
+}
+
 static int
 setsockopt_ipv4_ifindex (int sock, ifindex_t val)
 {
@@ -423,11 +442,9 @@ setsockopt_ifindex (int af, int sock, ifindex_t val)
       case AF_INET:
         ret = setsockopt_ipv4_ifindex (sock, val);
         break;
-#ifdef HAVE_IPV6
       case AF_INET6:
         ret = setsockopt_ipv6_pktinfo (sock, val);
         break;
-#endif
       default:
         zlog_warn ("setsockopt_ifindex: unknown address family %d", af);
     }
@@ -514,11 +531,9 @@ getsockopt_ifindex (int af, struct msghdr *msgh)
       case AF_INET:
         return (getsockopt_ipv4_ifindex (msgh));
         break;
-#ifdef HAVE_IPV6
       case AF_INET6:
         return (getsockopt_ipv6_ifindex (msgh));
         break;
-#endif
       default:
         zlog_warn ("getsockopt_ifindex: unknown address family %d", af);
         return 0;
@@ -625,7 +640,6 @@ sockopt_tcp_signature (int sock, union sockunion *su, const char *password)
           return 0;
         }
       
-#ifdef HAVE_IPV6
       /* If this does not work, then all users of this sockopt will need to
        * differentiate between IPv4 and IPv6, and keep seperate sockets for
        * each. 
@@ -642,7 +656,6 @@ sockopt_tcp_signature (int sock, union sockunion *su, const char *password)
            su2->sin6.sin6_addr.s6_addr32[2] = htonl(0xffff);
            memcpy (&su2->sin6.sin6_addr.s6_addr32[3], &su->sin.sin_addr, 4);
         }
-#endif
     }
   
   memset (&md5sig, 0, sizeof (md5sig));

@@ -29,6 +29,8 @@
 #include "log.h"
 #include "vty.h"
 #include "linklist.h"
+#include "vector.h"
+#include "vrf.h"
 #include "smux.h"
 
 #include "ospf6_proto.h"
@@ -205,8 +207,8 @@
 SNMP_LOCAL_VARIABLES
 
 /* OSPFv3-MIB instances. */
-oid ospfv3_oid [] = { OSPFv3MIB };
-oid ospfv3_trap_oid [] = { OSPFv3MIB, 0 };
+static oid ospfv3_oid [] = { OSPFv3MIB };
+static oid ospfv3_trap_oid [] = { OSPFv3MIB, 0 };
 
 /* Hook functions. */
 static u_char *ospfv3GeneralGroup (struct variable *, oid *, size_t *,
@@ -220,7 +222,7 @@ static u_char *ospfv3NbrEntry (struct variable *, oid *, size_t *,
 static u_char *ospfv3IfEntry (struct variable *, oid *, size_t *,
 			      int, size_t *, WriteMethod **);
 
-struct variable ospfv3_variables[] =
+static struct variable ospfv3_variables[] =
 {
   /* OSPF general variables */
   {OSPFv3ROUTERID,             UNSIGNED,   RWRITE, ospfv3GeneralGroup,
@@ -623,7 +625,8 @@ ospfv3WwLsdbEntry (struct variable *v, oid *name, size_t *length,
                      int exact, size_t *var_len, WriteMethod **write_method)
 {
   struct ospf6_lsa *lsa = NULL;
-  ifindex_t ifindex, area_id, id, instid, adv_router;
+  ifindex_t ifindex;
+  uint32_t area_id, id, instid, adv_router;
   u_int16_t type;
   int len;
   oid *offset;
@@ -749,7 +752,7 @@ ospfv3WwLsdbEntry (struct variable *v, oid *name, size_t *length,
           ifslist = list_new ();
           if (!ifslist) return NULL;
           ifslist->cmp = (int (*)(void *, void *))if_icmp_func;
-          for (ALL_LIST_ELEMENTS_RO (iflist, node, iif))
+          for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, iif))
             listnode_add_sort (ifslist, iif);
           
           for (ALL_LIST_ELEMENTS_RO (ifslist, node, iif))
@@ -886,7 +889,7 @@ ospfv3IfEntry (struct variable *v, oid *name, size_t *length,
       ifslist = list_new ();
       if (!ifslist) return NULL;
       ifslist->cmp = (int (*)(void *, void *))if_icmp_func;
-      for (ALL_LIST_ELEMENTS_RO (iflist, i, iif))
+      for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), i, iif))
 	listnode_add_sort (ifslist, iif);
 
       for (ALL_LIST_ELEMENTS_RO (ifslist, i, iif))
@@ -1047,7 +1050,7 @@ ospfv3NbrEntry (struct variable *v, oid *name, size_t *length,
       ifslist = list_new ();
       if (!ifslist) return NULL;
       ifslist->cmp = (int (*)(void *, void *))if_icmp_func;
-      for (ALL_LIST_ELEMENTS_RO (iflist, i, iif))
+      for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), i, iif))
 	listnode_add_sort (ifslist, iif);
 
       for (ALL_LIST_ELEMENTS_RO (ifslist, i, iif))

@@ -34,6 +34,8 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
   AF_UNSPEC))                         \
 )
 
+#define BGP_MP_NEXTHOP_FAMILY NEXTHOP_FAMILY
+
 /* BGP nexthop cache value structure. */
 struct bgp_nexthop_cache
 {
@@ -50,6 +52,8 @@ struct bgp_nexthop_cache
 #define BGP_NEXTHOP_REGISTERED        (1 << 1)
 #define BGP_NEXTHOP_CONNECTED         (1 << 2)
 #define BGP_NEXTHOP_PEER_NOTIFIED     (1 << 3)
+#define BGP_STATIC_ROUTE              (1 << 4)
+#define BGP_STATIC_ROUTE_EXACT_MATCH  (1 << 5)
 
   u_int16_t change_flags;
 
@@ -61,24 +65,24 @@ struct bgp_nexthop_cache
   void *nht_info;		/* In BGP, peer session */
   LIST_HEAD(path_list, bgp_info) paths;
   unsigned int path_count;
+  struct bgp *bgp;
 };
 
 extern int bgp_nexthop_lookup (afi_t, struct peer *peer, struct bgp_info *,
 			int *, int *);
-extern void bgp_connected_add (struct connected *c);
-extern void bgp_connected_delete (struct connected *c);
+extern void bgp_connected_add (struct bgp *bgp, struct connected *c);
+extern void bgp_connected_delete (struct bgp *bgp, struct connected *c);
 extern int bgp_multiaccess_check_v4 (struct in_addr, struct peer *);
 extern int bgp_config_write_scan_time (struct vty *);
-extern int bgp_nexthop_onlink (afi_t, struct attr *);
-extern int bgp_nexthop_self (struct attr *);
-extern void bgp_address_init (void);
-extern void bgp_address_destroy (void);
-extern void bgp_scan_destroy (void);
+extern int bgp_nexthop_self (struct bgp *, struct attr *);
 extern struct bgp_nexthop_cache *bnc_new(void);
 extern void bnc_free(struct bgp_nexthop_cache *bnc);
 extern void bnc_nexthop_free(struct bgp_nexthop_cache *bnc);
 extern char *bnc_str(struct bgp_nexthop_cache *bnc, char *buf, int size);
+extern void bgp_scan_init(struct bgp *bgp);
+extern void bgp_scan_finish(struct bgp *bgp);
+extern void bgp_scan_vty_init(void);
+extern void bgp_address_init (struct bgp *bgp);
+extern void bgp_address_destroy (struct bgp *bgp);
 
-extern void bgp_scan_init (void);
-extern void bgp_scan_vty_init (void);
 #endif /* _QUAGGA_BGP_NEXTHOP_H */

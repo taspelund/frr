@@ -25,25 +25,32 @@
 #define _LIB_NEXTHOP_H
 
 #include "prefix.h"
+#include "mpls.h"
+
+/* Maximum next hop string length - gateway + ifindex */
+#define NEXTHOP_STRLEN (INET6_ADDRSTRLEN + 30)
 
 union g_addr {
   struct in_addr ipv4;
-#ifdef HAVE_IPV6
   struct in6_addr ipv6;
-#endif /* HAVE_IPV6 */
 };
 
 enum nexthop_types_t
 {
   NEXTHOP_TYPE_IFINDEX = 1,      /* Directly connected.  */
-  NEXTHOP_TYPE_IFNAME,           /* Interface route.  */
   NEXTHOP_TYPE_IPV4,             /* IPv4 nexthop.  */
   NEXTHOP_TYPE_IPV4_IFINDEX,     /* IPv4 nexthop with ifindex.  */
-  NEXTHOP_TYPE_IPV4_IFNAME,      /* IPv4 nexthop with ifname.  */
   NEXTHOP_TYPE_IPV6,             /* IPv6 nexthop.  */
   NEXTHOP_TYPE_IPV6_IFINDEX,     /* IPv6 nexthop with ifindex.  */
-  NEXTHOP_TYPE_IPV6_IFNAME,      /* IPv6 nexthop with ifname.  */
   NEXTHOP_TYPE_BLACKHOLE,        /* Null0 nexthop.  */
+};
+
+/* Nexthop label structure. */
+struct nexthop_label
+{
+  u_int8_t num_labels;
+  u_int8_t reserved[3];
+  mpls_label_t label[0]; /* 1 or more labels. */
 };
 
 /* Nexthop structure. */
@@ -53,7 +60,6 @@ struct nexthop
   struct nexthop *prev;
 
   /* Interface index. */
-  char *ifname;
   ifindex_t ifindex;
 
   enum nexthop_types_t type;
@@ -64,10 +70,12 @@ struct nexthop
 #define NEXTHOP_FLAG_RECURSIVE  (1 << 2) /* Recursive nexthop. */
 #define NEXTHOP_FLAG_ONLINK     (1 << 3) /* Nexthop should be installed onlink. */
 #define NEXTHOP_FLAG_MATCHED    (1 << 4) /* Already matched vs a nexthop */
+#define NEXTHOP_FLAG_FILTERED   (1 << 5) /* rmap filtered, used by static only */
 
   /* Nexthop address */
   union g_addr gate;
   union g_addr src;
+  union g_addr rmap_src;	/* Src is set via routemap */
 
   /* Nexthops obtained by recursive resolution.
    *
@@ -76,7 +84,26 @@ struct nexthop
    * obtained by recursive resolution will be added to `resolved'.
    * Only one level of recursive resolution is currently supported. */
   struct nexthop *resolved;
+
+  /* Type of label(s), if any */
+  enum lsp_types_t nh_label_type;
+
+  /* Label(s) associated with this nexthop. */
+  struct nexthop_label *nh_label;
 };
+
+extern int zebra_rnh_ip_default_route;
+extern int zebra_rnh_ipv6_default_route;
+
+static inline int
+nh_resolve_via_default(int family)
+{
+  if (((family == AF_INET) && zebra_rnh_ip_default_route) ||
+      ((family == AF_INET6) && zebra_rnh_ipv6_default_route))
+    return 1;
+  else
+    return 0;
+}
 
 struct nexthop *nexthop_new (void);
 void nexthop_add (struct nexthop **target, struct nexthop *nexthop);
@@ -85,7 +112,11 @@ void copy_nexthops (struct nexthop **tnh, struct nexthop *nh);
 void nexthop_free (struct nexthop *nexthop);
 void nexthops_free (struct nexthop *nexthop);
 
+void nexthop_add_labels (struct nexthop *, enum lsp_types_t, u_int8_t, mpls_label_t *);
+void nexthop_del_labels (struct nexthop *);
+
 extern const char *nexthop_type_to_str (enum nexthop_types_t nh_type);
 extern int nexthop_same_no_recurse (struct nexthop *next1, struct nexthop *next2);
 
+extern const char * nexthop2str (struct nexthop *nexthop, char *str, int size);
 #endif /*_LIB_NEXTHOP_H */

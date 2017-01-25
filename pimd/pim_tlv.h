@@ -16,8 +16,6 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-  
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
 
 #ifndef PIM_TLV_H
@@ -28,10 +26,6 @@
 #include "config.h"
 #include "if.h"
 #include "linklist.h"
-
-#ifdef HAVE_INTTYPES_H
-#include <inttypes.h>
-#endif /* HAVE_INTTYPES_H */
 
 #define PIM_MSG_OPTION_TYPE_HOLDTIME         (1)
 #define PIM_MSG_OPTION_TYPE_LAN_PRUNE_DELAY  (2)
@@ -115,17 +109,16 @@ int pim_tlv_parse_addr_list(const char *ifname, struct in_addr src_addr,
 			    uint16_t option_len,
 			    const uint8_t *tlv_curr);
 
-int pim_parse_addr_ucast(const char *ifname, struct in_addr src_addr,
-			 struct prefix *p,
-			 const uint8_t *buf,
-			 int buf_size);
-int pim_parse_addr_group(const char *ifname, struct in_addr src_addr,
-			 struct prefix *p,
-			 const uint8_t *buf,
-			 int buf_size);
-int pim_parse_addr_source(const char *ifname,
-			  struct in_addr src_addr,
-			  struct prefix *p,
+int pim_encode_addr_ucast (uint8_t *buf, struct prefix *p);
+int pim_encode_addr_group (uint8_t *buf, afi_t afi, int bidir, int scope, struct in_addr group);
+
+int pim_parse_addr_ucast (struct prefix *p,
+			  const uint8_t *buf,
+			  int buf_size);
+int pim_parse_addr_group (struct prefix_sg *sg,
+			  const uint8_t *buf,
+			  int buf_size);
+int pim_parse_addr_source(struct prefix_sg *sg,
 			  uint8_t *flags,
 			  const uint8_t *buf,
 			  int buf_size);

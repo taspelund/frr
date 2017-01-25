@@ -1,5 +1,5 @@
 ##
-## Configure template file for Quagga.
+## Configure template file for FreeRangeRouting.
 ## autoconf will generate configure script.
 ##
 ##  Copyright (c) 1996, 97, 98, 99, 2000 Kunihiro Ishiguro <kunihiro@zebra.org>
@@ -7,9 +7,14 @@
 ##
 AC_PREREQ(2.60)
 
-AC_INIT(Quagga, 1.0.20160315, [https://bugzilla.quagga.net])
-CONFIG_ARGS="$*"
+AC_INIT(frr, 2.0-rc0, [https://bugzilla.quagga.net])
+PACKAGE_URL="https://freerangerouting.org/"
+PACKAGE_FULLNAME="FreeRangeRouting"
+AC_SUBST(PACKAGE_FULLNAME)
+
+CONFIG_ARGS="$ac_configure_args"
 AC_SUBST(CONFIG_ARGS)
+
 AC_CONFIG_SRCDIR(lib/zebra.h)
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -22,19 +27,13 @@ AC_CANONICAL_TARGET()
 
 # Disable portability warnings -- our automake code (in particular
 # common.am) uses some constructs specific to gmake.
-AM_INIT_AUTOMAKE([1.6 -Wno-portability])
-
+AM_INIT_AUTOMAKE([1.12 -Wno-portability])
 m4_ifndef([AM_SILENT_RULES], [m4_define([AM_SILENT_RULES],[])])
 AM_SILENT_RULES([yes])
 AC_CONFIG_HEADERS(config.h)
 
 AC_PATH_PROG(PERL, perl)
-AC_CHECK_PROG([GAWK],[gawk],[gawk],[not-in-PATH])
-if test "x$GAWK" = "xnot-in-PATH" ; then
-	AC_MSG_ERROR([GNU awk is required for lib/memtype.h made by memtypes.awk.
-BSD awk complains: awk: gensub doesn't support backreferences (subst "\1") ])
-fi
-AC_ARG_VAR([GAWK],[GNU AWK])
+PKG_PROG_PKG_CONFIG
 
 dnl default is to match previous behavior
 exampledir=${sysconfdir}
@@ -56,60 +55,38 @@ dnl XXX add --pkgsrcrcdir to autoconf standard directory list somehow
 AC_SUBST(pkgsrcdir)
 AC_SUBST(pkgsrcrcdir)
 
-dnl ------------
-dnl Check CFLAGS
-dnl ------------
-AC_ARG_WITH(cflags,
-[  --with-cflags           Set CFLAGS for use in compilation.])
-if test "x$with_cflags" != "x" ; then
-  CFLAGS="$with_cflags" ; cflags_specified=yes ;
-elif test -n "$CFLAGS" ; then
-  cflags_specified=yes ;
-fi
+AC_ARG_ENABLE(tcmalloc,
+	AS_HELP_STRING([--enable-tcmalloc], [Turn on tcmalloc]),
+[case "${enableval}" in
+  yes) tcmalloc_enabled=true
+LIBS="$LIBS -ltcmalloc_minimal"
+ ;;
+  no)  tcmalloc_enabled=false ;;
+  *) AC_MSG_ERROR(bad value ${enableval} for --enable-tcmalloc) ;;
+esac],[tcmalloc_enabled=false])
+
 
 dnl --------------------
 dnl Check CC and friends
 dnl --------------------
+dnl note orig_cflags is also used further down
+orig_cflags="$CFLAGS"
 AC_LANG([C])
 AC_PROG_CC
 AC_PROG_CPP
 AM_PROG_CC_C_O
-AC_PROG_RANLIB
+dnl remove autoconf default "-g -O2"
+CFLAGS="$orig_cflags"
+AC_PROG_CC_C99
+
 AC_PROG_EGREP
 
 dnl autoconf 2.59 appears not to support AC_PROG_SED
 dnl AC_PROG_SED
 AC_CHECK_PROG([SED],[sed],[sed],[/bin/false])
 
-dnl pdflatex and latexmk are needed to build HACKING.pdf
-AC_CHECK_PROG([PDFLATEX],[pdflatex],[pdflatex],[/bin/false])
-AC_CHECK_PROG([LATEXMK],[latexmk],[latexmk],[/bin/false])
-if test "x$PDFLATEX" = "x/bin/false" -o "x$LATEXMK" = "x/bin/false"; then
-	AC_MSG_WARN([Will not be able to make PDF versions of TeX documents])
-else
-	HAVE_LATEX=true
-fi
-AM_CONDITIONAL([HAVE_LATEX], [test "x$HAVE_LATEX" = "xtrue"])
-
-if test "x${GCC}" != "xyes" ; then
-  AC_MSG_CHECKING([whether we are using SunPro compiler])
-  AC_EGREP_CPP([^__SUNPRO_C.*0x5(7|8|9)], ["__SUNPRO_C" __SUNPRO_C],
-      [AC_MSG_RESULT([no])],
-      [COMPILER="SUNPRO"
-       AC_MSG_RESULT([yes])]
-  )
-fi
-
-dnl ---------------------------------------------
-dnl If CLFAGS doesn\'t exist set default value
-dnl AC_PROG_CC will have set minimal default
-dnl already, eg "-O2 -g" for gcc, "-g" for others
-dnl (Wall is gcc specific... have to make sure
-dnl  gcc is being used before setting it)
-dnl
-dnl Sun Studio 10 / SunPro 5.7 is also supported,
-dnl so lets set some sane CFLAGS for it.
-dnl ---------------------------------------------
+dnl try and enable CFLAGS that are useful for Quagga
+dnl - specifically, options to control warnings
 
 AC_USE_SYSTEM_EXTENSIONS()
 AC_DEFUN([AC_C_FLAG], [{
@@ -133,58 +110,64 @@ AC_DEFUN([AC_C_FLAG], [{
 	AC_LANG_POP(C)
 	}])
 
-AC_MSG_CHECKING([whether to set a default CFLAGS])
-if test "x${cflags_specified}" = "x" ; then
-  case ${COMPILER} in
-    "SUNPRO")
-        CFLAGS="-xO4 -v -g -xspace -xcode=pic32 -xstrconst -xc99"
-        AC_MSG_RESULT([SunPro default])
-        ;;
-    *)
-        AC_MSG_RESULT([autodetecting])
+dnl ICC won't bail on unknown options without -diag-error 10006
+dnl need to do this first so we get useful results for the other options
+AC_C_FLAG([-diag-error 10006])
 
-        AC_C_FLAG([-diag-error 10006])
-        AC_C_FLAG([-std=gnu99])
-        AC_C_FLAG([-g])
-        AC_C_FLAG([-Os], [
-          AC_C_FLAG([-O2])
-        ])
-        AC_C_FLAG([-fpie])
-        AC_C_FLAG([-fno-omit-frame-pointer])
-        AC_C_FLAG([-Wall])
-        AC_C_FLAG([-Wextra])
-        AC_C_FLAG([-Wmissing-prototypes])
-        AC_C_FLAG([-Wmissing-declarations])
-        AC_C_FLAG([-Wpointer-arith])
-        AC_C_FLAG([-Wbad-function-cast])
-        AC_C_FLAG([-Wwrite-strings])
-        if test x"${enable_gcc_ultra_verbose}" = x"yes" ; then
-          AC_C_FLAG([-Wcast-qual])
-          AC_C_FLAG([-Wstrict-prototypes])
-          AC_C_FLAG([-Wmissing-noreturn])
-          AC_C_FLAG([-Wmissing-format-attribute])
-          AC_C_FLAG([-Wunreachable-code])
-          AC_C_FLAG([-Wpacked])
-          AC_C_FLAG([-Wpadded])
-        else
-          AC_C_FLAG([-Wno-unused-result])
-        fi
-        AC_C_FLAG([-Wno-unused-parameter])
-        AC_C_FLAG([-Wno-missing-field-initializers])
-        # ICC emits a broken warning for const char *x = a ? "b" : "c";
-        # for some reason the string consts get 'promoted' to char *,
-        # triggering a const to non-const conversion warning.
-        AC_C_FLAG([-diag-disable 3179])
-        ;;
-  esac
-else
-  AC_MSG_RESULT([CFLAGS supplied by user])
+dnl if the user specified any CFLAGS, we don't add "-g -Os/-O2" here
+if test "z$orig_cflags" = "z"; then
+  AC_C_FLAG([-g])
+  AC_C_FLAG([-Os], [
+    AC_C_FLAG([-O2])
+  ])
 fi
+
+dnl always want these CFLAGS
+AC_C_FLAG([-fno-omit-frame-pointer])
+AC_C_FLAG([-Wall])
+AC_C_FLAG([-Wextra])
+AC_C_FLAG([-Wmissing-prototypes])
+AC_C_FLAG([-Wmissing-declarations])
+AC_C_FLAG([-Wpointer-arith])
+AC_C_FLAG([-Wbad-function-cast])
+AC_C_FLAG([-Wwrite-strings])
+if test x"${enable_gcc_ultra_verbose}" = x"yes" ; then
+  AC_C_FLAG([-Wcast-qual])
+  AC_C_FLAG([-Wstrict-prototypes])
+  AC_C_FLAG([-Wmissing-noreturn])
+  AC_C_FLAG([-Wmissing-format-attribute])
+  AC_C_FLAG([-Wunreachable-code])
+  AC_C_FLAG([-Wpacked])
+  AC_C_FLAG([-Wpadded])
+else
+  AC_C_FLAG([-Wno-unused-result])
+fi
+AC_C_FLAG([-Wno-unused-parameter])
+AC_C_FLAG([-Wno-missing-field-initializers])
+
+dnl ICC emits a broken warning for const char *x = a ? "b" : "c";
+dnl for some reason the string consts get 'promoted' to char *,
+dnl triggering a const to non-const conversion warning.
+AC_C_FLAG([-diag-disable 3179])
 
 if test x"${enable_werror}" = x"yes" ; then
   WERROR="-Werror"
 fi
 AC_SUBST(WERROR)
+
+dnl need link on this one, not compile
+AC_LANG_PUSH(C)
+ac_ld_flag_save="$LDFLAGS"
+LDFLAGS="$LDFLAGS -rdynamic"
+AC_MSG_CHECKING([[whether linker supports -rdynamic]])
+AC_LINK_IFELSE(
+	[AC_LANG_PROGRAM([[]])],
+	[AC_MSG_RESULT([yes])],
+	[
+		LDFLAGS="$ac_ld_flag_save"
+		AC_MSG_RESULT([no])
+	])
+AC_LANG_POP(C)
 
 dnl --------------
 dnl Check programs
@@ -193,22 +176,6 @@ AC_PROG_INSTALL
 AC_PROG_LN_S
 AC_PROG_MAKE_SET
 AC_CHECK_TOOL(AR, ar)
-
-dnl ---------------------------
-dnl We, perhaps unfortunately,
-dnl depend on GNU Make specific
-dnl constructs.
-dnl Give the user a warning if
-dnl not GNU Make.
-dnl ---------------------------
-AC_CACHE_CHECK([if ${MAKE-make} is GNU make], [quagga_cv_gnu_make],
-	[quagga_cv_gnu_make=no
-	 if ${MAKE-make} --version 2>/dev/null | \
-	 	grep '^GNU Make ' >/dev/null ; then
-	 	quagga_cv_gnu_make=yes;
-	 fi
-	]
-)
 
 dnl -----------------
 dnl System extensions
@@ -245,14 +212,20 @@ AC_ARG_ENABLE(ospfd,
   AS_HELP_STRING([--disable-ospfd], [do not build ospfd]))
 AC_ARG_ENABLE(ospf6d,
   AS_HELP_STRING([--disable-ospf6d], [do not build ospf6d]))
-AC_ARG_ENABLE(watchquagga,
-  AS_HELP_STRING([--disable-watchquagga], [do not build watchquagga]))
+AC_ARG_ENABLE(ldpd,
+  AS_HELP_STRING([--enable-ldpd], [build ldpd]))
+AC_ARG_ENABLE(watchfrr,
+  AS_HELP_STRING([--disable-watchfrr], [do not build watchfrr]))
 AC_ARG_ENABLE(isisd,
   AS_HELP_STRING([--disable-isisd], [do not build isisd]))
 AC_ARG_ENABLE(pimd,
   AS_HELP_STRING([--disable-pimd], [do not build pimd]))
 AC_ARG_ENABLE(bgp-announce,
   AS_HELP_STRING([--disable-bgp-announce,], [turn off BGP route announcement]))
+AC_ARG_ENABLE(bgp-vnc,
+  AS_HELP_STRING([--disable-bgp-vnc],[turn off BGP VNC support]))
+AC_ARG_WITH(rfp-path,
+  AS_HELP_STRING([--with-rfp-path[=DIR]],[path to replaced stub RFP used with BGP VNC]))
 AC_ARG_ENABLE(snmp,
   AS_HELP_STRING([--enable-snmp=ARG], [enable SNMP support (smux or agentx)]))
 AC_ARG_WITH(libpam,
@@ -267,22 +240,21 @@ AC_ARG_ENABLE(ospfclient,
 AC_ARG_ENABLE(multipath,
   AS_HELP_STRING([--enable-multipath=ARG], [enable multipath function, ARG must be digit]))
 AC_ARG_ENABLE(user,
-  AS_HELP_STRING([--enable-user=USER], [user to run Quagga suite as (default quagga)]))
+  AS_HELP_STRING([--enable-user=USER], [user to run FRR suite as (default frr)]))
 AC_ARG_ENABLE(group,
-  AS_HELP_STRING([--enable-group=GROUP], [group to run Quagga suite as (default quagga)]))
+  AS_HELP_STRING([--enable-group=GROUP], [group to run FRR suite as (default frr)]))
 AC_ARG_ENABLE(vty_group,
   AS_HELP_STRING([--enable-vty-group=ARG], [set vty sockets to have specified group as owner]))
 AC_ARG_ENABLE(configfile_mask,
   AS_HELP_STRING([--enable-configfile-mask=ARG], [set mask for config files]))
 AC_ARG_ENABLE(logfile_mask,
   AS_HELP_STRING([--enable-logfile-mask=ARG], [set mask for log files]))
-
+AC_ARG_ENABLE(shell_access,
+  AS_HELP_STRING([--enable-shell-access], [Allow users to access shell/telnet/ssh]))
 AC_ARG_ENABLE(rtadv,
   AS_HELP_STRING([--disable-rtadv], [disable IPV6 router advertisement feature]))
 AC_ARG_ENABLE(irdp,
   AS_HELP_STRING([--enable-irdp], [enable IRDP server support in zebra]))
-AC_ARG_ENABLE(isis_topology,
-  AS_HELP_STRING([--enable-isis-topology], [enable IS-IS topology generator]))
 AC_ARG_ENABLE(capabilities,
   AS_HELP_STRING([--disable-capabilities], [disable using POSIX capabilities]))
 AC_ARG_ENABLE(rusage,
@@ -291,8 +263,6 @@ AC_ARG_ENABLE(gcc_ultra_verbose,
   AS_HELP_STRING([--enable-gcc-ultra-verbose], [enable ultra verbose GCC warnings]))
 AC_ARG_ENABLE(linux24_tcp_md5,
   AS_HELP_STRING([--enable-linux24-tcp-md5], [enable support for old, Linux-2.4 RFC2385 patch]))
-AC_ARG_ENABLE(gcc-rdynamic,
-  AS_HELP_STRING([--enable-gcc-rdynamic], [enable linking with -rdynamic for better backtraces (default if gcc)]))
 AC_ARG_ENABLE(backtrace,
   AS_HELP_STRING([--disable-backtrace,], [disable crash backtraces (default autodetect)]))
 AC_ARG_ENABLE(time-check,
@@ -301,19 +271,32 @@ AC_ARG_ENABLE(pcreposix,
   AS_HELP_STRING([--enable-pcreposix], [enable using PCRE Posix libs for regex functions]))
 AC_ARG_ENABLE(fpm,
   AS_HELP_STRING([--enable-fpm], [enable Forwarding Plane Manager support]))
+AC_ARG_ENABLE(systemd,
+  AS_HELP_STRING([--enable-systemd], [enable Systemd support]))
+AC_ARG_ENABLE(poll,
+  AS_HELP_STRING([--enable-poll], [enable usage of Poll instead of select]))
 AC_ARG_ENABLE(werror,
   AS_HELP_STRING([--enable-werror], [enable -Werror (recommended for developers only)]))
+AC_ARG_ENABLE(cumulus,
+  AS_HELP_STRING([--enable-cumulus], [enable Cumulus Switch Special Extensions]))
+AC_ARG_ENABLE(rr-semantics,
+  AS_HELP_STRING([--disable-rr-semantics], [disable the v6 Route Replace semantics]))
 AC_ARG_ENABLE([protobuf],
   AS_HELP_STRING([--enable-protobuf], [Enable experimental protobuf support]))
+AC_ARG_ENABLE([oldvpn_commands],
+  AS_HELP_STRING([--enable-old-vpn-commands], [Keep old vpn commands]))
+
+AC_CHECK_HEADERS(json-c/json.h)
+AC_CHECK_LIB(json-c, json_object_get, LIBS="$LIBS -ljson-c")
+if test $ac_cv_lib_json_c_json_object_get = no; then
+  AC_CHECK_LIB(json, json_object_get, LIBS="$LIBS -ljson")
+  if test $ac_cv_lib_json_json_object_get = no; then
+      AC_MSG_ERROR([lib json is needed to compile])
+  fi
+fi
 
 AC_ARG_ENABLE([dev_build],
     AS_HELP_STRING([--enable-dev-build], [build for development]))
-
-if test x"${enable_gcc_rdynamic}" != x"no" ; then
-  if test x"${enable_gcc_rdynamic}" = x"yes" -o x"$COMPILER" = x"GCC"; then
-    LDFLAGS="${LDFLAGS} -rdynamic"
-  fi
-fi
 
 if test x"${enable_time_check}" != x"no" ; then
   if test x"${enable_time_check}" = x"yes" -o x"${enable_time_check}" = x ; then
@@ -321,6 +304,55 @@ if test x"${enable_time_check}" != x"no" ; then
   else
     AC_DEFINE_UNQUOTED(CONSUMED_TIME_CHECK,$enable_time_check,Consumed Time Check)
   fi
+fi
+
+case "${enable_systemd}" in
+  "no") ;;
+  "yes")
+  AC_CHECK_LIB(systemd, sd_notify, LIBS="$LIBS -lsystemd")
+  if test $ac_cv_lib_systemd_sd_notify = no; then
+    AC_MSG_ERROR([enable systemd has been specified but systemd development env not found on your system])
+  else
+    AC_DEFINE(HAVE_SYSTEMD,,Compile systemd support in)
+  fi
+  ;;
+  "*") ;;
+esac
+
+if test "${enable_rr_semantics}" != "no" ; then
+  AC_DEFINE(HAVE_V6_RR_SEMANTICS,, Compile in v6 Route Replacement Semantics)
+fi
+
+if test "${enable_poll}" = "yes" ; then
+  AC_DEFINE(HAVE_POLL,,Compile systemd support in)
+fi
+
+dnl ----------
+dnl MPLS check
+dnl ----------
+AC_MSG_CHECKING(whether this OS has MPLS stack)
+case "$host" in
+  *-linux*)
+      MPLS_METHOD="zebra_mpls_netlink.o"
+      AC_MSG_RESULT(Linux MPLS)
+  ;;
+  *-openbsd*)
+      MPLS_METHOD="zebra_mpls_openbsd.o"
+      AC_MSG_RESULT(OpenBSD MPLS)
+  ;;
+  *)
+      MPLS_METHOD="zebra_mpls_null.o"
+      AC_MSG_RESULT(Unsupported kernel)
+  ;;
+esac
+AC_SUBST(MPLS_METHOD)
+
+if test "${enable_cumulus}" = "yes" ; then
+  AC_DEFINE(HAVE_CUMULUS,,Compile Special Cumulus Code in)
+fi
+
+if test "${enable_shell_access}" = "yes"; then
+   AC_DEFINE(HAVE_SHELL_ACCESS,,Allow user to use ssh/telnet/bash)
 fi
 
 if test "${enable_fpm}" = "yes"; then
@@ -356,6 +388,13 @@ if test "$enable_protobuf" = "yes"; then
                         [have_protobuf=no; AC_MSG_RESULT([Couldn't find google/protobuf-c.h])])
       fi
    fi
+fi
+
+#
+# Logic for old vpn commans support.
+#
+if test "$enable_old_vpn_commands" = "yes"; then
+   AC_DEFINE(KEEP_OLD_VPN_COMMANDS,, [Define for compiling with old vpn commands])
 fi
 
 # Fail if the user explicity enabled protobuf support and we couldn't
@@ -394,27 +433,22 @@ if test "${enable_irdp}" = "yes"; then
   AC_DEFINE(HAVE_IRDP,, IRDP )
 fi
 
-if test "${enable_isisd}" != "no" && test "${enable_isis_topology}" = yes; then
-  AC_DEFINE(TOPOLOGY_GENERATE,,Enable IS-IS topology generator code)
-  ISIS_TOPOLOGY_INCLUDES="-I\$(srcdir)/topology"
-  ISIS_TOPOLOGY_DIR="topology"
-  ISIS_TOPOLOGY_LIB="./topology/libtopology.a"
+if test x"${enable_user}" = x"no"; then
+  enable_user=""
+else
+  if test x"${enable_user}" = x"yes" || test x"${enable_user}" = x""; then
+    enable_user="frr"
+  fi
+  AC_DEFINE_UNQUOTED(FRR_USER, "${enable_user}", frr User)
 fi
 
-AC_SUBST(ISIS_TOPOLOGY_INCLUDES)
-AC_SUBST(ISIS_TOPOLOGY_DIR)
-AC_SUBST(ISIS_TOPOLOGY_LIB)
-
-if test "${enable_user}" = "yes" || test x"${enable_user}" = x""; then
-  enable_user="quagga"
-elif test "${enable_user}" = "no"; then
-  enable_user="root"
-fi
-
-if test "${enable_group}" = "yes" || test x"${enable_group}" = x""; then
-  enable_group="quagga"
-elif test "${enable_group}" = "no"; then
-  enable_group="root"
+if test x"${enable_group}" = x"no"; then
+  enable_group=""
+else
+  if test x"${enable_group}" = x"yes" || test x"${enable_group}" = x""; then
+    enable_group="frr"
+  fi
+  AC_DEFINE_UNQUOTED(FRR_GROUP, "${enable_group}", frr Group)
 fi
 
 if test x"${enable_vty_group}" = x"yes" ; then
@@ -427,8 +461,6 @@ fi
 AC_SUBST([enable_user])
 AC_SUBST([enable_group])
 AC_SUBST([enable_vty_group])
-AC_DEFINE_UNQUOTED(QUAGGA_USER, "${enable_user}", Quagga User)
-AC_DEFINE_UNQUOTED(QUAGGA_GROUP, "${enable_group}", Quagga Group)
 
 enable_configfile_mask=${enable_configfile_mask:-0600}
 AC_DEFINE_UNQUOTED(CONFIGFILE_MASK, ${enable_configfile_mask}, Mask for config files)
@@ -478,12 +510,8 @@ dnl Check C keywords and standard  types
 dnl ------------------------------------
 AC_C_CONST
 AC_C_INLINE
-AC_C_RESTRICT
 AC_C_VOLATILE
 AC_HEADER_STDC
-AC_HEADER_TIME
-AC_HEADER_SYS_WAIT
-AC_HEADER_STDBOOL
 dnl AC_TYPE_PID_T
 AC_TYPE_UID_T
 AC_TYPE_MODE_T
@@ -493,97 +521,58 @@ AC_STRUCT_TM
 dnl -------------------------
 dnl Check other header files.
 dnl -------------------------
-AC_CHECK_HEADERS([stropts.h sys/ksym.h sys/times.h sys/select.h \
-	sys/types.h linux/version.h netdb.h asm/types.h \
-	sys/cdefs.h sys/param.h limits.h signal.h \
-	sys/socket.h netinet/in.h time.h sys/time.h features.h])
+AC_CHECK_HEADERS([stropts.h sys/ksym.h \
+	linux/version.h asm/types.h \
+	sys/cdefs.h])
 
 dnl Utility macro to avoid retyping includes all the time
-m4_define([QUAGGA_INCLUDES],
+m4_define([FRR_INCLUDES],
 [#ifdef SUNOS_5
 #define _XPG4_2
 #define __EXTENSIONS__
 #endif
 #include <stdio.h>
-#if STDC_HEADERS
-# include <stdlib.h>
-# include <stddef.h>
-#else
-# if HAVE_STDLIB_H
-#  include <stdlib.h>
-# endif
-#endif
-#if HAVE_SYS_TYPES_H
-# include <sys/types.h>
-#endif
+#include <stdlib.h>
+#include <stddef.h>
+#include <sys/types.h>
 /* sys/conf.h depends on param.h on FBSD at least */
-#if HAVE_SYS_PARAM_H
-# include <sys/param.h>
-#endif
+#include <sys/param.h>
 /* Required for MAXSIG */
-#if HAVE_SIGNAL_H
-# include <signal.h>
-#endif
-#if HAVE_SYS_SOCKET_H
-# include <sys/socket.h>
-#endif
+#include <signal.h>
+#include <sys/socket.h>
 #ifdef __APPLE__
 # define __APPLE_USE_RFC_3542
 #endif
-#if HAVE_NETINET_IN_H
-# include <netinet/in.h>
-#endif
-#ifdef TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
-#else
-# ifdef HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
-#endif /* TIME_WITH_SYS_TIME */
-])dnl
-
-dnl HAVE_NET_IF_H must be discovered by the time the longer AC_CHECK_HEADERS
-dnl round below execution begins, otherwise it doesn't properly detect
-dnl HAVE_NETINET6_IN6_VAR_H, HAVE_NET_IF_VAR_H and HAVE_STRUCT_IN6_ALIASREQ
-dnl on FreeBSD (BZ#408).
-
-AC_CHECK_HEADERS([net/if.h], [], [], QUAGGA_INCLUDES)
-
-m4_define([QUAGGA_INCLUDES],
-QUAGGA_INCLUDES
-[#if HAVE_NET_IF_H
-# include <net/if.h>
-#endif
+#include <netinet/in.h>
+#include <sys/time.h>
+#include <time.h>
+#include <net/if.h>
 ])dnl
 
 dnl Same applies for HAVE_NET_IF_VAR_H, which HAVE_NETINET6_ND6_H and
 dnl HAVE_NETINET_IN_VAR_H depend upon. But if_var.h depends on if.h, hence
 dnl an additional round for it.
 
-AC_CHECK_HEADERS([net/if_var.h], [], [], QUAGGA_INCLUDES)
+AC_CHECK_HEADERS([net/if_var.h], [], [], FRR_INCLUDES)
 
-m4_define([QUAGGA_INCLUDES],
-QUAGGA_INCLUDES
+m4_define([FRR_INCLUDES],
+FRR_INCLUDES
 [#if HAVE_NET_IF_VAR_H
 # include <net/if_var.h>
 #endif
 ])dnl
 
-AC_CHECK_HEADERS([sys/un.h netinet/in_systm.h netinet/in_var.h \
-	net/if_dl.h net/netopt.h net/route.h \
-	inet/nd.h arpa/inet.h netinet/ip_icmp.h \
-	fcntl.h stddef.h sys/ioctl.h syslog.h wchar.h wctype.h \
+AC_CHECK_HEADERS([netinet/in_var.h \
+	net/if_dl.h net/netopt.h \
+	inet/nd.h netinet/ip_icmp.h \
 	sys/sysctl.h sys/sockio.h kvm.h sys/conf.h],
-	[], [], QUAGGA_INCLUDES)
+	[], [], FRR_INCLUDES)
 
 AC_CHECK_HEADERS([ucontext.h], [], [],
 [#ifndef __USE_GNU
 #define __USE_GNU
 #endif /* __USE_GNU */
-QUAGGA_INCLUDES
+FRR_INCLUDES
 ])
 
 m4_define([UCONTEXT_INCLUDES],
@@ -598,14 +587,11 @@ AC_CHECK_MEMBERS([ucontext_t.uc_mcontext.regs],
 AC_CHECK_MEMBERS([ucontext_t.uc_mcontext.gregs],
   [], [], [UCONTEXT_INCLUDES])
 
-m4_define([QUAGGA_INCLUDES],
-QUAGGA_INCLUDES
-[#if HAVE_SYS_UN_H
-# include <sys/un.h>
-#endif
-#if HAVE_NETINET_IN_SYSTM_H
-# include <netinet/in_systm.h>
-#endif
+m4_define([FRR_INCLUDES],
+FRR_INCLUDES
+[
+#include <sys/un.h>
+#include <netinet/in_systm.h>
 #if HAVE_NETINET_IN_VAR_H
 # include <netinet/in_var.h>
 #endif
@@ -615,15 +601,11 @@ QUAGGA_INCLUDES
 #if HAVE_NET_NETOPT_H
 # include <net/netopt.h>
 #endif
-#if HAVE_NET_ROUTE_H
-# include <net/route.h>
-#endif
+#include <net/route.h>
 #if HAVE_INET_ND_H
 # include <inet/nd.h>
 #endif
-#if HAVE_ARPA_INET_H
-# include <arpa/inet.h>
-#endif
+#include <arpa/inet.h>
 /* Required for IDRP */
 #if HAVE_NETINET_IP_ICMP_H
 # include <netinet/ip_icmp.h>
@@ -699,7 +681,7 @@ dnl	 [TODO] on Linux, and in [TODO] on Solaris.
 	      )]
 	    )]
 	  )
-         AC_CHECK_LIB(readline, main, LIBREADLINE="$LIBREADLINE -lreadline",,
+         AC_CHECK_LIB(readline, main, LIBREADLINE="-lreadline $LIBREADLINE",,
                       "$LIBREADLINE")
          if test $ac_cv_lib_readline_main = no; then
            AC_MSG_ERROR([vtysh needs libreadline but was not found and usable on your system.])
@@ -714,7 +696,6 @@ dnl	 [TODO] on Linux, and in [TODO] on Solaris.
            AC_DEFINE(rl_completion_matches,completion_matches,Old readline)
 	 fi
 	 ;;
-  "no" ) VTYSH="";;
 esac
 AC_SUBST(LIBREADLINE)
 AM_CONDITIONAL(VTYSH, test "x$VTYSH" = "xvtysh")
@@ -735,13 +716,13 @@ if test "$with_libpam" = "yes"; then
      AC_DEFINE(PAM_CONV_FUNC,misc_conv,Have misc_conv)
      pam_conv_func="misc_conv"
     ],
-    [], QUAGGA_INCLUDES)
+    [], FRR_INCLUDES)
   AC_CHECK_HEADER([security/openpam.h],
     [AC_DEFINE(HAVE_OPENPAM_H,,Have openpam.h)
      AC_DEFINE(PAM_CONV_FUNC,openpam_ttyconv,Have openpam_ttyconv)
      pam_conv_func="openpam_ttyconv"
     ],
-    [], QUAGGA_INCLUDES[#include <security/pam_appl.h>])
+    [], FRR_INCLUDES[#include <security/pam_appl.h>])
   if test -z "$ac_cv_header_security_pam_misc_h$ac_cv_header_security_openpam_h" ; then
     AC_MSG_WARN([*** pam support will not be built ***])
     with_libpam="no"
@@ -795,20 +776,10 @@ dnl AC_CHECK_SIZEOF(long)
 dnl ----------------------------
 dnl check existance of functions
 dnl ----------------------------
-AC_FUNC_CHOWN
 AC_FUNC_FNMATCH
 AC_FUNC_FORK
-AC_FUNC_MEMCMP
 AC_FUNC_MKTIME
-AC_FUNC_STRFTIME
 AC_FUNC_STAT
-AC_FUNC_SELECT_ARGTYPES
-AC_FUNC_STRFTIME
-dnl Avoid AC_FUNC_STRNLEN because it pulls in AC_SYSTEM_EXTENSIONS which
-dnl can lead to strange side effects.  So we just check for strnlen
-dnl directly, see below.
-dnl AC_FUNC_STRNLENdnl
-AC_FUNC_VPRINTF
 
 dnl -------------------------------
 dnl bgpd needs pow() and hence libm
@@ -818,7 +789,6 @@ AC_CHECK_HEADER([math.h],
   [AC_CHECK_LIB([m], [pow],
     [LIBM="-lm"
      LIBS="$LIBS $LIBM"
-     AC_DEFINE(HAVE_LIBM,, Have libm)
      AC_CHECK_FUNCS(pow,[],[LIBM=""])
     ])
 ])
@@ -831,23 +801,17 @@ AC_SUBST(LIBM)
 dnl ---------------
 dnl other functions
 dnl ---------------
-AC_CHECK_FUNCS([dup2 ftruncate getcwd gethostbyname getpagesize gettimeofday \
-	inet_ntoa inet_aton strnlen \
-	memchr memmove memset select socket \
-	strcasecmp strchr strcspn strdup strerror \
-	strncasecmp strndup strrchr strspn strstr \
-	strtol strtoul strlcat strlcpy \
-	daemon snprintf vsnprintf \
-	if_nametoindex if_indextoname getifaddrs \
-	uname fcntl getgrouplist])
-
+AC_CHECK_FUNCS([ \
+	strlcat strlcpy \
+	getgrouplist \
+	pledge])
 
 AC_CHECK_HEADER([asm-generic/unistd.h],
                 [AC_CHECK_DECL(__NR_setns,
                                AC_DEFINE(HAVE_NETNS,, Have netns),,
-                               QUAGGA_INCLUDES [#include <asm-generic/unistd.h>
+                               FRR_INCLUDES [#include <asm-generic/unistd.h>
                                ])
-                 AC_CHECK_FUNCS(setns, AC_DEFINE(HAVE_SETNS,, Have setns))]
+                 AC_CHECK_FUNCS(setns)]
                )
 
 dnl ------------------------------------
@@ -857,8 +821,10 @@ AC_MSG_CHECKING(zebra between kernel interface method)
 if test x"$opsys" = x"gnu-linux"; then
   AC_MSG_RESULT(netlink)
   RT_METHOD=rt_netlink.o
+  KERNEL_METHOD=kernel_netlink.o
   AC_DEFINE(HAVE_NETLINK,,netlink)
   netlink=yes
+  AC_CHECK_DECLS([IFLA_INFO_SLAVE_KIND], [], [], [#include <linux/if_link.h>])
 else
   AC_MSG_RESULT(Route socket)
   KERNEL_METHOD="kernel_socket.o"
@@ -909,15 +875,9 @@ AC_RUN_IFELSE([AC_LANG_SOURCE([[
 #define _XPG4_2
 #define __EXTENSIONS__
 #endif
-#ifdef HAVE_STDLIB_H
-# include <stdlib.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
+#include <stdlib.h>
 #include <sys/types.h>
-#endif
-#ifdef HAVE_SYS_SOCKET_H
 #include <sys/socket.h>
-#endif
 
 main()
 {
@@ -936,25 +896,25 @@ main()
 dnl ------------------------------
 dnl check kernel route read method
 dnl ------------------------------
-AC_CACHE_CHECK([route read method], [quagga_cv_rtread_method],
+AC_CACHE_CHECK([route read method], [frr_cv_rtread_method],
 [if test "x$netlink" = xyes; then
-  quagga_cv_rtread_method="netlink"
+  frr_cv_rtread_method="netlink"
 else
-for quagga_cv_rtread_method in /dev/ip /dev/null;
+for frr_cv_rtread_method in /dev/ip /dev/null;
 do
-  test x`ls $quagga_cv_rtread_method 2>/dev/null` = x"$quagga_cv_rtread_method" && break
+  test x`ls $frr_cv_rtread_method 2>/dev/null` = x"$frr_cv_rtread_method" && break
 done
-case $quagga_cv_rtread_method in
+case $frr_cv_rtread_method in
   "/dev/ip")
                      case "$host" in
-                       *-freebsd*)    quagga_cv_rtread_method="sysctl";;
-                       *)             quagga_cv_rtread_method="getmsg";;
+                       *-freebsd*)    frr_cv_rtread_method="sysctl";;
+                       *)             frr_cv_rtread_method="getmsg";;
                      esac;;
 	*)
-                     quagga_cv_rtread_method="sysctl";;
+                     frr_cv_rtread_method="sysctl";;
 esac
 fi])
-RTREAD_METHOD=rtread_${quagga_cv_rtread_method}.o
+RTREAD_METHOD=rtread_${frr_cv_rtread_method}.o
 AC_SUBST(RTREAD_METHOD)
 
 dnl -----------------------------
@@ -989,17 +949,39 @@ AC_SUBST(IOCTL_METHOD)
 dnl ---------------------------------------------------------------
 dnl figure out how to specify an interface in multicast sockets API
 dnl ---------------------------------------------------------------
-AC_CHECK_MEMBERS([struct ip_mreqn.imr_ifindex], [], [], QUAGGA_INCLUDES)
+AC_CHECK_MEMBERS([struct ip_mreqn.imr_ifindex], [], [], FRR_INCLUDES)
 
-AC_CHECK_HEADERS([linux/mroute.h], [], [],
-[
-#if HAVE_NETINET_IN_H
-#include<netinet/in.h>
-#endif])
+AC_CHECK_HEADERS([linux/mroute.h], [], [],[
+	#include <sys/socket.h>
+	#include <netinet/in.h>
+	#define _LINUX_IN_H             /* For Linux <= 2.6.25 */
+	#include <linux/types.h>
+])
+
+m4_define([FRR_INCLUDES],
+FRR_INCLUDES
+[#if HAVE_LINUX_MROUTE_H
+# include <linux/mroute.h>
+#endif
+])dnl
+
+AC_CHECK_HEADERS([netinet/ip_mroute.h], [], [],[
+	#include <sys/socket.h>
+	#include <sys/types.h>
+	#include <netinet/in.h>
+	#include <net/route.h>
+])
+
+m4_define([FRR_INCLUDES],
+FRR_INCLUDES
+[#if HAVE_NETINET_IP_MROUTE_H
+# include <netinet/ip_mroute.h>
+#endif
+])dnl
+
 AC_MSG_CHECKING([for BSD struct ip_mreq hack])
-AC_TRY_COMPILE([#ifdef HAVE_SYS_PARAM_H
-#include <sys/param.h>
-#endif],[#if (defined(__FreeBSD__) && ((__FreeBSD_version >= 500022 && __FreeBSD_version < 700000) || (__FreeBSD_version < 500000 && __FreeBSD_version >= 440000))) || (defined(__NetBSD__) && defined(__NetBSD_Version__) && __NetBSD_Version__ >= 106010000) || defined(__OpenBSD__) || defined(__APPLE__) || defined(__DragonFly__) || defined(__sun)
+AC_TRY_COMPILE([#include <sys/param.h>],
+[#if (defined(__FreeBSD__) && ((__FreeBSD_version >= 500022 && __FreeBSD_version < 700000) || (__FreeBSD_version < 500000 && __FreeBSD_version >= 440000))) || (defined(__NetBSD__) && defined(__NetBSD_Version__) && __NetBSD_Version__ >= 106010000) || defined(__OpenBSD__) || defined(__APPLE__) || defined(__DragonFly__) || defined(__sun)
   return (0);
 #else
   #error No support for BSD struct ip_mreq hack detected
@@ -1019,28 +1001,24 @@ AC_MSG_RESULT(no))
 dnl ---------------------------------------------------------------
 dnl figure out how to check link-state
 dnl ---------------------------------------------------------------
-AC_CHECK_HEADER([net/if.h],
-  [AC_CHECK_HEADER( [net/if_media.h],
-    [m4_define([LINK_DETECT_INCLUDES],
-      QUAGGA_INCLUDES
-      [#include <net/if_media.h>
-    ])
-    AC_CHECK_MEMBERS( [struct ifmediareq.ifm_status],
-      AC_DEFINE(HAVE_BSD_LINK_DETECT,,[BSD link-detect]),
-      [], LINK_DETECT_INCLUDES)], 
-    [],
-    QUAGGA_INCLUDES)], 
-  [], QUAGGA_INCLUDES )
+AC_CHECK_HEADER( [net/if_media.h],
+  [m4_define([LINK_DETECT_INCLUDES],
+    FRR_INCLUDES
+    [#include <net/if_media.h>
+  ])
+  AC_CHECK_MEMBERS( [struct ifmediareq.ifm_status],
+    AC_DEFINE(HAVE_BSD_LINK_DETECT,,[BSD link-detect]),
+    [], LINK_DETECT_INCLUDES)], 
+  [],
+  FRR_INCLUDES)
 
 dnl ---------------------------------------------------------------
 dnl Additional, newer way to check link-state using ifi_link_state.
 dnl Not available in all BSD's when ifmediareq available
 dnl ---------------------------------------------------------------
-AC_CHECK_HEADER([net/if.h],
-    AC_CHECK_MEMBERS([struct if_data.ifi_link_state],
-      AC_DEFINE(HAVE_BSD_IFI_LINK_STATE,,[BSD ifi_link_state available]),
-      [], QUAGGA_INCLUDES),
-    ,)
+AC_CHECK_MEMBERS([struct if_data.ifi_link_state],
+  AC_DEFINE(HAVE_BSD_IFI_LINK_STATE,,[BSD ifi_link_state available]),
+  [], FRR_INCLUDES)
 
 dnl ------------------------
 dnl TCP_MD5SIG socket option
@@ -1048,16 +1026,16 @@ dnl ------------------------
 
 AC_CHECK_HEADER([netinet/tcp.h], 
    [m4_define([MD5_INCLUDES],
-      QUAGGA_INCLUDES
+      FRR_INCLUDES
       [#include <netinet/tcp.h>
     ])
     AC_CHECK_DECLS([TCP_MD5SIG], [], [], MD5_INCLUDES)],
    [],
-   QUAGGA_INCLUDES)
+   FRR_INCLUDES)
 if test $ac_cv_have_decl_TCP_MD5SIG = no; then
   AC_CHECK_HEADER([linux/tcp.h],
        [m4_define([MD5_INCLUDES],
-          QUAGGA_INCLUDES
+          FRR_INCLUDES
           [#include <linux/tcp.h>
         ])
        AC_CHECK_DECLS([TCP_MD5SIG], [], [], MD5_INCLUDES)])
@@ -1066,32 +1044,35 @@ fi
 dnl -----------------------------
 dnl check ipforward detect method
 dnl -----------------------------
-AC_CACHE_CHECK([ipforward method], [quagga_cv_ipforward_method],
+AC_CACHE_CHECK([ipforward method], [frr_cv_ipforward_method],
 [if test x$cross_compiling = xyes; then
   if test x"$opsys" = x"gnu-linux"; then
-    quagga_cv_ipforward_method=/proc/net/snmp
+    frr_cv_ipforward_method=/proc/net/snmp
   else
-    quagga_cv_ipforward_method=/dev/ip
+    frr_cv_ipforward_method=/dev/ip
   fi
 else
-  for quagga_cv_ipforward_method in /proc/net/snmp /dev/ip /dev/null;
+  for frr_cv_ipforward_method in /proc/net/snmp /dev/ip /dev/null;
   do
-    test x`ls $quagga_cv_ipforward_method 2>/dev/null` = x"$quagga_cv_ipforward_method" && break
+    test x`ls $frr_cv_ipforward_method 2>/dev/null` = x"$frr_cv_ipforward_method" && break
   done
 fi
-case $quagga_cv_ipforward_method in
-  "/proc/net/snmp")  quagga_cv_ipforward_method="proc";;
+case $frr_cv_ipforward_method in
+  "/proc/net/snmp")  frr_cv_ipforward_method="proc";;
   "/dev/ip")         
                      case "$host" in
-                       *-freebsd*)    quagga_cv_ipforward_method="sysctl";;
-                       *)             quagga_cv_ipforward_method="solaris";;
+                       *-freebsd*)    frr_cv_ipforward_method="sysctl";;
+                       *)             frr_cv_ipforward_method="solaris";;
                      esac;;
-  *)                 quagga_cv_ipforward_method="sysctl";;
+  *)                 frr_cv_ipforward_method="sysctl";;
 esac])
-IPFORWARD=ipforward_${quagga_cv_ipforward_method}.o
+IPFORWARD=ipforward_${frr_cv_ipforward_method}.o
 AC_SUBST(IPFORWARD)
 
-AC_CHECK_FUNCS(getaddrinfo, [have_getaddrinfo=yes], [have_getaddrinfo=no])
+dnl ----------------------------------------------------------------------------
+dnl figure out if domainname is available in the utsname struct (GNU extension).
+dnl ----------------------------------------------------------------------------
+AC_CHECK_MEMBERS([struct utsname.domainname], [], [], [#include <sys/utsname.h>])
 
 dnl ----------
 dnl IPv6 check
@@ -1114,32 +1095,33 @@ dnl Linux IPv6
 dnl ----------
   elif test x"$opsys" = x"gnu-linux"; then
     AC_DEFINE(LINUX_IPV6,1,Linux IPv6 stack)
+    dnl Linux has a compilation problem with mixing
+    dnl netinet/in.h and linux/in6.h they are not
+    dnl compatible.  There has been discussion on
+    dnl how to fix it but no real progress on implementation
+    dnl when they fix it, remove this
+    AC_DEFINE(IPV6_MINHOPCOUNT, 73, Linux ipv6 Min Hop Count)
     AC_MSG_RESULT(Linux IPv6)
   else
     AC_MSG_ERROR([Failed to detect IPv6 stack])
   fi
 
-dnl this is unconditial, for compatibility
-AC_DEFINE(HAVE_IPV6,1,IPv6)
-
 dnl ------------------
 dnl IPv6 header checks
 dnl ------------------
-AC_CHECK_HEADERS([netinet6/in6.h netinet/in6_var.h netinet/icmp6.h \
+AC_CHECK_HEADERS([netinet6/in6.h netinet/in6_var.h \
 	netinet6/in6_var.h netinet6/nd6.h], [], [],
-	QUAGGA_INCLUDES)
+	FRR_INCLUDES)
 
-m4_define([QUAGGA_INCLUDES],dnl
-QUAGGA_INCLUDES
+m4_define([FRR_INCLUDES],dnl
+FRR_INCLUDES
 [#if HAVE_NETINET6_IN6_H
 #include <netinet6/in6.h>
 #endif
 #if HAVE_NETINET_IN6_VAR_H
 #include <netinet/in6_var.h>
 #endif
-#if HAVE_NETINET_ICMP6_H
-# include <netinet/icmp6.h>
-#endif
+#include <netinet/icmp6.h>
 #if HAVE_NETINET6_IN6_VAR_H
 # include <netinet6/in6_var.h>
 #endif
@@ -1186,12 +1168,28 @@ else
 fi
 AM_CONDITIONAL(OSPFD, test "x$OSPFD" = "xospfd")
 
-if test "${enable_watchquagga}" = "no";then
-  WATCHQUAGGA=""
+if test "${enable_ldpd}" = "no";then
+  LDPD=""
 else
-  WATCHQUAGGA="watchquagga"
+  AX_PROG_PERL_MODULES(XML::LibXML, , [
+    if test -f "${srcdir}/ldpd/ldp_vty_cmds.c"; then
+      AC_MSG_WARN([XML::LibXML perl module not found, using pregenerated ldp_vty_cmds.c])
+    else
+      AC_MSG_ERROR([XML::LibXML perl module not found and pregenerated ldp_vty_cmds.c missing])
+    fi
+  ])
+
+  LDPD="ldpd"
+  AC_DEFINE(HAVE_LDPD, 1, ldpd)
 fi
-AM_CONDITIONAL(WATCHQUAGGA, test "x$WATCHQUAGGA" = "xwatchquagga")
+AM_CONDITIONAL(LDPD, test "x$LDPD" = "xldpd")
+
+if test "${enable_watchfrr}" = "no";then
+  WATCHFRR=""
+else
+  WATCHFRR="watchfrr"
+fi
+AM_CONDITIONAL(WATCHFRR, test "x$WATCHFRR" = "xwatchfrr")
 
 OSPFCLIENT=""
 if test "${enable_ospfapi}" != "no";then
@@ -1234,14 +1232,39 @@ else
   AC_DEFINE(DISABLE_BGP_ANNOUNCE,0,Disable BGP installation to zebra)
 fi
 
+if test "${with_rfp_path}" = "yes" || test x"${with_rfp_path}" = x""; then
+  with_rfp_path="bgpd/rfp-example"
+fi
+if test "${with_rfp_path}" != "no"; then
+  VNC_RFP_PATH="${with_rfp_path}"
+  AC_SUBST(VNC_RFP_PATH)
+fi
+
+if test "${enable_bgp_vnc}" != "no";then
+  AC_DEFINE(ENABLE_BGP_VNC,1,Enable BGP VNC support)
+  RFPTEST="${with_rfp_path}/rfptest"
+  LIBRFP="${with_rfp_path}/librfp"
+  RFPINC="${with_rfp_path}/librfp"
+else
+  RFPTEST=
+  LIBRFP=
+  RFPINC="bgpd/rfp-example/librfp"
+fi
+# set 
+AM_CONDITIONAL([ENABLE_BGP_VNC], [test x${enable_bgp_vnc} != xno])
+
 AC_SUBST(DOC)
 AC_SUBST(ZEBRA)
+AC_SUBST(RFPTEST)
+AC_SUBST(LIBRFP)
+AC_SUBST(RFPINC)
 AC_SUBST(BGPD)
 AC_SUBST(RIPD)
 AC_SUBST(RIPNGD)
 AC_SUBST(OSPFD)
 AC_SUBST(OSPF6D)
-AC_SUBST(WATCHQUAGGA)
+AC_SUBST(LDPD)
+AC_SUBST(WATCHFRR)
 AC_SUBST(ISISD)
 AC_SUBST(PIMD)
 AC_SUBST(SOLARIS)
@@ -1249,8 +1272,6 @@ AC_SUBST(VTYSH)
 AC_SUBST(CURSES)
 AC_SUBST(OSPFCLIENT)
 AC_SUBST(OSPFAPI)
-AC_CHECK_LIB(c, inet_ntop, [AC_DEFINE(HAVE_INET_NTOP,,inet_ntop)])
-AC_CHECK_LIB(c, inet_pton, [AC_DEFINE(HAVE_INET_PTON,,inet_pton)])
 AC_CHECK_LIB(crypt, crypt)
 AC_CHECK_LIB(resolv, res_init)
 
@@ -1261,19 +1282,7 @@ if test "x$enable_pcreposix" = "xyes"; then
   AC_CHECK_LIB(pcreposix, pcreposix_regexec, ,[enable_pcreposix=no
   AC_MSG_WARN([*** falling back to other regex library ***]) ])
 fi
-
-if test "x$enable_pcreposix" != "xyes"; then
-dnl ---------------------------
-dnl check system has GNU regexp
-dnl ---------------------------
-AC_MSG_CHECKING(whether system has GNU regex)
-AC_CHECK_LIB(c, regexec,
-[AC_DEFINE(HAVE_GNU_REGEX,,GNU regexp library)
- LIB_REGEX=""],
-[LIB_REGEX="regex.o"])
-fi
 AC_SUBST(HAVE_LIBPCREPOSIX)
-AC_SUBST(LIB_REGEX)
 
 dnl ------------------
 dnl check Net-SNMP library
@@ -1316,22 +1325,21 @@ fi
 dnl ---------------------------
 dnl sockaddr and netinet checks
 dnl ---------------------------
-AC_CHECK_TYPES([struct sockaddr, struct sockaddr_in,
-	struct sockaddr_in6, struct sockaddr_un, struct sockaddr_dl,
-	socklen_t, struct vifctl, struct mfcctl, struct sioc_sg_req,
+AC_CHECK_TYPES([
+	struct sockaddr_dl,
+	struct vifctl, struct mfcctl, struct sioc_sg_req,
 	vifi_t, struct sioc_vif_req, struct igmpmsg,
 	struct ifaliasreq, struct if6_aliasreq, struct in6_aliasreq,
 	struct nd_opt_adv_interval, struct rt_addrinfo,
 	struct nd_opt_homeagent_info, struct nd_opt_adv_interval],
-	[], [], QUAGGA_INCLUDES)
+	[], [], FRR_INCLUDES)
 
 AC_CHECK_MEMBERS([struct sockaddr.sa_len,
 	struct sockaddr_in.sin_len, struct sockaddr_un.sun_len,
-	struct sockaddr_in6.sin6_scope_id,
 	struct sockaddr_dl.sdl_len,
 	struct if6_aliasreq.ifra_lifetime,
 	struct nd_opt_adv_interval.nd_opt_ai_type],
-	[], [], QUAGGA_INCLUDES)
+	[], [], FRR_INCLUDES)
 
 dnl ---------------------------
 dnl IRDP/pktinfo/icmphdr checks
@@ -1343,10 +1351,10 @@ AC_CHECK_TYPES([struct in_pktinfo],
     fi],
    [if test "${enable_irdp}" = "yes"; then
       AC_MSG_ERROR(['IRDP requires in_pktinfo at the moment!'])
-    fi], [QUAGGA_INCLUDES])],
+    fi], [FRR_INCLUDES])],
  [if test "${enable_irdp}" = "yes"; then
     AC_MSG_ERROR(['IRDP requires in_pktinfo at the moment!'])
-  fi], [QUAGGA_INCLUDES])
+  fi], [FRR_INCLUDES])
 
 dnl -----------------------
 dnl checking for IP_PKTINFO
@@ -1387,16 +1395,31 @@ AC_TRY_COMPILE([#include <netinet/in.h>], [
   AC_MSG_RESULT(no)
 ])
 
-dnl --------------------------------------
-dnl checking for getrusage struct and call
-dnl --------------------------------------
-if test "${enable_rusage}" != "no"; then
-  AC_MSG_CHECKING(whether getrusage is available)
-  AC_TRY_COMPILE([#include <sys/resource.h>],[struct rusage ac_x; getrusage (RUSAGE_SELF, &ac_x);],
-    [AC_MSG_RESULT(yes)
-     AC_DEFINE(HAVE_RUSAGE,,rusage)],
-      AC_MSG_RESULT(no))
-fi
+dnl ----------------------
+dnl checking for SO_BINDANY
+dnl ----------------------
+AC_MSG_CHECKING(for SO_BINDANY)
+AC_TRY_COMPILE([#include <sys/socket.h>], [
+  int opt = SO_BINDANY;
+], [
+  AC_MSG_RESULT(yes)
+  AC_DEFINE(HAVE_SO_BINDANY, 1, [Have SO_BINDANY])
+], [
+  AC_MSG_RESULT(no)
+])
+
+dnl ----------------------
+dnl checking for IP_FREEBIND
+dnl ----------------------
+AC_MSG_CHECKING(for IP_FREEBIND)
+AC_TRY_COMPILE([#include <netinet/in.h>], [
+  int opt = IP_FREEBIND;
+], [
+  AC_MSG_RESULT(yes)
+  AC_DEFINE(HAVE_IP_FREEBIND, 1, [Have IP_FREEBIND])
+], [
+  AC_MSG_RESULT(no)
+])
 
 dnl --------------------------------------
 dnl checking for clock_time monotonic struct and call
@@ -1404,7 +1427,70 @@ dnl --------------------------------------
 AC_CHECK_DECL(CLOCK_MONOTONIC,
 	[AC_CHECK_LIB(rt, clock_gettime, [LIBS="$LIBS -lrt"])
 	 AC_DEFINE(HAVE_CLOCK_MONOTONIC,, Have monotonic clock)
-], [AC_MSG_RESULT(no)], [QUAGGA_INCLUDES])
+], [AC_MSG_RESULT(no)], [FRR_INCLUDES])
+
+dnl --------------------------------------
+dnl checking for flex and bison
+dnl --------------------------------------
+
+AM_PROG_LEX
+AC_MSG_CHECKING(version of flex)
+quagga_ac_flex_version="$(eval $LEX -V | grep flex | head -n 1)"
+quagga_ac_flex_version="${quagga_ac_flex_version##* }"
+AC_MSG_RESULT([$quagga_ac_flex_version])
+AX_COMPARE_VERSION([$quagga_ac_flex_version], [lt], [2.5.20], [
+  LEX="$SHELL $missing_dir/missing flex"
+  if test -f "${srcdir}/lib/command_lex.c" -a -f "${srcdir}/lib/command_lex.h"; then
+    AC_MSG_WARN([using pregenerated flex output files])
+  else
+    AC_MSG_ERROR([flex failure and pregenerated files not included (probably a git build)])
+  fi
+  AC_SUBST([LEX_OUTPUT_ROOT], [lex.yy])
+  AC_SUBST([LEXLIB], [''])
+])
+
+AC_PROG_YACC
+dnl thanks GNU bison for this b*llshit...
+AC_MSG_CHECKING(version of bison)
+quagga_ac_bison_version="$(eval $YACC -V | grep bison | head -n 1)"
+quagga_ac_bison_version="${quagga_ac_bison_version##* }"
+quagga_ac_bison_missing="false"
+case "x${quagga_ac_bison_version}" in
+  x2.7*)
+    BISON_OPENBRACE='"'
+    BISON_CLOSEBRACE='"'
+    BISON_VERBOSE=''
+    AC_MSG_RESULT([$quagga_ac_bison_version - 2.7 or older])
+    ;;
+  x2.*|x1.*)
+    AC_MSG_RESULT([$quagga_ac_bison_version])
+    AC_MSG_WARN([installed bison is too old.  Please install GNU bison 2.7.x or newer.])
+    quagga_ac_bison_missing="true"
+    ;;
+  x)
+    AC_MSG_RESULT([none])
+    AC_MSG_WARN([could not determine bison version.  Please install GNU bison 2.7.x or newer.])
+    quagga_ac_bison_missing="true"
+    ;;
+  *)
+    BISON_OPENBRACE='{'
+    BISON_CLOSEBRACE='}'
+    BISON_VERBOSE='-Dparse.error=verbose'
+    AC_MSG_RESULT([$quagga_ac_bison_version - 3.0 or newer])
+    ;;
+esac
+AC_SUBST(BISON_OPENBRACE)
+AC_SUBST(BISON_CLOSEBRACE)
+AC_SUBST(BISON_VERBOSE)
+
+if $quagga_ac_bison_missing; then
+  YACC="$SHELL $missing_dir/missing bison -y"
+  if test -f "${srcdir}/lib/command_parse.c" -a -f "${srcdir}/lib/command_parse.h"; then
+    AC_MSG_WARN([using pregenerated bison output files])
+  else
+    AC_MSG_ERROR([bison failure and pregenerated files not included (probably a git build)])
+  fi
+fi
 
 dnl -------------------
 dnl capabilities checks
@@ -1414,17 +1500,17 @@ if test "${enable_capabilities}" != "no"; then
   AC_TRY_COMPILE([#include <sys/prctl.h>],[prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);],
     [AC_MSG_RESULT(yes)
      AC_DEFINE(HAVE_PR_SET_KEEPCAPS,,prctl)
-     quagga_ac_keepcaps="yes"],
+     frr_ac_keepcaps="yes"],
      AC_MSG_RESULT(no)
   )
-  if test x"${quagga_ac_keepcaps}" = x"yes"; then
+  if test x"${frr_ac_keepcaps}" = x"yes"; then
     AC_CHECK_HEADERS(sys/capability.h)
   fi
   if test x"${ac_cv_header_sys_capability_h}" = x"yes"; then
     AC_CHECK_LIB(cap, cap_init, 
       [AC_DEFINE(HAVE_LCAPS,1,Capabilities)
        LIBCAP="-lcap"
-       quagga_ac_lcaps="yes"]
+       frr_ac_lcaps="yes"]
     )
   else
     AC_CHECK_HEADERS(priv.h,
@@ -1432,34 +1518,18 @@ if test "${enable_capabilities}" != "no"; then
       AC_TRY_COMPILE([#include <priv.h>],[getpflags(PRIV_AWARE);],
     	  [AC_MSG_RESULT(yes)
     	   AC_DEFINE(HAVE_SOLARIS_CAPABILITIES,1,getpflags)
-    	   quagga_ac_scaps="yes"],
+    	   frr_ac_scaps="yes"],
     	   AC_MSG_RESULT(no)
       )
      ]
    )
   fi
-  if test x"${quagga_ac_scaps}" = x"yes" \
-       -o x"${quagga_ac_lcaps}" = x"yes"; then
+  if test x"${frr_ac_scaps}" = x"yes" \
+       -o x"${frr_ac_lcaps}" = x"yes"; then
     AC_DEFINE(HAVE_CAPABILITIES,1,capabilities)
   fi
 fi
 AC_SUBST(LIBCAP)
-
-dnl ---------------------------------------------------------------------------
-dnl http://www.gnu.org/software/autoconf-archive/ax_sys_weak_alias.html
-dnl Check for and set one of the following = 1
-dnl   HAVE_SYS_WEAK_ALIAS_ATTRIBUTE
-dnl   HAVE_SYS_WEAK_ALIAS_PRAGMA
-dnl   HAVE_SYS_WEAK_ALIAS_HPSECONDARY
-dnl   HAVE_SYS_WEAK_ALIAS_CRIDUPLICATE
-dnl If any scheme is found, set
-dnl   HAVE_SYS_WEAK_ALIAS=1
-dnl The following variable is set to text value
-dnl   WEAK_ALIAS = "attribute" || "pragma" || "hpsecondary" || "criduplicate" || "no"
-dnl If weak alias can cross object file boundaries
-dnl   WEAK_ALIAS_CROSSFILE = "yes" || "no"
-dnl ---------------------------------------------------------------------------
-AX_SYS_WEAK_ALIAS
 
 dnl ---------------------------
 dnl check for glibc 'backtrace'
@@ -1495,7 +1565,7 @@ AC_CHECK_HEADER([malloc.h],
        AC_DEFINE(HAVE_MALLINFO,,mallinfo)],
        AC_MSG_RESULT(no)
   )
- ], [], QUAGGA_INCLUDES)
+ ], [], FRR_INCLUDES)
 
 dnl ----------
 dnl configure date
@@ -1520,50 +1590,77 @@ dnl set paths for state directory
 dnl ------------------------------
 AC_MSG_CHECKING(directory to use for state file)
 if test "${prefix}" = "NONE"; then
-  quagga_statedir_prefix="";
+  frr_statedir_prefix="";
 else
-  quagga_statedir_prefix=${prefix}
+  frr_statedir_prefix=${prefix}
 fi
 if test "${localstatedir}" = '${prefix}/var'; then
-  for QUAGGA_STATE_DIR in ${quagga_statedir_prefix}/var/run dnl
-			${quagga_statedir_prefix}/var/adm dnl
-			${quagga_statedir_prefix}/etc dnl
+  for FRR_STATE_DIR in ${frr_statedir_prefix}/var/run dnl
+			${frr_statedir_prefix}/var/adm dnl
+			${frr_statedir_prefix}/etc dnl
 			/var/run	dnl
                         /var/adm	dnl
                         /etc		dnl
                         /dev/null;
   do
-    test -d $QUAGGA_STATE_DIR && break
+    test -d $FRR_STATE_DIR && break
   done
-  quagga_statedir=$QUAGGA_STATE_DIR
+  frr_statedir=$FRR_STATE_DIR
 else
-  quagga_statedir=${localstatedir}
+  frr_statedir=${localstatedir}
 fi
-if test $quagga_statedir = "/dev/null"; then
+if test $frr_statedir = "/dev/null"; then
     AC_MSG_ERROR('STATE DIRECTORY NOT FOUND! FIX OR SPECIFY --localstatedir!')
 fi
-AC_MSG_RESULT(${quagga_statedir})
-AC_SUBST(quagga_statedir)
+AC_MSG_RESULT(${frr_statedir})
+AC_SUBST(frr_statedir)
 
-AC_DEFINE_UNQUOTED(PATH_ZEBRA_PID, "$quagga_statedir/zebra.pid",zebra PID)
-AC_DEFINE_UNQUOTED(PATH_RIPD_PID, "$quagga_statedir/ripd.pid",ripd PID)
-AC_DEFINE_UNQUOTED(PATH_RIPNGD_PID, "$quagga_statedir/ripngd.pid",ripngd PID)
-AC_DEFINE_UNQUOTED(PATH_BGPD_PID, "$quagga_statedir/bgpd.pid",bgpd PID)
-AC_DEFINE_UNQUOTED(PATH_OSPFD_PID, "$quagga_statedir/ospfd.pid",ospfd PID)
-AC_DEFINE_UNQUOTED(PATH_OSPF6D_PID, "$quagga_statedir/ospf6d.pid",ospf6d PID)
-AC_DEFINE_UNQUOTED(PATH_ISISD_PID, "$quagga_statedir/isisd.pid",isisd PID)
-AC_DEFINE_UNQUOTED(PATH_PIMD_PID, "$quagga_statedir/pimd.pid",pimd PID)
-AC_DEFINE_UNQUOTED(PATH_WATCHQUAGGA_PID, "$quagga_statedir/watchquagga.pid",watchquagga PID)
-AC_DEFINE_UNQUOTED(ZEBRA_SERV_PATH, "$quagga_statedir/zserv.api",zebra api socket)
-AC_DEFINE_UNQUOTED(ZEBRA_VTYSH_PATH, "$quagga_statedir/zebra.vty",zebra vty socket)
-AC_DEFINE_UNQUOTED(RIP_VTYSH_PATH, "$quagga_statedir/ripd.vty",rip vty socket)
-AC_DEFINE_UNQUOTED(RIPNG_VTYSH_PATH, "$quagga_statedir/ripngd.vty",ripng vty socket)
-AC_DEFINE_UNQUOTED(BGP_VTYSH_PATH, "$quagga_statedir/bgpd.vty",bgpd vty socket)
-AC_DEFINE_UNQUOTED(OSPF_VTYSH_PATH, "$quagga_statedir/ospfd.vty",ospfd vty socket)
-AC_DEFINE_UNQUOTED(OSPF6_VTYSH_PATH, "$quagga_statedir/ospf6d.vty",ospf6d vty socket)
-AC_DEFINE_UNQUOTED(ISIS_VTYSH_PATH, "$quagga_statedir/isisd.vty",isisd vty socket)
-AC_DEFINE_UNQUOTED(PIM_VTYSH_PATH, "$quagga_statedir/pimd.vty",pimd vty socket)
-AC_DEFINE_UNQUOTED(DAEMON_VTY_DIR, "$quagga_statedir",daemon vty directory)
+AC_DEFINE_UNQUOTED(PATH_ZEBRA_PID, "$frr_statedir/zebra.pid",zebra PID)
+AC_DEFINE_UNQUOTED(PATH_RIPD_PID, "$frr_statedir/ripd.pid",ripd PID)
+AC_DEFINE_UNQUOTED(PATH_RIPNGD_PID, "$frr_statedir/ripngd.pid",ripngd PID)
+AC_DEFINE_UNQUOTED(PATH_BGPD_PID, "$frr_statedir/bgpd.pid",bgpd PID)
+AC_DEFINE_UNQUOTED(PATH_OSPFD_PID, "$frr_statedir/ospfd.pid",ospfd PID)
+AC_DEFINE_UNQUOTED(PATH_OSPF6D_PID, "$frr_statedir/ospf6d.pid",ospf6d PID)
+AC_DEFINE_UNQUOTED(PATH_LDPD_PID, "$frr_statedir/ldpd.pid",ldpd PID)
+AC_DEFINE_UNQUOTED(LDPD_SOCKET, "$frr_statedir/ldpd.sock",ldpd control socket)
+AC_DEFINE_UNQUOTED(PATH_ISISD_PID, "$frr_statedir/isisd.pid",isisd PID)
+AC_DEFINE_UNQUOTED(PATH_PIMD_PID, "$frr_statedir/pimd.pid",pimd PID)
+AC_DEFINE_UNQUOTED(PATH_WATCHFRR_PID, "$frr_statedir/watchfrr.pid",watchfrr PID)
+AC_DEFINE_UNQUOTED(ZEBRA_SERV_PATH, "$frr_statedir/zserv.api",zebra api socket)
+AC_DEFINE_UNQUOTED(ZEBRA_VTYSH_PATH, "$frr_statedir/zebra.vty",zebra vty socket)
+AC_DEFINE_UNQUOTED(RIP_VTYSH_PATH, "$frr_statedir/ripd.vty",rip vty socket)
+AC_DEFINE_UNQUOTED(RIPNG_VTYSH_PATH, "$frr_statedir/ripngd.vty",ripng vty socket)
+AC_DEFINE_UNQUOTED(BGP_VTYSH_PATH, "$frr_statedir/bgpd.vty",bgpd vty socket)
+AC_DEFINE_UNQUOTED(OSPF_VTYSH_PATH, "$frr_statedir/ospfd.vty",ospfd vty socket)
+AC_DEFINE_UNQUOTED(OSPF6_VTYSH_PATH, "$frr_statedir/ospf6d.vty",ospf6d vty socket)
+AC_DEFINE_UNQUOTED(LDP_VTYSH_PATH, "$frr_statedir/ldpd.vty",ldpd vty socket)
+AC_DEFINE_UNQUOTED(ISIS_VTYSH_PATH, "$frr_statedir/isisd.vty",isisd vty socket)
+AC_DEFINE_UNQUOTED(PIM_VTYSH_PATH, "$frr_statedir/pimd.vty",pimd vty socket)
+AC_DEFINE_UNQUOTED(WATCHFRR_VTYSH_PATH, "$frr_statedir/watchfrr.vty",watchfrr vty socket)
+AC_DEFINE_UNQUOTED(DAEMON_VTY_DIR, "$frr_statedir",daemon vty directory)
+
+dnl autoconf does this, but it does it too late...
+test "x$prefix" = xNONE && prefix=$ac_default_prefix
+test "x$exec_prefix" = xNONE && exec_prefix='${prefix}'
+
+dnl get the full path, recursing through variables...
+vtysh_bin="$bindir/vtysh"
+for I in 1 2 3 4 5 6 7 8 9 10; do
+	eval vtysh_bin="\"$vtysh_bin\""
+done
+AC_DEFINE_UNQUOTED(VTYSH_BIN_PATH, "$vtysh_bin",path to vtysh binary)
+
+CFG_SYSCONF="$sysconfdir"
+CFG_SBIN="$sbindir"
+CFG_STATE="$frr_statedir"
+for I in 1 2 3 4 5 6 7 8 9 10; do
+	eval CFG_SYSCONF="\"$CFG_SYSCONF\""
+	eval CFG_SBIN="\"$CFG_SBIN\""
+	eval CFG_STATE="\"$CFG_STATE\""
+done
+AC_SUBST(CFG_SYSCONF)
+AC_SUBST(CFG_SBIN)
+AC_SUBST(CFG_STATE)
 
 dnl -------------------------------
 dnl Quagga sources should always be 
@@ -1578,61 +1675,78 @@ dnl Check htonl works correctly
 dnl ---------------------------
 AC_MSG_CHECKING(for working htonl)
 AC_CACHE_VAL(ac_cv_htonl_works,
- [AC_LINK_IFELSE([AC_LANG_PROGRAM([QUAGGA_INCLUDES],[htonl (0);])],
+ [AC_LINK_IFELSE([AC_LANG_PROGRAM([FRR_INCLUDES],[htonl (0);])],
  		[ac_cv_htonl_works=yes], [ac_cv_htonl_works=no])
  ]
 )
 AC_MSG_RESULT($ac_cv_htonl_works)
 
 AC_CONFIG_FILES([Makefile lib/Makefile qpb/Makefile zebra/Makefile ripd/Makefile 
-	  ripngd/Makefile bgpd/Makefile ospfd/Makefile watchquagga/Makefile
-	  ospf6d/Makefile isisd/Makefile vtysh/Makefile
+	  ripngd/Makefile bgpd/Makefile ospfd/Makefile watchfrr/Makefile
+	  ospf6d/Makefile ldpd/Makefile isisd/Makefile vtysh/Makefile
 	  doc/Makefile ospfclient/Makefile tests/Makefile m4/Makefile
 	  pimd/Makefile
 	  tests/bgpd.tests/Makefile
 	  tests/libzebra.tests/Makefile
 	  redhat/Makefile
+	  tools/Makefile
+	  cumulus/Makefile
 	  pkgsrc/Makefile
 	  fpm/Makefile
-	  redhat/quagga.spec 
+	  redhat/frr.spec 
 	  lib/version.h
 	  doc/defines.texi
-	  isisd/topology/Makefile
+	  doc/bgpd.8
+	  doc/isisd.8
+	  doc/ospf6d.8
+	  doc/ospfclient.8
+	  doc/ospfd.8
+	  doc/ldpd.8
+	  doc/ripd.8
+	  doc/ripngd.8
+	  doc/pimd.8
+	  doc/vtysh.1
+	  doc/watchfrr.8
+	  doc/zebra.8
+	  doc/frr.1
 	  pkgsrc/bgpd.sh pkgsrc/ospf6d.sh pkgsrc/ospfd.sh
 	  pkgsrc/ripd.sh pkgsrc/ripngd.sh pkgsrc/zebra.sh])
+
+if test "${enable_bgp_vnc}" != "no"; then
+   if test "${with_rfp_path}" = "bgpd/rfp-example" ; then 
+     AC_CONFIG_FILES([bgpd/rfp-example/rfptest/Makefile bgpd/rfp-example/librfp/Makefile])
+   else
+     AC_CONFIG_FILES([${with_rfp_path}/rfptest/Makefile ${with_rfp_path}/librfp/Makefile])
+   fi
+fi
+
 AC_CONFIG_FILES([solaris/Makefile])
 
 AC_CONFIG_FILES([vtysh/extract.pl],[chmod +x vtysh/extract.pl])
+
 ## Hack, but working solution to avoid rebuilding of quagga.info.
 ## It's already in CVS until texinfo 4.7 is more common.
 AC_OUTPUT
 
 echo "
-Quagga configuration
---------------------
-quagga version          : ${PACKAGE_VERSION}
+FreeRangeRouting configuration
+------------------------------
+FRR version             : ${PACKAGE_VERSION}
 host operating system   : ${host_os}
 source code location    : ${srcdir}
 compiler                : ${CC}
 compiler flags          : ${CFLAGS}
 make                    : ${MAKE-make}
 linker flags            : ${LDFLAGS} ${LIBS} ${LIBCAP} ${LIBREADLINE} ${LIBM}
-state file directory    : ${quagga_statedir}
+state file directory    : ${frr_statedir}
 config file directory   : `eval echo \`echo ${sysconfdir}\``
 example directory       : `eval echo \`echo ${exampledir}\``
-user to run as		: ${enable_user}
-group to run as		: ${enable_group}
-group for vty sockets	: ${enable_vty_group}
+user to run as          : ${enable_user}
+group to run as         : ${enable_group}
+group for vty sockets   : ${enable_vty_group}
 config file mask        : ${enable_configfile_mask}
 log file mask           : ${enable_logfile_mask}
 zebra protobuf enabled  : ${have_protobuf:-no}
 
 The above user and group must have read/write access to the state file
 directory and to the config files in the config file directory."
-
-if test x"$quagga_cv_gnu_make" = x"no"; then echo "
-Warning: The ${MAKE-make} programme detected, either in your path or
-via the MAKE variable, is not GNU Make. GNU make may be installed as
-gmake on some systems. and is required to complete a build of Quagga
-" > /dev/stderr 
-fi

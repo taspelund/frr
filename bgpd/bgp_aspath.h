@@ -21,6 +21,8 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #ifndef _QUAGGA_BGP_ASPATH_H
 #define _QUAGGA_BGP_ASPATH_H
 
+#include "lib/json.h"
+
 /* AS path segment type.  */
 #define AS_SET                       1
 #define AS_SEQUENCE                  2
@@ -63,6 +65,9 @@ struct aspath
   /* segment data */
   struct assegment *segments;
   
+  /* AS path as a json object */
+  json_object *json;
+
   /* String expression of AS path.  This string is used by vty output
      and AS path regular expression match.  */
   char *str;
@@ -77,7 +82,6 @@ extern void aspath_finish (void);
 extern struct aspath *aspath_parse (struct stream *, size_t, int);
 extern struct aspath *aspath_dup (struct aspath *);
 extern struct aspath *aspath_aggregate (struct aspath *, struct aspath *);
-extern struct aspath *aspath_aggregate_mpath (struct aspath *, struct aspath *);
 extern struct aspath *aspath_prepend (struct aspath *, struct aspath *);
 extern struct aspath *aspath_filter_exclude (struct aspath *, struct aspath *);
 extern struct aspath *aspath_add_seq_n (struct aspath *, as_t, unsigned);
@@ -97,8 +101,14 @@ extern const char *aspath_print (struct aspath *);
 extern void aspath_print_vty (struct vty *, const char *, struct aspath *, const char *);
 extern void aspath_print_all_vty (struct vty *);
 extern unsigned int aspath_key_make (void *);
+extern unsigned int aspath_get_first_as (struct aspath *);
+extern unsigned int aspath_get_last_as (struct aspath *);
 extern int aspath_loop_check (struct aspath *, as_t);
 extern int aspath_private_as_check (struct aspath *);
+extern int aspath_single_asn_check (struct aspath *, as_t asn);
+extern struct aspath *aspath_replace_specific_asn (struct aspath *aspath, as_t target_asn, as_t our_asn);
+extern struct aspath *aspath_replace_private_asns(struct aspath *aspath, as_t asn);
+extern struct aspath *aspath_remove_private_asns (struct aspath *aspath);
 extern int aspath_firstas_check (struct aspath *, as_t);
 extern int aspath_confed_check (struct aspath *);
 extern int aspath_left_confed_check (struct aspath *);

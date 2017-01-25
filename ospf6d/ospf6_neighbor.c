@@ -40,37 +40,18 @@
 #include "ospf6_flood.h"
 #include "ospf6_snmp.h"
 #include "ospf6d.h"
+#include "ospf6_bfd.h"
+#include "ospf6_abr.h"
+#include "ospf6_asbr.h"
+#include "ospf6_lsa.h"
+#include "ospf6_spf.h"
+#include "ospf6_zebra.h"
 
 unsigned char conf_debug_ospf6_neighbor = 0;
 
 const char *ospf6_neighbor_state_str[] =
 { "None", "Down", "Attempt", "Init", "Twoway", "ExStart", "ExChange",
   "Loading", "Full", NULL };
-
-static const char *ospf6_neighbor_event_str[] =
-  {
-    "NoEvent",
-    "HelloReceived",
-    "2-WayReceived",
-    "NegotiationDone",
-    "ExchangeDone",
-    "LoadingDone",
-    "AdjOK?",
-    "SeqNumberMismatch",
-    "BadLSReq",
-    "1-WayReceived",
-    "InactivityTimer",
-  };
-
-static const char *
-ospf6_neighbor_event_string (int event)
-{
-  #define OSPF6_NEIGHBOR_UNKNOWN_EVENT_STRING "UnknownEvent"
-
-  if (event < OSPF6_NEIGHBOR_EVENT_MAX_EVENT)
-      return ospf6_neighbor_event_str[event];
-  return OSPF6_NEIGHBOR_UNKNOWN_EVENT_STRING;
-}
 
 int
 ospf6_neighbor_cmp (void *va, void *vb)
@@ -116,7 +97,7 @@ ospf6_neighbor_create (u_int32_t router_id, struct ospf6_interface *oi)
   on->ospf6_if = oi;
   on->state = OSPF6_NEIGHBOR_DOWN;
   on->state_change = 0;
-  quagga_gettime (QUAGGA_CLK_MONOTONIC, &on->last_changed);
+  monotime(&on->last_changed);
   on->router_id = router_id;
 
   on->summary_list = ospf6_lsdb_create (on);
@@ -128,6 +109,8 @@ ospf6_neighbor_create (u_int32_t router_id, struct ospf6_interface *oi)
   on->lsack_list = ospf6_lsdb_create (on);
 
   listnode_add_sort (oi->neighbor_list, on);
+
+  ospf6_bfd_info_nbr_create(oi, on);
   return on;
 }
 
@@ -164,6 +147,7 @@ ospf6_neighbor_delete (struct ospf6_neighbor *on)
   THREAD_OFF (on->thread_send_lsupdate);
   THREAD_OFF (on->thread_send_lsack);
 
+  ospf6_bfd_reg_dereg_nbr(on, ZEBRA_BFD_DEST_DEREGISTER);
   XFREE (MTYPE_OSPF6_NEIGHBOR, on);
 }
 
@@ -179,7 +163,7 @@ ospf6_neighbor_state_change (u_char next_state, struct ospf6_neighbor *on, int e
     return;
 
   on->state_change++;
-  quagga_gettime (QUAGGA_CLK_MONOTONIC, &on->last_changed);
+  monotime(&on->last_changed);
 
   /* log */
   if (IS_OSPF6_DEBUG_NEIGHBOR (STATE))
@@ -225,7 +209,7 @@ ospf6_neighbor_state_change (u_char next_state, struct ospf6_neighbor *on, int e
       (next_state < prev_state))
     ospf6TrapNbrStateChange (on);
 #endif
-
+  ospf6_bfd_trigger_event(on, prev_state, next_state);
 }
 
 /* RFC2328 section 10.4 */
@@ -649,7 +633,7 @@ ospf6_neighbor_show (struct vty *vty, struct ospf6_neighbor *on)
 {
   char router_id[16];
   char duration[16];
-  struct timeval now, res;
+  struct timeval res;
   char nstate[16];
   char deadtime[16];
   long h, m, s;
@@ -661,13 +645,11 @@ ospf6_neighbor_show (struct vty *vty, struct ospf6_neighbor *on)
   }
 #endif /*HAVE_GETNAMEINFO*/
 
-  quagga_gettime (QUAGGA_CLK_MONOTONIC, &now);
-
   /* Dead time */
   h = m = s = 0;
   if (on->inactivity_timer)
     {
-      s = on->inactivity_timer->u.sands.tv_sec - recent_relative_time().tv_sec;
+      s = monotime_until(&on->inactivity_timer->u.sands, NULL) / 1000000LL;
       h = s / 3600;
       s -= h * 3600;
       m = s / 60;
@@ -689,7 +671,7 @@ ospf6_neighbor_show (struct vty *vty, struct ospf6_neighbor *on)
     }
 
   /* Duration */
-  timersub (&now, &on->last_changed, &res);
+  monotime_since(&on->last_changed, &res);
   timerstring (&res, duration, sizeof (duration));
 
   /*
@@ -698,7 +680,7 @@ ospf6_neighbor_show (struct vty *vty, struct ospf6_neighbor *on)
            "I/F", "State", VNL);
   */
 
-  vty_out (vty, "%-15s %3d %11s %6s/%-12s %11s %s[%s]%s",
+  vty_out (vty, "%-15s %3d %11s %8s/%-12s %11s %s[%s]%s",
            router_id, on->priority, deadtime,
            ospf6_neighbor_state_str[on->state], nstate, duration,
            on->ospf6_if->interface->name,
@@ -723,11 +705,11 @@ ospf6_neighbor_show_drchoice (struct vty *vty, struct ospf6_neighbor *on)
   inet_ntop (AF_INET, &on->drouter, drouter, sizeof (drouter));
   inet_ntop (AF_INET, &on->bdrouter, bdrouter, sizeof (bdrouter));
 
-  quagga_gettime (QUAGGA_CLK_MONOTONIC, &now);
+  monotime(&now);
   timersub (&now, &on->last_changed, &res);
   timerstring (&res, duration, sizeof (duration));
 
-  vty_out (vty, "%-15s %6s/%-11s %-15s %-15s %s[%s]%s",
+  vty_out (vty, "%-15s %8s/%-11s %-15s %-15s %s[%s]%s",
            router_id, ospf6_neighbor_state_str[on->state],
            duration, drouter, bdrouter, on->ospf6_if->interface->name,
            ospf6_interface_state_str[on->ospf6_if->state],
@@ -747,7 +729,7 @@ ospf6_neighbor_show_detail (struct vty *vty, struct ospf6_neighbor *on)
   inet_ntop (AF_INET, &on->drouter, drouter, sizeof (drouter));
   inet_ntop (AF_INET, &on->bdrouter, bdrouter, sizeof (bdrouter));
 
-  quagga_gettime (QUAGGA_CLK_MONOTONIC, &now);
+  monotime(&now);
   timersub (&now, &on->last_changed, &res);
   timerstring (&res, duration, sizeof (duration));
 
@@ -840,17 +822,20 @@ ospf6_neighbor_show_detail (struct vty *vty, struct ospf6_neighbor *on)
        lsa = ospf6_lsdb_next (lsa))
     vty_out (vty, "      %s%s", lsa->name, VNL);
 
+  ospf6_bfd_show_info(vty, on->bfd_info, 0);
 }
 
 DEFUN (show_ipv6_ospf6_neighbor,
        show_ipv6_ospf6_neighbor_cmd,
-       "show ipv6 ospf6 neighbor",
+       "show ipv6 ospf6 neighbor [<detail|drchoice>]",
        SHOW_STR
        IP6_STR
        OSPF6_STR
        "Neighbor list\n"
-      )
+       "Display details\n"
+       "Display DR choices\n")
 {
+  int idx_type = 4;
   struct ospf6_neighbor *on;
   struct ospf6_interface *oi;
   struct ospf6_area *oa;
@@ -860,20 +845,20 @@ DEFUN (show_ipv6_ospf6_neighbor,
   OSPF6_CMD_CHECK_RUNNING ();
   showfunc = ospf6_neighbor_show;
 
-  if (argc)
+  if (argc == 5)
     {
-      if (! strncmp (argv[0], "de", 2))
+      if (! strncmp (argv[idx_type]->arg, "de", 2))
         showfunc = ospf6_neighbor_show_detail;
-      else if (! strncmp (argv[0], "dr", 2))
+      else if (! strncmp (argv[idx_type]->arg, "dr", 2))
         showfunc = ospf6_neighbor_show_drchoice;
     }
 
   if (showfunc == ospf6_neighbor_show)
-    vty_out (vty, "%-15s %3s %11s %6s/%-12s %11s %s[%s]%s",
+    vty_out (vty, "%-15s %3s %11s %8s/%-12s %11s %s[%s]%s",
              "Neighbor ID", "Pri", "DeadTime", "State", "IfState", "Duration",
              "I/F", "State", VNL);
   else if (showfunc == ospf6_neighbor_show_drchoice)
-    vty_out (vty, "%-15s %6s/%-11s %-15s %-15s %s[%s]%s",
+    vty_out (vty, "%-15s %8s/%-11s %-15s %-15s %s[%s]%s",
              "RouterID", "State", "Duration", "DR", "BDR", "I/F",
              "State", VNL);
 
@@ -885,16 +870,6 @@ DEFUN (show_ipv6_ospf6_neighbor,
   return CMD_SUCCESS;
 }
 
-ALIAS (show_ipv6_ospf6_neighbor,
-       show_ipv6_ospf6_neighbor_detail_cmd,
-       "show ipv6 ospf6 neighbor (detail|drchoice)",
-       SHOW_STR
-       IP6_STR
-       OSPF6_STR
-       "Neighbor list\n"
-       "Display details\n"
-       "Display DR choices\n"
-      )
 
 DEFUN (show_ipv6_ospf6_neighbor_one,
        show_ipv6_ospf6_neighbor_one_cmd,
@@ -906,6 +881,7 @@ DEFUN (show_ipv6_ospf6_neighbor_one,
        "Specify Router-ID as IPv4 address notation\n"
       )
 {
+  int idx_ipv4 = 4;
   struct ospf6_neighbor *on;
   struct ospf6_interface *oi;
   struct ospf6_area *oa;
@@ -916,9 +892,9 @@ DEFUN (show_ipv6_ospf6_neighbor_one,
   OSPF6_CMD_CHECK_RUNNING ();
   showfunc = ospf6_neighbor_show_detail;
 
-  if ((inet_pton (AF_INET, argv[0], &router_id)) != 1)
+  if ((inet_pton (AF_INET, argv[idx_ipv4]->arg, &router_id)) != 1)
     {
-      vty_out (vty, "Router-ID is not parsable: %s%s", argv[0],
+      vty_out (vty, "Router-ID is not parsable: %s%s", argv[idx_ipv4]->arg,
                VNL);
       return CMD_SUCCESS;
     }
@@ -935,23 +911,26 @@ void
 ospf6_neighbor_init (void)
 {
   install_element (VIEW_NODE, &show_ipv6_ospf6_neighbor_cmd);
-  install_element (VIEW_NODE, &show_ipv6_ospf6_neighbor_detail_cmd);
+  install_element (VIEW_NODE, &show_ipv6_ospf6_neighbor_one_cmd);
 }
 
 DEFUN (debug_ospf6_neighbor,
        debug_ospf6_neighbor_cmd,
-       "debug ospf6 neighbor",
+       "debug ospf6 neighbor [<state|event>]",
        DEBUG_STR
        OSPF6_STR
        "Debug OSPFv3 Neighbor\n"
-      )
+       "Debug OSPFv3 Neighbor State Change\n"
+       "Debug OSPFv3 Neighbor Event\n")
 {
+  int idx_type = 3;
   unsigned char level = 0;
-  if (argc)
+
+  if (argc == 4)
     {
-      if (! strncmp (argv[0], "s", 1))
+      if (! strncmp (argv[idx_type]->arg, "s", 1))
         level = OSPF6_DEBUG_NEIGHBOR_STATE;
-      if (! strncmp (argv[0], "e", 1))
+      else if (! strncmp (argv[idx_type]->arg, "e", 1))
         level = OSPF6_DEBUG_NEIGHBOR_EVENT;
     }
   else
@@ -961,31 +940,25 @@ DEFUN (debug_ospf6_neighbor,
   return CMD_SUCCESS;
 }
 
-ALIAS (debug_ospf6_neighbor,
-       debug_ospf6_neighbor_detail_cmd,
-       "debug ospf6 neighbor (state|event)",
-       DEBUG_STR
-       OSPF6_STR
-       "Debug OSPFv3 Neighbor\n"
-       "Debug OSPFv3 Neighbor State Change\n"
-       "Debug OSPFv3 Neighbor Event\n"
-      )
 
 DEFUN (no_debug_ospf6_neighbor,
        no_debug_ospf6_neighbor_cmd,
-       "no debug ospf6 neighbor",
+       "no debug ospf6 neighbor [<state|event>]",
        NO_STR
        DEBUG_STR
        OSPF6_STR
        "Debug OSPFv3 Neighbor\n"
-      )
+       "Debug OSPFv3 Neighbor State Change\n"
+       "Debug OSPFv3 Neighbor Event\n")
 {
+  int idx_type = 4;
   unsigned char level = 0;
-  if (argc)
+
+  if (argc == 5)
     {
-      if (! strncmp (argv[0], "s", 1))
+      if (! strncmp (argv[idx_type]->arg, "s", 1))
         level = OSPF6_DEBUG_NEIGHBOR_STATE;
-      if (! strncmp (argv[0], "e", 1))
+      if (! strncmp (argv[idx_type]->arg, "e", 1))
         level = OSPF6_DEBUG_NEIGHBOR_EVENT;
     }
   else
@@ -995,16 +968,50 @@ DEFUN (no_debug_ospf6_neighbor,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_debug_ospf6_neighbor,
-       no_debug_ospf6_neighbor_detail_cmd,
-       "no debug ospf6 neighbor (state|event)",
+
+DEFUN (no_debug_ospf6,
+       no_debug_ospf6_cmd,
+       "no debug ospf6",
        NO_STR
        DEBUG_STR
-       OSPF6_STR
-       "Debug OSPFv3 Neighbor\n"
-       "Debug OSPFv3 Neighbor State Change\n"
-       "Debug OSPFv3 Neighbor Event\n"
-      )
+       OSPF6_STR)
+{
+  u_int i;
+  struct ospf6_lsa_handler *handler = NULL;
+
+  OSPF6_DEBUG_ABR_OFF ();
+  OSPF6_DEBUG_ASBR_OFF ();
+  OSPF6_DEBUG_BROUTER_OFF ();
+  OSPF6_DEBUG_BROUTER_SPECIFIC_ROUTER_OFF ();
+  OSPF6_DEBUG_BROUTER_SPECIFIC_AREA_OFF ();
+  OSPF6_DEBUG_FLOODING_OFF ();
+  OSPF6_DEBUG_INTERFACE_OFF ();
+
+  for (i = 0; i < vector_active (ospf6_lsa_handler_vector); i++)
+    {
+      handler = vector_slot (ospf6_lsa_handler_vector, i);
+
+      if (handler != NULL)
+        {
+          UNSET_FLAG (handler->debug, OSPF6_LSA_DEBUG);
+        }
+    }
+
+  for (i = 0; i < 6; i++)
+    OSPF6_DEBUG_MESSAGE_OFF (i, OSPF6_DEBUG_NEIGHBOR_STATE | OSPF6_DEBUG_NEIGHBOR_EVENT);
+
+  OSPF6_DEBUG_NEIGHBOR_OFF (OSPF6_DEBUG_NEIGHBOR_STATE | OSPF6_DEBUG_NEIGHBOR_EVENT);
+  OSPF6_DEBUG_ROUTE_OFF (OSPF6_DEBUG_ROUTE_TABLE);
+  OSPF6_DEBUG_ROUTE_OFF (OSPF6_DEBUG_ROUTE_INTRA);
+  OSPF6_DEBUG_ROUTE_OFF (OSPF6_DEBUG_ROUTE_INTER);
+  OSPF6_DEBUG_ROUTE_OFF (OSPF6_DEBUG_ROUTE_MEMORY);
+  OSPF6_DEBUG_SPF_OFF (OSPF6_DEBUG_SPF_PROCESS);
+  OSPF6_DEBUG_SPF_OFF (OSPF6_DEBUG_SPF_TIME);
+  OSPF6_DEBUG_SPF_OFF (OSPF6_DEBUG_SPF_DATABASE);
+  OSPF6_DEBUG_ZEBRA_OFF (OSPF6_DEBUG_ZEBRA_SEND | OSPF6_DEBUG_ZEBRA_RECV);
+
+  return CMD_SUCCESS;
+}
 
 int
 config_write_ospf6_debug_neighbor (struct vty *vty)
@@ -1023,13 +1030,11 @@ void
 install_element_ospf6_debug_neighbor (void)
 {
   install_element (ENABLE_NODE, &debug_ospf6_neighbor_cmd);
-  install_element (ENABLE_NODE, &debug_ospf6_neighbor_detail_cmd);
   install_element (ENABLE_NODE, &no_debug_ospf6_neighbor_cmd);
-  install_element (ENABLE_NODE, &no_debug_ospf6_neighbor_detail_cmd);
+  install_element (ENABLE_NODE, &no_debug_ospf6_cmd);
   install_element (CONFIG_NODE, &debug_ospf6_neighbor_cmd);
-  install_element (CONFIG_NODE, &debug_ospf6_neighbor_detail_cmd);
   install_element (CONFIG_NODE, &no_debug_ospf6_neighbor_cmd);
-  install_element (CONFIG_NODE, &no_debug_ospf6_neighbor_detail_cmd);
+  install_element (CONFIG_NODE, &no_debug_ospf6_cmd);
 }
 
 

@@ -23,6 +23,7 @@
 #ifndef _ZEBRA_OSPF_INTERFACE_H
 #define _ZEBRA_OSPF_INTERFACE_H
 
+#include "qobj.h"
 #include "ospfd/ospf_packet.h"
 #include "ospfd/ospf_spf.h"
 
@@ -30,17 +31,8 @@
 #define IF_DEF_PARAMS(I) (IF_OSPF_IF_INFO (I)->def_params)
 #define IF_OIFS(I)  (IF_OSPF_IF_INFO (I)->oifs)
 #define IF_OIFS_PARAMS(I) (IF_OSPF_IF_INFO (I)->params)
-
-/* Despite the name, this macro probably is for specialist use only */
+			    
 #define OSPF_IF_PARAM_CONFIGURED(S, P) ((S) && (S)->P##__config)
-
-/* Test whether an OSPF interface parameter is set, generally, given some
- * existing ospf interface
- */
-#define OSPF_IF_PARAM_IS_SET(O,P) \
-      (OSPF_IF_PARAM_CONFIGURED ((O)->params, P) || \
-      OSPF_IF_PARAM_CONFIGURED(IF_DEF_PARAMS((O)->ifp)->P))
-
 #define OSPF_IF_PARAM(O, P) \
         (OSPF_IF_PARAM_CONFIGURED ((O)->params, P)?\
                         (O)->params->P:IF_DEF_PARAMS((O)->ifp)->P)
@@ -56,7 +48,8 @@ struct ospf_if_params
   DECLARE_IF_PARAM (u_int32_t, retransmit_interval); /* Retransmission Interval */
   DECLARE_IF_PARAM (u_char, passive_interface);      /* OSPF Interface is passive: no sending or receiving (no need to join multicast groups) */
   DECLARE_IF_PARAM (u_char, priority);               /* OSPF Interface priority */
-  DECLARE_IF_PARAM (struct in_addr, if_area);        /* Enable OSPF on this interface with area if_area */
+  /* Enable OSPF on this interface with area if_area */
+  DECLARE_IF_PARAM (struct in_addr, if_area);
   DECLARE_IF_PARAM (u_char, type);                   /* type of interface */
 #define OSPF_IF_ACTIVE                  0
 #define OSPF_IF_PASSIVE		        1
@@ -86,6 +79,9 @@ struct ospf_if_params
   
   /* Other, non-configuration state */
   u_int32_t network_lsa_seqnum;		/* Network LSA seqnum */
+
+  /* BFD configuration */
+  struct bfd_info *bfd_info;
 };
 
 enum
@@ -233,7 +229,10 @@ struct ospf_interface
   u_int32_t state_change;	/* Number of status change. */
 
   u_int32_t full_nbrs;
+
+  QOBJ_FIELDS
 };
+DECLARE_QOBJ_TYPE(ospf_interface)
 
 /* Prototypes. */
 extern char *ospf_if_name (struct ospf_interface *);

@@ -22,6 +22,7 @@
 #ifndef OSPF6_TOP_H
 #define OSPF6_TOP_H
 
+#include "qobj.h"
 #include "routemap.h"
 
 /* OSPFv3 top level data structure */
@@ -65,6 +66,9 @@ struct ospf6
 #define OSPF6_LOG_ADJACENCY_CHANGES      (1 << 0)
 #define OSPF6_LOG_ADJACENCY_DETAIL       (1 << 1)
 
+  /* LSA timer parameters */
+  unsigned int lsa_minarrival;         /* LSA minimum arrival in milliseconds. */
+
   /* SPF parameters */
   unsigned int spf_delay;		/* SPF delay time. */
   unsigned int spf_holdtime;		/* SPF hold time. */
@@ -90,7 +94,10 @@ struct ospf6
   u_char distance_external;
 
   struct route_table *distance_table;
+
+  QOBJ_FIELDS
 };
+DECLARE_QOBJ_TYPE(ospf6)
 
 #define OSPF6_DISABLED    0x01
 #define OSPF6_STUB_ROUTER 0x02
@@ -105,3 +112,5 @@ extern void ospf6_delete (struct ospf6 *o);
 extern void ospf6_maxage_remove (struct ospf6 *o);
 
 #endif /* OSPF6_TOP_H */
+
+

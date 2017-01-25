@@ -27,6 +27,8 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "prefix.h"
 #include "thread.h"
 #include "linklist.h"
+#include "queue.h"
+#include "memory.h"
 #include "filter.h"
 
 #include "bgpd/bgp_table.h"
@@ -309,7 +311,7 @@ bgp_dump_routes_index_table(struct bgp *bgp)
 
 static struct bgp_info *
 bgp_dump_route_node_record (int afi, struct bgp_node *rn,
-                            struct bgp_info *info, unsigned int seq)
+			    struct bgp_info *info, unsigned int seq)
 {
   struct stream *obuf;
   size_t sizep;
@@ -335,17 +337,13 @@ bgp_dump_route_node_record (int afi, struct bgp_node *rn,
   /* Prefix */
   if (afi == AFI_IP)
     {
-      /* We'll dump only the useful bits (those not 0), but have to
-       * align on 8 bits */
-      stream_write (obuf, (u_char *) &rn->p.u.prefix4, 
-                    (rn->p.prefixlen + 7) / 8);
+      /* We'll dump only the useful bits (those not 0), but have to align on 8 bits */
+      stream_write (obuf, (u_char *)&rn->p.u.prefix4, (rn->p.prefixlen+7)/8);
     }
   else if (afi == AFI_IP6)
     {
-      /* We'll dump only the useful bits (those not 0), but have to
-       * align on 8 bits */
-      stream_write (obuf, (u_char *) &rn->p.u.prefix6,
-                    (rn->p.prefixlen + 7) / 8);
+      /* We'll dump only the useful bits (those not 0), but have to align on 8 bits */
+      stream_write (obuf, (u_char *)&rn->p.u.prefix6, (rn->p.prefixlen+7)/8);
     }
 
   /* Save where we are now, so we can overwride the entry count later */
@@ -359,34 +357,30 @@ bgp_dump_route_node_record (int afi, struct bgp_node *rn,
 
   endp = stream_get_endp (obuf);
   for (; info; info = info->next)
+  {
+    size_t cur_endp;
+
+    /* Peer index */
+    stream_putw (obuf, info->peer->table_dump_index);
+
+    /* Originated */
+    stream_putl (obuf, time(NULL) - (bgp_clock() - info->uptime));
+
+    /* Dump attribute. */
+    /* Skip prefix & AFI/SAFI for MP_NLRI */
+    bgp_dump_routes_attr (obuf, info->attr, &rn->p);
+
+    cur_endp = stream_get_endp (obuf);
+    if (cur_endp > BGP_MAX_PACKET_SIZE + BGP_DUMP_MSG_HEADER
+                   + BGP_DUMP_HEADER_SIZE)
     {
-      size_t cur_endp;
-
-      /* Peer index */
-      stream_putw (obuf, info->peer->table_dump_index);
-
-      /* Originated */
-#ifdef HAVE_CLOCK_MONOTONIC
-      stream_putl (obuf, time (NULL) - (bgp_clock () - info->uptime));
-#else
-      stream_putl (obuf, info->uptime);
-#endif /* HAVE_CLOCK_MONOTONIC */
-
-      /* Dump attribute. */
-      /* Skip prefix & AFI/SAFI for MP_NLRI */
-      bgp_dump_routes_attr (obuf, info->attr, &rn->p);
-
-      cur_endp = stream_get_endp (obuf);
-      if (cur_endp > BGP_MAX_PACKET_SIZE + BGP_DUMP_MSG_HEADER
-          + BGP_DUMP_HEADER_SIZE)
-        {
-          stream_set_endp (obuf, endp);
-          break;
-        }
-
-      entry_count++;
-      endp = cur_endp;
+      stream_set_endp (obuf, endp);
+      break;
     }
+
+    entry_count++;
+    endp = cur_endp;
+  }
 
   /* Overwrite the entry count, now that we know the right number */
   stream_putw_at (obuf, sizep, entry_count);
@@ -396,6 +390,7 @@ bgp_dump_route_node_record (int afi, struct bgp_node *rn,
 
   return info;
 }
+
 
 /* Runs under child process. */
 static unsigned int
@@ -416,7 +411,7 @@ bgp_dump_routes_func (int afi, int first_run, unsigned int seq)
   /* Note that bgp_dump_routes_index_table will do ipv4 and ipv6 peers,
      so this should only be done on the first call to bgp_dump_routes_func.
      ( this function will be called once for ipv4 and once for ipv6 ) */
-  if(first_run)
+  if (first_run)
     bgp_dump_routes_index_table(bgp);
 
   /* Walk down each BGP route. */
@@ -427,7 +422,7 @@ bgp_dump_routes_func (int afi, int first_run, unsigned int seq)
       info = rn->info;
       while (info)
       {
-        info = bgp_dump_route_node_record(afi, rn, info, seq);
+        info = bgp_dump_route_node_record (afi, rn, info, seq);
         seq++;
       }
     }
@@ -675,7 +670,7 @@ bgp_dump_set (struct vty *vty, struct bgp_dump *bgp_dump,
 	}
 
       /* Setting interval string */
-      bgp_dump->interval_str = strdup (interval_str);
+      bgp_dump->interval_str = XSTRDUP(MTYPE_BGP_DUMP_STR, interval_str);
     }
   else
     {
@@ -689,7 +684,7 @@ bgp_dump_set (struct vty *vty, struct bgp_dump *bgp_dump,
   bgp_dump->interval = interval;
 
   /* Set file name. */
-  bgp_dump->filename = strdup (path);
+  bgp_dump->filename = XSTRDUP (MTYPE_BGP_DUMP_STR, path);
 
   /* Create interval thread. */
   bgp_dump_interval_add (bgp_dump, interval);
@@ -706,7 +701,7 @@ bgp_dump_unset (struct vty *vty, struct bgp_dump *bgp_dump)
   /* Removing file name. */
   if (bgp_dump->filename)
     {
-      free (bgp_dump->filename);
+      XFREE(MTYPE_BGP_DUMP_STR, bgp_dump->filename);
       bgp_dump->filename = NULL;
     }
 
@@ -729,7 +724,7 @@ bgp_dump_unset (struct vty *vty, struct bgp_dump *bgp_dump)
   /* Removing interval string. */
   if (bgp_dump->interval_str)
     {
-      free (bgp_dump->interval_str);
+      XFREE(MTYPE_BGP_DUMP_STR, bgp_dump->interval_str);
       bgp_dump->interval_str = NULL;
     }
   
@@ -738,22 +733,25 @@ bgp_dump_unset (struct vty *vty, struct bgp_dump *bgp_dump)
 
 DEFUN (dump_bgp_all,
        dump_bgp_all_cmd,
-       "dump bgp (all|all-et|updates|updates-et|routes-mrt) PATH [INTERVAL]",
+       "dump bgp <all|all-et|updates|updates-et|routes-mrt> PATH [INTERVAL]",
        "Dump packet\n"
        "BGP packet dump\n"
-       "Dump all BGP packets\nDump all BGP packets (Extended Tiemstamp Header)\n"
-       "Dump BGP updates only\nDump BGP updates only (Extended Tiemstamp Header)\n"
+       "Dump all BGP packets\nDump all BGP packets (Extended Timestamp Header)\n"
+       "Dump BGP updates only\nDump BGP updates only (Extended Timestamp Header)\n"
        "Dump whole BGP routing table\n"
        "Output filename\n"
        "Interval of output\n")
 {
+  int idx_dump_routes = 2;
+  int idx_path = 3;
+  int idx_interval = 4;
   int bgp_dump_type = 0;
   const char *interval = NULL;
   struct bgp_dump *bgp_dump_struct = NULL;
   const struct bgp_dump_type_map *map = NULL;
 
   for (map = bgp_dump_type_map; map->str; map++)
-    if (strcmp(argv[0], map->str) == 0)
+    if (strcmp(argv[idx_dump_routes]->arg, map->str) == 0)
       bgp_dump_type = map->type;
 
   switch (bgp_dump_type)
@@ -773,24 +771,53 @@ DEFUN (dump_bgp_all,
     }
 
   /* When an interval is given */
-  if (argc == 3)
-      interval = argv[2];
+  if (argc == idx_interval + 1)
+      interval = argv[idx_interval]->arg;
 
   return bgp_dump_set (vty, bgp_dump_struct, bgp_dump_type,
-                       argv[1], interval);
+                       argv[idx_path]->arg, interval);
 }
 
 DEFUN (no_dump_bgp_all,
        no_dump_bgp_all_cmd,
-       "no dump bgp (all|updates|routes-mrt) [PATH] [INTERVAL]",
+       "no dump bgp <all|all-et|updates|updates-et|routes-mrt> [PATH [INTERVAL]]",
        NO_STR
        "Stop dump packet\n"
        "Stop BGP packet dump\n"
-       "Stop dump process all/all-et\n"
-       "Stop dump process updates/updates-et\n"
-       "Stop dump process route-mrt\n")
+       "Stop dump process all\n"
+       "Stop dump process all-et\n"
+       "Stop dump process updates\n"
+       "Stop dump process updates-et\n"
+       "Stop dump process route-mrt\n"
+       "Output filename\n"
+       "Interval of output\n")
 {
-  return bgp_dump_unset (vty, &bgp_dump_all);
+  int idx_dump_routes = 3;
+  int bgp_dump_type = 0;
+  const struct bgp_dump_type_map *map = NULL;
+  struct bgp_dump *bgp_dump_struct = NULL;
+
+  for (map = bgp_dump_type_map; map->str; map++)
+    if (strcmp(argv[idx_dump_routes]->arg, map->str) == 0)
+      bgp_dump_type = map->type;
+
+  switch (bgp_dump_type)
+    {
+    case BGP_DUMP_ALL:
+    case BGP_DUMP_ALL_ET:
+      bgp_dump_struct = &bgp_dump_all;
+      break;
+    case BGP_DUMP_UPDATES:
+    case BGP_DUMP_UPDATES_ET:
+      bgp_dump_struct = &bgp_dump_updates;
+      break;
+    case BGP_DUMP_ROUTES:
+    default:
+      bgp_dump_struct = &bgp_dump_routes;
+      break;
+    }
+
+  return bgp_dump_unset (vty, bgp_dump_struct);
 }
 
 /* BGP node structure. */
@@ -855,7 +882,7 @@ config_write_bgp_dump (struct vty *vty)
 		 bgp_dump_updates.filename, bgp_dump_updates.interval_str,
 		 VTY_NEWLINE);
       else
-	vty_out (vty, "dump bgp updates %s%s", 
+	vty_out (vty, "dump bgp %s %s%s", type_str,
 		 bgp_dump_updates.filename, VTY_NEWLINE);
     }
   if (bgp_dump_routes.filename)
@@ -864,6 +891,10 @@ config_write_bgp_dump (struct vty *vty)
 	vty_out (vty, "dump bgp routes-mrt %s %s%s", 
 		 bgp_dump_routes.filename, bgp_dump_routes.interval_str,
 		 VTY_NEWLINE);
+      else
+        vty_out (vty, "dump bgp routes-mrt %s%s",
+                 bgp_dump_routes.filename, VTY_NEWLINE);
+
     }
   return 0;
 }

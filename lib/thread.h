@@ -23,12 +23,11 @@
 #define _ZEBRA_THREAD_H
 
 #include <zebra.h>
+#include "monotime.h"
 
 struct rusage_t
 {
-#ifdef HAVE_RUSAGE
   struct rusage cpu;
-#endif
   struct timeval real;
 };
 #define RUSAGE_T        struct rusage_t
@@ -51,6 +50,27 @@ struct pqueue;
  */
 typedef fd_set thread_fd_set;
 
+#if defined(HAVE_POLL)
+#include <poll.h>
+struct fd_handler
+{
+  /* number of pfd stored in pfds */
+  nfds_t pfdcount;
+  /* number of pfd stored in pfds + number of snmp pfd */
+  nfds_t pfdcountsnmp;
+  /* number of pfd that fit in the allocated space of pfds */
+  nfds_t pfdsize;
+  struct pollfd *pfds;
+};
+#else
+struct fd_handler
+{
+  fd_set readfd;
+  fd_set writefd;
+  fd_set exceptfd;
+};
+#endif
+
 /* Master of the theads. */
 struct thread_master
 {
@@ -62,9 +82,7 @@ struct thread_master
   struct thread_list unuse;
   struct pqueue *background;
   int fd_limit;
-  thread_fd_set readfd;
-  thread_fd_set writefd;
-  thread_fd_set exceptfd;
+  struct fd_handler handler;
   unsigned long alloc;
 };
 
@@ -88,6 +106,7 @@ struct thread
   int index;			/* used for timers to store position in queue */
   struct timeval real;
   struct cpu_thread_history *hist; /* cache pointer to cpu_history */
+  unsigned long yield; /* yield time in us */
   const char *funcname;
   const char *schedfrom;
   int schedfrom_line;
@@ -97,23 +116,23 @@ struct cpu_thread_history
 {
   int (*func)(struct thread *);
   unsigned int total_calls;
+  unsigned int total_active;
   struct time_stats
   {
     unsigned long total, max;
   } real;
-#ifdef HAVE_RUSAGE
   struct time_stats cpu;
-#endif
   thread_type types;
   const char *funcname;
 };
 
 /* Clocks supported by Quagga */
 enum quagga_clkid {
-  QUAGGA_CLK_REALTIME = 0,	/* ala gettimeofday() */
-  QUAGGA_CLK_MONOTONIC,		/* monotonic, against an indeterminate base */
-  QUAGGA_CLK_REALTIME_STABILISED, /* like realtime, but non-decrementing */
+  QUAGGA_CLK_MONOTONIC = 1,	/* monotonic, against an indeterminate base */
 };
+
+/* Struct timeval's tv_usec one second value.  */
+#define TIMER_SECOND_MICRO 1000000L
 
 /* Thread types. */
 #define THREAD_READ           0
@@ -172,10 +191,11 @@ enum quagga_clkid {
 
 #define debugargdef  const char *funcname, const char *schedfrom, int fromln
 
-#define thread_add_read(m,f,a,v) funcname_thread_add_read(m,f,a,v,#f,__FILE__,__LINE__)
-#define thread_add_write(m,f,a,v) funcname_thread_add_write(m,f,a,v,#f,__FILE__,__LINE__)
+#define thread_add_read(m,f,a,v) funcname_thread_add_read_write(THREAD_READ,m,f,a,v,#f,__FILE__,__LINE__)
+#define thread_add_write(m,f,a,v) funcname_thread_add_read_write(THREAD_WRITE,m,f,a,v,#f,__FILE__,__LINE__)
 #define thread_add_timer(m,f,a,v) funcname_thread_add_timer(m,f,a,v,#f,__FILE__,__LINE__)
 #define thread_add_timer_msec(m,f,a,v) funcname_thread_add_timer_msec(m,f,a,v,#f,__FILE__,__LINE__)
+#define thread_add_timer_tv(m,f,a,v) funcname_thread_add_timer_tv(m,f,a,v,#f,__FILE__,__LINE__)
 #define thread_add_event(m,f,a,v) funcname_thread_add_event(m,f,a,v,#f,__FILE__,__LINE__)
 #define thread_execute(m,f,a,v) funcname_thread_execute(m,f,a,v,#f,__FILE__,__LINE__)
 
@@ -185,19 +205,21 @@ enum quagga_clkid {
 /* Prototypes. */
 extern struct thread_master *thread_master_create (void);
 extern void thread_master_free (struct thread_master *);
+extern void thread_master_free_unused(struct thread_master *);
 
-extern struct thread *funcname_thread_add_read (struct thread_master *, 
+extern struct thread *funcname_thread_add_read_write (int dir, struct thread_master *,
 				                int (*)(struct thread *),
 				                void *, int, debugargdef);
-extern struct thread *funcname_thread_add_write (struct thread_master *,
-				                 int (*)(struct thread *),
-				                 void *, int, debugargdef);
 extern struct thread *funcname_thread_add_timer (struct thread_master *,
 				                 int (*)(struct thread *),
 				                 void *, long, debugargdef);
 extern struct thread *funcname_thread_add_timer_msec (struct thread_master *,
 				                      int (*)(struct thread *),
 				                      void *, long, debugargdef);
+extern struct thread *funcname_thread_add_timer_tv (struct thread_master *,
+				                    int (*)(struct thread *),
+				                    void *, struct timeval *,
+						    debugargdef);
 extern struct thread *funcname_thread_add_event (struct thread_master *,
 				                 int (*)(struct thread *),
 				                 void *, int, debugargdef);
@@ -218,19 +240,12 @@ extern void thread_call (struct thread *);
 extern unsigned long thread_timer_remain_second (struct thread *);
 extern struct timeval thread_timer_remain(struct thread*);
 extern int thread_should_yield (struct thread *);
-extern unsigned long timeval_elapsed (struct timeval a, struct timeval b);
+/* set yield time for thread */
+extern void thread_set_yield_time (struct thread *, unsigned long);
 
 /* Internal libzebra exports */
 extern void thread_getrusage (RUSAGE_T *);
-extern struct cmd_element show_thread_cpu_cmd;
-extern struct cmd_element clear_thread_cpu_cmd;
-
-/* replacements for the system gettimeofday(), clock_gettime() and
- * time() functions, providing support for non-decrementing clock on
- * all systems, and fully monotonic on /some/ systems.
- */
-extern int quagga_gettime (enum quagga_clkid, struct timeval *);
-extern time_t quagga_time (time_t *);
+extern void thread_cmd_init (void);
 
 /* Returns elapsed real (wall clock) time. */
 extern unsigned long thread_consumed_time(RUSAGE_T *after, RUSAGE_T *before,
@@ -240,8 +255,6 @@ extern unsigned long thread_consumed_time(RUSAGE_T *after, RUSAGE_T *before,
    be used instead of calling gettimeofday if a recent value is sufficient.
    This is guaranteed to be refreshed before a thread is called. */
 extern struct timeval recent_time;
-/* Similar to recent_time, but a monotonically increasing time value */
-extern struct timeval recent_relative_time (void);
 
 /* only for use in logging functions! */
 extern struct thread *thread_current;

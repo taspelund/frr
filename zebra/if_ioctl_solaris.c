@@ -28,6 +28,7 @@
 #include "ioctl.h"
 #include "connected.h"
 #include "memory.h"
+#include "zebra_memory.h"
 #include "log.h"
 #include "privs.h"
 #include "vrf.h"
@@ -176,12 +177,7 @@ calculate_lifc_len:     /* must hold privileges to enter here */
 
       if (lifreq->lifr_addr.ss_family == AF_INET6)
         {
-#ifdef HAVE_IPV6
           ifp->flags |= IFF_IPV6;
-#else
-          lifreq++;
-          continue;
-#endif /* HAVE_IPV6 */
         }
         
       if_add_update (ifp);
@@ -308,7 +304,6 @@ if_get_addr (struct interface *ifp, struct sockaddr *addr, const char *label)
           dest_pnt = (char *) &SIN (&dest)->sin_addr;
         }
     }
-#ifdef HAVE_IPV6
   else if (af == AF_INET6)
     {
       if (if_ioctl_ipv6 (SIOCGLIFSUBNET, (caddr_t) & lifreq) < 0)
@@ -324,17 +319,14 @@ if_get_addr (struct interface *ifp, struct sockaddr *addr, const char *label)
 	  prefixlen = lifreq.lifr_addrlen;
 	}
     }
-#endif /* HAVE_IPV6 */
 
   /* Set address to the interface. */
   if (af == AF_INET)
     connected_add_ipv4 (ifp, flags, &SIN (addr)->sin_addr, prefixlen,
                         (struct in_addr *) dest_pnt, label);
-#ifdef HAVE_IPV6
   else if (af == AF_INET6)
     connected_add_ipv6 (ifp, flags, &SIN6 (addr)->sin6_addr, prefixlen,
                         (struct in6_addr *) dest_pnt, label);
-#endif /* HAVE_IPV6 */
 
   return 0;
 }
@@ -351,11 +343,11 @@ interface_info_ioctl (struct interface *ifp)
 
 /* Lookup all interface information. */
 void
-interface_list (struct zebra_vrf *zvrf)
+interface_list (struct zebra_ns *zns)
 {
-  if (zvrf->vrf_id != VRF_DEFAULT)
+  if (zns->ns_id != NS_DEFAULT)
     {
-      zlog_warn ("interface_list: ignore VRF %u", zvrf->vrf_id);
+      zlog_warn ("interface_list: ignore NS %u", zns->ns_id);
       return;
     }
   interface_list_ioctl (AF_INET);
@@ -366,7 +358,6 @@ interface_list (struct zebra_vrf *zvrf)
 struct connected *
 if_lookup_linklocal (struct interface *ifp)
 {
-#ifdef HAVE_IPV6
   struct listnode *node;
   struct connected *ifc;
 
@@ -379,7 +370,6 @@ if_lookup_linklocal (struct interface *ifp)
           (IN6_IS_ADDR_LINKLOCAL (&ifc->address->u.prefix6)))
         return ifc;
     }
-#endif /* HAVE_IPV6 */
 
   return NULL;
 }

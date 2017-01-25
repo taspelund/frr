@@ -26,6 +26,8 @@
 #include <zclient.h>
 #include <vty.h>
 
+#include "ripng_memory.h"
+
 /* RIPng version and port number. */
 #define RIPNG_V1                         1
 #define RIPNG_PORT_DEFAULT             521
@@ -146,7 +148,7 @@ struct ripng
 struct rte
 {
   struct in6_addr addr;	/* RIPng destination prefix */
-  u_short tag;		/* RIPng tag */
+  u_int16_t tag;		/* RIPng tag */
   u_char prefixlen;	/* Length of the RIPng prefix */
   u_char metric;	/* Metric of the RIPng route */
   			/* The nexthop is stored by the structure
@@ -176,7 +178,7 @@ struct ripng_info
   struct in6_addr from;
 
   /* Which interface does this route come from. */
-  ifindex_t ifindex;		
+  ifindex_t ifindex;
 
   /* Metric of this route.  */
   u_char metric;		
@@ -200,7 +202,7 @@ struct ripng_info
   struct in6_addr nexthop_out;
   u_char metric_set;
   u_char metric_out;
-  u_short tag_out;
+  u_int16_t tag_out;
 
   struct route_node *rp;
 };
@@ -355,8 +357,7 @@ extern void ripng_route_map_init (void);
 extern void ripng_route_map_reset (void);
 extern void ripng_terminate (void);
  /* zclient_init() is done by ripng_zebra.c:zebra_init() */
-extern void zebra_init (struct thread_master *);
-extern void ripng_zclient_start (void);
+extern void zebra_init(struct thread_master *);
 extern void ripng_zclient_reset (void);
 extern void ripng_offset_init (void);
 
@@ -381,7 +382,7 @@ extern void ripng_info_free (struct ripng_info *rinfo);
 extern void ripng_event (enum ripng_event, int);
 extern int ripng_request (struct interface *ifp);
 extern void ripng_redistribute_add (int, int, struct prefix_ipv6 *,
-                                    ifindex_t, struct in6_addr *);
+                                    ifindex_t, struct in6_addr *, route_tag_t);
 extern void ripng_redistribute_delete (int, int, struct prefix_ipv6 *,
                                        ifindex_t);
 extern void ripng_redistribute_withdraw (int type);

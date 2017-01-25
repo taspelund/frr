@@ -74,9 +74,7 @@ struct prefix
   {
     u_char prefix;
     struct in_addr prefix4;
-#ifdef HAVE_IPV6
     struct in6_addr prefix6;
-#endif /* HAVE_IPV6 */
     struct 
     {
       struct in_addr id;
@@ -97,14 +95,12 @@ struct prefix_ipv4
 };
 
 /* IPv6 prefix structure. */
-#ifdef HAVE_IPV6
 struct prefix_ipv6
 {
   u_char family;
   u_char prefixlen;
   struct in6_addr prefix __attribute__ ((aligned (8)));
 };
-#endif /* HAVE_IPV6 */
 
 struct prefix_ls
 {
@@ -136,6 +132,14 @@ struct prefix_ptr
   u_char family;
   u_char prefixlen;
   uintptr_t prefix __attribute__ ((aligned (8)));
+};
+
+struct prefix_sg
+{
+  u_char family;
+  u_char prefixlen;
+  struct in_addr src __attribute ((aligned (8)));
+  struct in_addr grp;
 };
 
 /* helper to get type safety/avoid casts on calls
@@ -225,6 +229,9 @@ extern void prefix_free (struct prefix *);
 extern const char *prefix_family_str (const struct prefix *);
 extern int prefix_blen (const struct prefix *);
 extern int str2prefix (const char *, struct prefix *);
+
+#define PREFIX2STR_BUFFER  PREFIX_STRLEN
+
 extern const char *prefix2str (union prefix46constptr, char *, int);
 extern int prefix_match (const struct prefix *, const struct prefix *);
 extern int prefix_same (const struct prefix *, const struct prefix *);
@@ -263,7 +270,6 @@ extern in_addr_t ipv4_broadcast_addr (in_addr_t hostaddr, int masklen);
 
 extern int netmask_str2prefix_str (const char *, const char *, char *);
 
-#ifdef HAVE_IPV6
 extern struct prefix_ipv6 *prefix_ipv6_new (void);
 extern void prefix_ipv6_free (struct prefix_ipv6 *);
 extern int str2prefix_ipv6 (const char *, struct prefix_ipv6 *);
@@ -278,17 +284,42 @@ extern void masklen2ip6 (const int, struct in6_addr *);
 extern void str2in6_addr (const char *, struct in6_addr *);
 extern const char *inet6_ntoa (struct in6_addr);
 
-#endif /* HAVE_IPV6 */
+static inline int ipv6_martian (struct in6_addr *addr)
+{
+  struct in6_addr localhost_addr;
+
+  inet_pton (AF_INET6, "::1", &localhost_addr);
+
+  if (IPV6_ADDR_SAME(&localhost_addr, addr))
+    return 1;
+
+  return 0;
+}
 
 extern int all_digit (const char *);
 
+/* NOTE: This routine expects the address argument in network byte order. */
 static inline int ipv4_martian (struct in_addr *addr)
 {
-  in_addr_t ip = addr->s_addr;
+  in_addr_t ip = ntohl(addr->s_addr);
 
   if (IPV4_NET0(ip) || IPV4_NET127(ip) || IPV4_CLASS_DE(ip)) {
     return 1;
   }
+  return 0;
+}
+
+static inline int
+is_default_prefix (struct prefix *p)
+{
+  if (!p)
+    return 0;
+
+  if (((p->family == AF_INET) && (p->u.prefix4.s_addr == INADDR_ANY))
+      || ((p->family == AF_INET6) &&
+          !memcmp(&p->u.prefix6, &in6addr_any, sizeof (struct in6_addr))))
+    return 1;
+
   return 0;
 }
 

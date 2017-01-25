@@ -28,6 +28,7 @@
 #include "vty.h"
 #include "command.h"
 #include "memory.h"
+#include "memory_vty.h"
 #include "thread.h"
 #include "log.h"
 #include "prefix.h"
@@ -69,11 +70,11 @@ zebra_capabilities_t _caps_p [] =
 
 struct zebra_privs_t ripngd_privs =
 {
-#if defined(QUAGGA_USER)
-  .user = QUAGGA_USER,
+#if defined(FRR_USER)
+  .user = FRR_USER,
 #endif
-#if defined QUAGGA_GROUP
-  .group = QUAGGA_GROUP,
+#if defined FRR_GROUP
+  .group = FRR_GROUP,
 #endif
 #ifdef VTY_GROUP
   .vty_group = VTY_GROUP,
@@ -124,7 +125,7 @@ Daemon which manages RIPng.\n\n\
 -C, --dryrun       Check configuration for validity and exit\n\
 -h, --help         Display this help and exit\n\
 \n\
-Report bugs to %s\n", progname, ZEBRA_BUG_ADDRESS);
+Report bugs to %s\n", progname, FRR_BUG_ADDRESS);
     }
   exit (status);
 }
@@ -201,8 +202,12 @@ main (int argc, char **argv)
   /* get program name */
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
-  zlog_default = openzlog(progname, ZLOG_RIPNG,
+  zlog_default = openzlog(progname, ZLOG_RIPNG, 0,
 			  LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
+  zprivs_init (&ripngd_privs);
+#if defined(HAVE_CUMULUS)
+  zlog_set_level (NULL, ZLOG_DEST_SYSLOG, zlog_default->default_lvl);
+#endif
 
   while (1) 
     {
@@ -272,7 +277,6 @@ main (int argc, char **argv)
   master = thread_master_create ();
 
   /* Library inits. */
-  zprivs_init (&ripngd_privs);
   signal_init (master, array_size(ripng_signals), ripng_signals);
   cmd_init (1);
   vty_init (master);
@@ -281,7 +285,7 @@ main (int argc, char **argv)
 
   /* RIPngd inits. */
   ripng_init ();
-  zebra_init (master);
+  zebra_init(master);
   ripng_peer_init ();
 
   /* Get configuration file. */
@@ -305,7 +309,7 @@ main (int argc, char **argv)
   pid_output (pid_file);
 
   /* Print banner. */
-  zlog_notice ("RIPNGd %s starting: vty@%d", QUAGGA_VERSION, vty_port);
+  zlog_notice ("RIPNGd %s starting: vty@%d", FRR_VERSION, vty_port);
 
   /* Fetch next active thread. */
   while (thread_fetch (master, &thread))

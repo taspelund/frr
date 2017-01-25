@@ -81,10 +81,10 @@
 SNMP_LOCAL_VARIABLES
 
 /* RIP-MIB instances. */
-oid rip_oid [] = { RIPV2MIB };
+static oid rip_oid [] = { RIPV2MIB };
 
 /* Interface cache table sorted by interface's address. */
-struct route_table *rip_ifaddr_table;
+static struct route_table *rip_ifaddr_table;
 
 /* Hook functions. */
 static u_char *rip2Globals (struct variable *, oid [], size_t *,
@@ -96,7 +96,7 @@ static u_char *rip2IfConfAddress (struct variable *, oid [], size_t *,
 static u_char *rip2PeerTable (struct variable *, oid [], size_t *,
 			      int, size_t *, WriteMethod **);
 
-struct variable rip_variables[] = 
+static struct variable rip_variables[] =
 {
   /* RIP Global Counters. */
   {RIP2GLOBALROUTECHANGES,    COUNTER, RONLY, rip2Globals,
@@ -255,7 +255,7 @@ rip2IfLookup (struct variable *v, oid name[], size_t *length,
 
       oid2in_addr (name + v->namelen, sizeof (struct in_addr), addr);
 
-      return if_lookup_exact_address (*addr);
+      return if_lookup_exact_address ((void *)addr, AF_INET);
     }
   else
     {

@@ -51,10 +51,11 @@ ripng_zebra_ipv6_send (struct route_node *rp, u_char cmd)
   struct ripng_info *rinfo = NULL;
   int count = 0;
 
-  if (vrf_bitmap_check (zclient->redist[ZEBRA_ROUTE_RIPNG], VRF_DEFAULT))
+  if (vrf_bitmap_check (zclient->redist[AFI_IP6][ZEBRA_ROUTE_RIPNG], VRF_DEFAULT))
     {
       api.vrf_id = VRF_DEFAULT;
       api.type = ZEBRA_ROUTE_RIPNG;
+      api.instance = 0;
       api.flags = 0;
       api.message = 0;
       api.safi = SAFI_UNICAST;
@@ -90,6 +91,12 @@ ripng_zebra_ipv6_send (struct route_node *rp, u_char cmd)
 
       SET_FLAG (api.message, ZAPI_MESSAGE_METRIC);
       api.metric = rinfo->metric;
+
+      if (rinfo->tag)
+        {
+          SET_FLAG (api.message, ZAPI_MESSAGE_TAG);
+          api.tag = rinfo->tag;
+        }
 
       zapi_ipv6_route (cmd, zclient,
                        (struct prefix_ipv6 *)&rp->p, &api);
@@ -134,7 +141,6 @@ ripng_zebra_read_ipv6 (int command, struct zclient *zclient,
   unsigned long ifindex;
   struct in6_addr nexthop;
   struct prefix_ipv6 p;
-  unsigned char plength = 0;
 
   s = zclient->ibuf;
   ifindex = 0;
@@ -142,14 +148,14 @@ ripng_zebra_read_ipv6 (int command, struct zclient *zclient,
 
   /* Type, flags, message. */
   api.type = stream_getc (s);
-  api.flags = stream_getc (s);
+  api.instance = stream_getw (s);
+  api.flags = stream_getl (s);
   api.message = stream_getc (s);
 
   /* IPv6 prefix. */
   memset (&p, 0, sizeof (struct prefix_ipv6));
   p.family = AF_INET6;
-  plength = stream_getc (s);
-  p.prefixlen = MIN(IPV6_MAX_PREFIXLEN, plength);
+  p.prefixlen = MIN(IPV6_MAX_PREFIXLEN, stream_getc (s));
   stream_get (&p.prefix, s, PSIZE (p.prefixlen));
 
   /* Nexthop, ifindex, distance, metric. */
@@ -172,8 +178,13 @@ ripng_zebra_read_ipv6 (int command, struct zclient *zclient,
   else
     api.metric = 0;
 
-  if (command == ZEBRA_IPV6_ROUTE_ADD)
-    ripng_redistribute_add (api.type, RIPNG_ROUTE_REDISTRIBUTE, &p, ifindex, &nexthop);
+  if (CHECK_FLAG (api.message, ZAPI_MESSAGE_TAG))
+    api.tag = stream_getl (s);
+  else
+    api.tag = 0;
+
+  if (command == ZEBRA_REDISTRIBUTE_IPV6_ADD)
+    ripng_redistribute_add (api.type, RIPNG_ROUTE_REDISTRIBUTE, &p, ifindex, &nexthop, api.tag);
   else
     ripng_redistribute_delete (api.type, RIPNG_ROUTE_REDISTRIBUTE, &p, ifindex);
 
@@ -189,14 +200,14 @@ ripng_zclient_reset (void)
 static int
 ripng_redistribute_unset (int type)
 {
-  if (! vrf_bitmap_check (zclient->redist[type], VRF_DEFAULT))
+
+  if (! vrf_bitmap_check (zclient->redist[AFI_IP6][type], VRF_DEFAULT))
     return CMD_SUCCESS;
 
-  vrf_bitmap_set (zclient->redist[type], VRF_DEFAULT);
+  vrf_bitmap_set (zclient->redist[AFI_IP6][type], VRF_DEFAULT);
 
   if (zclient->sock > 0)
-    zebra_redistribute_send (ZEBRA_REDISTRIBUTE_DELETE, zclient, type,
-                             VRF_DEFAULT);
+    zebra_redistribute_send (ZEBRA_REDISTRIBUTE_DELETE, zclient, AFI_IP6, type, 0, VRF_DEFAULT);
 
   ripng_redistribute_withdraw (type);
   
@@ -206,7 +217,7 @@ ripng_redistribute_unset (int type)
 int
 ripng_redistribute_check (int type)
 {
-  return vrf_bitmap_check (zclient->redist[type], VRF_DEFAULT);
+  return vrf_bitmap_check (zclient->redist[AFI_IP6][type], VRF_DEFAULT);
 }
 
 static void
@@ -255,7 +266,7 @@ static struct {
   {ZEBRA_ROUTE_STATIC,  1, "static"},
   {ZEBRA_ROUTE_OSPF6,   1, "ospf6"},
   {ZEBRA_ROUTE_BGP,     2, "bgp"},
-  {ZEBRA_ROUTE_BABEL,   2, "babel"},
+  {ZEBRA_ROUTE_VNC,     1, "vnc"},
   {0, 0, NULL}
 };
 
@@ -266,43 +277,19 @@ ripng_redistribute_clean ()
 
   for (i = 0; redist_type[i].str; i++)
     {
-      if (vrf_bitmap_check (zclient->redist[redist_type[i].type], VRF_DEFAULT))
+      if (vrf_bitmap_check (zclient->redist[AFI_IP6][redist_type[i].type], VRF_DEFAULT))
         {
           if (zclient->sock > 0)
             zebra_redistribute_send (ZEBRA_REDISTRIBUTE_DELETE,
-                                     zclient, redist_type[i].type,
+                                     zclient, AFI_IP6, redist_type[i].type, 0,
                                      VRF_DEFAULT);
 
-          vrf_bitmap_unset (zclient->redist[redist_type[i].type], VRF_DEFAULT);
+          vrf_bitmap_unset (zclient->redist[AFI_IP6][redist_type[i].type], VRF_DEFAULT);
 
           /* Remove the routes from RIPng table. */
           ripng_redistribute_withdraw (redist_type[i].type);
         }
     }
-}
-
-DEFUN (router_zebra,
-       router_zebra_cmd,
-       "router zebra",
-       "Enable a routing process\n"
-       "Make connection to zebra daemon\n")
-{
-  vty->node = ZEBRA_NODE;
-  zclient->enable = 1;
-  zclient_start (zclient);
-  return CMD_SUCCESS;
-}
-
-DEFUN (no_router_zebra,
-       no_router_zebra_cmd,
-       "no router zebra",
-       NO_STR
-       "Disable a routing process\n"
-       "Stop connection to zebra daemon\n")
-{
-  zclient->enable = 0;
-  zclient_stop (zclient);
-  return CMD_SUCCESS;
 }
 
 DEFUN (ripng_redistribute_ripng,
@@ -311,7 +298,7 @@ DEFUN (ripng_redistribute_ripng,
        "Redistribute information from another routing protocol\n"
        "RIPng route\n")
 {
-  vrf_bitmap_set (zclient->redist[ZEBRA_ROUTE_RIPNG], VRF_DEFAULT);
+  vrf_bitmap_set (zclient->redist[AFI_IP6][ZEBRA_ROUTE_RIPNG], VRF_DEFAULT);
   return CMD_SUCCESS;
 }
 
@@ -322,44 +309,50 @@ DEFUN (no_ripng_redistribute_ripng,
        "Redistribute information from another routing protocol\n"
        "RIPng route\n")
 {
-  vrf_bitmap_unset (zclient->redist[ZEBRA_ROUTE_RIPNG], VRF_DEFAULT);
+  vrf_bitmap_unset (zclient->redist[AFI_IP6][ZEBRA_ROUTE_RIPNG], VRF_DEFAULT);
   return CMD_SUCCESS;
 }
 
 DEFUN (ripng_redistribute_type,
        ripng_redistribute_type_cmd,
-       "redistribute " QUAGGA_REDIST_STR_RIPNGD,
+       "redistribute <kernel|connected|static|ospf6|isis|bgp|table>",
        "Redistribute\n"
-       QUAGGA_REDIST_HELP_STR_RIPNGD)
+       FRR_REDIST_HELP_STR_RIPNGD)
 {
   int type;
 
-  type = proto_redistnum(AFI_IP6, argv[0]);
+  char *proto = argv[argc - 1]->text;
+  type = proto_redistnum(AFI_IP6, proto);
 
   if (type < 0)
     {
-      vty_out(vty, "Invalid type %s%s", argv[0], VTY_NEWLINE);
+      vty_out(vty, "Invalid type %s%s", proto, VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  zclient_redistribute (ZEBRA_REDISTRIBUTE_ADD, zclient, type, VRF_DEFAULT);
+  zclient_redistribute (ZEBRA_REDISTRIBUTE_ADD, zclient, AFI_IP6, type, 0, VRF_DEFAULT);
   return CMD_SUCCESS;
 }
 
 DEFUN (no_ripng_redistribute_type,
        no_ripng_redistribute_type_cmd,
-       "no redistribute " QUAGGA_REDIST_STR_RIPNGD,
+       "no redistribute <kernel|connected|static|ospf6|isis|bgp|table> [metric (0-16)] [route-map WORD]",
        NO_STR
        "Redistribute\n"
-       QUAGGA_REDIST_HELP_STR_RIPNGD)
+       FRR_REDIST_HELP_STR_RIPNGD
+       "Metric\n"
+       "Metric value\n"
+       "Route map reference\n"
+       "Pointer to route-map entries\n")
 {
   int type;
 
-  type = proto_redistnum(AFI_IP6, argv[0]);
+  char *proto = argv[2]->text;
+  type = proto_redistnum(AFI_IP6, proto);
 
   if (type < 0)
     {
-      vty_out(vty, "Invalid type %s%s", argv[0], VTY_NEWLINE);
+      vty_out(vty, "Invalid type %s%s", proto, VTY_NEWLINE);
       return CMD_WARNING;
     }
 
@@ -371,106 +364,88 @@ DEFUN (no_ripng_redistribute_type,
 
 DEFUN (ripng_redistribute_type_metric,
        ripng_redistribute_type_metric_cmd,
-       "redistribute " QUAGGA_REDIST_STR_RIPNGD " metric <0-16>",
+       "redistribute <kernel|connected|static|ospf6|isis|bgp|table> metric (0-16)",
        "Redistribute\n"
-       QUAGGA_REDIST_HELP_STR_RIPNGD
+       FRR_REDIST_HELP_STR_RIPNGD
        "Metric\n"
        "Metric value\n")
 {
+  int idx_protocol = 1;
+  int idx_number = 3;
   int type;
   int metric;
 
-  metric = atoi (argv[1]);
-  type = proto_redistnum(AFI_IP6, argv[0]);
+  metric = atoi (argv[idx_number]->arg);
+  type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
 
   if (type < 0)
     {
-      vty_out(vty, "Invalid type %s%s", argv[0], VTY_NEWLINE);
+      vty_out(vty, "Invalid type %s%s", argv[idx_protocol]->text, VTY_NEWLINE);
       return CMD_WARNING;
     }
 
   ripng_redistribute_metric_set (type, metric);
-  zclient_redistribute (ZEBRA_REDISTRIBUTE_ADD, zclient, type, VRF_DEFAULT);
+  zclient_redistribute (ZEBRA_REDISTRIBUTE_ADD, zclient, AFI_IP6, type, 0,
+                        VRF_DEFAULT);
   return CMD_SUCCESS;
 }
 
-ALIAS (no_ripng_redistribute_type,
-       no_ripng_redistribute_type_metric_cmd,
-       "no redistribute " QUAGGA_REDIST_STR_RIPNGD " metric <0-16>",
-       NO_STR
-       "Redistribute\n"
-       QUAGGA_REDIST_HELP_STR_RIPNGD
-       "Metric\n"
-       "Metric value\n")
-
 DEFUN (ripng_redistribute_type_routemap,
        ripng_redistribute_type_routemap_cmd,
-       "redistribute " QUAGGA_REDIST_STR_RIPNGD " route-map WORD",
+       "redistribute <kernel|connected|static|ospf6|isis|bgp|table> route-map WORD",
        "Redistribute\n"
-       QUAGGA_REDIST_HELP_STR_RIPNGD
+       FRR_REDIST_HELP_STR_RIPNGD
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
+  int idx_protocol = 1;
+  int idx_word = 3;
   int type;
 
-  type = proto_redistnum(AFI_IP6, argv[0]);
+  type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
 
   if (type < 0)
     {
-      vty_out(vty, "Invalid type %s%s", argv[0], VTY_NEWLINE);
+      vty_out(vty, "Invalid type %s%s", argv[idx_protocol]->text, VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  ripng_redistribute_routemap_set (type, argv[1]);
-  zclient_redistribute (ZEBRA_REDISTRIBUTE_ADD, zclient, type, VRF_DEFAULT);
+  ripng_redistribute_routemap_set (type, argv[idx_word]->text);
+  zclient_redistribute (ZEBRA_REDISTRIBUTE_ADD, zclient, AFI_IP6, type, 0,
+                        VRF_DEFAULT);
  return CMD_SUCCESS;
 }
 
-ALIAS (no_ripng_redistribute_type,
-       no_ripng_redistribute_type_routemap_cmd,
-       "no redistribute " QUAGGA_REDIST_STR_RIPNGD " route-map WORD",
-       NO_STR
-       "Redistribute\n"
-       QUAGGA_REDIST_HELP_STR_RIPNGD
-       "Route map reference\n"
-       "Pointer to route-map entries\n")
-
 DEFUN (ripng_redistribute_type_metric_routemap,
        ripng_redistribute_type_metric_routemap_cmd,
-       "redistribute " QUAGGA_REDIST_STR_RIPNGD " metric <0-16> route-map WORD",
+       "redistribute <kernel|connected|static|ospf6|isis|bgp|table> metric (0-16) route-map WORD",
        "Redistribute\n"
-       QUAGGA_REDIST_HELP_STR_RIPNGD
+       FRR_REDIST_HELP_STR_RIPNGD
        "Metric\n"
        "Metric value\n"
        "Route map reference\n"
        "Pointer to route-map entries\n")
 {
+  int idx_protocol = 1;
+  int idx_number = 3;
+  int idx_word = 5;
   int type;
   int metric;
 
-  type = proto_redistnum(AFI_IP6, argv[0]);
-  metric = atoi (argv[1]);
+  type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
+  metric = atoi (argv[idx_number]->arg);
 
   if (type < 0)
     {
-      vty_out(vty, "Invalid type %s%s", argv[0], VTY_NEWLINE);
+      vty_out(vty, "Invalid type %s%s", argv[idx_protocol]->text, VTY_NEWLINE);
       return CMD_WARNING;
     }
 
   ripng_redistribute_metric_set (type, metric);
-  ripng_redistribute_routemap_set (type, argv[2]);
-  zclient_redistribute (ZEBRA_REDISTRIBUTE_ADD, zclient, type, VRF_DEFAULT);
+  ripng_redistribute_routemap_set (type, argv[idx_word]->text);
+  zclient_redistribute (ZEBRA_REDISTRIBUTE_ADD, zclient, AFI_IP6, type, 0, VRF_DEFAULT);
   return CMD_SUCCESS;
 }
-
-ALIAS (no_ripng_redistribute_type,
-       no_ripng_redistribute_type_metric_routemap_cmd,
-       "no redistribute " QUAGGA_REDIST_STR_RIPNGD " metric <0-16> route-map WORD",
-       NO_STR
-       "Redistribute\n"
-       QUAGGA_REDIST_HELP_STR_RIPNGD
-       "Route map reference\n"
-       "Pointer to route-map entries\n")
 
 void
 ripng_redistribute_write (struct vty *vty, int config_mode)
@@ -479,7 +454,7 @@ ripng_redistribute_write (struct vty *vty, int config_mode)
 
   for (i = 0; i < ZEBRA_ROUTE_MAX; i++)
     if (i != zclient->redist_default &&
-        vrf_bitmap_check (zclient->redist[i], VRF_DEFAULT))
+        vrf_bitmap_check (zclient->redist[AFI_IP6][i], VRF_DEFAULT))
       {
       if (config_mode)
 	{
@@ -519,7 +494,7 @@ zebra_config_write (struct vty *vty)
       vty_out (vty, "no router zebra%s", VTY_NEWLINE);
       return 1;
     }
-  else if (! vrf_bitmap_check (zclient->redist[ZEBRA_ROUTE_RIPNG], VRF_DEFAULT))
+  else if (! vrf_bitmap_check (zclient->redist[AFI_IP6][ZEBRA_ROUTE_RIPNG], VRF_DEFAULT))
     {
       vty_out (vty, "router zebra%s", VTY_NEWLINE);
       vty_out (vty, " no redistribute ripng%s", VTY_NEWLINE);
@@ -538,7 +513,7 @@ static struct cmd_node zebra_node =
 static void
 ripng_zebra_connected (struct zclient *zclient)
 {
-  zclient_send_requests (zclient, VRF_DEFAULT);
+  zclient_send_reg_requests (zclient, VRF_DEFAULT);
 }
 
 /* Initialize zebra structure and it's commands. */
@@ -546,8 +521,8 @@ void
 zebra_init (struct thread_master *master)
 {
   /* Allocate zebra structure. */
-  zclient = zclient_new (master);
-  zclient_init (zclient, ZEBRA_ROUTE_RIPNG);
+  zclient = zclient_new(master);
+  zclient_init (zclient, ZEBRA_ROUTE_RIPNG, 0);
 
   zclient->zebra_connected = ripng_zebra_connected;
   zclient->interface_up = ripng_interface_up;
@@ -556,15 +531,13 @@ zebra_init (struct thread_master *master)
   zclient->interface_delete = ripng_interface_delete;
   zclient->interface_address_add = ripng_interface_address_add;
   zclient->interface_address_delete = ripng_interface_address_delete;
-  zclient->ipv6_route_add = ripng_zebra_read_ipv6;
-  zclient->ipv6_route_delete = ripng_zebra_read_ipv6;
+  zclient->redistribute_route_ipv6_add = ripng_zebra_read_ipv6;
+  zclient->redistribute_route_ipv6_del = ripng_zebra_read_ipv6;
   
   /* Install zebra node. */
   install_node (&zebra_node, zebra_config_write);
 
   /* Install command element for zebra node. */ 
-  install_element (CONFIG_NODE, &router_zebra_cmd);
-  install_element (CONFIG_NODE, &no_router_zebra_cmd);
   install_default (ZEBRA_NODE);
   install_element (ZEBRA_NODE, &ripng_redistribute_ripng_cmd);
   install_element (ZEBRA_NODE, &no_ripng_redistribute_ripng_cmd);
@@ -575,7 +548,4 @@ zebra_init (struct thread_master *master)
   install_element (RIPNG_NODE, &ripng_redistribute_type_metric_cmd);
   install_element (RIPNG_NODE, &ripng_redistribute_type_metric_routemap_cmd);
   install_element (RIPNG_NODE, &no_ripng_redistribute_type_cmd);
-  install_element (RIPNG_NODE, &no_ripng_redistribute_type_routemap_cmd);
-  install_element (RIPNG_NODE, &no_ripng_redistribute_type_metric_cmd);
-  install_element (RIPNG_NODE, &no_ripng_redistribute_type_metric_routemap_cmd);
 }

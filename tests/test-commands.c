@@ -133,12 +133,6 @@ static struct cmd_node ospf6_node =
   "%s(config-ospf6)# "
 };
 
-static struct cmd_node babel_node =
-{
-  BABEL_NODE,
-  "%s(config-babel)# "
-};
-
 static struct cmd_node keychain_node =
 {
   KEYCHAIN_NODE,
@@ -152,7 +146,7 @@ static struct cmd_node keychain_key_node =
 };
 
 static int
-test_callback(struct cmd_element *cmd, struct vty *vty, int argc, const char *argv[])
+test_callback(const struct cmd_element *cmd, struct vty *vty, int argc, struct cmd_token *argv[])
 {
   int offset;
   int rv;
@@ -168,7 +162,7 @@ test_callback(struct cmd_element *cmd, struct vty *vty, int argc, const char *ar
   for (i = 0; i < argc; i++)
     {
       rv = snprintf(test_buf + offset, sizeof(test_buf) - offset, "%s'%s'",
-                    (i == 0) ? ": " : ", ", argv[i]);
+                    (i == 0) ? ": " : ", ", argv[i]->arg);
       if (rv < 0)
         abort();
       offset += rv;
@@ -217,7 +211,6 @@ test_init(void)
   install_node (&ospf_node, NULL);
   install_node (&ripng_node, NULL);
   install_node (&ospf6_node, NULL);
-  install_node (&babel_node, NULL);
   install_node (&keychain_node, NULL);
   install_node (&keychain_key_node, NULL);
   install_node (&isis_node, NULL);
@@ -339,7 +332,7 @@ test_run(struct prng *prng, struct vty *vty, const char *cmd, unsigned int edit_
             for (j = 0; j < vector_active(descriptions); j++)
               {
                 struct cmd_token *cmd = vector_slot(descriptions, j);
-                printf("  '%s' '%s'\n", cmd->cmd, cmd->desc);
+                printf("  '%s' '%s'\n", cmd->text, cmd->desc);
               }
             vector_free(descriptions);
           }

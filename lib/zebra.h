@@ -32,10 +32,6 @@ typedef unsigned short  u_int16_t;
 typedef unsigned char   u_int8_t;
 #endif /* SUNOS_5 */
 
-#ifndef HAVE_SOCKLEN_T
-typedef int socklen_t;
-#endif /* HAVE_SOCKLEN_T */
-
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,9 +46,7 @@ typedef int socklen_t;
 #ifdef HAVE_STROPTS_H
 #include <stropts.h>
 #endif /* HAVE_STROPTS_H */
-#ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
-#endif /* HAVE_SYS_SELECT_H */
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -70,34 +64,14 @@ typedef int socklen_t;
 #include <sys/ksym.h>
 #endif /* HAVE_SYS_KSYM_H */
 #include <syslog.h>
-#ifdef TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
-#else
-# ifdef HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
-#endif /* TIME_WITH_SYS_TIME */
+#include <sys/time.h>
+#include <time.h>
 #include <sys/uio.h>
 #include <sys/utsname.h>
-#ifdef HAVE_RUSAGE
 #include <sys/resource.h>
-#endif /* HAVE_RUSAGE */
-#ifdef HAVE_LIMITS_H
 #include <limits.h>
-#endif /* HAVE_LIMITS_H */
-#ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
-#endif /* HAVE_INTTYPES_H */
-#ifdef HAVE_STDBOOL_H
 #include <stdbool.h>
-#endif
-/* primarily for __STDC_IEC_559__ with clang */
-#ifdef HAVE_FEATURES_H
-#include <features.h>
-#endif
 
 /* machine dependent includes */
 #ifdef SUNOS_5
@@ -152,9 +126,7 @@ typedef int socklen_t;
 #define __APPLE_USE_RFC_3542
 #endif
 
-#ifdef HAVE_NETINET_IN_H
 #include <netinet/in.h>
-#endif /* HAVE_NETINET_IN_H */
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
@@ -173,9 +145,7 @@ typedef int socklen_t;
 #include <net/if_var.h>
 #endif /* HAVE_NET_IF_VAR_H */
 
-#ifdef HAVE_NET_ROUTE_H
 #include <net/route.h>
-#endif /* HAVE_NET_ROUTE_H */
 
 #ifdef HAVE_NETLINK
 #include <linux/netlink.h>
@@ -185,10 +155,7 @@ typedef int socklen_t;
 #define RT_TABLE_MAIN		0
 #endif /* HAVE_NETLINK */
 
-#ifdef HAVE_NETDB_H
 #include <netdb.h>
-#endif /* HAVE_NETDB_H */
-
 #include <arpa/inet.h>
 
 #ifdef HAVE_INET_ND_H
@@ -216,9 +183,7 @@ typedef int socklen_t;
 #include <netinet6/ip6.h>
 #endif /* HAVE_NETINET6_IP6_H */
 
-#ifdef HAVE_NETINET_ICMP6_H
 #include <netinet/icmp6.h>
-#endif /* HAVE_NETINET_ICMP6_H */
 
 #ifdef HAVE_NETINET6_ND6_H
 #include <netinet6/nd6.h>
@@ -256,8 +221,13 @@ typedef int socklen_t;
 #endif  /* !__GNUC__ || VTYSH_EXTRACT_PL */
 
 #include "zassert.h"
-#include "str.h"
 
+#ifndef HAVE_STRLCAT
+size_t strlcat (char *__restrict dest, const char *__restrict src, size_t size);
+#endif
+#ifndef HAVE_STRLCPY
+size_t strlcpy (char *__restrict dest, const char *__restrict src, size_t size);
+#endif
 
 #ifdef HAVE_BROKEN_CMSG_FIRSTHDR
 /* This bug is present in Solaris 8 and pre-patch Solaris 9 <sys/socket.h>;
@@ -322,26 +292,6 @@ struct in_pktinfo
 #endif
 
 /* 
- * OSPF Fragmentation / fragmented writes
- *
- * ospfd can support writing fragmented packets, for cases where
- * kernel will not fragment IP_HDRINCL and/or multicast destined
- * packets (ie TTBOMK all kernels, BSD, SunOS, Linux). However,
- * SunOS, probably BSD too, clobber the user supplied IP ID and IP
- * flags fields, hence user-space fragmentation will not work.
- * Only Linux is known to leave IP header unmolested.
- * Further, fragmentation really should be done the kernel, which already
- * supports it, and which avoids nasty IP ID state problems.
- *
- * Fragmentation of OSPF packets can be required on networks with router
- * with many many interfaces active in one area, or on networks with links
- * with low MTUs.
- */
-#ifdef GNU_LINUX
-#define WANT_OSPF_WRITE_FRAGMENT
-#endif
-
-/* 
  * IP_HDRINCL / struct ip byte order
  *
  * Linux: network byte order
@@ -376,18 +326,21 @@ struct in_pktinfo
 #endif /* ndef BYTE_ORDER */
 
 /* MAX / MIN are not commonly defined, but useful */
-#ifndef MAX
+/* note: glibc sys/param.h has #define MIN(a,b) (((a)<(b))?(a):(b)) */
+#ifdef MAX
+#undef MAX
+#endif
 #define MAX(a, b) \
 	({ typeof (a) _a = (a); \
 	   typeof (b) _b = (b); \
 	   _a > _b ? _a : _b; })
+#ifdef MIN
+#undef MIN
 #endif
-#ifndef MIN
 #define MIN(a, b) \
 	({ typeof (a) _a = (a); \
 	   typeof (b) _b = (b); \
 	   _a < _b ? _a : _b; })
-#endif
 
 #define ZEBRA_NUM_OF(x) (sizeof (x) / sizeof (x[0]))
 
@@ -400,42 +353,66 @@ struct in_pktinfo
 #define ZEBRA_PORT			2600
 
 /* Zebra message types. */
-#define ZEBRA_INTERFACE_ADD                1
-#define ZEBRA_INTERFACE_DELETE             2
-#define ZEBRA_INTERFACE_ADDRESS_ADD        3
-#define ZEBRA_INTERFACE_ADDRESS_DELETE     4
-#define ZEBRA_INTERFACE_UP                 5
-#define ZEBRA_INTERFACE_DOWN               6
-#define ZEBRA_IPV4_ROUTE_ADD               7
-#define ZEBRA_IPV4_ROUTE_DELETE            8
-#define ZEBRA_IPV6_ROUTE_ADD               9
-#define ZEBRA_IPV6_ROUTE_DELETE           10
-#define ZEBRA_REDISTRIBUTE_ADD            11
-#define ZEBRA_REDISTRIBUTE_DELETE         12
-#define ZEBRA_REDISTRIBUTE_DEFAULT_ADD    13
-#define ZEBRA_REDISTRIBUTE_DEFAULT_DELETE 14
-#define ZEBRA_IPV4_NEXTHOP_LOOKUP         15
-#define ZEBRA_IPV6_NEXTHOP_LOOKUP         16
-#define ZEBRA_IPV4_IMPORT_LOOKUP          17
-#define ZEBRA_IPV6_IMPORT_LOOKUP          18
-#define ZEBRA_INTERFACE_RENAME            19
-#define ZEBRA_ROUTER_ID_ADD               20
-#define ZEBRA_ROUTER_ID_DELETE            21
-#define ZEBRA_ROUTER_ID_UPDATE            22
-#define ZEBRA_HELLO                       23
-#define ZEBRA_IPV4_NEXTHOP_LOOKUP_MRIB    24
-#define ZEBRA_VRF_UNREGISTER              25
-#define ZEBRA_INTERFACE_LINK_PARAMS       26
-#define ZEBRA_NEXTHOP_REGISTER            27
-#define ZEBRA_NEXTHOP_UNREGISTER          28
-#define ZEBRA_NEXTHOP_UPDATE              29
-#define ZEBRA_MESSAGE_MAX                 30
+typedef enum {
+  ZEBRA_INTERFACE_ADD,
+  ZEBRA_INTERFACE_DELETE,
+  ZEBRA_INTERFACE_ADDRESS_ADD,
+  ZEBRA_INTERFACE_ADDRESS_DELETE,
+  ZEBRA_INTERFACE_UP,
+  ZEBRA_INTERFACE_DOWN,
+  ZEBRA_IPV4_ROUTE_ADD,
+  ZEBRA_IPV4_ROUTE_DELETE,
+  ZEBRA_IPV6_ROUTE_ADD,
+  ZEBRA_IPV6_ROUTE_DELETE,
+  ZEBRA_REDISTRIBUTE_ADD,
+  ZEBRA_REDISTRIBUTE_DELETE,
+  ZEBRA_REDISTRIBUTE_DEFAULT_ADD,
+  ZEBRA_REDISTRIBUTE_DEFAULT_DELETE,
+  ZEBRA_ROUTER_ID_ADD,
+  ZEBRA_ROUTER_ID_DELETE,
+  ZEBRA_ROUTER_ID_UPDATE,
+  ZEBRA_HELLO,
+  ZEBRA_NEXTHOP_REGISTER,
+  ZEBRA_NEXTHOP_UNREGISTER,
+  ZEBRA_NEXTHOP_UPDATE,
+  ZEBRA_INTERFACE_NBR_ADDRESS_ADD,
+  ZEBRA_INTERFACE_NBR_ADDRESS_DELETE,
+  ZEBRA_INTERFACE_BFD_DEST_UPDATE,
+  ZEBRA_IMPORT_ROUTE_REGISTER,
+  ZEBRA_IMPORT_ROUTE_UNREGISTER,
+  ZEBRA_IMPORT_CHECK_UPDATE,
+  ZEBRA_IPV4_ROUTE_IPV6_NEXTHOP_ADD,
+  ZEBRA_BFD_DEST_REGISTER,
+  ZEBRA_BFD_DEST_DEREGISTER,
+  ZEBRA_BFD_DEST_UPDATE,
+  ZEBRA_BFD_DEST_REPLAY,
+  ZEBRA_REDISTRIBUTE_IPV4_ADD,
+  ZEBRA_REDISTRIBUTE_IPV4_DEL,
+  ZEBRA_REDISTRIBUTE_IPV6_ADD,
+  ZEBRA_REDISTRIBUTE_IPV6_DEL,
+  ZEBRA_VRF_UNREGISTER,
+  ZEBRA_VRF_ADD,
+  ZEBRA_VRF_DELETE,
+  ZEBRA_INTERFACE_VRF_UPDATE,
+  ZEBRA_BFD_CLIENT_REGISTER,
+  ZEBRA_INTERFACE_ENABLE_RADV,
+  ZEBRA_INTERFACE_DISABLE_RADV,
+  ZEBRA_IPV4_NEXTHOP_LOOKUP_MRIB,
+  ZEBRA_INTERFACE_LINK_PARAMS,
+  ZEBRA_MPLS_LABELS_ADD,
+  ZEBRA_MPLS_LABELS_DELETE,
+  ZEBRA_IPV4_NEXTHOP_ADD,
+  ZEBRA_IPV4_NEXTHOP_DELETE,
+  ZEBRA_IPV6_NEXTHOP_ADD,
+  ZEBRA_IPV6_NEXTHOP_DELETE,
+  ZEBRA_IPMR_ROUTE_STATS,
+} zebra_message_types_t;
 
 /* Marker value used in new Zserv, in the byte location corresponding
  * the command value in the old zserv header. To allow old and new
  * Zserv headers to be distinguished from each other.
  */
-#define ZEBRA_HEADER_MARKER              255
+#define ZEBRA_HEADER_MARKER              254
 
 /* Zebra route's types are defined in route_types.h */
 #include "route_types.h"
@@ -459,6 +436,8 @@ extern int proto_redistnum(int afi, const char *s);
 
 extern const char *zserv_command_string (unsigned int command);
 
+#define strmatch(a,b) (!strcmp((a), (b)))
+
 /* Error codes of zebra. */
 #define ZEBRA_ERR_NOERROR                0
 #define ZEBRA_ERR_RTEXIST               -1
@@ -473,20 +452,10 @@ extern const char *zserv_command_string (unsigned int command);
 #define ZEBRA_FLAG_BLACKHOLE          0x04
 #define ZEBRA_FLAG_IBGP               0x08
 #define ZEBRA_FLAG_SELECTED           0x10
-#define ZEBRA_FLAG_FIB_OVERRIDE       0x20
 #define ZEBRA_FLAG_STATIC             0x40
 #define ZEBRA_FLAG_REJECT             0x80
-
-/* Zebra nexthop flags. */
-#define ZEBRA_NEXTHOP_IFINDEX            1
-#define ZEBRA_NEXTHOP_IFNAME             2
-#define ZEBRA_NEXTHOP_IPV4               3
-#define ZEBRA_NEXTHOP_IPV4_IFINDEX       4
-#define ZEBRA_NEXTHOP_IPV4_IFNAME        5
-#define ZEBRA_NEXTHOP_IPV6               6
-#define ZEBRA_NEXTHOP_IPV6_IFINDEX       7
-#define ZEBRA_NEXTHOP_IPV6_IFNAME        8
-#define ZEBRA_NEXTHOP_BLACKHOLE          9
+#define ZEBRA_FLAG_SCOPE_LINK         0x100
+#define ZEBRA_FLAG_FIB_OVERRIDE       0x200
 
 #ifndef INADDR_LOOPBACK
 #define	INADDR_LOOPBACK	0x7f000001	/* Internet address 127.0.0.1.  */
@@ -497,16 +466,47 @@ typedef enum {
   AFI_IP  = 1,
   AFI_IP6 = 2,
   AFI_ETHER = 3,                /* RFC 1700 has "6" for 802.* */
-#define AFI_MAX 4
+  AFI_MAX = 4
 } afi_t;
 
 /* Subsequent Address Family Identifier. */
 #define SAFI_UNICAST              1
 #define SAFI_MULTICAST            2
-#define SAFI_RESERVED_3           3
-#define SAFI_MPLS_VPN             4
-#define SAFI_ENCAP		  7 /* per IANA */
-#define SAFI_MAX                  8
+#define SAFI_MPLS_VPN             3
+#define SAFI_RESERVED_4           4
+#define SAFI_ENCAP		  5
+#define SAFI_RESERVED_5           5
+#define SAFI_MAX                  6
+
+#define IANA_SAFI_RESERVED            0
+#define IANA_SAFI_UNICAST             1
+#define IANA_SAFI_MULTICAST           2
+#define IANA_SAFI_ENCAP               7
+#define IANA_SAFI_MPLS_VPN            128
+
+/*
+ * The above AFI and SAFI definitions are for internal use. The protocol
+ * definitions (IANA values) as for example used in BGP protocol packets
+ * are defined below and these will get mapped to/from the internal values
+ * in the appropriate places.
+ * The rationale is that the protocol (IANA) values may be sparse and are
+ * not optimal for use in data-structure sizing.
+ * Note: Only useful (i.e., supported) values are defined below.
+ */
+typedef enum {
+  IANA_AFI_RESERVED = 0,
+  IANA_AFI_IPV4 = 1,
+  IANA_AFI_IPV6 = 2,
+  IANA_AFI_L2VPN = 25,
+  IANA_AFI_IPMR = 128,
+  IANA_AFI_IP6MR = 129
+} iana_afi_t;
+
+#define IANA_SAFI_RESERVED            0
+#define IANA_SAFI_UNICAST             1
+#define IANA_SAFI_MULTICAST           2
+#define IANA_SAFI_ENCAP               7
+#define IANA_SAFI_MPLS_VPN            128
 
 /* Default Administrative Distance of each protocol. */
 #define ZEBRA_KERNEL_DISTANCE_DEFAULT      0
@@ -519,6 +519,7 @@ typedef enum {
 #define ZEBRA_ISIS_DISTANCE_DEFAULT      115
 #define ZEBRA_IBGP_DISTANCE_DEFAULT      200
 #define ZEBRA_EBGP_DISTANCE_DEFAULT       20
+#define ZEBRA_TABLE_DISTANCE_DEFAULT      15
 
 /* Flag manipulation macros. */
 #define CHECK_FLAG(V,F)      ((V) & (F))
@@ -537,5 +538,50 @@ typedef u_int16_t vrf_id_t;
 
 typedef uint32_t route_tag_t;
 #define ROUTE_TAG_MAX UINT32_MAX
+#define ROUTE_TAG_PRI PRIu32
+
+static inline afi_t afi_iana2int (iana_afi_t afi)
+{
+  if (afi == IANA_AFI_IPV4)
+    return AFI_IP;
+  if (afi == IANA_AFI_IPV6)
+    return AFI_IP6;
+  return AFI_MAX;
+}
+
+static inline iana_afi_t afi_int2iana (afi_t afi)
+{
+  if (afi == AFI_IP)
+    return IANA_AFI_IPV4;
+  if (afi == AFI_IP6)
+    return IANA_AFI_IPV6;
+  return IANA_AFI_RESERVED;
+}
+
+static inline safi_t safi_iana2int (safi_t safi)
+{
+  if (safi == IANA_SAFI_UNICAST)
+    return SAFI_UNICAST;
+  if (safi == IANA_SAFI_MULTICAST)
+    return SAFI_MULTICAST;
+  if (safi == IANA_SAFI_MPLS_VPN)
+    return SAFI_MPLS_VPN;
+  if (safi == IANA_SAFI_ENCAP)
+    return SAFI_ENCAP;
+  return SAFI_MAX;
+}
+
+static inline safi_t safi_int2iana (safi_t safi)
+{
+  if (safi == SAFI_UNICAST)
+    return IANA_SAFI_UNICAST;
+  if (safi == SAFI_MULTICAST)
+    return IANA_SAFI_MULTICAST;
+  if (safi == SAFI_MPLS_VPN)
+    return IANA_SAFI_MPLS_VPN;
+  if (safi == SAFI_ENCAP)
+    return IANA_SAFI_ENCAP;
+  return IANA_SAFI_RESERVED;
+}
 
 #endif /* _ZEBRA_H */

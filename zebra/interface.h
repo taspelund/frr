@@ -23,7 +23,7 @@
 #define _ZEBRA_INTERFACE_H
 
 #include "redistribute.h"
-#include "event_counter.h"
+#include "vrf.h"
 
 #ifdef HAVE_IRDP
 #include "zebra/irdp.h"
@@ -37,19 +37,6 @@
 /* For interface shutdown configuration. */
 #define IF_ZEBRA_SHUTDOWN_OFF    0
 #define IF_ZEBRA_SHUTDOWN_ON     1
-
-/* Global user-configured default for interface link-detect */
-typedef enum {
-  IF_LINKDETECT_UNSPEC = 0,
-  IF_LINKDETECT_ON,
-  IF_LINKDETECT_OFF,
-} zebra_if_linkdetect;
-
-/* Global defaults for interfaces */
-struct zebra_if_defaults {
-  /* Link-detect default configuration */
-  zebra_if_linkdetect linkdetect;
-};
 
 #if defined (HAVE_RTADV)
 /* Router advertisement parameter.  From RFC4861, RFC6275 and RFC4191. */
@@ -183,6 +170,13 @@ struct rtadvconf
      Default: 0 (medium) */
   int DefaultPreference;
 #define RTADV_PREF_MEDIUM 0x0 /* Per RFC4191. */
+
+  u_char inFastRexmit;          /* True if we're rexmits faster than usual */
+  u_char configured;            /* Has operator configured RA? */
+  int NumFastReXmitsRemain;     /* Loaded first with number of fast rexmits to do */
+
+#define RTADV_FAST_REXMIT_PERIOD 1 /* 1 sec */
+#define RTADV_NUM_FAST_REXMITS   4 /* Fast Rexmit RA 4 times on certain events */
 };
 
 #endif /* HAVE_RTADV */
@@ -198,20 +192,20 @@ struct zebra_if
 
   /* Router advertise configuration. */
   u_char rtadv_enable;
-  
-  /* Interface specific link-detect configuration state */
-  zebra_if_linkdetect linkdetect;
-  
+
   /* Installed addresses chains tree. */
   struct route_table *ipv4_subnets;
 
   /* Information about up/down changes */
-  struct event_counter up_events;
-  struct event_counter down_events;
+  unsigned int up_count;
+  char up_last[QUAGGA_TIMESTAMP_LEN];
+  unsigned int down_count;
+  char down_last[QUAGGA_TIMESTAMP_LEN];
 
 #if defined(HAVE_RTADV)
   struct rtadvconf rtadv;
-#endif /* RTADV */
+  unsigned int ra_sent, ra_rcvd;
+#endif /* HAVE_RTADV */
 
 #ifdef HAVE_IRDP
   struct irdp_interface irdp;
@@ -235,17 +229,32 @@ struct zebra_if
    */
   u_char primary_state;
 #endif /* SUNOS_5 */
+
+  /* ptm enable configuration */
+  u_char ptm_enable;
 };
 
+
+extern struct interface *if_lookup_by_index_per_ns (struct zebra_ns *, u_int32_t);
+extern struct interface *if_link_per_ns (struct zebra_ns *, struct interface *);
+extern const char *ifindex2ifname_per_ns (struct zebra_ns *, unsigned int);
+
+extern void if_unlink_per_ns (struct interface *);
+extern void if_nbr_ipv6ll_to_ipv4ll_neigh_update (struct interface *ifp,
+                                                  struct in6_addr *address, int add);
+extern void if_nbr_ipv6ll_to_ipv4ll_neigh_del_all (struct interface *ifp);
 extern void if_delete_update (struct interface *ifp);
 extern void if_add_update (struct interface *ifp);
 extern void if_up (struct interface *);
 extern void if_down (struct interface *);
 extern void if_refresh (struct interface *);
 extern void if_flags_update (struct interface *, uint64_t);
-extern void if_startup_count_up (void);
 extern int if_subnet_add (struct interface *, struct connected *);
 extern int if_subnet_delete (struct interface *, struct connected *);
+extern int ipv6_address_configured (struct interface *ifp);
+extern void if_handle_vrf_change (struct interface *ifp, vrf_id_t vrf_id);
+
+extern void vrf_add_update (struct vrf *vrfp);
 
 #ifdef HAVE_PROC_NET_DEV
 extern void ifstat_update_proc (void);

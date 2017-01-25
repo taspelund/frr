@@ -26,6 +26,7 @@
 #include "thread.h"
 #include "command.h"
 #include "memory.h"
+#include "memory_vty.h"
 #include "prefix.h"
 #include "filter.h"
 #include "keychain.h"
@@ -64,11 +65,11 @@ zebra_capabilities_t _caps_p [] =
 
 struct zebra_privs_t ripd_privs =
 {
-#if defined(QUAGGA_USER)
-  .user = QUAGGA_USER,
+#if defined(FRR_USER)
+  .user = FRR_USER,
 #endif
-#if defined QUAGGA_GROUP
-  .group = QUAGGA_GROUP,
+#if defined FRR_GROUP
+  .group = FRR_GROUP,
 #endif
 #ifdef VTY_GROUP
   .vty_group = VTY_GROUP,
@@ -122,7 +123,7 @@ Daemon which manages RIP version 1 and 2.\n\n\
 -v, --version      Print program version\n\
 -h, --help         Display this help and exit\n\
 \n\
-Report bugs to %s\n", progname, ZEBRA_BUG_ADDRESS);
+Report bugs to %s\n", progname, FRR_BUG_ADDRESS);
     }
 
   exit (status);
@@ -202,8 +203,12 @@ main (int argc, char **argv)
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
   /* First of all we need logging init. */
-  zlog_default = openzlog (progname, ZLOG_RIP,
+  zlog_default = openzlog (progname, ZLOG_RIP, 0,
 			   LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
+  zprivs_init (&ripd_privs);
+#if defined(HAVE_CUMULUS)
+  zlog_set_level (NULL, ZLOG_DEST_SYSLOG, zlog_default->default_lvl);
+#endif
 
   /* Command line option parse. */
   while (1) 
@@ -275,7 +280,6 @@ main (int argc, char **argv)
   master = thread_master_create ();
 
   /* Library initialization. */
-  zprivs_init (&ripd_privs);
   signal_init (master, array_size(ripd_signals), ripd_signals);
   cmd_init (1);
   vty_init (master);
@@ -286,7 +290,7 @@ main (int argc, char **argv)
   /* RIP related initialization. */
   rip_init ();
   rip_if_init ();
-  rip_zclient_init (master);
+  rip_zclient_init(master);
   rip_peer_init ();
 
   /* Get configuration file. */
@@ -310,7 +314,7 @@ main (int argc, char **argv)
   vty_serv_sock (vty_addr, vty_port, RIP_VTYSH_PATH);
 
   /* Print banner. */
-  zlog_notice ("RIPd %s starting: vty@%d", QUAGGA_VERSION, vty_port);
+  zlog_notice ("RIPd %s starting: vty@%d", FRR_VERSION, vty_port);
 
   /* Execute each thread. */
   while (thread_fetch (master, &thread))

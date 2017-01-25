@@ -23,30 +23,20 @@
 #ifndef _ZEBRA_SOCKUNION_H
 #define _ZEBRA_SOCKUNION_H
 
+#include "privs.h"
 #include "if.h"
-
-#if 0
-union sockunion {
-  struct sockinet {
-    u_char si_len;
-    u_char si_family;
-    u_short si_port;
-  } su_si;
-  struct sockaddr_in  su_sin;
-  struct sockaddr_in6 su_sin6;
-};
-#define su_len                su_si.si_len
-#define su_family     su_si.si_family
-#define su_port               su_si.si_port
-#endif /* 0 */
+#ifdef __OpenBSD__
+#include <netmpls/mpls.h>
+#endif
 
 union sockunion 
 {
   struct sockaddr sa;
   struct sockaddr_in sin;
-#ifdef HAVE_IPV6
   struct sockaddr_in6 sin6;
-#endif /* HAVE_IPV6 */
+#ifdef __OpenBSD__
+  struct sockaddr_mpls smpls;
+#endif
 };
 
 enum connect_result
@@ -57,11 +47,7 @@ enum connect_result
 };
 
 /* Default address family. */
-#ifdef HAVE_IPV6
 #define AF_INET_UNION AF_INET6
-#else
-#define AF_INET_UNION AF_INET
-#endif
 
 /* Sockunion address string length.  Same as INET6_ADDRSTRLEN. */
 #define SU_ADDRSTRLEN 46
@@ -107,27 +93,16 @@ extern int sockunion_bind (int sock, union sockunion *,
 extern int sockopt_ttl (int family, int sock, int ttl);
 extern int sockopt_minttl (int family, int sock, int minttl);
 extern int sockopt_cork (int sock, int onoff);
+extern int sockopt_mark_default(int sock, int mark, struct zebra_privs_t *);
 extern int sockunion_socket (const union sockunion *su);
 extern const char *inet_sutop (const union sockunion *su, char *str);
-extern enum connect_result sockunion_connect (int fd, const union sockunion *su,
+extern enum connect_result sockunion_connect (int fd, const union sockunion *su, 
                                               unsigned short port,
                                               ifindex_t);
 extern union sockunion *sockunion_getsockname (int);
 extern union sockunion *sockunion_getpeername (int);
 extern union sockunion *sockunion_dup (const union sockunion *);
 extern void sockunion_free (union sockunion *);
-
-#ifndef HAVE_INET_NTOP
-extern const char * inet_ntop (int family, const void *addrptr, 
-                               char *strptr, size_t len);
-#endif /* HAVE_INET_NTOP */
-
-#ifndef HAVE_INET_PTON
-extern int inet_pton (int family, const char *strptr, void *addrptr);
-#endif /* HAVE_INET_PTON */
-
-#ifndef HAVE_INET_ATON
-extern int inet_aton (const char *cp, struct in_addr *inaddr);
-#endif
+extern void sockunion_init (union sockunion *);
 
 #endif /* _ZEBRA_SOCKUNION_H */

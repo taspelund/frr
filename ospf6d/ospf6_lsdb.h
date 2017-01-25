@@ -24,6 +24,7 @@
 
 #include "prefix.h"
 #include "table.h"
+#include "ospf6_route.h"
 
 struct ospf6_lsdb
 {

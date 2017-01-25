@@ -30,6 +30,7 @@
 #include "stream.h"
 #include "table.h"
 #include "log.h"
+#include "json.h"
 
 #include "ospfd/ospfd.h"
 #include "ospfd/ospf_interface.h"
@@ -42,6 +43,7 @@
 #include "ospfd/ospf_network.h"
 #include "ospfd/ospf_flood.h"
 #include "ospfd/ospf_dump.h"
+#include "ospfd/ospf_bfd.h"
 
 /* Fill in the the 'key' as appropriate to retrieve the entry for nbr
  * from the ospf_interface's nbrs table. Indexed by interface address
@@ -99,6 +101,7 @@ ospf_nbr_new (struct ospf_interface *oi)
 
   nbr->crypt_seqnum = 0;
 
+  ospf_bfd_info_nbr_create(oi, nbr);
   return nbr;
 }
 
@@ -142,6 +145,7 @@ ospf_nbr_free (struct ospf_neighbor *nbr)
   /* Cancel all events. *//* Thread lookup cost would be negligible. */
   thread_cancel_event (master, nbr);
 
+  ospf_bfd_info_free(&nbr->bfd_info);
   XFREE (MTYPE_OSPF_NEIGHBOR, nbr);
 }
 
@@ -234,26 +238,29 @@ ospf_nbr_bidirectional (struct in_addr *router_id,
 
 /* reset nbr_self */
 void
-ospf_nbr_self_reset (struct ospf_interface *oi)
+ospf_nbr_self_reset (struct ospf_interface *oi, struct in_addr router_id)
 {
   if (oi->nbr_self)
     ospf_nbr_delete (oi->nbr_self);
 
   oi->nbr_self = ospf_nbr_new (oi);
-  ospf_nbr_add_self (oi);
+  ospf_nbr_add_self (oi, router_id);
 }
 
 /* Add self to nbr list. */
 void
-ospf_nbr_add_self (struct ospf_interface *oi)
+ospf_nbr_add_self (struct ospf_interface *oi, struct in_addr router_id)
 {
   struct prefix p;
   struct route_node *rn;
 
+  if (!oi->nbr_self)
+    oi->nbr_self = ospf_nbr_new (oi);
+
   /* Initial state */
   oi->nbr_self->address = *oi->address;
   oi->nbr_self->priority = OSPF_IF_PARAM (oi, priority);
-  oi->nbr_self->router_id = oi->ospf->router_id;
+  oi->nbr_self->router_id = router_id;
   oi->nbr_self->src = oi->address->u.prefix4;
   oi->nbr_self->state = NSM_TwoWay;
   

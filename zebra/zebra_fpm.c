@@ -31,6 +31,9 @@
 #include "command.h"
 
 #include "zebra/rib.h"
+#include "zebra/zserv.h"
+#include "zebra/zebra_ns.h"
+#include "zebra/zebra_vrf.h"
 
 #include "fpm/fpm.h"
 #include "zebra_fpm.h"
@@ -294,20 +297,6 @@ zfpm_state_to_str (zfpm_state_t state)
 }
 
 /*
- * zfpm_get_time
- */
-static time_t
-zfpm_get_time (void)
-{
-  struct timeval tv;
-
-  if (quagga_gettime (QUAGGA_CLK_MONOTONIC, &tv) < 0)
-    zlog_warn ("FPM: quagga_gettime failed!!");
-
-  return tv.tv_sec;
-}
-
-/*
  * zfpm_get_elapsed_time
  *
  * Returns the time elapsed (in seconds) since the given time.
@@ -317,7 +306,7 @@ zfpm_get_elapsed_time (time_t reference)
 {
   time_t now;
 
-  now = zfpm_get_time ();
+  now = monotime(NULL);
 
   if (now < reference)
     {
@@ -345,7 +334,7 @@ zfpm_is_table_for_fpm (struct route_table *table)
    * We only send the unicast tables in the main instance to the FPM
    * at this point.
    */
-  if (info->zvrf->vrf_id != 0)
+  if (zvrf_id (info->zvrf) != 0)
     return 0;
 
   if (info->safi != SAFI_UNICAST)
@@ -618,7 +607,7 @@ zfpm_connection_up (const char *detail)
  * Check if an asynchronous connect() to the FPM is complete.
  */
 static void
-zfpm_connect_check ()
+zfpm_connect_check (void)
 {
   int status;
   socklen_t slen;
@@ -880,7 +869,9 @@ zfpm_encode_route (rib_dest_t *dest, struct rib *rib, char *in_buf,
 		   size_t in_buf_len, fpm_msg_type_e *msg_type)
 {
   size_t len;
+#ifdef HAVE_NETLINK
   int cmd;
+#endif
   len = 0;
 
   *msg_type = FPM_MSG_TYPE_NONE;
@@ -1174,7 +1165,7 @@ zfpm_connect_cb (struct thread *t)
    */
   zfpm_g->connect_calls++;
   zfpm_g->stats.connect_calls++;
-  zfpm_g->last_connect_call_time = zfpm_get_time ();
+  zfpm_g->last_connect_call_time = monotime(NULL);
 
   ret = connect (sock, (struct sockaddr *) &serv, sizeof (serv));
   if (ret >= 0)
@@ -1305,6 +1296,7 @@ zfpm_start_connect_timer (const char *reason)
   zfpm_set_state (ZFPM_STATE_ACTIVE, reason);
 }
 
+#if defined (HAVE_FPM)
 /*
  * zfpm_is_enabled
  *
@@ -1315,6 +1307,7 @@ zfpm_is_enabled (void)
 {
   return zfpm_g->enabled;
 }
+#endif
 
 /*
  * zfpm_conn_is_up
@@ -1418,6 +1411,7 @@ zfpm_stats_timer_cb (struct thread *t)
   return 0;
 }
 
+#if defined (HAVE_FPM)
 /*
  * zfpm_stop_stats_timer
  */
@@ -1430,6 +1424,7 @@ zfpm_stop_stats_timer (void)
   zfpm_debug ("Stopping existing stats timer");
   THREAD_TIMER_OFF (zfpm_g->t_stats);
 }
+#endif
 
 /*
  * zfpm_start_stats_timer
@@ -1452,6 +1447,7 @@ zfpm_start_stats_timer (void)
 	     zfpm_g->last_ivl_stats.counter, VTY_NEWLINE);		\
   } while (0)
 
+#if defined (HAVE_FPM)
 /*
  * zfpm_show_stats
  */
@@ -1523,7 +1519,7 @@ zfpm_clear_stats (struct vty *vty)
   zfpm_stop_stats_timer ();
   zfpm_start_stats_timer ();
 
-  zfpm_g->last_stats_clear_time = zfpm_get_time();
+  zfpm_g->last_stats_clear_time = monotime(NULL);
 
   vty_out (vty, "Cleared FPM stats%s", VTY_NEWLINE);
 }
@@ -1561,9 +1557,9 @@ DEFUN (clear_zebra_fpm_stats,
 /*
  * update fpm connection information 
  */
-DEFUN ( fpm_remote_ip, 
-        fpm_remote_ip_cmd,
-        "fpm connection ip A.B.C.D port <1-65535>",
+DEFUN ( fpm_remote_ip,
+       fpm_remote_ip_cmd,
+        "fpm connection ip A.B.C.D port (1-65535)",
         "fpm connection remote ip and port\n"
         "Remote fpm server ip A.B.C.D\n"
         "Enter ip ")
@@ -1572,11 +1568,11 @@ DEFUN ( fpm_remote_ip,
    in_addr_t fpm_server;
    uint32_t port_no;
 
-   fpm_server = inet_addr (argv[0]);
+   fpm_server = inet_addr (argv[3]->arg);
    if (fpm_server == INADDR_NONE)
      return CMD_ERR_INCOMPLETE;
 
-   port_no = atoi (argv[1]);
+   port_no = atoi (argv[5]->arg);
    if (port_no < TCP_MIN_PORT || port_no > TCP_MAX_PORT)
      return CMD_ERR_INCOMPLETE;
 
@@ -1587,16 +1583,16 @@ DEFUN ( fpm_remote_ip,
    return CMD_SUCCESS;
 }
 
-DEFUN ( no_fpm_remote_ip, 
-        no_fpm_remote_ip_cmd,
-        "no fpm connection ip A.B.C.D port <1-65535>",
+DEFUN ( no_fpm_remote_ip,
+       no_fpm_remote_ip_cmd,
+        "no fpm connection ip A.B.C.D port (1-65535)",
         "fpm connection remote ip and port\n"
         "Connection\n"
         "Remote fpm server ip A.B.C.D\n"
         "Enter ip ")
 {
-   if (zfpm_g->fpm_server != inet_addr (argv[0]) || 
-              zfpm_g->fpm_port !=  atoi (argv[1]))
+   if (zfpm_g->fpm_server != inet_addr (argv[4]->arg) || 
+              zfpm_g->fpm_port !=  atoi (argv[6]->arg))
        return CMD_ERR_NO_MATCH;
 
    zfpm_g->fpm_server = FPM_DEFAULT_IP;
@@ -1604,7 +1600,7 @@ DEFUN ( no_fpm_remote_ip,
 
    return CMD_SUCCESS;
 }
-
+#endif
 
 /*
  * zfpm_init_message_format
@@ -1614,14 +1610,16 @@ zfpm_init_message_format (const char *format)
 {
   int have_netlink, have_protobuf;
 
-  have_netlink = have_protobuf = 0;
-
 #ifdef HAVE_NETLINK
   have_netlink = 1;
+#else
+  have_netlink = 0;
 #endif
 
 #ifdef HAVE_PROTOBUF
   have_protobuf = 1;
+#else
+  have_protobuf = 0;
 #endif
 
   zfpm_g->message_format = ZFPM_MSG_FORMAT_NONE;
@@ -1719,10 +1717,12 @@ zfpm_init (struct thread_master *master, int enable, uint16_t port,
   zfpm_stats_init (&zfpm_g->last_ivl_stats);
   zfpm_stats_init (&zfpm_g->cumulative_stats);
 
+#if defined (HAVE_FPM)
   install_element (ENABLE_NODE, &show_zebra_fpm_stats_cmd);
   install_element (ENABLE_NODE, &clear_zebra_fpm_stats_cmd);
   install_element (CONFIG_NODE, &fpm_remote_ip_cmd);
   install_element (CONFIG_NODE, &no_fpm_remote_ip_cmd);
+#endif
 
   zfpm_init_message_format(format);
 

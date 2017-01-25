@@ -39,8 +39,8 @@
 #else
 #define OSPF_LS_REFRESH_TIME                  1800
 #endif
-#define OSPF_MIN_LS_INTERVAL                  5000  /* msec */
-#define OSPF_MIN_LS_ARRIVAL                   1000  /* msec */
+#define OSPF_MIN_LS_INTERVAL                  5000     /* msec */
+#define OSPF_MIN_LS_ARRIVAL                   1000     /* in milliseconds */
 #define OSPF_LSA_INITIAL_AGE                     0	/* useful for debug */
 #define OSPF_LSA_MAXAGE                       3600
 #define OSPF_CHECK_AGE                         300
@@ -69,9 +69,9 @@
 #define OSPF_ROUTER_PRIORITY_DEFAULT        1
 #define OSPF_RETRANSMIT_INTERVAL_DEFAULT    5
 #define OSPF_TRANSMIT_DELAY_DEFAULT         1
-#define OSPF_DEFAULT_BANDWIDTH		 10000	/* Kbps */
+#define OSPF_DEFAULT_BANDWIDTH		 10000	/* Mbps */
 
-#define OSPF_DEFAULT_REF_BANDWIDTH	100000  /* Kbps */
+#define OSPF_DEFAULT_REF_BANDWIDTH	100000  /* Mbps */
 
 #define OSPF_POLL_INTERVAL_DEFAULT         60
 #define OSPF_NEIGHBOR_PRIORITY_DEFAULT      0
@@ -80,6 +80,12 @@
 #define OSPF_FAST_HELLO_DEFAULT             0
 
 #define OSPF_AREA_BACKBONE              0x00000000      /* 0.0.0.0 */
+#define OSPF_AREA_RANGE_COST_UNSPEC	-1U
+
+#define OSPF_AREA_DEFAULT       0
+#define OSPF_AREA_STUB          1
+#define OSPF_AREA_NSSA          2
+#define OSPF_AREA_TYPE_MAX	3
 
 /* SPF Throttling timer values. */
 #define OSPF_SPF_DELAY_DEFAULT              0

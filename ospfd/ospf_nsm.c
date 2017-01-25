@@ -33,6 +33,7 @@
 #include "stream.h"
 #include "table.h"
 #include "log.h"
+#include "command.h"
 
 #include "ospfd/ospfd.h"
 #include "ospfd/ospf_interface.h"
@@ -48,6 +49,7 @@
 #include "ospfd/ospf_flood.h"
 #include "ospfd/ospf_abr.h"
 #include "ospfd/ospf_snmp.h"
+#include "ospfd/ospf_bfd.h"
 
 static void nsm_clear_adj (struct ospf_neighbor *);
 
@@ -170,6 +172,10 @@ nsm_packet_received (struct ospf_neighbor *nbr)
   if (nbr->oi->type == OSPF_IFTYPE_NBMA && nbr->nbr_nbma)
     OSPF_POLL_TIMER_OFF (nbr->nbr_nbma->t_poll);
 
+  /* Send proactive ARP requests */
+  if (nbr->state < NSM_Exchange)
+      ospf_proactively_arp (nbr);
+
   return 0;
 }
 
@@ -184,13 +190,22 @@ nsm_start (struct ospf_neighbor *nbr)
   OSPF_NSM_TIMER_ON (nbr->t_inactivity, ospf_inactivity_timer,
                      nbr->v_inactivity);
 
+  /* Send proactive ARP requests */
+  ospf_proactively_arp (nbr);
+
   return 0;
 }
 
 static int
 nsm_twoway_received (struct ospf_neighbor *nbr)
 {
-  return (nsm_should_adj (nbr) ? NSM_ExStart : NSM_TwoWay);
+  int adj = nsm_should_adj (nbr);
+
+  /* Send proactive ARP requests */
+  if (adj)
+     ospf_proactively_arp (nbr);
+
+  return (adj ? NSM_ExStart : NSM_TwoWay);
 }
 
 int
@@ -271,6 +286,9 @@ nsm_negotiation_done (struct ospf_neighbor *nbr)
   struct ospf_lsa *lsa;
   struct route_node *rn;
 
+  /* Send proactive ARP requests */
+  ospf_proactively_arp (nbr);
+
   LSDB_LOOP (ROUTER_LSDB (area), rn, lsa)
     ospf_db_summary_add (nbr, lsa);
   LSDB_LOOP (NETWORK_LSDB (area), rn, lsa)
@@ -306,10 +324,6 @@ nsm_negotiation_done (struct ospf_neighbor *nbr)
     LSDB_LOOP (OPAQUE_AS_LSDB (nbr->oi->ospf), rn, lsa)
       ospf_db_summary_add (nbr, lsa);
 
-  /* Send Link State Request. */
-  if (nbr->t_ls_req == NULL)
-    ospf_ls_req_send (nbr);
-
   return 0;
 }
 
@@ -318,10 +332,11 @@ nsm_exchange_done (struct ospf_neighbor *nbr)
 {
   if (ospf_ls_request_isempty (nbr))
     return NSM_Full;
-  
+
+  /* Send Link State Request. */
   if (nbr->t_ls_req == NULL)
     ospf_ls_req_send (nbr);
-  
+
   return NSM_Loading;
 }
 
@@ -332,7 +347,12 @@ nsm_adj_ok (struct ospf_neighbor *nbr)
   int adj = nsm_should_adj (nbr);
 
   if (nbr->state == NSM_TwoWay && adj == 1)
-    next_state = NSM_ExStart;
+    {
+      next_state = NSM_ExStart;
+
+      /* Send proactive ARP requests */
+      ospf_proactively_arp (nbr);
+    }
   else if (nbr->state >= NSM_ExStart && adj == 0)
     next_state = NSM_TwoWay;
 
@@ -610,10 +630,10 @@ nsm_notice_state_change (struct ospf_neighbor *nbr, int next_state, int event)
 
   /* Advance in NSM */
   if (next_state > nbr->state)
-    nbr->ts_last_progress = recent_relative_time ();
+    monotime(&nbr->ts_last_progress);
   else /* regression in NSM */
     {
-      nbr->ts_last_regress = recent_relative_time ();
+      monotime(&nbr->ts_last_regress);
       nbr->last_regress_str = ospf_nsm_event_str [event];
     }
 
@@ -677,9 +697,19 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
 	  /* kevinm: refresh any redistributions */
 	  for (x = ZEBRA_ROUTE_SYSTEM; x < ZEBRA_ROUTE_MAX; x++)
 	    {
-	      if (x == ZEBRA_ROUTE_OSPF || x == ZEBRA_ROUTE_OSPF6)
-		continue;
-	      ospf_external_lsa_refresh_type (oi->ospf, x, force);
+              struct list *red_list;
+              struct listnode *node;
+              struct ospf_redist *red;
+
+              if (x == ZEBRA_ROUTE_OSPF6)
+                continue;
+
+              red_list = oi->ospf->redist[x];
+              if (!red_list)
+                continue;
+
+              for (ALL_LIST_ELEMENTS_RO(red_list, node, red))
+	        ospf_external_lsa_refresh_type (oi->ospf, x, red->instance, force);
 	    }
           /* XXX: Clearly some thing is wrong with refresh of external LSAs
            * this added to hack around defaults not refreshing after a timer
@@ -744,7 +774,7 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
   if (state == NSM_ExStart)
     {
       if (nbr->dd_seqnum == 0)
-	nbr->dd_seqnum = quagga_time (NULL);
+	nbr->dd_seqnum = (uint32_t)random ();
       else
 	nbr->dd_seqnum++;
 
@@ -756,6 +786,8 @@ nsm_change_state (struct ospf_neighbor *nbr, int state)
   if (state == NSM_Down)
     nbr->crypt_seqnum = 0;
   
+  ospf_bfd_trigger_event(nbr, old_state, state);
+
   /* Preserve old status? */
 }
 

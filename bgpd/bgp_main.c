@@ -27,6 +27,7 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "thread.h"
 #include <lib/version.h>
 #include "memory.h"
+#include "memory_vty.h"
 #include "prefix.h"
 #include "log.h"
 #include "privs.h"
@@ -36,8 +37,9 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "filter.h"
 #include "plist.h"
 #include "stream.h"
+#include "queue.h"
 #include "vrf.h"
-#include "workqueue.h"
+#include "bfd.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_attr.h"
@@ -51,6 +53,10 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "bgpd/bgp_debug.h"
 #include "bgpd/bgp_filter.h"
 #include "bgpd/bgp_zebra.h"
+
+#ifdef ENABLE_BGP_VNC
+#include "bgpd/rfapi/rfapi_backend.h"
+#endif
 
 /* bgpd options, we use GNU getopt library. */
 static const struct option longopts[] = 
@@ -80,6 +86,7 @@ void sigint (void);
 void sigusr1 (void);
 
 static void bgp_exit (int);
+static void bgp_vrf_terminate (void);
 
 static struct quagga_signal_t bgp_signals[] = 
 {
@@ -127,9 +134,9 @@ static zebra_capabilities_t _caps_p [] =
 
 struct zebra_privs_t bgpd_privs =
 {
-#if defined(QUAGGA_USER) && defined(QUAGGA_GROUP)
-  .user = QUAGGA_USER,
-  .group = QUAGGA_GROUP,
+#if defined(FRR_USER) && defined(FRR_GROUP)
+  .user = FRR_USER,
+  .group = FRR_GROUP,
 #endif
 #ifdef VTY_GROUP
   .vty_group = VTY_GROUP,
@@ -167,7 +174,7 @@ redistribution between different routing protocols.\n\n\
 -C, --dryrun       Check configuration for validity and exit\n\
 -h, --help         Display this help and exit\n\
 \n\
-Report bugs to %s\n", progname, ZEBRA_BUG_ADDRESS);
+Report bugs to %s\n", progname, FRR_BUG_ADDRESS);
     }
 
   exit (status);
@@ -177,7 +184,7 @@ Report bugs to %s\n", progname, ZEBRA_BUG_ADDRESS);
 void 
 sighup (void)
 {
-  zlog (NULL, LOG_INFO, "SIGHUP received");
+  zlog_info ("SIGHUP received");
 
   /* Terminate all thread. */
   bgp_terminate ();
@@ -194,12 +201,12 @@ sighup (void)
 }
 
 /* SIGINT handler. */
-void
+__attribute__((__noreturn__)) void
 sigint (void)
 {
   zlog_notice ("Terminating on signal");
 
-  if (! retain_mode) 
+  if (! retain_mode)
     {
       bgp_terminate ();
       if (bgpd_privs.user)      /* NULL if skip_runas flag set */
@@ -207,6 +214,8 @@ sigint (void)
     }
 
   bgp_exit (0);
+
+  exit (0);
 }
 
 /* SIGUSR1 handler. */
@@ -223,64 +232,26 @@ sigusr1 (void)
   Zebra route removal and protocol teardown are not meant to be done here.
   For example, "retain_mode" may be set.
 */
-static void
+static __attribute__((__noreturn__)) void
 bgp_exit (int status)
 {
   struct bgp *bgp;
   struct listnode *node, *nnode;
-  int *socket;
-  struct interface *ifp;
 
   /* it only makes sense for this to be called on a clean exit */
   assert (status == 0);
+
+  bfd_gbl_exit();
+
+  bgp_close();
+
+  if (retain_mode)
+    if_add_hook (IF_DELETE_HOOK, NULL);
 
   /* reverse bgp_master_init */
   for (ALL_LIST_ELEMENTS (bm->bgp, node, nnode, bgp))
     bgp_delete (bgp);
   list_free (bm->bgp);
-  bm->bgp = NULL;
-  
-  /*
-   * bgp_delete can re-allocate the process queues after they were
-   * deleted in bgp_terminate. delete them again.
-   *
-   * It might be better to ensure the RIBs (including static routes)
-   * are cleared by bgp_terminate() during its call to bgp_cleanup_routes(),
-   * which currently only deletes the kernel routes.
-   */
-  if (bm->process_main_queue)
-    {
-     work_queue_free (bm->process_main_queue);
-     bm->process_main_queue = NULL;
-    }
-  if (bm->process_rsclient_queue)
-    {
-      work_queue_free (bm->process_rsclient_queue);
-      bm->process_rsclient_queue = NULL;
-    }
-  
-  /* reverse bgp_master_init */
-  for (ALL_LIST_ELEMENTS_RO(bm->listen_sockets, node, socket))
-    {
-      if (close ((int)(long)socket) == -1)
-        zlog_err ("close (%d): %s", (int)(long)socket, safe_strerror (errno));
-    }
-  list_delete (bm->listen_sockets);
-
-  /* reverse bgp_zebra_init/if_init */
-  if (retain_mode)
-    if_add_hook (IF_DELETE_HOOK, NULL);
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
-    {
-      struct listnode *c_node, *c_nnode;
-      struct connected *c;
-
-      for (ALL_LIST_ELEMENTS (ifp->connected, c_node, c_nnode, c))
-        bgp_connected_delete (c);
-    }
-
-  /* reverse bgp_attr_init */
-  bgp_attr_finish ();
 
   /* reverse bgp_dump_init */
   bgp_dump_finish ();
@@ -288,8 +259,11 @@ bgp_exit (int status)
   /* reverse bgp_route_init */
   bgp_route_finish ();
 
-  /* reverse bgp_route_map_init/route_map_init */
-  route_map_finish ();
+  /* cleanup route maps */
+  bgp_route_map_terminate();
+
+  /* reverse bgp_attr_init */
+  bgp_attr_finish ();
 
   /* reverse access_list_init */
   access_list_add_hook (NULL);
@@ -309,19 +283,17 @@ bgp_exit (int status)
   /* reverse community_list_init */
   community_list_terminate (bgp_clist);
 
-  vrf_terminate ();
+  bgp_vrf_terminate ();
   cmd_terminate ();
   vty_terminate ();
-  bgp_address_destroy();
-  bgp_scan_destroy();
+#if ENABLE_BGP_VNC
+  vnc_zebra_destroy();
+#endif
   bgp_zebra_destroy();
   if (bgp_nexthop_buf)
     stream_free (bgp_nexthop_buf);
   if (bgp_ifindices_buf)
     stream_free (bgp_ifindices_buf);
-
-  /* reverse bgp_scan_init */
-  bgp_scan_finish ();
 
   /* reverse bgp_master_init */
   if (bm->master)
@@ -330,10 +302,102 @@ bgp_exit (int status)
   if (zlog_default)
     closezlog (zlog_default);
 
-  if (CONF_BGP_DEBUG (normal, NORMAL))
+  if (bgp_debug_count())
     log_memstats_stderr ("bgpd");
-
   exit (status);
+}
+
+static int
+bgp_vrf_new (struct vrf *vrf)
+{
+  if (BGP_DEBUG (zebra, ZEBRA))
+    zlog_debug ("VRF Created: %s(%d)", vrf->name, vrf->vrf_id);
+
+  return 0;
+}
+
+static int
+bgp_vrf_delete (struct vrf *vrf)
+{
+  if (BGP_DEBUG (zebra, ZEBRA))
+    zlog_debug ("VRF Deletion: %s(%d)", vrf->name, vrf->vrf_id);
+
+  return 0;
+}
+
+static int
+bgp_vrf_enable (struct vrf *vrf)
+{
+  struct bgp *bgp;
+  vrf_id_t old_vrf_id;
+
+  if (BGP_DEBUG (zebra, ZEBRA))
+    zlog_debug("VRF enable add %s id %d", vrf->name, vrf->vrf_id);
+
+  bgp = bgp_lookup_by_name (vrf->name);
+  if (bgp)
+    {
+      old_vrf_id = bgp->vrf_id;
+      /* We have instance configured, link to VRF and make it "up". */
+      bgp_vrf_link (bgp, vrf);
+
+      /* Update any redistribute vrf bitmaps if the vrf_id changed */
+      if (old_vrf_id != bgp->vrf_id)
+        bgp_update_redist_vrf_bitmaps(bgp, old_vrf_id);
+      bgp_instance_up (bgp);
+    }
+
+  return 0;
+}
+
+static int
+bgp_vrf_disable (struct vrf *vrf)
+{
+  struct bgp *bgp;
+  vrf_id_t old_vrf_id;
+
+  if (vrf->vrf_id == VRF_DEFAULT)
+    return 0;
+
+  if (BGP_DEBUG (zebra, ZEBRA))
+    zlog_debug("VRF disable %s id %d", vrf->name, vrf->vrf_id);
+
+  bgp = bgp_lookup_by_name (vrf->name);
+  if (bgp)
+    {
+      old_vrf_id = bgp->vrf_id;
+      /* We have instance configured, unlink from VRF and make it "down". */
+      bgp_vrf_unlink (bgp, vrf);
+      /* Update any redistribute vrf bitmaps if the vrf_id changed */
+      if (old_vrf_id != bgp->vrf_id)
+        bgp_update_redist_vrf_bitmaps(bgp, old_vrf_id);
+      bgp_instance_down (bgp);
+    }
+
+  /* Note: This is a callback, the VRF will be deleted by the caller. */
+  return 0;
+}
+
+static void
+bgp_vrf_init (void)
+{
+  vrf_add_hook (VRF_NEW_HOOK, bgp_vrf_new);
+  vrf_add_hook (VRF_ENABLE_HOOK, bgp_vrf_enable);
+  vrf_add_hook (VRF_DISABLE_HOOK, bgp_vrf_disable);
+  vrf_add_hook (VRF_DELETE_HOOK, bgp_vrf_delete);
+
+  vrf_init ();
+}
+
+static void
+bgp_vrf_terminate (void)
+{
+  vrf_add_hook (VRF_NEW_HOOK, NULL);
+  vrf_add_hook (VRF_ENABLE_HOOK, NULL);
+  vrf_add_hook (VRF_DISABLE_HOOK, NULL);
+  vrf_add_hook (VRF_DELETE_HOOK, NULL);
+
+  vrf_terminate ();
 }
 
 /* Main routine of bgpd. Treatment of argument and start bgp finite
@@ -355,9 +419,6 @@ main (int argc, char **argv)
 
   /* Preserve name of myself. */
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
-
-  zlog_default = openzlog (progname, ZLOG_BGP,
-			   LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
 
   /* BGP master init. */
   bgp_master_init ();
@@ -442,16 +503,24 @@ main (int argc, char **argv)
 	}
     }
 
-  /* Initializations. */
-  srandom (time (NULL));
-  signal_init (bm->master, array_size(bgp_signals), bgp_signals);
+  zlog_default = openzlog (progname, ZLOG_BGP, 0,
+			   LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
+
   if (skip_runas)
     memset (&bgpd_privs, 0, sizeof (bgpd_privs));
   zprivs_init (&bgpd_privs);
+
+#if defined(HAVE_CUMULUS)
+  zlog_set_level (NULL, ZLOG_DEST_SYSLOG, zlog_default->default_lvl);
+#endif
+
+  /* Initializations. */
+  srandom (time (NULL));
+  signal_init (bm->master, array_size(bgp_signals), bgp_signals);
   cmd_init (1);
   vty_init (bm->master);
   memory_init ();
-  vrf_init ();
+  bgp_vrf_init ();
 
   /* BGP related initialization.  */
   bgp_init ();
@@ -478,11 +547,10 @@ main (int argc, char **argv)
   vty_serv_sock (vty_addr, vty_port, BGP_VTYSH_PATH);
 
   /* Print banner. */
-  zlog_notice ("BGPd %s starting: vty@%d, bgp@%s:%d pid %d", QUAGGA_VERSION,
+  zlog_notice ("BGPd %s starting: vty@%d, bgp@%s:%d", FRR_COPYRIGHT,
 	       vty_port, 
 	       (bm->address ? bm->address : "<all>"),
-	       bm->port,
-	       getpid ());
+	       bm->port);
 
   /* Start finite state machine, here we go! */
   while (thread_fetch (bm->master, &thread))

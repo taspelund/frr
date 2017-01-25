@@ -22,6 +22,9 @@
 #ifndef _ZEBRA_RIP_H
 #define _ZEBRA_RIP_H
 
+#include "qobj.h"
+#include "rip_memory.h"
+
 /* RIP version number. */
 #define RIPv1                            1
 #define RIPv2                            2
@@ -154,7 +157,10 @@ struct rip
     int metric_config;
     u_int32_t metric;
   } route_map[ZEBRA_ROUTE_MAX];
+
+  QOBJ_FIELDS
 };
+DECLARE_QOBJ_TYPE(rip)
 
 /* RIP routing table entry which belong to rip_packet. */
 struct rte
@@ -223,7 +229,7 @@ struct rip_info
   struct in_addr nexthop_out;
   u_char metric_set;
   u_int32_t metric_out;
-  u_short tag_out;
+  u_int16_t tag_out;
   ifindex_t ifindex_out;
 
   struct route_node *rp;
@@ -255,6 +261,9 @@ struct rip_interface
   /* RIP version control. */
   int ri_send;
   int ri_receive;
+
+  /* RIPv2 broadcast mode */
+  int v2_broadcast;
 
   /* RIPv2 authentication type. */
   int auth_type;
@@ -345,6 +354,7 @@ struct rip_md5_data
 #define RI_RIP_VERSION_1                   1
 #define RI_RIP_VERSION_2                   2
 #define RI_RIP_VERSION_1_AND_2             3
+#define RI_RIP_VERSION_NONE                4
 /* N.B. stuff will break if
 	(RIPv1 != RI_RIP_VERSION_1) || (RIPv2 != RI_RIP_VERSION_2) */
 
@@ -367,14 +377,7 @@ enum rip_event
   } while (0)
 
 /* Macro for timer turn off. */
-#define RIP_TIMER_OFF(X) \
-  do { \
-    if (X) \
-      { \
-        thread_cancel (X); \
-        (X) = NULL; \
-      } \
-  } while (0)
+#define RIP_TIMER_OFF(X) THREAD_TIMER_OFF(X)
 
 /* Prototypes. */
 extern void rip_init (void);
@@ -389,8 +392,7 @@ extern void rip_if_down_all (void);
 extern void rip_route_map_init (void);
 extern void rip_route_map_reset (void);
 extern void rip_snmp_init (void);
-extern void rip_zclient_init (struct thread_master *);
-extern void rip_zclient_start (void);
+extern void rip_zclient_init(struct thread_master *);
 extern void rip_zclient_reset (void);
 extern void rip_offset_init (void);
 extern int if_check_address (struct in_addr addr);
@@ -400,8 +402,9 @@ extern int rip_request_send (struct sockaddr_in *, struct interface *, u_char,
 extern int rip_neighbor_lookup (struct sockaddr_in *);
 
 extern int rip_redistribute_check (int);
-extern void rip_redistribute_add (int, int, struct prefix_ipv4 *, ifindex_t, 
-			   struct in_addr *, unsigned int, unsigned char);
+extern void rip_redistribute_add (int, int, struct prefix_ipv4 *, ifindex_t,
+			   struct in_addr *, unsigned int, unsigned char,
+			   route_tag_t);
 extern void rip_redistribute_delete (int, int, struct prefix_ipv4 *, ifindex_t);
 extern void rip_redistribute_withdraw (int);
 extern void rip_zebra_ipv4_add (struct route_node *);

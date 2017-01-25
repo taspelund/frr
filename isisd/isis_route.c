@@ -128,7 +128,6 @@ nexthops_print (struct list *nhs)
 }
 #endif /* EXTREME_DEBUG */
 
-#ifdef HAVE_IPV6
 static struct isis_nexthop6 *
 isis_nexthop6_new (struct in6_addr *ip6, ifindex_t ifindex)
 {
@@ -217,7 +216,6 @@ nexthops6_print (struct list *nhs6)
     nexthop6_print (nh6);
 }
 #endif /* EXTREME_DEBUG */
-#endif /* HAVE_IPV6 */
 
 static void
 adjinfo2nexthop (struct list *nexthops, struct isis_adjacency *adj)
@@ -242,7 +240,6 @@ adjinfo2nexthop (struct list *nexthops, struct isis_adjacency *adj)
     }
 }
 
-#ifdef HAVE_IPV6
 static void
 adjinfo2nexthop6 (struct list *nexthops6, struct isis_adjacency *adj)
 {
@@ -265,7 +262,6 @@ adjinfo2nexthop6 (struct list *nexthops6, struct isis_adjacency *adj)
 	}
     }
 }
-#endif /* HAVE_IPV6 */
 
 static struct isis_route_info *
 isis_route_info_new (struct prefix *prefix, uint32_t cost, uint32_t depth,
@@ -291,7 +287,6 @@ isis_route_info_new (struct prefix *prefix, uint32_t cost, uint32_t depth,
           adjinfo2nexthop (rinfo->nexthops, adj);
         }
     }
-#ifdef HAVE_IPV6
   if (prefix->family == AF_INET6)
     {
       rinfo->nexthops6 = list_new ();
@@ -306,8 +301,6 @@ isis_route_info_new (struct prefix *prefix, uint32_t cost, uint32_t depth,
           adjinfo2nexthop6 (rinfo->nexthops6, adj);
         }
     }
-
-#endif /* HAVE_IPV6 */
 
   rinfo->cost = cost;
   rinfo->depth = depth;
@@ -324,13 +317,11 @@ isis_route_info_delete (struct isis_route_info *route_info)
       list_delete (route_info->nexthops);
     }
 
-#ifdef HAVE_IPV6
   if (route_info->nexthops6)
     {
       route_info->nexthops6->del = (void (*)(void *)) isis_nexthop6_delete;
       list_delete (route_info->nexthops6);
     }
-#endif /* HAVE_IPV6 */
 
   XFREE (MTYPE_ISIS_ROUTE_INFO, route_info);
 }
@@ -353,9 +344,7 @@ isis_route_info_same (struct isis_route_info *new,
 {
   struct listnode *node;
   struct isis_nexthop *nexthop;
-#ifdef HAVE_IPV6
   struct isis_nexthop6 *nexthop6;
-#endif /* HAVE_IPV6 */
 
   if (!CHECK_FLAG (old->flag, ISIS_ROUTE_FLAG_ZEBRA_SYNCED))
     return 0;
@@ -378,7 +367,6 @@ isis_route_info_same (struct isis_route_info *new,
              == 0)
           return 0;
     }
-#ifdef HAVE_IPV6
   else if (family == AF_INET6)
     {
       for (ALL_LIST_ELEMENTS_RO (new->nexthops6, node, nexthop6))
@@ -391,7 +379,6 @@ isis_route_info_same (struct isis_route_info *new,
                             nexthop6->ifindex) == 0)
           return 0;
     }
-#endif /* HAVE_IPV6 */
 
   return 1;
 }
@@ -403,21 +390,19 @@ isis_route_create (struct prefix *prefix, u_int32_t cost, u_int32_t depth,
 {
   struct route_node *route_node;
   struct isis_route_info *rinfo_new, *rinfo_old, *route_info = NULL;
-  u_char buff[BUFSIZ];
+  char buff[PREFIX2STR_BUFFER];
   u_char family;
 
   family = prefix->family;
   /* for debugs */
-  prefix2str (prefix, (char *) buff, BUFSIZ);
+  prefix2str (prefix, buff, sizeof (buff));
 
   rinfo_new = isis_route_info_new (prefix, cost, depth, adjacencies);
 
   if (family == AF_INET)
     route_node = route_node_get (area->route_table[level - 1], prefix);
-#ifdef HAVE_IPV6
   else if (family == AF_INET6)
     route_node = route_node_get (area->route_table6[level - 1], prefix);
-#endif /* HAVE_IPV6 */
   else
     {
       isis_route_info_delete (rinfo_new);
@@ -467,10 +452,10 @@ isis_route_delete (struct prefix *prefix, struct route_table *table)
 {
   struct route_node *rode;
   struct isis_route_info *rinfo;
-  char buff[BUFSIZ];
+  char buff[PREFIX2STR_BUFFER];
 
   /* for log */
-  prefix2str (prefix, buff, BUFSIZ);
+  prefix2str (prefix, buff, sizeof (buff));
 
 
   rode = route_node_get (table, prefix);
@@ -502,7 +487,7 @@ isis_route_validate_table (struct isis_area *area, struct route_table *table)
 {
   struct route_node *rnode, *drnode;
   struct isis_route_info *rinfo;
-  u_char buff[BUFSIZ];
+  char buff[PREFIX2STR_BUFFER];
 
   for (rnode = route_top (table); rnode; rnode = route_next (rnode))
     {
@@ -512,7 +497,7 @@ isis_route_validate_table (struct isis_area *area, struct route_table *table)
 
       if (isis->debugs & DEBUG_RTE_EVENTS)
 	{
-	  prefix2str (&rnode->p, (char *) buff, BUFSIZ);
+	  prefix2str (&rnode->p, buff, sizeof (buff));
 	  zlog_debug ("ISIS-Rte (%s): route validate: %s %s %s %s",
 		      area->area_tag,
 		      (CHECK_FLAG (rinfo->flag, ISIS_ROUTE_FLAG_ZEBRA_SYNCED) ?
@@ -547,7 +532,6 @@ isis_route_validate_table (struct isis_area *area, struct route_table *table)
 		drnode->info = NULL;
 	    }
 
-#ifdef HAVE_IPV6
 	  if (rnode->p.family == AF_INET6)
 	    {
 	      drnode = route_node_get (area->route_table6[0], &rnode->p);
@@ -557,7 +541,6 @@ isis_route_validate_table (struct isis_area *area, struct route_table *table)
 	      if (drnode->info == rnode->info)
 		drnode->info = NULL;
 	    }
-#endif
 	      
 	  isis_route_delete (&rnode->p, table);
 	}
@@ -585,10 +568,8 @@ isis_route_validate_merge (struct isis_area *area, int family)
 
   if (family == AF_INET)
     table = area->route_table[0];
-#ifdef HAVE_IPV6
   else if (family == AF_INET6)
     table = area->route_table6[0];
-#endif
 
   for (rnode = route_top (table); rnode; rnode = route_next (rnode))
     {
@@ -600,10 +581,8 @@ isis_route_validate_merge (struct isis_area *area, int family)
 
   if (family == AF_INET)
     table = area->route_table[1];
-#ifdef HAVE_IPV6
   else if (family == AF_INET6)
     table = area->route_table6[1];
-#endif
 
   for (rnode = route_top (table); rnode; rnode = route_next (rnode))
     {
@@ -634,14 +613,12 @@ isis_route_validate (struct isis_area *area)
   else
     isis_route_validate_merge (area, AF_INET);
 
-#ifdef HAVE_IPV6
   if (area->is_type == IS_LEVEL_1)
     isis_route_validate_table (area, area->route_table6[0]);
   else if (area->is_type == IS_LEVEL_2)
     isis_route_validate_table (area, area->route_table6[1]);
   else
     isis_route_validate_merge (area, AF_INET6);
-#endif
 
   if (!area->circuit_list) {
     return;

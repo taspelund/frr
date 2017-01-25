@@ -224,7 +224,7 @@ ospf6_install_lsa (struct ospf6_lsa *lsa)
       ospf6_flood_clear (old);
     }
 
-  quagga_gettime (QUAGGA_CLK_MONOTONIC, &now);
+  monotime(&now);
   if (! OSPF6_LSA_IS_MAXAGE (lsa))
     lsa->expire = thread_add_timer (master, ospf6_lsa_expire, lsa,
                                     OSPF_LSA_MAXAGE + lsa->birth.tv_sec - now.tv_sec);
@@ -422,7 +422,7 @@ ospf6_flood_interface (struct ospf6_neighbor *from,
     }
 }
 
-static void
+void
 ospf6_flood_area (struct ospf6_neighbor *from,
                   struct ospf6_lsa *lsa, struct ospf6_area *oa)
 {
@@ -760,6 +760,7 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
   struct ospf6_lsa *new = NULL, *old = NULL, *rem = NULL;
   int ismore_recent;
   int is_debug = 0;
+  unsigned int time_delta_ms;
 
   ismore_recent = 1;
   assert (from);
@@ -861,18 +862,20 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
       if (old)
         {
           struct timeval now, res;
-          quagga_gettime (QUAGGA_CLK_MONOTONIC, &now);
+          monotime(&now);
           timersub (&now, &old->installed, &res);
-          if (res.tv_sec < (OSPF_MIN_LS_ARRIVAL / 1000))
+          time_delta_ms = (res.tv_sec * 1000) + (int)(res.tv_usec/1000);
+          if (time_delta_ms < from->ospf6_if->area->ospf6->lsa_minarrival)
             {
               if (is_debug)
-                zlog_debug ("LSA can't be updated within MinLSArrival, discard");
+                zlog_debug ("LSA can't be updated within MinLSArrival, %dms < %dms, discard",
+                            time_delta_ms, from->ospf6_if->area->ospf6->lsa_minarrival);
               ospf6_lsa_delete (new);
               return;   /* examin next lsa */
             }
         }
 
-      quagga_gettime (QUAGGA_CLK_MONOTONIC, &new->received);
+      monotime(&new->received);
 
       if (is_debug)
         zlog_debug ("Install, Flood, Possibly acknowledge the received LSA");
@@ -891,6 +894,9 @@ ospf6_receive_lsa (struct ospf6_neighbor *from,
       /* (d), installing lsdb, which may cause routing
               table calculation (replacing database copy) */
       ospf6_install_lsa (new);
+
+      if (OSPF6_LSA_IS_MAXAGE (new))
+	ospf6_maxage_remove (from->ospf6_if->area->ospf6);
 
       /* (e) possibly acknowledge */
       ospf6_acknowledge_lsa (new, ismore_recent, from);

@@ -21,6 +21,7 @@
 
 #include <zebra.h>
 #include <lib/version.h>
+#include <stdlib.h>
 
 #include "getopt.h"
 #include "thread.h"
@@ -28,6 +29,7 @@
 #include "command.h"
 #include "vty.h"
 #include "memory.h"
+#include "memory_vty.h"
 #include "if.h"
 #include "filter.h"
 #include "prefix.h"
@@ -36,6 +38,7 @@
 #include "sigevent.h"
 #include "zclient.h"
 #include "vrf.h"
+#include "bfd.h"
 
 #include "ospf6d.h"
 #include "ospf6_top.h"
@@ -60,11 +63,11 @@ zebra_capabilities_t _caps_p [] =
 
 struct zebra_privs_t ospf6d_privs =
 {
-#if defined(QUAGGA_USER)
-  .user = QUAGGA_USER,
+#if defined(FRR_USER)
+  .user = FRR_USER,
 #endif
-#if defined QUAGGA_GROUP
-  .group = QUAGGA_GROUP,
+#if defined FRR_GROUP
+  .group = FRR_GROUP,
 #endif
 #ifdef VTY_GROUP
   .vty_group = VTY_GROUP,
@@ -128,7 +131,7 @@ Daemon which manages OSPF version 3.\n\n\
 -C, --dryrun       Check configuration for validity and exit\n\
 -h, --help         Display this help and exit\n\
 \n\
-Report bugs to %s\n", progname, ZEBRA_BUG_ADDRESS);
+Report bugs to %s\n", progname, FRR_BUG_ADDRESS);
     }
 
   exit (status);
@@ -143,7 +146,9 @@ ospf6_exit (int status)
   if (ospf6)
     ospf6_delete (ospf6);
 
-  for (ALL_LIST_ELEMENTS_RO(iflist, node, ifp))
+  bfd_gbl_exit();
+
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     if (ifp->info != NULL)
       ospf6_interface_delete(ifp->info);
 
@@ -238,6 +243,9 @@ main (int argc, char *argv[], char *envp[])
   /* Preserve name of myself. */
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
+  /* Seed random number for LSA ID */
+  srandom (time(NULL));
+
   /* Command line argument treatment. */
   while (1) 
     {
@@ -310,10 +318,14 @@ main (int argc, char *argv[], char *envp[])
   master = thread_master_create ();
 
   /* Initializations. */
-  zlog_default = openzlog (progname, ZLOG_OSPF6,
+  zlog_default = openzlog (progname, ZLOG_OSPF6, 0,
                            LOG_CONS|LOG_NDELAY|LOG_PID,
                            LOG_DAEMON);
   zprivs_init (&ospf6d_privs);
+#if defined(HAVE_CUMULUS)
+  zlog_set_level (NULL, ZLOG_DEST_SYSLOG, zlog_default->default_lvl);
+#endif
+
   /* initialize zebra libraries */
   signal_init (master, array_size(ospf6_signals), ospf6_signals);
   cmd_init (1);
@@ -349,7 +361,7 @@ main (int argc, char *argv[], char *envp[])
 
   /* Print start message */
   zlog_notice ("OSPF6d (Quagga-%s ospf6d-%s) starts: vty@%d",
-               QUAGGA_VERSION, OSPF6_DAEMON_VERSION,vty_port);
+               FRR_VERSION, OSPF6_DAEMON_VERSION,vty_port);
 
   /* Start finite state machine, here we go! */
   while (thread_fetch (master, &thread))

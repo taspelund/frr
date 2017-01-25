@@ -46,10 +46,6 @@ struct isis_lsp
   time_t installed;
   time_t last_generated;
   int own_lsp;
-#ifdef TOPOLOGY_GENERATE
-  int from_topology;
-  struct thread *t_lsp_top_ref;
-#endif
   /* used for 60 second counting when rem_lifetime is zero */
   int age_out;
   struct isis_area *area;
@@ -112,15 +108,10 @@ void lsp_print_detail (struct isis_lsp *lsp, struct vty *vty, char dynhost);
 int lsp_print_all (struct vty *vty, dict_t * lspdb, char detail,
 		   char dynhost);
 const char *lsp_bits2string (u_char *);
+void lsp_te_tlv_fit (struct isis_lsp *lsp, struct list **from,
+		     struct list **to, int frag_thold);
 
 /* sets SRMflags for all active circuits of an lsp */
 void lsp_set_all_srmflags (struct isis_lsp *lsp);
-
-#ifdef TOPOLOGY_GENERATE
-void generate_topology_lsps (struct isis_area *area);
-void remove_topology_lsps (struct isis_area *area);
-void build_topology_lsp_data (struct isis_lsp *lsp,
-			      struct isis_area *area, int lsp_top_num);
-#endif /* TOPOLOGY_GENERATE */
 
 #endif /* ISIS_LSP */

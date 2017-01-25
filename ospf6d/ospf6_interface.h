@@ -22,6 +22,7 @@
 #ifndef OSPF6_INTERFACE_H
 #define OSPF6_INTERFACE_H
 
+#include "qobj.h"
 #include "if.h"
 
 /* Debug option */
@@ -113,7 +114,13 @@ struct ospf6_interface
 
   /* prefix-list name to filter connected prefix */
   char *plist_name;
+
+  /* BFD information */
+  void *bfd_info;
+
+  QOBJ_FIELDS
 };
+DECLARE_QOBJ_TYPE(ospf6_interface)
 
 /* interface state */
 #define OSPF6_INTERFACE_NONE             0
@@ -141,15 +148,15 @@ extern const char *ospf6_interface_state_str[];
 #define OSPF6_INTERFACE_PRIORITY       1
 #define OSPF6_INTERFACE_TRANSDELAY     1
 #define OSPF6_INTERFACE_INSTANCE_ID    0
-#define OSPF6_INTERFACE_BANDWIDTH      10000   /* Kbps */
-#define OSPF6_REFERENCE_BANDWIDTH      100000  /* Kbps */
+#define OSPF6_INTERFACE_BANDWIDTH      10000   /* Mbps */
+#define OSPF6_REFERENCE_BANDWIDTH      100000  /* Mbps */
 #define OSPF6_INTERFACE_SSO_RETRY_INT  1
 #define OSPF6_INTERFACE_SSO_RETRY_MAX  5
 
 
 /* Function Prototypes */
 
-extern struct ospf6_interface *ospf6_interface_lookup_by_ifindex (int);
+extern struct ospf6_interface *ospf6_interface_lookup_by_ifindex (ifindex_t);
 extern struct ospf6_interface *ospf6_interface_create (struct interface *);
 extern void ospf6_interface_delete (struct ospf6_interface *);
 

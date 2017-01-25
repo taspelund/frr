@@ -41,7 +41,6 @@ extern struct zebra_privs_t ospfd_privs;
 #include "ospfd/ospf_lsdb.h"
 #include "ospfd/ospf_neighbor.h"
 #include "ospfd/ospf_packet.h"
-#include "ospfd/ospf_dump.h"
 
 
 
@@ -53,7 +52,7 @@ ospf_if_add_allspfrouters (struct ospf *top, struct prefix *p,
   int ret;
   
   ret = setsockopt_ipv4_multicast (top->fd, IP_ADD_MEMBERSHIP,
-                                   htonl (OSPF_ALLSPFROUTERS),
+                                   p->u.prefix4, htonl (OSPF_ALLSPFROUTERS),
                                    ifindex);
   if (ret < 0)
     zlog_warn ("can't setsockopt IP_ADD_MEMBERSHIP (fd %d, addr %s, "
@@ -74,7 +73,7 @@ ospf_if_drop_allspfrouters (struct ospf *top, struct prefix *p,
   int ret;
 
   ret = setsockopt_ipv4_multicast (top->fd, IP_DROP_MEMBERSHIP,
-                                   htonl (OSPF_ALLSPFROUTERS),
+                                   p->u.prefix4, htonl (OSPF_ALLSPFROUTERS),
                                    ifindex);
   if (ret < 0)
     zlog_warn ("can't setsockopt IP_DROP_MEMBERSHIP (fd %d, addr %s, "
@@ -94,7 +93,7 @@ ospf_if_add_alldrouters (struct ospf *top, struct prefix *p, ifindex_t ifindex)
   int ret;
 
   ret = setsockopt_ipv4_multicast (top->fd, IP_ADD_MEMBERSHIP,
-                                   htonl (OSPF_ALLDROUTERS),
+                                   p->u.prefix4, htonl (OSPF_ALLDROUTERS),
                                    ifindex);
   if (ret < 0)
     zlog_warn ("can't setsockopt IP_ADD_MEMBERSHIP (fd %d, addr %s, "
@@ -114,7 +113,7 @@ ospf_if_drop_alldrouters (struct ospf *top, struct prefix *p, ifindex_t ifindex)
   int ret;
 
   ret = setsockopt_ipv4_multicast (top->fd, IP_DROP_MEMBERSHIP,
-                                   htonl (OSPF_ALLDROUTERS),
+                                   p->u.prefix4, htonl (OSPF_ALLDROUTERS),
                                    ifindex);
   if (ret < 0)
     zlog_warn ("can't setsockopt IP_DROP_MEMBERSHIP (fd %d, addr %s, "
@@ -132,24 +131,22 @@ ospf_if_ipmulticast (struct ospf *top, struct prefix *p, ifindex_t ifindex)
 {
   u_char val;
   int ret, len;
-  
-  val = 0;
-  len = sizeof (val);
-  
+
   /* Prevent receiving self-origined multicast packets. */
-  ret = setsockopt (top->fd, IPPROTO_IP, IP_MULTICAST_LOOP, (void *)&val, len);
+  ret = setsockopt_ipv4_multicast_loop (top->fd, 0);
   if (ret < 0)
     zlog_warn ("can't setsockopt IP_MULTICAST_LOOP(0) for fd %d: %s",
 	       top->fd, safe_strerror(errno));
   
   /* Explicitly set multicast ttl to 1 -- endo. */
   val = 1;
+  len = sizeof (val);
   ret = setsockopt (top->fd, IPPROTO_IP, IP_MULTICAST_TTL, (void *)&val, len);
   if (ret < 0)
     zlog_warn ("can't setsockopt IP_MULTICAST_TTL(1) for fd %d: %s",
 	       top->fd, safe_strerror (errno));
 
-  ret = setsockopt_ipv4_multicast_if (top->fd, ifindex);
+  ret = setsockopt_ipv4_multicast_if (top->fd, p->u.prefix4, ifindex);
   if (ret < 0)
     zlog_warn("can't setsockopt IP_MULTICAST_IF(fd %d, addr %s, "
 	      "ifindex %u): %s",
@@ -163,6 +160,7 @@ ospf_sock_init (void)
 {
   int ospf_sock;
   int ret, hincl = 1;
+  int bufsize = (8 * 1024 * 1024);
 
   if ( ospfd_privs.change (ZPRIVS_RAISE) )
     zlog_err ("ospf_sock_init: could not raise privs, %s",
@@ -221,40 +219,9 @@ ospf_sock_init (void)
       zlog_err ("ospf_sock_init: could not lower privs, %s",
                safe_strerror (errno) );
     }
- 
-  return ospf_sock;
-}
 
-void
-ospf_adjust_sndbuflen (struct ospf * ospf, unsigned int buflen)
-{
-  int ret, newbuflen;
-  /* Check if any work has to be done at all. */
-  if (ospf->maxsndbuflen >= buflen)
-    return;
-  if (IS_DEBUG_OSPF (zebra, ZEBRA_INTERFACE))
-    zlog_debug ("%s: adjusting OSPF send buffer size to %d",
-      __func__, buflen);
-  if (ospfd_privs.change (ZPRIVS_RAISE))
-    zlog_err ("%s: could not raise privs, %s", __func__,
-      safe_strerror (errno));
-  /* Now we try to set SO_SNDBUF to what our caller has requested
-   * (the MTU of a newly added interface). However, if the OS has
-   * truncated the actual buffer size to somewhat less size, try
-   * to detect it and update our records appropriately. The OS
-   * may allocate more buffer space, than requested, this isn't
-   * a error.
-   */
-  ret = setsockopt_so_sendbuf (ospf->fd, buflen);
-  newbuflen = getsockopt_so_sendbuf (ospf->fd);
-  if (ret < 0 || newbuflen < 0 || newbuflen < (int) buflen)
-    zlog_warn ("%s: tried to set SO_SNDBUF to %u, but got %d",
-      __func__, buflen, newbuflen);
-  if (newbuflen >= 0)
-    ospf->maxsndbuflen = (unsigned int)newbuflen;
-  else
-    zlog_warn ("%s: failed to get SO_SNDBUF", __func__);
-  if (ospfd_privs.change (ZPRIVS_LOWER))
-    zlog_err ("%s: could not lower privs, %s", __func__,
-      safe_strerror (errno));
+  setsockopt_so_sendbuf (ospf_sock, bufsize);
+  setsockopt_so_recvbuf (ospf_sock, bufsize);
+
+  return ospf_sock;
 }

@@ -16,8 +16,6 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-  
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
 
 #ifndef PIM_CMD_H
@@ -30,6 +28,7 @@
 #define CONF_SSMPINGD_STR                      "Enable ssmpingd operation\n"
 #define SHOW_SSMPINGD_STR                      "ssmpingd operation\n"
 #define IFACE_PIM_STR                          "Enable PIM SSM operation\n"
+#define IFACE_PIM_SM_STR                       "Enable PIM SM operation\n"
 #define IFACE_PIM_HELLO_STR                    "Hello Interval\n"
 #define IFACE_PIM_HELLO_TIME_STR               "Time in seconds for Hello Interval\n"
 #define IFACE_PIM_HELLO_HOLD_STR               "Time in seconds for Hold Interval\n"
@@ -48,6 +47,7 @@
 #define DEBUG_PIM_PACKETS_STR                       "PIM protocol packets\n"
 #define DEBUG_PIM_HELLO_PACKETS_STR                 "PIM Hello protocol packets\n"
 #define DEBUG_PIM_J_P_PACKETS_STR                   "PIM Join/Prune protocol packets\n"
+#define DEBUG_PIM_PIM_REG_PACKETS_STR               "PIM Register/Reg-Stop protocol packets\n"
 #define DEBUG_PIM_PACKETDUMP_STR                    "PIM packet dump\n"
 #define DEBUG_PIM_PACKETDUMP_SEND_STR               "Dump sent packets\n"
 #define DEBUG_PIM_PACKETDUMP_RECV_STR               "Dump received packets\n"
@@ -58,12 +58,12 @@
 #define CLEAR_IP_PIM_STR                            "PIM clear commands\n"
 #define MROUTE_STR                                  "IP multicast routing table\n"
 #define RIB_STR                                     "IP unicast routing table\n"
-
-#define PIM_CMD_NO                                   "no"
-#define PIM_CMD_IP_MULTICAST_ROUTING                 "ip multicast-routing"
-#define PIM_CMD_IP_IGMP_QUERY_INTERVAL               "ip igmp query-interval"
-#define PIM_CMD_IP_IGMP_QUERY_MAX_RESPONSE_TIME      "ip igmp query-max-response-time"
-#define PIM_CMD_IP_IGMP_QUERY_MAX_RESPONSE_TIME_DSEC "ip igmp query-max-response-time-dsec"
+#define CFG_MSDP_STR                                "Configure multicast source discovery protocol\n"
+#define MSDP_STR                                    "MSDP information\n"
+#define DEBUG_MSDP_STR                              "MSDP protocol activity\n"
+#define DEBUG_MSDP_EVENTS_STR                       "MSDP protocol events\n"
+#define DEBUG_MSDP_INTERNAL_STR                     "MSDP protocol internal\n"
+#define DEBUG_MSDP_PACKETS_STR                      "MSDP protocol packets\n"
 
 void pim_cmd_init(void);
 

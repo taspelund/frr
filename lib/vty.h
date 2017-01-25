@@ -24,8 +24,9 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "thread.h"
 #include "log.h"
 #include "sockunion.h"
+#include "qobj.h"
 
-#define VTY_BUFSIZ 512
+#define VTY_BUFSIZ 4096
 #define VTY_MAXHIST 20
 
 /* VTY struct. */
@@ -52,6 +53,9 @@ struct vty
   /* Command input buffer */
   char *buf;
 
+  /* Command input error buffer */
+  char *error_buf;
+
   /* Command cursor point */
   int cp;
 
@@ -70,12 +74,11 @@ struct vty
   /* History insert end point */
   int hindex;
 
-  /* For current referencing point of interface, route-map,
-     access-list etc... */
-  void *index;
+  /* qobj object ID (replacement for "index") */
+  uint64_t qobj_index;
 
-  /* For multiple level index treatment such as key chain and key. */
-  void *index_sub;
+  /* qobj second-level object ID (replacement for "index_sub") */
+  uint64_t qobj_index_sub;
 
   /* For escape character. */
   unsigned char escape;
@@ -124,6 +127,55 @@ struct vty
   char address[SU_ADDRSTRLEN];
 };
 
+static inline void vty_push_context(struct vty *vty,
+                                    int node, uint64_t id)
+{
+  vty->node = node;
+  vty->qobj_index = id;
+}
+
+/* note: VTY_PUSH_CONTEXT(..., NULL) doesn't work, since it will try to
+ * dereference "NULL->qobj_node.nid" */
+#define VTY_PUSH_CONTEXT(nodeval, ptr) \
+	vty_push_context(vty, nodeval, QOBJ_ID_0SAFE(ptr))
+#define VTY_PUSH_CONTEXT_NULL(nodeval) \
+	vty_push_context(vty, nodeval, 0ULL)
+#define VTY_PUSH_CONTEXT_SUB(nodeval, ptr) do { \
+		vty->node = nodeval; \
+		/* qobj_index stays untouched */ \
+		vty->qobj_index_sub = QOBJ_ID_0SAFE(ptr); \
+	} while (0)
+
+/* can return NULL if context is invalid! */
+#define VTY_GET_CONTEXT(structname) \
+	QOBJ_GET_TYPESAFE(vty->qobj_index, structname)
+#define VTY_GET_CONTEXT_SUB(structname) \
+	QOBJ_GET_TYPESAFE(vty->qobj_index_sub, structname)
+
+/* will return if ptr is NULL. */
+#define VTY_CHECK_CONTEXT(ptr) \
+	if (!ptr) { \
+		vty_out (vty, "Current configuration object was deleted " \
+				"by another process.%s", VTY_NEWLINE); \
+		return CMD_WARNING; \
+	}
+
+/* struct structname *ptr = <context>;   ptr will never be NULL. */
+#define VTY_DECLVAR_CONTEXT(structname, ptr) \
+	struct structname *ptr = VTY_GET_CONTEXT(structname); \
+	VTY_CHECK_CONTEXT(ptr);
+#define VTY_DECLVAR_CONTEXT_SUB(structname, ptr) \
+	struct structname *ptr = VTY_GET_CONTEXT_SUB(structname); \
+	VTY_CHECK_CONTEXT(ptr);
+
+struct vty_arg
+{
+  const char *name;
+  const char *value;
+  const char **argv;
+  int argc;
+};
+
 /* Integrated configuration file. */
 #define INTEGRATE_DEFAULT_CONFIG "Quagga.conf"
 
@@ -158,9 +210,42 @@ do { \
   char *endptr = NULL; \
   errno = 0; \
   (V) = strtoul ((STR), &endptr, 10); \
-  if (*(STR) == '-' || *endptr != '\0' || errno) \
+  if (*(STR) == '-') \
     { \
-      vty_out (vty, "%% Invalid %s value%s", NAME, VTY_NEWLINE); \
+      vty_out (vty, "%% Invalid %s value (dash)%s", NAME, VTY_NEWLINE); \
+      return CMD_WARNING; \
+    } \
+  if (*endptr != '\0') \
+    { \
+      vty_out (vty, "%% Invalid %s value (%s)%s", NAME, endptr, VTY_NEWLINE); \
+      return CMD_WARNING; \
+    } \
+  if (errno) \
+    { \
+      vty_out (vty, "%% Invalid %s value (error %d)%s", NAME, errno, VTY_NEWLINE); \
+      return CMD_WARNING; \
+    } \
+} while (0)
+
+/* Utility macros to convert VTY argument to unsigned long long */
+#define VTY_GET_ULL(NAME,V,STR) \
+do { \
+  char *endptr = NULL; \
+  errno = 0; \
+  (V) = strtoull ((STR), &endptr, 10); \
+  if (*(STR) == '-') \
+    { \
+      vty_out (vty, "%% Invalid %s value (dash)%s", NAME, VTY_NEWLINE); \
+      return CMD_WARNING; \
+    } \
+  if (*endptr != '\0') \
+    { \
+      vty_out (vty, "%% Invalid %s value (%s)%s", NAME, endptr, VTY_NEWLINE); \
+      return CMD_WARNING; \
+    } \
+  if (errno) \
+    { \
+      vty_out (vty, "%% Invalid %s value (error %d)%s", NAME, errno, VTY_NEWLINE); \
       return CMD_WARNING; \
     } \
 } while (0)
@@ -184,7 +269,7 @@ do {                                                            \
 
 #define VTY_GET_INTEGER_RANGE(NAME,V,STR,MIN,MAX)               \
 do {                                                            \
-  unsigned long tmpl;                                           \
+  unsigned long long tmpl;                                      \
   VTY_GET_INTEGER_RANGE_HEART(NAME,tmpl,STR,MIN,MAX);           \
   (V) = tmpl;                                                   \
 } while (0)
@@ -248,6 +333,7 @@ extern void vty_log (const char *level, const char *proto,
                      const char *fmt, struct timestamp_control *, va_list);
 extern int vty_config_lock (struct vty *);
 extern int vty_config_unlock (struct vty *);
+extern void vty_config_lockless (void);
 extern int vty_shell (struct vty *);
 extern int vty_shell_serv (struct vty *);
 extern void vty_hello (struct vty *);
@@ -255,5 +341,8 @@ extern void vty_hello (struct vty *);
 /* Send a fixed-size message to all vty terminal monitors; this should be
    an async-signal-safe function. */
 extern void vty_log_fixed (char *buf, size_t len);
+
+extern const char *vty_get_arg_value (struct vty_arg **, const char *);
+extern struct vty_arg *vty_get_arg (struct vty_arg **, const char *);
 
 #endif /* _ZEBRA_VTY_H */

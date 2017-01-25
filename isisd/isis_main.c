@@ -29,6 +29,7 @@
 #include "command.h"
 #include "vty.h"
 #include "memory.h"
+#include "memory_vty.h"
 #include "stream.h"
 #include "if.h"
 #include "privs.h"
@@ -37,9 +38,9 @@
 #include "plist.h"
 #include "zclient.h"
 #include "vrf.h"
+#include "qobj.h"
 
 #include "isisd/dict.h"
-#include "include-netbsd/iso.h"
 #include "isisd/isis_constants.h"
 #include "isisd/isis_common.h"
 #include "isisd/isis_flags.h"
@@ -65,11 +66,11 @@ zebra_capabilities_t _caps_p[] = {
 };
 
 struct zebra_privs_t isisd_privs = {
-#if defined(QUAGGA_USER)
-  .user = QUAGGA_USER,
+#if defined(FRR_USER)
+  .user = FRR_USER,
 #endif
-#if defined QUAGGA_GROUP
-  .group = QUAGGA_GROUP,
+#if defined FRR_GROUP
+  .group = FRR_GROUP,
 #endif
 #ifdef VTY_GROUP
   .vty_group = VTY_GROUP,
@@ -149,7 +150,7 @@ Daemon which manages IS-IS routing\n\n\
 -C, --dryrun       Check configuration for validity and exit\n\
 -h, --help         Display this help and exit\n\
 \n\
-Report bugs to %s\n", progname, ZEBRA_BUG_ADDRESS);
+Report bugs to %s\n", progname, FRR_BUG_ADDRESS);
     }
 
   exit (status);
@@ -168,7 +169,7 @@ reload ()
       safe_strerror (errno));
 }
 
-static void
+static __attribute__((__noreturn__)) void
 terminate (int i)
 {
   exit (i);
@@ -187,14 +188,14 @@ sighup (void)
   return;
 }
 
-void
+__attribute__((__noreturn__)) void
 sigint (void)
 {
   zlog_notice ("Terminating on signal SIGINT");
   terminate (0);
 }
 
-void
+__attribute__((__noreturn__)) void
 sigterm (void)
 {
   zlog_notice ("Terminating on signal SIGTERM");
@@ -244,14 +245,23 @@ main (int argc, char **argv, char **envp)
   /* Get the programname without the preceding path. */
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
-  zlog_default = openzlog (progname, ZLOG_ISIS,
+  zlog_default = openzlog (progname, ZLOG_ISIS, 0,
 			   LOG_CONS | LOG_NDELAY | LOG_PID, LOG_DAEMON);
+  zprivs_init (&isisd_privs);
+#if defined(HAVE_CUMULUS)
+  zlog_set_level (NULL, ZLOG_DEST_SYSLOG, zlog_default->default_lvl);
+#endif
 
   /* for reload */
   _argc = argc;
   _argv = argv;
   _envp = envp;
-  getcwd (_cwd, sizeof (_cwd));
+  if (getcwd (_cwd, sizeof (_cwd)) == NULL)
+    {
+      zlog_err ("ISISd: Unable to determine CWD: %d", errno);
+      exit (1);
+    }
+
   if (*argv[0] == '.')
     snprintf (_progpath, sizeof (_progpath), "%s/%s", _cwd, _argv[0]);
   else
@@ -329,9 +339,9 @@ main (int argc, char **argv, char **envp)
   /*
    *  initializations
    */
-  zprivs_init (&isisd_privs);
   signal_init (master, array_size (isisd_signals), isisd_signals);
   cmd_init (1);
+  vty_config_lockless ();
   vty_init (master);
   memory_init ();
   access_list_init();
@@ -347,7 +357,7 @@ main (int argc, char **argv, char **envp)
   /* create the global 'isis' instance */
   isis_new (1);
 
-  isis_zebra_init (master);
+  isis_zebra_init(master);
 
   /* parse config file */
   /* this is needed three times! because we have interfaces before the areas */
@@ -358,8 +368,11 @@ main (int argc, char **argv, char **envp)
     return(0);
   
   /* demonize */
-  if (daemon_mode)
-    daemon (0, 0);
+  if (daemon_mode && daemon (0, 0) < 0)
+    {
+      zlog_err("ISISd daemon failed: %s", strerror(errno));
+      return (1);
+    }
 
   /* Process ID file creation. */
   if (pid_file[0] != '\0')
@@ -369,7 +382,7 @@ main (int argc, char **argv, char **envp)
   vty_serv_sock (vty_addr, vty_port, ISIS_VTYSH_PATH);
 
   /* Print banner. */
-  zlog_notice ("Quagga-ISISd %s starting: vty@%d", QUAGGA_VERSION, vty_port);
+  zlog_notice ("Quagga-ISISd %s starting: vty@%d", FRR_VERSION, vty_port);
 
   /* Start finite state machine. */
   while (thread_fetch (master, &thread))

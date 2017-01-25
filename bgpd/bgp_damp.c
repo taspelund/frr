@@ -26,6 +26,7 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "command.h"
 #include "log.h"
 #include "thread.h"
+#include "queue.h"
 #include "filter.h"
 
 #include "bgpd/bgpd.h"
@@ -543,10 +544,11 @@ bgp_config_write_damp (struct vty *vty)
 }
 
 static const char *
-bgp_get_reuse_time (unsigned int penalty, char *buf, size_t len)
+bgp_get_reuse_time (unsigned int penalty, char *buf, size_t len, u_char use_json, json_object *json)
 {
   time_t reuse_time = 0;
   struct tm *tm = NULL;
+  int time_store = 0;
 
   if (penalty > damp->reuse_limit)
     {
@@ -564,22 +566,52 @@ bgp_get_reuse_time (unsigned int penalty, char *buf, size_t len)
 #define ONE_DAY_SECOND 60*60*24
 #define ONE_WEEK_SECOND 60*60*24*7
   if (reuse_time == 0)
-    snprintf (buf, len, "00:00:00");
+    {
+      if (use_json)
+        json_object_int_add(json, "reuseTimerMsecs", 0);
+      else
+        snprintf (buf, len, "00:00:00");
+    }
   else if (reuse_time < ONE_DAY_SECOND)
-    snprintf (buf, len, "%02d:%02d:%02d", 
-              tm->tm_hour, tm->tm_min, tm->tm_sec);
+    {
+      if (use_json)
+        {
+          time_store = (3600000 * tm->tm_hour) + (60000 * tm->tm_min) + (1000 * tm->tm_sec);
+          json_object_int_add(json, "reuseTimerMsecs", time_store);
+        }
+      else
+        snprintf (buf, len, "%02d:%02d:%02d",
+                tm->tm_hour, tm->tm_min, tm->tm_sec);
+    }
   else if (reuse_time < ONE_WEEK_SECOND)
-    snprintf (buf, len, "%dd%02dh%02dm", 
-              tm->tm_yday, tm->tm_hour, tm->tm_min);
+    {
+      if (use_json)
+        {
+          time_store = (86400000 * tm->tm_yday) + (3600000 * tm->tm_hour) + (60000 * tm->tm_min) + (1000 * tm->tm_sec);
+          json_object_int_add(json, "reuseTimerMsecs", time_store);
+        }
+      else
+        snprintf (buf, len, "%dd%02dh%02dm",
+                tm->tm_yday, tm->tm_hour, tm->tm_min);
+    }
   else
-    snprintf (buf, len, "%02dw%dd%02dh", 
-              tm->tm_yday/7, tm->tm_yday - ((tm->tm_yday/7) * 7), tm->tm_hour); 
+    {
+      if (use_json)
+        {
+          time_store = (604800000 * tm->tm_yday/7) + (86400000 * (tm->tm_yday - ((tm->tm_yday/7) * 7))) + (3600000 * tm->tm_hour) + (60000 * tm->tm_min) + (1000 * tm->tm_sec);
+          json_object_int_add(json, "reuseTimerMsecs", time_store);
+        }
+      else
+        snprintf (buf, len, "%02dw%dd%02dh",
+                tm->tm_yday/7, tm->tm_yday - ((tm->tm_yday/7) * 7), tm->tm_hour);
+    }
 
   return buf;
 }
  
 void
-bgp_damp_info_vty (struct vty *vty, struct bgp_info *binfo)  
+bgp_damp_info_vty (struct vty *vty, struct bgp_info *binfo,
+                   json_object *json_path)
 {
   struct bgp_damp_info *bdi;
   time_t t_now, t_diff;
@@ -602,21 +634,34 @@ bgp_damp_info_vty (struct vty *vty, struct bgp_info *binfo)
   t_diff = t_now - bdi->t_updated;
   penalty = bgp_damp_decay (t_diff, bdi->penalty);
 
-  vty_out (vty, "      Dampinfo: penalty %d, flapped %d times in %s",
-           penalty, bdi->flap,
-	   peer_uptime (bdi->start_time, timebuf, BGP_UPTIME_LEN));
+  if (json_path)
+    {
+      json_object_int_add(json_path, "dampeningPenalty", penalty);
+      json_object_int_add(json_path, "dampeningFlapCount", bdi->flap);
+      peer_uptime (bdi->start_time, timebuf, BGP_UPTIME_LEN, 1, json_path);
 
-  if (CHECK_FLAG (binfo->flags, BGP_INFO_DAMPED)
-      && ! CHECK_FLAG (binfo->flags, BGP_INFO_HISTORY))
-    vty_out (vty, ", reuse in %s",
-	     bgp_get_reuse_time (penalty, timebuf, BGP_UPTIME_LEN));
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_DAMPED)
+          && ! CHECK_FLAG (binfo->flags, BGP_INFO_HISTORY))
+        bgp_get_reuse_time (penalty, timebuf, BGP_UPTIME_LEN, 1, json_path);
+    }
+  else
+    {
+      vty_out (vty, "      Dampinfo: penalty %d, flapped %d times in %s",
+               penalty, bdi->flap,
+	       peer_uptime (bdi->start_time, timebuf, BGP_UPTIME_LEN, 0, json_path));
 
-  vty_out (vty, "%s", VTY_NEWLINE);
+      if (CHECK_FLAG (binfo->flags, BGP_INFO_DAMPED)
+          && ! CHECK_FLAG (binfo->flags, BGP_INFO_HISTORY))
+        vty_out (vty, ", reuse in %s",
+	       bgp_get_reuse_time (penalty, timebuf, BGP_UPTIME_LEN, 0, json_path));
+
+      vty_out (vty, "%s", VTY_NEWLINE);
+    }
 }
 
 const char *
 bgp_damp_reuse_time_vty (struct vty *vty, struct bgp_info *binfo,
-                         char *timebuf, size_t len)
+                         char *timebuf, size_t len, u_char use_json, json_object *json)
 {
   struct bgp_damp_info *bdi;
   time_t t_now, t_diff;
@@ -638,7 +683,7 @@ bgp_damp_reuse_time_vty (struct vty *vty, struct bgp_info *binfo,
   t_diff = t_now - bdi->t_updated;
   penalty = bgp_damp_decay (t_diff, bdi->penalty);
 
-  return  bgp_get_reuse_time (penalty, timebuf, len);
+  return  bgp_get_reuse_time (penalty, timebuf, len, use_json, json);
 }
 
 int
@@ -655,16 +700,16 @@ bgp_show_dampening_parameters (struct vty *vty, afi_t afi, safi_t safi)
 
   if (CHECK_FLAG (bgp->af_flags[afi][safi], BGP_CONFIG_DAMPENING))
     {
-      vty_out (vty, "Half-life time: %ld min%s",
-                    damp->half_life / 60, VTY_NEWLINE);
+      vty_out (vty, "Half-life time: %lld min%s",
+               (long long)damp->half_life / 60, VTY_NEWLINE);
       vty_out (vty, "Reuse penalty: %d%s",
-                    damp->reuse_limit, VTY_NEWLINE);
+               damp->reuse_limit, VTY_NEWLINE);
       vty_out (vty, "Suppress penalty: %d%s",
-                    damp->suppress_value, VTY_NEWLINE);
-      vty_out (vty, "Max suppress time: %ld min%s",
-                    damp->max_suppress_time / 60, VTY_NEWLINE);
+               damp->suppress_value, VTY_NEWLINE);
+      vty_out (vty, "Max suppress time: %lld min%s",
+               (long long)damp->max_suppress_time / 60, VTY_NEWLINE);
       vty_out (vty, "Max supress penalty: %u%s",
-                    damp->ceiling, VTY_NEWLINE);
+               damp->ceiling, VTY_NEWLINE);
       vty_out (vty, "%s", VTY_NEWLINE);
     }
   else

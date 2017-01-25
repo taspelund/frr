@@ -24,7 +24,7 @@
 #include "if.h"
 #include "linklist.h"
 #include "memory.h"
-#include "memtypes.h"
+#include "isis_memory.h"
 #include "prefix.h"
 #include "routemap.h"
 #include "stream.h"
@@ -96,7 +96,7 @@ isis_redist_route_node_create(route_table_delegate_t *delegate,
                               struct route_table *table)
 {
   struct route_node *node;
-  node = XCALLOC(MTYPE_ROUTE_NODE, sizeof(*node));
+  node = XCALLOC(MTYPE_ISIS_EXT_ROUTE, sizeof(*node));
   return node;
 }
 
@@ -106,8 +106,8 @@ isis_redist_route_node_destroy(route_table_delegate_t *delegate,
                                struct route_node *node)
 {
   if (node->info)
-    XFREE(MTYPE_ISIS, node->info);
-  XFREE (MTYPE_ROUTE_NODE, node);
+    XFREE(MTYPE_ISIS_EXT_INFO, node->info);
+  XFREE (MTYPE_ISIS_EXT_ROUTE, node);
 }
 
 static route_table_delegate_t isis_redist_rt_delegate = {
@@ -144,7 +144,7 @@ isis_redist_install(struct isis_area *area, int level,
     }
   else
     {
-      er_node->info = XMALLOC(MTYPE_ISIS, sizeof(*info));
+      er_node->info = XMALLOC(MTYPE_ISIS_EXT_INFO, sizeof(*info));
     }
 
   memcpy(er_node->info, info, sizeof(*info));
@@ -244,7 +244,7 @@ isis_redist_ensure_default(struct isis *isis, int family)
       return;
     }
 
-  ei_node->info = XCALLOC(MTYPE_ISIS, sizeof(struct isis_ext_info));
+  ei_node->info = XCALLOC(MTYPE_ISIS_EXT_INFO, sizeof(struct isis_ext_info));
 
   info = ei_node->info;
   info->origin = DEFAULT_ROUTE;
@@ -282,7 +282,7 @@ isis_redist_add(int type, struct prefix *p, u_char distance, uint32_t metric)
   if (ei_node->info)
     route_unlock_node(ei_node);
   else
-    ei_node->info = XCALLOC(MTYPE_ISIS, sizeof(struct isis_ext_info));
+    ei_node->info = XCALLOC(MTYPE_ISIS_EXT_INFO, sizeof(struct isis_ext_info));
 
   info = ei_node->info;
   info->origin = type;
@@ -538,33 +538,33 @@ isis_redist_area_finish(struct isis_area *area)
   isis_redist_update_zebra_subscriptions(area->isis);
 }
 
-DEFUN(isis_redistribute,
-      isis_redistribute_cmd,
-      "redistribute (ipv4|ipv6) " QUAGGA_REDIST_STR_ISISD
-      " (level-1|level-2) {metric <0-16777215>|route-map WORD}",
-      REDIST_STR
-      "Redistribute IPv4 routes\n"
-      "Redistribute IPv6 routes\n"
-      QUAGGA_REDIST_HELP_STR_ISISD
-      "Redistribute into level-1\n"
-      "Redistribute into level-2\n"
-      "Metric for redistributed routes\n"
-      "ISIS default metric\n"
-      "Route map reference\n"
-      "Pointer to route-map entries\n")
+DEFUN (isis_redistribute,
+       isis_redistribute_cmd,
+       "redistribute <ipv4|ipv6> <kernel|connected|static|rip|ripng|ospf|ospf6|bgp|pim|table> <level-1|level-2> [<metric (0-16777215)|route-map WORD>]",
+       REDIST_STR
+       "Redistribute IPv4 routes\n"
+       "Redistribute IPv6 routes\n"
+       FRR_REDIST_HELP_STR_ISISD
+       "Redistribute into level-1\n"
+       "Redistribute into level-2\n"
+       "Metric for redistributed routes\n"
+       "ISIS default metric\n"
+       "Route map reference\n"
+       "Pointer to route-map entries\n")
 {
-  struct isis_area *area = vty->index;
+  int idx_afi = 1;
+  int idx_protocol = 2;
+  int idx_level = 3;
+  int idx_metric_rmap = 4;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int family;
   int afi;
   int type;
   int level;
   unsigned long metric;
-  const char *routemap;
+  const char *routemap = NULL;
 
-  if (argc < 5)
-    return CMD_WARNING;
-
-  family = str2family(argv[0]);
+  family = str2family(argv[idx_afi]->text);
   if (family < 0)
     return CMD_WARNING;
 
@@ -572,13 +572,13 @@ DEFUN(isis_redistribute,
   if (!afi)
     return CMD_WARNING;
 
-  type = proto_redistnum(afi, argv[1]);
-  if (type < 0 || type == ZEBRA_ROUTE_ISIS)
+  type = proto_redistnum(afi, argv[idx_protocol]->text);
+  if (type < 0)
     return CMD_WARNING;
 
-  if (!strcmp("level-1", argv[2]))
+  if (!strcmp("level-1", argv[idx_level]->arg))
     level = 1;
-  else if (!strcmp("level-2", argv[2]))
+  else if (!strcmp("level-2", argv[idx_level]->arg))
     level = 2;
   else
     return CMD_WARNING;
@@ -589,46 +589,46 @@ DEFUN(isis_redistribute,
       return CMD_WARNING;
     }
 
-  if (argv[3])
+  if (strmatch(argv[idx_metric_rmap]->text, "metric"))
     {
       char *endp;
-      metric = strtoul(argv[3], &endp, 10);
-      if (argv[3][0] == '\0' || *endp != '\0')
+      metric = strtoul(argv[idx_metric_rmap + 1]->arg, &endp, 10);
+      routemap = NULL;
+
+      if (argv[idx_metric_rmap]->arg[0] == '\0' || *endp != '\0')
         return CMD_WARNING;
     }
   else
     {
+      routemap = argv[idx_metric_rmap + 1]->arg;
       metric = 0xffffffff;
     }
-
-  routemap = argv[4];
 
   isis_redist_set(area, level, family, type, metric, routemap, 0);
   return 0;
 }
 
-DEFUN(no_isis_redistribute,
-      no_isis_redistribute_cmd,
-      "no redistribute (ipv4|ipv6) " QUAGGA_REDIST_STR_ISISD
-      " (level-1|level-2)",
-      NO_STR
-      REDIST_STR
-      "Redistribute IPv4 routes\n"
-      "Redistribute IPv6 routes\n"
-      QUAGGA_REDIST_HELP_STR_ISISD
-      "Redistribute into level-1\n"
-      "Redistribute into level-2\n")
+DEFUN (no_isis_redistribute,
+       no_isis_redistribute_cmd,
+       "no redistribute <ipv4|ipv6> <kernel|connected|static|rip|ripng|ospf|ospf6|bgp|pim|table> <level-1|level-2>",
+       NO_STR
+       REDIST_STR
+       "Redistribute IPv4 routes\n"
+       "Redistribute IPv6 routes\n"
+       FRR_REDIST_HELP_STR_ISISD
+       "Redistribute into level-1\n"
+       "Redistribute into level-2\n")
 {
-  struct isis_area *area = vty->index;
+  int idx_afi = 2;
+  int idx_protocol = 3;
+  int idx_level = 4;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int type;
   int level;
   int family;
   int afi;
 
-  if (argc < 3)
-    return CMD_WARNING;
-
-  family = str2family(argv[0]);
+  family = str2family(argv[idx_afi]->arg);
   if (family < 0)
     return CMD_WARNING;
 
@@ -636,57 +636,46 @@ DEFUN(no_isis_redistribute,
   if (!afi)
     return CMD_WARNING;
 
-  type = proto_redistnum(afi, argv[1]);
-  if (type < 0 || type == ZEBRA_ROUTE_ISIS)
+  type = proto_redistnum(afi, argv[idx_protocol]->text);
+  if (type < 0)
     return CMD_WARNING;
 
-  if (!strcmp("level-1", argv[2]))
-    level = 1;
-  else if (!strcmp("level-2", argv[2]))
-    level = 2;
-  else
-    return CMD_WARNING;
+  level = strmatch ("level-1", argv[idx_level]->text) ? 1 : 2;
 
   isis_redist_unset(area, level, family, type);
   return 0;
 }
 
-DEFUN(isis_default_originate,
-      isis_default_originate_cmd,
-      "default-information originate (ipv4|ipv6) (level-1|level-2) "
-        "{always|metric <0-16777215>|route-map WORD}",
-      "Control distribution of default information\n"
-      "Distribute a default route\n"
-      "Distribute default route for IPv4\n"
-      "Distribute default route for IPv6\n"
-      "Distribute default route into level-1\n"
-      "Distribute default route into level-2\n"
-      "Always advertise default route\n"
-      "Metric for default route\n"
-      "ISIS default metric\n"
-      "Route map reference\n"
-      "Pointer to route-map entries\n")
+DEFUN (isis_default_originate,
+       isis_default_originate_cmd,
+       "default-information originate <ipv4|ipv6> <level-1|level-2> [<always|metric (0-16777215)|route-map WORD>]",
+       "Control distribution of default information\n"
+       "Distribute a default route\n"
+       "Distribute default route for IPv4\n"
+       "Distribute default route for IPv6\n"
+       "Distribute default route into level-1\n"
+       "Distribute default route into level-2\n"
+       "Always advertise default route\n"
+       "Metric for default route\n"
+       "ISIS default metric\n"
+       "Route map reference\n"
+       "Pointer to route-map entries\n")
 {
-  struct isis_area *area = vty->index;
+  int idx_afi = 2;
+  int idx_level = 3;
+  int idx_metric_rmap = 4;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int family;
-  int originate_type;
+  int originate_type = DEFAULT_ORIGINATE;
   int level;
-  unsigned long metric;
-  const char *routemap;
+  unsigned long metric = 0xffffffff;
+  const char *routemap = NULL;
 
-  if (argc < 5)
-    return CMD_WARNING;
-
-  family = str2family(argv[0]);
+  family = str2family(argv[idx_afi]->text);
   if (family < 0)
     return CMD_WARNING;
 
-  if (!strcmp("level-1", argv[1]))
-    level = 1;
-  else if (!strcmp("level-2", argv[1]))
-    level = 2;
-  else
-    return CMD_WARNING;
+  level = strmatch ("level-1", argv[idx_level]->text) ? 1 : 2;
 
   if ((area->is_type & level) != level)
     {
@@ -694,10 +683,15 @@ DEFUN(isis_default_originate,
       return CMD_WARNING;
     }
 
-  if (argv[2] && *argv[2] != '\0')
-    originate_type = DEFAULT_ORIGINATE_ALWAYS;
-  else
-    originate_type = DEFAULT_ORIGINATE;
+  if (argc > 4)
+  {
+    if (strmatch (argv[idx_metric_rmap]->text, "always"))
+      originate_type = DEFAULT_ORIGINATE_ALWAYS;
+    else if (strmatch(argv[idx_metric_rmap]->text, "metric"))
+      metric = strtoul(argv[idx_metric_rmap + 1]->arg, NULL, 10);
+    else
+      routemap = argv[idx_metric_rmap + 1]->arg;
+  }
 
   if (family == AF_INET6 && originate_type != DEFAULT_ORIGINATE_ALWAYS)
     {
@@ -705,50 +699,34 @@ DEFUN(isis_default_originate,
       vty_out(vty, "so use with care or use default-originate always.%s", VTY_NEWLINE);
     }
 
-  if (argv[3])
-    {
-      char *endp;
-      metric = strtoul(argv[3], &endp, 10);
-      if (argv[3][0] == '\0' || *endp != '\0')
-        return CMD_WARNING;
-    }
-  else
-    {
-      metric = 0xffffffff;
-    }
-
-  routemap = argv[4];
-
   isis_redist_set(area, level, family, DEFAULT_ROUTE, metric, routemap, originate_type);
   return 0;
 }
 
-DEFUN(no_isis_default_originate,
-      no_isis_default_originate_cmd,
-      "no default-information originate (ipv4|ipv6) (level-1|level-2)",
-      NO_STR
-      "Control distribution of default information\n"
-      "Distribute a default route\n"
-      "Distribute default route for IPv4\n"
-      "Distribute default route for IPv6\n"
-      "Distribute default route into level-1\n"
-      "Distribute default route into level-2\n")
+DEFUN (no_isis_default_originate,
+       no_isis_default_originate_cmd,
+       "no default-information originate <ipv4|ipv6> <level-1|level-2>",
+       NO_STR
+       "Control distribution of default information\n"
+       "Distribute a default route\n"
+       "Distribute default route for IPv4\n"
+       "Distribute default route for IPv6\n"
+       "Distribute default route into level-1\n"
+       "Distribute default route into level-2\n")
 {
-  struct isis_area *area = vty->index;
-
+  int idx_afi = 3;
+  int idx_level = 4;
+  VTY_DECLVAR_CONTEXT (isis_area, area);
   int family;
   int level;
 
-  if (argc < 2)
-    return CMD_WARNING;
-
-  family = str2family(argv[0]);
+  family = str2family(argv[idx_afi]->text);
   if (family < 0)
     return CMD_WARNING;
 
-  if (!strcmp("level-1", argv[1]))
+  if (strmatch ("level-1", argv[idx_level]->text))
     level = 1;
-  else if (!strcmp("level-2", argv[1]))
+  else if (strmatch ("level-2", argv[idx_level]->text))
     level = 2;
   else
     return CMD_WARNING;

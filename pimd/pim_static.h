@@ -16,8 +16,6 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
 
 #ifndef PIM_STATIC_H_
@@ -32,16 +30,15 @@ struct static_route {
    struct in_addr group;
    struct in_addr source;
 
-   unsigned int   iif;
+   struct channel_oil c_oil;
+   ifindex_t          iif;
    unsigned char  oif_ttls[MAXVIFS];
-   int            oif_count;
-   struct mfcctl  mc;
-   time_t         creation[MAXVIFS];
 };
 
 void pim_static_route_free(struct static_route *s_route);
 
 int pim_static_add(struct interface *iif, struct interface *oif, struct in_addr group, struct in_addr source);
 int pim_static_del(struct interface *iif, struct interface *oif, struct in_addr group, struct in_addr source);
+int pim_static_write_mroute (struct vty *vty, struct interface *ifp);
 
 #endif /* PIM_STATIC_H_ */

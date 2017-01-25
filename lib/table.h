@@ -23,6 +23,9 @@
 #ifndef _ZEBRA_TABLE_H
 #define _ZEBRA_TABLE_H
 
+#include "memory.h"
+DECLARE_MTYPE(ROUTE_TABLE)
+
 /*
  * Forward declarations.
  */
@@ -141,6 +144,9 @@ extern struct route_table *route_table_init (void);
 extern struct route_table *
 route_table_init_with_delegate (route_table_delegate_t *);
 
+extern route_table_delegate_t *
+route_table_get_default_delegate(void);
+
 extern void route_table_finish (struct route_table *);
 extern void route_unlock_node (struct route_node *node);
 extern struct route_node *route_top (struct route_table *);
@@ -156,12 +162,15 @@ extern struct route_node *route_node_match (const struct route_table *,
                                             const struct prefix *);
 extern struct route_node *route_node_match_ipv4 (const struct route_table *,
 						 const struct in_addr *);
-#ifdef HAVE_IPV6
 extern struct route_node *route_node_match_ipv6 (const struct route_table *,
 						 const struct in6_addr *);
-#endif /* HAVE_IPV6 */
 
 extern unsigned long route_table_count (const struct route_table *);
+
+extern struct route_node *route_node_create (route_table_delegate_t *,
+					     struct route_table *);
+extern void route_node_destroy (route_table_delegate_t *,
+				struct route_table *, struct route_node *);
 
 extern struct route_node *
 route_table_get_next (const struct route_table *table, struct prefix *p);

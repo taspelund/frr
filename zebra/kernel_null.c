@@ -24,16 +24,15 @@
 #include <zebra.h>
 #include <log.h>
 
+#include "vty.h"
 #include "zebra/zserv.h"
 #include "zebra/rt.h"
 #include "zebra/redistribute.h"
 #include "zebra/connected.h"
+#include "zebra/rt_netlink.h"
 #include "zebra/rib.h"
 
 int kernel_route_rib (struct prefix *a, struct rib *old, struct rib *new) { return 0; }
-
-int kernel_add_route (struct prefix_ipv4 *a, struct in_addr *b, int c, int d)
-{ return 0; }
 
 int kernel_address_add_ipv4 (struct interface *a, struct connected *b)
 {
@@ -53,10 +52,13 @@ int kernel_address_delete_ipv4 (struct interface *a, struct connected *b)
   return 0;
 }
 
-void kernel_init (struct zebra_vrf *zvrf) { return; }
-void kernel_terminate (struct zebra_vrf *zvrf) { return; }
-#ifdef HAVE_SYS_WEAK_ALIAS_PRAGMA
-#pragma weak route_read = kernel_init
-#else
-void route_read (struct zebra_vrf *zvrf) { return; }
-#endif
+int kernel_neigh_update (int a, int b, uint32_t c, char *d, int e)
+{
+  return 0;
+}
+
+void kernel_init (struct zebra_ns *zns) { return; }
+void kernel_terminate (struct zebra_ns *zns) { return; }
+void route_read (struct zebra_ns *zns) { return; }
+
+int kernel_get_ipmr_sg_stats (void *m) { return 0; }

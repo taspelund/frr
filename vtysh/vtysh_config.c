@@ -25,10 +25,13 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "memory.h"
 
 #include "vtysh/vtysh.h"
+#include "vtysh/vtysh_user.h"
+
+DEFINE_MGROUP(MVTYSH, "vtysh")
+DEFINE_MTYPE_STATIC(MVTYSH, VTYSH_CONFIG,      "Vtysh configuration")
+DEFINE_MTYPE_STATIC(MVTYSH, VTYSH_CONFIG_LINE, "Vtysh configuration line")
 
 vector configvec;
-
-extern int vtysh_writeconfig_integrated;
 
 struct config
 {
@@ -60,7 +63,7 @@ line_del (char *line)
 }
 
 static struct config *
-config_new ()
+config_new (void)
 {
   struct config *config;
   config = XCALLOC (MTYPE_VTYSH_CONFIG, sizeof (struct config));
@@ -121,7 +124,7 @@ config_get (int index, const char *line)
   return config;
 }
 
-static void
+void
 config_add_line (struct list *config, const char *line)
 {
   listnode_add (config, XSTRDUP (MTYPE_VTYSH_CONFIG_LINE, line));
@@ -141,7 +144,7 @@ config_add_line_uniq (struct list *config, const char *line)
   listnode_add_sort (config, XSTRDUP (MTYPE_VTYSH_CONFIG_LINE, line));
 }
 
-static void
+void
 vtysh_config_parse_line (const char *line)
 {
   char c;
@@ -159,6 +162,8 @@ vtysh_config_parse_line (const char *line)
 
   switch (c)
     {
+    /* Suppress exclamation points ! and commented lines. The !s are generated
+     * dynamically in vtysh_config_dump() */
     case '!':
     case '#':
       break;
@@ -166,26 +171,21 @@ vtysh_config_parse_line (const char *line)
       /* Store line to current configuration. */
       if (config)
 	{
-          if (strncmp (line, " address-family vpnv4",
-	      strlen (" address-family vpnv4")) == 0)
-	    config = config_get (BGP_VPNV4_NODE, line);
-	  else if (strncmp (line, " address-family vpn6",
-	      strlen (" address-family vpn6")) == 0)
-	    config = config_get (BGP_VPNV6_NODE, line);
-	  else if (strncmp (line, " address-family encapv6",
-	      strlen (" address-family encapv6")) == 0)
-	    config = config_get (BGP_ENCAPV6_NODE, line);
-	  else if (strncmp (line, " address-family encap",
-	      strlen (" address-family encap")) == 0)
-	    config = config_get (BGP_ENCAP_NODE, line);
-	  else if (strncmp (line, " address-family ipv4 multicast",
-		   strlen (" address-family ipv4 multicast")) == 0)
-	    config = config_get (BGP_IPV4M_NODE, line);
-	  else if (strncmp (line, " address-family ipv6",
-		   strlen (" address-family ipv6")) == 0)
-	    config = config_get (BGP_IPV6_NODE, line);
+	  if (strncmp (line, " link-params", strlen (" link-params")) == 0)
+	    {
+	      config_add_line (config->line, line);
+	      config->index = LINK_PARAMS_NODE;
+	    }
+	  else if (config->index == LINK_PARAMS_NODE &&
+	      strncmp (line, "  exit-link-params", strlen ("  exit")) == 0)
+	    {
+	      config_add_line (config->line, line);
+	      config->index = INTERFACE_NODE;
+	    }
 	  else if (config->index == RMAP_NODE ||
-		   config->index == VTY_NODE)
+	      config->index == INTERFACE_NODE ||
+	      config->index == NS_NODE ||
+	      config->index == VTY_NODE)
 	    config_add_line_uniq (config->line, line);
 	  else
 	    config_add_line (config->line, line);
@@ -196,6 +196,10 @@ vtysh_config_parse_line (const char *line)
     default:
       if (strncmp (line, "interface", strlen ("interface")) == 0)
 	config = config_get (INTERFACE_NODE, line);
+      else if (strncmp (line, "logical-router", strlen ("ns")) == 0)
+	config = config_get (NS_NODE, line);
+      else if (strncmp (line, "vrf", strlen ("vrf")) == 0)
+	config = config_get (VRF_NODE, line);
       else if (strncmp (line, "router-id", strlen ("router-id")) == 0)
 	config = config_get (ZEBRA_NODE, line);
       else if (strncmp (line, "router rip", strlen ("router rip")) == 0)
@@ -206,12 +210,14 @@ vtysh_config_parse_line (const char *line)
 	config = config_get (OSPF_NODE, line);
       else if (strncmp (line, "router ospf6", strlen ("router ospf6")) == 0)
 	config = config_get (OSPF6_NODE, line);
+      else if (strncmp (line, "mpls ldp", strlen ("mpls ldp")) == 0)
+	config = config_get (LDP_NODE, line);
+      else if (strncmp (line, "l2vpn", strlen ("l2vpn")) == 0)
+	config = config_get (LDP_L2VPN_NODE, line);
       else if (strncmp (line, "router bgp", strlen ("router bgp")) == 0)
 	config = config_get (BGP_NODE, line);
       else if (strncmp (line, "router isis", strlen ("router isis")) == 0)
   	config = config_get (ISIS_NODE, line);
-      else if (strncmp (line, "router bgp", strlen ("router bgp")) == 0)
-	config = config_get (BGP_NODE, line);
       else if (strncmp (line, "route-map", strlen ("route-map")) == 0)
 	config = config_get (RMAP_NODE, line);
       else if (strncmp (line, "access-list", strlen ("access-list")) == 0)
@@ -228,8 +234,8 @@ vtysh_config_parse_line (const char *line)
       else if (strncmp (line, "ip as-path access-list",
 	       strlen ("ip as-path access-list")) == 0)
 	config = config_get (AS_LIST_NODE, line);
-      else if (strncmp (line, "ip community-list",
-	       strlen ("ip community-list")) == 0)
+      else if (strncmp (line, "ip community-list", strlen ("ip community-list")) == 0 ||
+               strncmp (line, "ip extcommunity-list", strlen ("ip extcommunity-list")) == 0)
 	config = config_get (COMMUNITY_LIST_NODE, line);
       else if (strncmp (line, "ip route", strlen ("ip route")) == 0)
 	config = config_get (IP_NODE, line);
@@ -246,6 +252,8 @@ vtysh_config_parse_line (const char *line)
 	config = config_get (FORWARDING_NODE, line);
       else if (strncmp (line, "service", strlen ("service")) == 0)
 	config = config_get (SERVICE_NODE, line);
+      else if (strncmp (line, "debug vrf", strlen ("debug vrf")) == 0)
+	config = config_get (VRF_DEBUG_NODE, line);
       else if (strncmp (line, "debug", strlen ("debug")) == 0)
 	config = config_get (DEBUG_NODE, line);
       else if (strncmp (line, "password", strlen ("password")) == 0
@@ -254,6 +262,14 @@ vtysh_config_parse_line (const char *line)
 	config = config_get (AAA_NODE, line);
       else if (strncmp (line, "ip protocol", strlen ("ip protocol")) == 0)
 	config = config_get (PROTOCOL_NODE, line);
+      else if (strncmp (line, "ipv6 protocol", strlen ("ipv6 protocol")) == 0)
+	config = config_get (PROTOCOL_NODE, line);
+      else if (strncmp (line, "ip nht", strlen ("ip nht")) == 0)
+	config = config_get (PROTOCOL_NODE, line);
+      else if (strncmp (line, "ipv6 nht", strlen ("ipv6 nht")) == 0)
+	config = config_get (PROTOCOL_NODE, line);
+      else if (strncmp (line, "mpls", strlen ("mpls")) == 0)
+	config = config_get (MPLS_NODE, line);
       else
 	{
 	  if (strncmp (line, "log", strlen ("log")) == 0
@@ -268,29 +284,6 @@ vtysh_config_parse_line (const char *line)
     }
 }
 
-void
-vtysh_config_parse (char *line)
-{
-  char *begin;
-  char *pnt;
-  
-  begin = pnt = line;
-
-  while (*pnt != '\0')
-    {
-      if (*pnt == '\n')
-	{
-	  *pnt++ = '\0';
-	  vtysh_config_parse_line (begin);
-	  begin = pnt;
-	}
-      else
-	{
-	  pnt++;
-	}
-    }
-}
-
 /* Macro to check delimiter is needed between each configuration line
  * or not. */
 #define NO_DELIMITER(I)  \
@@ -298,7 +291,7 @@ vtysh_config_parse (char *line)
    || (I) == AS_LIST_NODE || (I) == COMMUNITY_LIST_NODE || \
    (I) == ACCESS_IPV6_NODE || (I) == PREFIX_IPV6_NODE \
    || (I) == SERVICE_NODE || (I) == FORWARDING_NODE || (I) == DEBUG_NODE \
-   || (I) == AAA_NODE)
+   || (I) == AAA_NODE || (I) == VRF_DEBUG_NODE || (I) == MPLS_NODE)
 
 /* Display configuration to file pointer. */
 void
@@ -323,7 +316,14 @@ vtysh_config_dump (FILE *fp)
     if ((master = vector_slot (configvec, i)) != NULL)
       {
 	for (ALL_LIST_ELEMENTS (master, node, nnode, config))
-	  {
+    {
+      /* Don't print empty sections for interface/vrf. Route maps on the
+       * other hand could have a legitimate empty section at the end.
+       */
+      if ((config->index == INTERFACE_NODE || (config->index == VRF_NODE))
+          && list_isempty (config->line))
+        continue;
+
 	    fprintf (fp, "%s\n", config->name);
 	    fflush (fp);
 
@@ -355,11 +355,11 @@ vtysh_config_dump (FILE *fp)
 }
 
 /* Read up configuration file from file_name. */
-static void
+static int
 vtysh_read_file (FILE *confp)
 {
-  int ret;
   struct vty *vty;
+  int ret;
 
   vty = vty_new ();
   vty->fd = 0;			/* stdout */
@@ -377,38 +377,28 @@ vtysh_read_file (FILE *confp)
 
   vty_close (vty);
 
-  if (ret != CMD_SUCCESS) 
-    {
-      switch (ret)
-	{
-	case CMD_ERR_AMBIGUOUS:
-	  fprintf (stderr, "Ambiguous command.\n");
-	  break;
-	case CMD_ERR_NO_MATCH:
-	  fprintf (stderr, "There is no such command.\n");
-	  break;
-	}
-      fprintf (stderr, "Error occured during reading below line.\n%s\n", 
-	       vty->buf);
-      exit (1);
-    }
+  return (ret);
 }
 
 /* Read up configuration file from config_default_dir. */
 int
-vtysh_read_config (char *config_default_dir)
+vtysh_read_config (const char *config_default_dir)
 {
   FILE *confp = NULL;
+  int ret;
 
   confp = fopen (config_default_dir, "r");
   if (confp == NULL)
-    return (1);
+    {
+      fprintf (stderr, "%% Can't open configuration file %s due to '%s'.\n",
+               config_default_dir, safe_strerror (errno));
+      return (CMD_ERR_NO_FILE);
+    }
 
-  vtysh_read_file (confp);
+  ret = vtysh_read_file (confp);
   fclose (confp);
-  host_config_set (config_default_dir);
 
-  return (0);
+  return (ret);
 }
 
 /* We don't write vtysh specific into file from vtysh. vtysh.conf should
@@ -426,8 +416,12 @@ vtysh_config_write ()
       sprintf (line, "hostname %s", host.name);
       vtysh_config_parse_line(line);
     }
-  if (vtysh_writeconfig_integrated)
+  if (vtysh_write_integrated == WRITE_INTEGRATED_NO)
+    vtysh_config_parse_line ("no service integrated-vtysh-config");
+  if (vtysh_write_integrated == WRITE_INTEGRATED_YES)
     vtysh_config_parse_line ("service integrated-vtysh-config");
+
+  user_config_write ();
 }
 
 void

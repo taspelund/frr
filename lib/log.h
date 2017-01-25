@@ -41,6 +41,10 @@
  * please use LOG_ERR instead.
  */
 
+/*
+ * This must be kept in the same order as
+ * zlog_proto_names[]
+ */
 typedef enum 
 {
   ZLOG_NONE,
@@ -50,11 +54,12 @@ typedef enum
   ZLOG_BGP,
   ZLOG_OSPF,
   ZLOG_RIPNG,
-  ZLOG_BABEL,
   ZLOG_OSPF6,
+  ZLOG_LDP,
   ZLOG_ISIS,
   ZLOG_PIM,
-  ZLOG_MASC
+  ZLOG_RFP,
+  ZLOG_WATCHFRR,
 } zlog_proto_t;
 
 /* If maxlvl is set to ZLOG_DISABLED, then no messages will be sent
@@ -74,6 +79,7 @@ struct zlog
 {
   const char *ident;	/* daemon name (first arg to openlog) */
   zlog_proto_t protocol;
+  u_short      instance;
   int maxlvl[ZLOG_NUM_DESTS];	/* maximum priority to send to associated
   				   logging destination */
   int default_lvl;	/* maxlvl to use if none is specified */
@@ -98,7 +104,7 @@ extern struct zlog *zlog_default;
 
 /* Open zlog function */
 extern struct zlog *openzlog (const char *progname, zlog_proto_t protocol,
-		              int syslog_options, int syslog_facility);
+		              u_short instance, int syslog_options, int syslog_facility);
 
 /* Close zlog function. */
 extern void closezlog (struct zlog *zl);
@@ -115,23 +121,14 @@ extern void zlog (struct zlog *zl, int priority, const char *format, ...)
   PRINTF_ATTRIBUTE(3, 4);
 
 /* Handy zlog functions. */
+extern void vzlog (struct zlog *zl, int priority, const char *format, va_list args);
 extern void zlog_err (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 extern void zlog_warn (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 extern void zlog_info (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 extern void zlog_notice (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 extern void zlog_debug (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 
-/* For bgpd's peer oriented log. */
-extern void plog_err (struct zlog *, const char *format, ...)
-  PRINTF_ATTRIBUTE(2, 3);
-extern void plog_warn (struct zlog *, const char *format, ...)
-  PRINTF_ATTRIBUTE(2, 3);
-extern void plog_info (struct zlog *, const char *format, ...)
-  PRINTF_ATTRIBUTE(2, 3);
-extern void plog_notice (struct zlog *, const char *format, ...)
-  PRINTF_ATTRIBUTE(2, 3);
-extern void plog_debug (struct zlog *, const char *format, ...)
-  PRINTF_ATTRIBUTE(2, 3);
+extern void vzlog (struct zlog *, int , const char *, va_list );
 
 extern void zlog_thread_info (int log_level);
 
@@ -190,7 +187,11 @@ extern void zlog_backtrace_sigsafe(int priority, void *program_counter);
 extern size_t quagga_timestamp(int timestamp_precision /* # subsecond digits */,
 			       char *buf, size_t buflen);
 
-extern void zlog_hexdump(void *mem, unsigned int len);
+extern void zlog_hexdump(const void *mem, unsigned int len);
+
+
+extern int 
+vzlog_test (struct zlog *zl, int priority);
 
 /* structure useful for avoiding repeated rendering of the same timestamp */
 struct timestamp_control {
@@ -200,9 +201,9 @@ struct timestamp_control {
    char buf[QUAGGA_TIMESTAMP_LEN];	/* will contain the rendered timestamp */
 };
 
-/* Defines for use in command construction: */
+#define LOG_DEFAULT_FILENAME "/var/log/quagga/Quagga.log"
 
-#define LOG_LEVELS "(emergencies|alerts|critical|errors|warnings|notifications|informational|debugging)"
+/* Defines for use in command construction: */
 
 #define LOG_LEVEL_DESC \
   "System is unusable\n" \
@@ -213,8 +214,6 @@ struct timestamp_control {
   "Normal but significant conditions\n" \
   "Informational messages\n" \
   "Debugging messages\n"
-
-#define LOG_FACILITIES "(kern|user|mail|daemon|auth|syslog|lpr|news|uucp|cron|local0|local1|local2|local3|local4|local5|local6|local7)"
 
 #define LOG_FACILITY_DESC \
        "Kernel\n" \

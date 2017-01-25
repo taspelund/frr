@@ -62,8 +62,13 @@ writen(int fd, const u_char *ptr, int nbytes)
   while (nleft > 0) 
     {
       nwritten = write(fd, ptr, nleft);
-      
-      if (nwritten <= 0) 
+
+      if (nwritten < 0)
+	{
+	  if (!ERRNO_IO_RETRY(errno))
+	    return nwritten;
+	}
+      if (nwritten == 0) 
 	return (nwritten);
 
       nleft -= nwritten;
@@ -94,15 +99,26 @@ set_nonblocking(int fd)
   return 0;
 }
 
+int
+set_cloexec(int fd)
+{
+  int flags;
+  flags = fcntl(fd, F_GETFD, 0);
+  if (flags == -1)
+    return -1;
+
+  flags |= FD_CLOEXEC;
+  if (fcntl(fd, F_SETFD, flags) == -1)
+    return -1;
+  return 0;
+}
+
 float
 htonf (float host)
 {
-#if !defined(__STDC_IEC_559__) && __GCC_IEC_559 < 0
-#warning "Unknown floating-point format on platform, htonf may break"
-#endif
   u_int32_t lu1, lu2;
   float convert;
-  
+
   memcpy (&lu1, &host, sizeof (u_int32_t));
   lu2 = htonl (lu1);
   memcpy (&convert, &lu2, sizeof (u_int32_t));

@@ -45,50 +45,9 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "bgpd/bgp_vty.h"
 #include "bgpd/bgp_encap.h"
 
-static u_int16_t
-decode_rd_type (u_char *pnt)
-{
-  u_int16_t v;
-  
-  v = ((u_int16_t) *pnt++ << 8);
-  v |= (u_int16_t) *pnt;
-  return v;
-}
-
-
-static void
-decode_rd_as (u_char *pnt, struct rd_as *rd_as)
-{
-  rd_as->as  = (u_int16_t) *pnt++ << 8;
-  rd_as->as |= (u_int16_t) *pnt++;
-  
-  rd_as->val  = ((u_int32_t) *pnt++) << 24;
-  rd_as->val |= ((u_int32_t) *pnt++) << 16;
-  rd_as->val |= ((u_int32_t) *pnt++) << 8;
-  rd_as->val |= (u_int32_t) *pnt;
-}
-
-static void
-decode_rd_as4 (u_char *pnt, struct rd_as *rd_as)
-{
-  rd_as->as  = (u_int32_t) *pnt++ << 24;
-  rd_as->as |= (u_int32_t) *pnt++ << 16;
-  rd_as->as |= (u_int32_t) *pnt++ << 8;
-  rd_as->as |= (u_int32_t) *pnt++;
-  
-  rd_as->val  = ((u_int32_t) *pnt++ << 8);
-  rd_as->val |= (u_int32_t) *pnt;
-}
-
-static void
-decode_rd_ip (u_char *pnt, struct rd_ip *rd_ip)
-{
-  memcpy (&rd_ip->ip, pnt, 4);
-  pnt += 4;
-  
-  rd_ip->val = ((u_int16_t) *pnt++ << 8);
-  rd_ip->val |= (u_int16_t) *pnt;
-}
+#if ENABLE_BGP_VNC
+#include "bgpd/rfapi/rfapi_backend.h"
+#endif
 
 static void
 ecom2prd(struct ecommunity *ecom, struct prefix_rd *prd)
@@ -127,7 +86,7 @@ ecom2prd(struct ecommunity *ecom, struct prefix_rd *prd)
 int
 bgp_nlri_parse_encap(
     struct peer		*peer,
-    struct attr		*attr, 		/* Need even for withdraw */
+    struct attr		*attr,
     struct bgp_nlri	*packet)
 {
   u_char *pnt;
@@ -227,10 +186,18 @@ bgp_nlri_parse_encap(
 	    p.prefixlen);
 
       if (attr) {
-	bgp_update (peer, &p, attr, afi, SAFI_ENCAP,
+	bgp_update (peer, &p, 0, attr, afi, SAFI_ENCAP,
 		    ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, NULL, 0);
+#if ENABLE_BGP_VNC
+	rfapiProcessUpdate(peer, NULL, &p, &prd, attr, afi, SAFI_ENCAP,
+                           ZEBRA_ROUTE_BGP,  BGP_ROUTE_NORMAL, NULL);
+#endif
       } else {
-	bgp_withdraw (peer, &p, attr, afi, SAFI_ENCAP,
+#if ENABLE_BGP_VNC
+	rfapiProcessWithdraw(peer, NULL, &p, &prd, attr, afi, SAFI_ENCAP,
+                             ZEBRA_ROUTE_BGP, 0);
+#endif
+	bgp_withdraw (peer, &p, 0, attr, afi, SAFI_ENCAP,
 		      ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, NULL);
       }
     }
@@ -250,13 +217,16 @@ DEFUN (encap_network,
        encap_network_cmd,
        "network A.B.C.D/M rd ASN:nn_or_IP-address:nn tag WORD",
        "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
+       "IPv4 prefix\n"
        "Specify Route Distinguisher\n"
        "ENCAP Route Distinguisher\n"
        "BGP tag\n"
        "tag value\n")
 {
-  return bgp_static_set_safi (SAFI_ENCAP, vty, argv[0], argv[1], argv[2], NULL);
+  int idx_ipv4 = 1;
+  int idx_rd = 3;
+  int idx_word = 5;
+  return bgp_static_set_safi (SAFI_ENCAP, vty, argv[idx_ipv4]->arg, argv[idx_rd]->arg, argv[idx_word]->arg, NULL);
 }
 
 /* For testing purpose, static route of ENCAP. */
@@ -265,13 +235,16 @@ DEFUN (no_encap_network,
        "no network A.B.C.D/M rd ASN:nn_or_IP-address:nn tag WORD",
        NO_STR
        "Specify a network to announce via BGP\n"
-       "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n"
+       "IPv4 prefix\n"
        "Specify Route Distinguisher\n"
        "ENCAP Route Distinguisher\n"
        "BGP tag\n"
        "tag value\n")
 {
-  return bgp_static_unset_safi (SAFI_ENCAP, vty, argv[0], argv[1], argv[2]);
+  int idx_ipv4 = 2;
+  int idx_rd = 4;
+  int idx_word = 6;
+  return bgp_static_unset_safi (SAFI_ENCAP, vty, argv[idx_ipv4]->arg, argv[idx_rd]->arg, argv[idx_word]->arg);
 }
 
 static int
@@ -352,7 +325,7 @@ show_adj_route_encap (struct vty *vty, struct peer *peer, struct prefix_rd *prd)
                     vty_out (vty, "%s", VTY_NEWLINE);
                     rd_header = 0;
                   }
-                route_vty_out_tmp (vty, &rm->p, attr, SAFI_ENCAP);
+                route_vty_out_tmp (vty, &rm->p, attr, SAFI_ENCAP, 0, NULL);
               }
         }
     }
@@ -481,9 +454,9 @@ bgp_show_encap (
 		    rd_header = 0;
 		  }
 	        if (tags)
-		  route_vty_out_tag (vty, &rm->p, ri, 0, SAFI_ENCAP);
+		  route_vty_out_tag (vty, &rm->p, ri, 0, SAFI_ENCAP, NULL);
 	        else
-		  route_vty_out (vty, &rm->p, ri, 0, SAFI_ENCAP);
+		  route_vty_out (vty, &rm->p, ri, 0, SAFI_ENCAP, NULL);
                 output_count++;
 	      }
         }
@@ -494,7 +467,7 @@ bgp_show_encap (
         vty_out (vty, "No prefixes displayed, %ld exist%s", total_count, VTY_NEWLINE);
     }
   else
-    vty_out (vty, "%sDisplayed %ld out of %ld total prefixes%s",
+    vty_out (vty, "%sDisplayed %ld routes and %ld total paths%s",
 	     VTY_NEWLINE, output_count, total_count, VTY_NEWLINE);
 
   return CMD_SUCCESS;
@@ -502,8 +475,9 @@ bgp_show_encap (
 
 DEFUN (show_bgp_ipv4_encap,
        show_bgp_ipv4_encap_cmd,
-       "show bgp ipv4 encap",
+       "show [ip] bgp ipv4 encap",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n")
@@ -513,8 +487,9 @@ DEFUN (show_bgp_ipv4_encap,
 
 DEFUN (show_bgp_ipv6_encap,
        show_bgp_ipv6_encap_cmd,
-       "show bgp ipv6 encap",
+       "show [ip] bgp ipv6 encap",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n")
@@ -524,18 +499,20 @@ DEFUN (show_bgp_ipv6_encap,
 
 DEFUN (show_bgp_ipv4_encap_rd,
        show_bgp_ipv4_encap_rd_cmd,
-       "show bgp ipv4 encap rd ASN:nn_or_IP-address:nn",
+       "show [ip] bgp ipv4 encap rd ASN:nn_or_IP-address:nn",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
        "Display information for a route distinguisher\n"
        "ENCAP Route Distinguisher\n")
 {
+  int idx_rd = 5;
   int ret;
   struct prefix_rd prd;
 
-  ret = str2prefix_rd (argv[0], &prd);
+  ret = str2prefix_rd (argv[idx_rd]->arg, &prd);
   if (! ret)
     {
       vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
@@ -546,8 +523,9 @@ DEFUN (show_bgp_ipv4_encap_rd,
 
 DEFUN (show_bgp_ipv6_encap_rd,
        show_bgp_ipv6_encap_rd_cmd,
-       "show bgp ipv6 encap rd ASN:nn_or_IP-address:nn",
+       "show [ip] bgp ipv6 encap rd ASN:nn_or_IP-address:nn",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -555,10 +533,11 @@ DEFUN (show_bgp_ipv6_encap_rd,
        "ENCAP Route Distinguisher\n"
        "Display BGP tags for prefixes\n")
 {
+  int idx_rd = 5;
   int ret;
   struct prefix_rd prd;
 
-  ret = str2prefix_rd (argv[0], &prd);
+  ret = str2prefix_rd (argv[idx_rd]->arg, &prd);
   if (! ret)
     {
       vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
@@ -569,8 +548,9 @@ DEFUN (show_bgp_ipv6_encap_rd,
 
 DEFUN (show_bgp_ipv4_encap_tags,
        show_bgp_ipv4_encap_tags_cmd,
-       "show bgp ipv4 encap tags",
+       "show [ip] bgp ipv4 encap tags",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -581,8 +561,9 @@ DEFUN (show_bgp_ipv4_encap_tags,
 
 DEFUN (show_bgp_ipv6_encap_tags,
        show_bgp_ipv6_encap_tags_cmd,
-       "show bgp ipv6 encap tags",
+       "show [ip] bgp ipv6 encap tags",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -591,11 +572,11 @@ DEFUN (show_bgp_ipv6_encap_tags,
   return bgp_show_encap (vty, AFI_IP6, NULL, bgp_show_type_normal, NULL,  1);
 }
 
-
 DEFUN (show_bgp_ipv4_encap_rd_tags,
        show_bgp_ipv4_encap_rd_tags_cmd,
-       "show bgp ipv4 encap rd ASN:nn_or_IP-address:nn tags",
+       "show [ip] bgp ipv4 encap rd ASN:nn_or_IP-address:nn tags",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -603,10 +584,11 @@ DEFUN (show_bgp_ipv4_encap_rd_tags,
        "ENCAP Route Distinguisher\n"
        "Display BGP tags for prefixes\n")
 {
+  int idx_rd = 5;
   int ret;
   struct prefix_rd prd;
 
-  ret = str2prefix_rd (argv[0], &prd);
+  ret = str2prefix_rd (argv[idx_rd]->arg, &prd);
   if (! ret)
     {
       vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
@@ -617,8 +599,9 @@ DEFUN (show_bgp_ipv4_encap_rd_tags,
 
 DEFUN (show_bgp_ipv6_encap_rd_tags,
        show_bgp_ipv6_encap_rd_tags_cmd,
-       "show bgp ipv6 encap rd ASN:nn_or_IP-address:nn tags",
+       "show [ip] bgp ipv6 encap rd ASN:nn_or_IP-address:nn tags",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -626,10 +609,11 @@ DEFUN (show_bgp_ipv6_encap_rd_tags,
        "ENCAP Route Distinguisher\n"
        "Display BGP tags for prefixes\n")
 {
+  int idx_rd = 5;
   int ret;
   struct prefix_rd prd;
 
-  ret = str2prefix_rd (argv[0], &prd);
+  ret = str2prefix_rd (argv[idx_rd]->arg, &prd);
   if (! ret)
     {
       vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
@@ -640,8 +624,9 @@ DEFUN (show_bgp_ipv6_encap_rd_tags,
 
 DEFUN (show_bgp_ipv4_encap_neighbor_routes,
        show_bgp_ipv4_encap_neighbor_routes_cmd,
-       "show bgp ipv4 encap neighbors A.B.C.D routes",
+       "show [ip] bgp ipv4 encap neighbors A.B.C.D routes",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -649,30 +634,31 @@ DEFUN (show_bgp_ipv4_encap_neighbor_routes,
        "Neighbor to display information about\n"
        "Display routes learned from neighbor\n")
 {
-  union sockunion *su;
+  int idx_peer = 5;
+  union sockunion su;
   struct peer *peer;
-  
-  su = sockunion_str2su (argv[0]);
-  if (su == NULL)
+
+  if (sockunion_str2su (argv[idx_peer]->arg))
     {
-      vty_out (vty, "Malformed address: %s%s", argv[0], VTY_NEWLINE);
+      vty_out (vty, "Malformed address: %s%s", argv[idx_peer]->arg, VTY_NEWLINE);
                return CMD_WARNING;
     }
 
-  peer = peer_lookup (NULL, su);
+  peer = peer_lookup (NULL, &su);
   if (! peer || ! peer->afc[AFI_IP][SAFI_ENCAP])
     {
       vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_show_encap (vty, AFI_IP, NULL, bgp_show_type_neighbor, su, 0);
+  return bgp_show_encap (vty, AFI_IP, NULL, bgp_show_type_neighbor, &su, 0);
 }
 
 DEFUN (show_bgp_ipv6_encap_neighbor_routes,
        show_bgp_ipv6_encap_neighbor_routes_cmd,
-       "show bgp ipv6 encap neighbors A.B.C.D routes",
+       "show [ip] bgp ipv6 encap neighbors A.B.C.D routes",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -680,30 +666,31 @@ DEFUN (show_bgp_ipv6_encap_neighbor_routes,
        "Neighbor to display information about\n"
        "Display routes learned from neighbor\n")
 {
-  union sockunion *su;
+  int idx_peer = 5;
+  union sockunion su;
   struct peer *peer;
   
-  su = sockunion_str2su (argv[0]);
-  if (su == NULL)
+  if (str2sockunion(argv[idx_peer]->arg, &su))
     {
-      vty_out (vty, "Malformed address: %s%s", argv[0], VTY_NEWLINE);
+      vty_out (vty, "Malformed address: %s%s", argv[idx_peer]->arg, VTY_NEWLINE);
                return CMD_WARNING;
     }
 
-  peer = peer_lookup (NULL, su);
+  peer = peer_lookup (NULL, &su);
   if (! peer || ! peer->afc[AFI_IP6][SAFI_ENCAP])
     {
       vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_show_encap (vty, AFI_IP6, NULL, bgp_show_type_neighbor, su, 0);
+  return bgp_show_encap (vty, AFI_IP6, NULL, bgp_show_type_neighbor, &su, 0);
 }
 
 DEFUN (show_bgp_ipv4_encap_rd_neighbor_routes,
        show_bgp_ipv4_encap_rd_neighbor_routes_cmd,
-       "show bgp ipv4 encap rd ASN:nn_or_IP-address:nn neighbors (A.B.C.D|X:X::X:X) routes",
+       "show [ip] bgp ipv4 encap rd ASN:nn_or_IP-address:nn neighbors <A.B.C.D|X:X::X:X> routes",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -714,39 +701,41 @@ DEFUN (show_bgp_ipv4_encap_rd_neighbor_routes,
        "Neighbor to display information about\n"
        "Display routes learned from neighbor\n")
 {
+  int idx_rd = 5;
+  int idx_peer = 7;
   int ret;
-  union sockunion *su;
+  union sockunion su;
   struct peer *peer;
   struct prefix_rd prd;
 
-  ret = str2prefix_rd (argv[0], &prd);
+  ret = str2prefix_rd (argv[idx_rd]->arg, &prd);
   if (! ret)
     {
       vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  su = sockunion_str2su (argv[1]);
-  if (su == NULL)
+  if (str2sockunion(argv[idx_peer]->arg, &su))
     {
-      vty_out (vty, "Malformed address: %s%s", argv[1], VTY_NEWLINE);
+      vty_out (vty, "Malformed address: %s%s", argv[idx_peer]->arg, VTY_NEWLINE);
                return CMD_WARNING;
     }
 
-  peer = peer_lookup (NULL, su);
+  peer = peer_lookup (NULL, &su);
   if (! peer || ! peer->afc[AFI_IP][SAFI_ENCAP])
     {
       vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_show_encap (vty, AFI_IP, &prd, bgp_show_type_neighbor, su, 0);
+  return bgp_show_encap (vty, AFI_IP, &prd, bgp_show_type_neighbor, &su, 0);
 }
 
 DEFUN (show_bgp_ipv6_encap_rd_neighbor_routes,
        show_bgp_ipv6_encap_rd_neighbor_routes_cmd,
-       "show bgp ipv6 encap rd ASN:nn_or_IP-address:nn neighbors (A.B.C.D|X:X::X:X) routes",
+       "show [ip] bgp ipv6 encap rd ASN:nn_or_IP-address:nn neighbors <A.B.C.D|X:X::X:X> routes",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -757,39 +746,41 @@ DEFUN (show_bgp_ipv6_encap_rd_neighbor_routes,
        "Neighbor to display information about\n"
        "Display routes learned from neighbor\n")
 {
+  int idx_rd = 5;
+  int idx_peer = 7;
   int ret;
-  union sockunion *su;
+  union sockunion su;
   struct peer *peer;
   struct prefix_rd prd;
 
-  ret = str2prefix_rd (argv[0], &prd);
+  ret = str2prefix_rd (argv[idx_rd]->arg, &prd);
   if (! ret)
     {
       vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  su = sockunion_str2su (argv[1]);
-  if (su == NULL)
+  if (str2sockunion(argv[idx_peer]->arg, &su))
     {
-      vty_out (vty, "Malformed address: %s%s", argv[1], VTY_NEWLINE);
+      vty_out (vty, "Malformed address: %s%s", argv[idx_peer]->arg, VTY_NEWLINE);
                return CMD_WARNING;
     }
 
-  peer = peer_lookup (NULL, su);
+  peer = peer_lookup (NULL, &su);
   if (! peer || ! peer->afc[AFI_IP6][SAFI_ENCAP])
     {
       vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
 
-  return bgp_show_encap (vty, AFI_IP6, &prd, bgp_show_type_neighbor, su, 0);
+  return bgp_show_encap (vty, AFI_IP6, &prd, bgp_show_type_neighbor, &su, 0);
 }
 
 DEFUN (show_bgp_ipv4_encap_neighbor_advertised_routes,
        show_bgp_ipv4_encap_neighbor_advertised_routes_cmd,
-       "show bgp ipv4 encap neighbors A.B.C.D advertised-routes",
+       "show [ip] bgp ipv4 encap neighbors A.B.C.D advertised-routes",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -797,14 +788,15 @@ DEFUN (show_bgp_ipv4_encap_neighbor_advertised_routes,
        "Neighbor to display information about\n"
        "Display the routes advertised to a BGP neighbor\n")
 {
+  int idx_peer = 5;
   int ret;
   struct peer *peer;
   union sockunion su;
 
-  ret = str2sockunion (argv[0], &su);
+  ret = str2sockunion (argv[idx_peer]->arg, &su);
   if (ret < 0)
     {
-      vty_out (vty, "%% Malformed address: %s%s", argv[0], VTY_NEWLINE);
+      vty_out (vty, "%% Malformed address: %s%s", argv[idx_peer]->arg, VTY_NEWLINE);
       return CMD_WARNING;
     }
   peer = peer_lookup (NULL, &su);
@@ -819,8 +811,9 @@ DEFUN (show_bgp_ipv4_encap_neighbor_advertised_routes,
 
 DEFUN (show_bgp_ipv6_encap_neighbor_advertised_routes,
        show_bgp_ipv6_encap_neighbor_advertised_routes_cmd,
-       "show bgp ipv6 encap neighbors A.B.C.D advertised-routes",
+       "show [ip] bgp ipv6 encap neighbors A.B.C.D advertised-routes",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -828,14 +821,15 @@ DEFUN (show_bgp_ipv6_encap_neighbor_advertised_routes,
        "Neighbor to display information about\n"
        "Display the routes advertised to a BGP neighbor\n")
 {
+  int idx_peer = 5;
   int ret;
   struct peer *peer;
   union sockunion su;
 
-  ret = str2sockunion (argv[0], &su);
+  ret = str2sockunion (argv[idx_peer]->arg, &su);
   if (ret < 0)
     {
-      vty_out (vty, "%% Malformed address: %s%s", argv[0], VTY_NEWLINE);
+      vty_out (vty, "%% Malformed address: %s%s", argv[idx_peer]->arg, VTY_NEWLINE);
       return CMD_WARNING;
     }
   peer = peer_lookup (NULL, &su);
@@ -850,8 +844,9 @@ DEFUN (show_bgp_ipv6_encap_neighbor_advertised_routes,
 
 DEFUN (show_bgp_ipv4_encap_rd_neighbor_advertised_routes,
        show_bgp_ipv4_encap_rd_neighbor_advertised_routes_cmd,
-       "show bgp ipv4 encap rd ASN:nn_or_IP-address:nn neighbors (A.B.C.D|X:X::X:X) advertised-routes",
+       "show [ip] bgp ipv4 encap rd ASN:nn_or_IP-address:nn neighbors <A.B.C.D|X:X::X:X> advertised-routes",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -862,15 +857,17 @@ DEFUN (show_bgp_ipv4_encap_rd_neighbor_advertised_routes,
        "Neighbor to display information about\n"
        "Display the routes advertised to a BGP neighbor\n")
 {
+  int idx_rd = 5;
+  int idx_peer = 7;
   int ret;
   struct peer *peer;
   struct prefix_rd prd;
   union sockunion su;
 
-  ret = str2sockunion (argv[1], &su);
+  ret = str2sockunion (argv[idx_peer]->arg, &su);
   if (ret < 0)
     {
-      vty_out (vty, "%% Malformed address: %s%s", argv[1], VTY_NEWLINE);
+      vty_out (vty, "%% Malformed address: %s%s", argv[idx_peer]->arg, VTY_NEWLINE);
       return CMD_WARNING;
     }
   peer = peer_lookup (NULL, &su);
@@ -880,7 +877,7 @@ DEFUN (show_bgp_ipv4_encap_rd_neighbor_advertised_routes,
       return CMD_WARNING;
     }
 
-  ret = str2prefix_rd (argv[0], &prd);
+  ret = str2prefix_rd (argv[idx_rd]->arg, &prd);
   if (! ret)
     {
       vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);
@@ -892,8 +889,9 @@ DEFUN (show_bgp_ipv4_encap_rd_neighbor_advertised_routes,
 
 DEFUN (show_bgp_ipv6_encap_rd_neighbor_advertised_routes,
        show_bgp_ipv6_encap_rd_neighbor_advertised_routes_cmd,
-       "show bgp ipv6 encap rd ASN:nn_or_IP-address:nn neighbors (A.B.C.D|X:X::X:X) advertised-routes",
+       "show [ip] bgp ipv6 encap rd ASN:nn_or_IP-address:nn neighbors <A.B.C.D|X:X::X:X> advertised-routes",
        SHOW_STR
+       IP_STR
        BGP_STR
        "Address Family\n"
        "Display ENCAP NLRI specific information\n"
@@ -904,15 +902,17 @@ DEFUN (show_bgp_ipv6_encap_rd_neighbor_advertised_routes,
        "Neighbor to display information about\n"
        "Display the routes advertised to a BGP neighbor\n")
 {
+  int idx_rd = 5;
+  int idx_peer = 7;
   int ret;
   struct peer *peer;
   struct prefix_rd prd;
   union sockunion su;
 
-  ret = str2sockunion (argv[1], &su);
+  ret = str2sockunion (argv[idx_peer]->arg, &su);
   if (ret < 0)
     {
-      vty_out (vty, "%% Malformed address: %s%s", argv[1], VTY_NEWLINE);
+      vty_out (vty, "%% Malformed address: %s%s", argv[idx_peer]->arg, VTY_NEWLINE);
       return CMD_WARNING;
     }
   peer = peer_lookup (NULL, &su);
@@ -922,7 +922,7 @@ DEFUN (show_bgp_ipv6_encap_rd_neighbor_advertised_routes,
       return CMD_WARNING;
     }
 
-  ret = str2prefix_rd (argv[0], &prd);
+  ret = str2prefix_rd (argv[idx_rd]->arg, &prd);
   if (! ret)
     {
       vty_out (vty, "%% Malformed Route Distinguisher%s", VTY_NEWLINE);

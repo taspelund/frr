@@ -24,7 +24,9 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "memory.h"
 #include "sockunion.h"
 #include "vty.h"
+#include "queue.h"
 #include "filter.h"
+#include "command.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_table.h"
@@ -118,7 +120,6 @@ bgp_table_init (afi_t afi, safi_t safi)
   rt->route_table->info = rt;
 
   bgp_table_lock (rt);
-  rt->type = BGP_TABLE_MAIN;
   rt->afi = afi;
   rt->safi = safi;
 

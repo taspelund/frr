@@ -23,19 +23,37 @@
 #ifndef _ZEBRA_VRF_H
 #define _ZEBRA_VRF_H
 
+#include "openbsd-tree.h"
 #include "linklist.h"
+#include "qobj.h"
+#include "vty.h"
+
+/* The default NS ID */
+#define NS_DEFAULT 0
 
 /* The default VRF ID */
 #define VRF_DEFAULT 0
+#define VRF_UNKNOWN UINT16_MAX
+
+/* Pending: May need to refine this. */
+#ifndef IFLA_VRF_MAX
+enum {
+        IFLA_VRF_UNSPEC,
+        IFLA_VRF_TABLE,
+        __IFLA_VRF_MAX
+};
+
+#define IFLA_VRF_MAX (__IFLA_VRF_MAX - 1)
+#endif
+
+#define VRF_NAMSIZ      36
+
+#define VRF_DEFAULT_NAME    "Default-IP-Routing-Table"
 
 /*
  * The command strings
  */
-
-#define VRF_CMD_STR         "vrf <0-65535>"
-#define VRF_CMD_HELP_STR    "Specify the VRF\nThe VRF ID\n"
-
-#define VRF_ALL_CMD_STR         "vrf all"
+#define VRF_CMD_HELP_STR    "Specify the VRF\nThe VRF name\n"
 #define VRF_ALL_CMD_HELP_STR    "Specify the VRF\nAll VRFs\n"
 
 /*
@@ -47,6 +65,38 @@
 #define VRF_ENABLE_HOOK     2   /* a VRF is ready to use */
 #define VRF_DISABLE_HOOK    3   /* a VRF is to be unusable */
 
+struct vrf
+{
+  RB_ENTRY(vrf) id_entry, name_entry;
+
+  /* Identifier, same as the vector index */
+  vrf_id_t vrf_id;
+
+  /* Name */
+  char name[VRF_NAMSIZ + 1];
+
+  /* Zebra internal VRF status */
+  u_char status;
+#define VRF_ACTIVE     (1 << 0)
+
+  /* Master list of interfaces belonging to this VRF */
+  struct list *iflist;
+
+  /* User data */
+  void *info;
+
+  QOBJ_FIELDS
+};
+RB_HEAD (vrf_id_head, vrf);
+RB_PROTOTYPE (vrf_id_head, vrf, id_entry, vrf_id_compare)
+RB_HEAD (vrf_name_head, vrf);
+RB_PROTOTYPE (vrf_name_head, vrf, name_entry, vrf_name_compare)
+DECLARE_QOBJ_TYPE(vrf)
+
+
+extern struct vrf_id_head vrfs_by_id;
+extern struct vrf_name_head vrfs_by_name;
+
 /*
  * Add a specific hook to VRF module.
  * @param1: hook type
@@ -55,41 +105,30 @@
  *          - param 2: the address of the user data pointer (the user data
  *                     can be stored in or freed from there)
  */
-extern void vrf_add_hook (int, int (*)(vrf_id_t, void **));
+extern void vrf_add_hook (int, int (*)(struct vrf *));
 
-/*
- * VRF iteration
- */
+extern struct vrf *vrf_lookup_by_id (vrf_id_t);
+extern struct vrf *vrf_lookup_by_name (const char *);
+extern struct vrf *vrf_get (vrf_id_t, const char *);
+extern void vrf_delete (struct vrf *);
+extern int vrf_enable (struct vrf *);
+extern vrf_id_t vrf_name_to_id (const char *);
 
-typedef void *              vrf_iter_t;
-#define VRF_ITER_INVALID    NULL    /* invalid value of the iterator */
-
-/*
- * VRF iteration utilities. Example for the usage:
- *
- *   vrf_iter_t iter = vrf_first();
- *   for (; iter != VRF_ITER_INVALID; iter = vrf_next (iter))
- *
- * or
- *
- *   vrf_iter_t iter = vrf_iterator (<a given VRF ID>);
- *   for (; iter != VRF_ITER_INVALID; iter = vrf_next (iter))
- */
-
-/* Return the iterator of the first VRF. */
-extern vrf_iter_t vrf_first (void);
-/* Return the next VRF iterator to the given iterator. */
-extern vrf_iter_t vrf_next (vrf_iter_t);
-/* Return the VRF iterator of the given VRF ID. If it does not exist,
- * the iterator of the next existing VRF is returned. */
-extern vrf_iter_t vrf_iterator (vrf_id_t);
-
-/*
- * VRF iterator to properties
- */
-extern vrf_id_t vrf_iter2id (vrf_iter_t);
-extern void *vrf_iter2info (vrf_iter_t);
-extern struct list *vrf_iter2iflist (vrf_iter_t);
+#define VRF_GET_ID(V,NAME)      \
+  do {                          \
+      struct vrf *vrf; \
+      if (!(vrf = vrf_lookup_by_name(NAME))) \
+        {                                                           \
+          vty_out (vty, "%% VRF %s not found%s", NAME, VTY_NEWLINE);\
+          return CMD_WARNING;                                       \
+        }                                               \
+      if (vrf->vrf_id == VRF_UNKNOWN) \
+        { \
+          vty_out (vty, "%% VRF %s not active%s", NAME, VTY_NEWLINE);\
+          return CMD_WARNING;                                       \
+        } \
+      (V) = vrf->vrf_id; \
+  } while (0)
 
 /*
  * Utilities to obtain the user data
@@ -108,6 +147,10 @@ extern void *vrf_info_lookup (vrf_id_t);
 extern struct list *vrf_iflist (vrf_id_t);
 /* Get the interface list of the specified VRF. Create one if not find. */
 extern struct list *vrf_iflist_get (vrf_id_t);
+/* Create the interface list for the specified VRF, if needed. */
+extern void vrf_iflist_create (vrf_id_t vrf_id);
+/* Free the interface list of the specified VRF. */
+extern void vrf_iflist_terminate (vrf_id_t vrf_id);
 
 /*
  * VRF bit-map: maintaining flags, one bit per VRF ID
@@ -129,6 +172,8 @@ extern int vrf_bitmap_check (vrf_bitmap_t, vrf_id_t);
 extern void vrf_init (void);
 extern void vrf_terminate (void);
 
+extern void vrf_cmd_init (int (*writefunc)(struct vty *vty));
+
 /*
  * VRF utilities
  */
@@ -136,5 +181,9 @@ extern void vrf_terminate (void);
 /* Create a socket serving for the given VRF */
 extern int vrf_socket (int, int, int, vrf_id_t);
 
+/*
+ * VRF Debugging
+ */
+extern void vrf_install_commands (void);
 #endif /*_ZEBRA_VRF_H*/
 

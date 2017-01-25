@@ -117,6 +117,7 @@ ospf6_sso (ifindex_t ifindex, struct in6_addr *group, int option)
 {
   struct ipv6_mreq mreq6;
   int ret;
+  int bufsize = (8 * 1024 * 1024);
 
   assert (ifindex);
   mreq6.ipv6mr_interface = ifindex;
@@ -128,9 +129,13 @@ ospf6_sso (ifindex_t ifindex, struct in6_addr *group, int option)
     {
       zlog_err ("Network: setsockopt (%d) on ifindex %d failed: %s",
                 option, ifindex, safe_strerror (errno));
+      return ret;
     }
 
-  return ret;
+  setsockopt_so_sendbuf (ospf6_sock, bufsize);
+  setsockopt_so_recvbuf (ospf6_sock, bufsize);
+
+  return 0;
 }
 
 static int
@@ -159,14 +164,18 @@ ospf6_sendmsg (struct in6_addr *src, struct in6_addr *dst,
   int retval;
   struct msghdr smsghdr;
   struct cmsghdr *scmsgp;
-  u_char cmsgbuf[CMSG_SPACE(sizeof (struct in6_pktinfo))];
+  union
+  {
+    struct cmsghdr hdr;
+    u_char buf[CMSG_SPACE (sizeof (struct in6_pktinfo))];
+  } cmsgbuf;
   struct in6_pktinfo *pktinfo;
   struct sockaddr_in6 dst_sin6;
 
   assert (dst);
   assert (*ifindex);
 
-  scmsgp = (struct cmsghdr *)cmsgbuf;
+  scmsgp = (struct cmsghdr *)&cmsgbuf;
   pktinfo = (struct in6_pktinfo *)(CMSG_DATA(scmsgp));
   memset (&dst_sin6, 0, sizeof (struct sockaddr_in6));
 
@@ -183,9 +192,7 @@ ospf6_sendmsg (struct in6_addr *src, struct in6_addr *dst,
   dst_sin6.sin6_len = sizeof (struct sockaddr_in6);
 #endif /*SIN6_LEN*/
   memcpy (&dst_sin6.sin6_addr, dst, sizeof (struct in6_addr));
-#ifdef HAVE_SIN6_SCOPE_ID
   dst_sin6.sin6_scope_id = *ifindex;
-#endif
 
   /* send control msg */
   scmsgp->cmsg_level = IPPROTO_IPV6;
@@ -199,8 +206,8 @@ ospf6_sendmsg (struct in6_addr *src, struct in6_addr *dst,
   smsghdr.msg_iovlen = iov_count (message);
   smsghdr.msg_name = (caddr_t) &dst_sin6;
   smsghdr.msg_namelen = sizeof (struct sockaddr_in6);
-  smsghdr.msg_control = (caddr_t) cmsgbuf;
-  smsghdr.msg_controllen = scmsgp->cmsg_len;
+  smsghdr.msg_control = (caddr_t) &cmsgbuf.buf;
+  smsghdr.msg_controllen = sizeof(cmsgbuf.buf);
 
   retval = sendmsg (ospf6_sock, &smsghdr, 0);
   if (retval != iov_totallen (message))

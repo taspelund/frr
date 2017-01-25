@@ -24,6 +24,7 @@
 
 int vtysh_auth (void);
 void vtysh_user_init (void);
+void user_config_write(void);
 
 char *vtysh_get_home (void);
 

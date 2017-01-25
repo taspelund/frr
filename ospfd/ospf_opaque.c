@@ -21,11 +21,6 @@
  * 02111-1307, USA.
  */
 
-/***** MTYPE definitions are not reflected to "memory.h" yet. *****/
-#define MTYPE_OSPF_OPAQUE_FUNCTAB	MTYPE_TMP
-#define MTYPE_OPAQUE_INFO_PER_TYPE	MTYPE_TMP
-#define MTYPE_OPAQUE_INFO_PER_ID	MTYPE_TMP
-
 #include <zebra.h>
 
 #include "linklist.h"
@@ -56,6 +51,10 @@
 #include "ospfd/ospf_route.h"
 #include "ospfd/ospf_ase.h"
 #include "ospfd/ospf_zebra.h"
+
+DEFINE_MTYPE_STATIC(OSPFD, OSPF_OPAQUE_FUNCTAB,  "OSPF opaque function table")
+DEFINE_MTYPE_STATIC(OSPFD, OPAQUE_INFO_PER_TYPE, "OSPF opaque per-type info")
+DEFINE_MTYPE_STATIC(OSPFD, OPAQUE_INFO_PER_ID,   "OSPF opaque per-ID info")
 
 /*------------------------------------------------------------------------*
  * Followings are initialize/terminate functions for Opaque-LSAs handling.
@@ -770,7 +769,7 @@ DEFUN (capability_opaque,
        "Enable specific OSPF feature\n"
        "Opaque LSA\n")
 {
-  struct ospf *ospf = (struct ospf *) vty->index;
+  VTY_DECLVAR_CONTEXT(ospf, ospf);
 
   /* Turn on the "master switch" of opaque-lsa capability. */
   if (!CHECK_FLAG (ospf->config, OSPF_OPAQUE_CAPABLE))
@@ -784,11 +783,14 @@ DEFUN (capability_opaque,
   return CMD_SUCCESS;
 }
 
-ALIAS (capability_opaque,
-       ospf_opaque_capable_cmd,
+DEFUN (ospf_opaque,
+       ospf_opaque_cmd,
        "ospf opaque-lsa",
        "OSPF specific commands\n"
        "Enable the Opaque-LSA capability (rfc2370)\n")
+{
+  return capability_opaque (self, vty, argc, argv);
+}
 
 DEFUN (no_capability_opaque,
        no_capability_opaque_cmd,
@@ -797,7 +799,7 @@ DEFUN (no_capability_opaque,
        "Enable specific OSPF feature\n"
        "Opaque LSA\n")
 {
-  struct ospf *ospf = (struct ospf *) vty->index;
+  VTY_DECLVAR_CONTEXT(ospf, ospf);
 
   /* Turn off the "master switch" of opaque-lsa capability. */
   if (CHECK_FLAG (ospf->config, OSPF_OPAQUE_CAPABLE))
@@ -811,20 +813,23 @@ DEFUN (no_capability_opaque,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_capability_opaque,
-       no_ospf_opaque_capable_cmd,
+DEFUN (no_ospf_opaque,
+       no_ospf_opaque_cmd,
        "no ospf opaque-lsa",
        NO_STR
        "OSPF specific commands\n"
-       "Disable the Opaque-LSA capability (rfc2370)\n")
+       "Enable the Opaque-LSA capability (rfc2370)\n")
+{
+  return no_capability_opaque (self, vty, argc, argv);
+}
 
 static void
 ospf_opaque_register_vty (void)
 {
   install_element (OSPF_NODE, &capability_opaque_cmd);
   install_element (OSPF_NODE, &no_capability_opaque_cmd);
-  install_element (OSPF_NODE, &ospf_opaque_capable_cmd);
-  install_element (OSPF_NODE, &no_ospf_opaque_capable_cmd);
+  install_element (OSPF_NODE, &ospf_opaque_cmd);
+  install_element (OSPF_NODE, &no_ospf_opaque_cmd);
   return;
 }
 
@@ -1355,7 +1360,7 @@ ospf_opaque_lsa_originate_schedule (struct ospf_interface *oi, int *delay0)
         zlog_debug ("Schedule Type-10 Opaque-LSA origination in %d ms later.", delay);
       area->t_opaque_lsa_self =
         thread_add_timer_msec (master, ospf_opaque_type10_lsa_originate,
-                          area, delay);
+			       area, delay);
       delay += top->min_ls_interval;
     }
 
@@ -1372,7 +1377,7 @@ ospf_opaque_lsa_originate_schedule (struct ospf_interface *oi, int *delay0)
         zlog_debug ("Schedule Type-11 Opaque-LSA origination in %d ms later.", delay);
       top->t_opaque_lsa_self =
         thread_add_timer_msec (master, ospf_opaque_type11_lsa_originate,
-                          top, delay);
+			       top, delay);
       delay += top->min_ls_interval;
     }
 
@@ -1803,11 +1808,11 @@ ospf_opaque_lsa_reoriginate_schedule (void *lsa_type_dependent,
 
   if (IS_DEBUG_OSPF_EVENT)
     zlog_debug ("Schedule Type-%u Opaque-LSA to RE-ORIGINATE in %d"
-               " ms later: [opaque-type=%u]",
+               " ms later: [opaque-type=%u]", 
                lsa_type, delay, 
                GET_OPAQUE_TYPE (ntohl (lsa->data->id.s_addr)));
 
-  OSPF_OPAQUE_TIMER_ON (oipt->t_opaque_lsa_self, func, oipt, delay);
+  OSPF_OPAQUE_TIMER_ON (oipt->t_opaque_lsa_self, func, oipt, delay * 1000);
 
 out:
   return;

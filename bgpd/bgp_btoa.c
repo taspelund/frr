@@ -44,9 +44,9 @@ static zebra_capabilities_t _caps_p [] =
 
 struct zebra_privs_t bgpd_privs =
 {
-#if defined(QUAGGA_USER) && defined(QUAGGA_GROUP)
-  .user = QUAGGA_USER,
-  .group = QUAGGA_GROUP,
+#if defined(FRR_USER) && defined(FRR_GROUP)
+  .user = FRR_USER,
+  .group = FRR_GROUP,
 #endif
 #ifdef VTY_GROUP
   .vty_group = VTY_GROUP,
@@ -161,7 +161,8 @@ main (int argc, char **argv)
   fp = fopen (argv[1], "r");
   if (!fp)
     {
-      perror ("fopen");
+      fprintf (stdout,"%% Can't open configuration file %s due to '%s'.\n",
+              argv[1], safe_strerror(errno));
       exit (1);
     }
   

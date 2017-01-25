@@ -22,6 +22,7 @@
 
 #include <zebra.h>
 
+#include "monotime.h"
 #include "linklist.h"
 #include "prefix.h"
 #include "if.h"
@@ -92,19 +93,37 @@ ospf_external_info_check (struct ospf_lsa *lsa)
 
   for (type = 0; type <= ZEBRA_ROUTE_MAX; type++)
     {
-      int redist_type = is_prefix_default (&p) ? DEFAULT_ROUTE : type;
-      if (ospf_is_type_redistributed (redist_type))
-	if (EXTERNAL_INFO (type))
-	  {
-	    rn = route_node_lookup (EXTERNAL_INFO (type),
-				    (struct prefix *) &p);
-	    if (rn)
-	      {
-		route_unlock_node (rn);
-		if (rn->info != NULL)
-		  return (struct external_info *) rn->info;
-	      }
-	  }
+      int redist_on = 0;
+
+      redist_on = is_prefix_default (&p) ?
+                  vrf_bitmap_check (zclient->default_information, VRF_DEFAULT) :
+                  (zclient->mi_redist[AFI_IP][type].enabled ||
+                   vrf_bitmap_check (zclient->redist[AFI_IP][type], VRF_DEFAULT));
+                   //Pending: check for MI above.
+      if (redist_on)
+        {
+          struct list *ext_list;
+          struct listnode *node;
+          struct ospf_external *ext;
+
+          ext_list = om->external[type];
+          if (!ext_list)
+            continue;
+
+          for (ALL_LIST_ELEMENTS_RO(ext_list, node, ext))
+            {
+	      rn = NULL;
+              if (ext->external_info)
+                rn = route_node_lookup (ext->external_info,
+                                        (struct prefix *) &p);
+              if (rn)
+                {
+                  route_unlock_node (rn);
+                  if (rn->info != NULL)
+                    return (struct external_info *) rn->info;
+                }
+            }
+        }
     }
 
   return NULL;
@@ -259,8 +278,8 @@ ospf_flood (struct ospf *ospf, struct ospf_neighbor *nbr,
 		       "while local one is initial instance.");
           ; /* Accept this LSA for quick LSDB resynchronization. */
         }
-      else if (tv_cmp (tv_sub (recent_relative_time (), current->tv_recv),
-	               msec2tv (ospf->min_ls_arrival)) < 0)
+      else if (monotime_since (&current->tv_recv, NULL)
+                 < ospf->min_ls_arrival * 1000LL)
         {
           if (IS_DEBUG_OSPF_EVENT)
 	    zlog_debug ("LSA[Flooding]: LSA is received recently.");
@@ -951,7 +970,7 @@ ospf_lsa_flush_area (struct ospf_lsa *lsa, struct ospf_area *area)
      more time for the ACK to be received and avoid
      retransmissions */
   lsa->data->ls_age = htons (OSPF_LSA_MAXAGE);
-  lsa->tv_recv = recent_relative_time ();
+  monotime(&lsa->tv_recv);
   lsa->tv_orig = lsa->tv_recv;
   ospf_flood_through_area (area, NULL, lsa);
   ospf_lsa_maxage (area->ospf, lsa);
@@ -964,7 +983,7 @@ ospf_lsa_flush_as (struct ospf *ospf, struct ospf_lsa *lsa)
      more time for the ACK to be received and avoid
      retransmissions */
   lsa->data->ls_age = htons (OSPF_LSA_MAXAGE);
-  lsa->tv_recv = recent_relative_time ();
+  monotime(&lsa->tv_recv);
   lsa->tv_orig = lsa->tv_recv;
   ospf_flood_through_as (ospf, NULL, lsa);
   ospf_lsa_maxage (ospf, lsa);

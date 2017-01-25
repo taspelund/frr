@@ -48,7 +48,7 @@ ZEBRA_ROUTE_STATIC,     static,    zebra,  'S', 1, 1, "static"
 ZEBRA_ROUTE_RIP,        rip,       ripd,   'R', 1, 0, "RIP"
 ZEBRA_ROUTE_RIPNG,      ripng,     ripngd, 'R', 0, 1, "RIPng"
 ZEBRA_ROUTE_OSPF,       ospf,      ospfd,  'O', 1, 0, "OSPF"
-ZEBRA_ROUTE_OSPF6,      ospf6,     ospf6d, 'O', 0, 1, "OSPFv6"
+ZEBRA_ROUTE_OSPF6,      ospf6,     ospf6d, 'O', 0, 1, "OSPFv3"
 ZEBRA_ROUTE_ISIS,       isis,      isisd,  'I', 1, 1, "IS-IS"
 ZEBRA_ROUTE_BGP,        bgp,       bgpd,   'B', 1, 1, "BGP"
 ZEBRA_ROUTE_PIM,	pim,	   pimd,   'P', 1, 0, "PIM"
@@ -59,7 +59,19 @@ ZEBRA_ROUTE_PIM,	pim,	   pimd,   'P', 1, 0, "PIM"
 # possible).
 ZEBRA_ROUTE_HSLS,       hsls,      hslsd,  'H', 0, 0, "HSLS"
 ZEBRA_ROUTE_OLSR,       olsr,      olsrd,  'o', 0, 0, "OLSR"
-ZEBRA_ROUTE_BABEL,      babel,     babeld, 'A', 1, 1, "Babel"
+ZEBRA_ROUTE_TABLE,      table,     zebra,  'T', 1, 1, "Table"
+ZEBRA_ROUTE_LDP,        ldp,       ldpd,   'L', 0, 0, "LDP"
+#vnc when sent to zebra 
+ZEBRA_ROUTE_VNC,        vnc,       NULL,   'v', 1, 1, "VNC"
+# vnc when sent to bgp
+ZEBRA_ROUTE_VNC_DIRECT, vnc-direct,NULL,   'V', 1, 1, "VNC-Direct", bgpd
+# vnc when sent to bgp (resolve NVE mode)
+ZEBRA_ROUTE_VNC_DIRECT_RH, vnc-rn, NULL,   'V', 0, 0, "VNC-RN"
+#  bgp unicast -> vnc 
+ZEBRA_ROUTE_BGP_DIRECT, bgp-direct, NULL,  'b', 0, 0, "BGP-Direct"
+#  bgp unicast -> vnc 
+ZEBRA_ROUTE_BGP_DIRECT_EXT, bgp-direct-to-nve-groups, NULL, 'e', 0, 0, "BGP2VNC"
+ZEBRA_ROUTE_ALL,        wildcard,  none,   '-', 0, 0, "-"
 
 ## help strings
 ZEBRA_ROUTE_SYSTEM, "Reserved route type, for internal use only"
@@ -74,5 +86,8 @@ ZEBRA_ROUTE_ISIS,   "Intermediate System to Intermediate System (IS-IS)"
 ZEBRA_ROUTE_BGP,    "Border Gateway Protocol (BGP)"
 ZEBRA_ROUTE_PIM,    "Protocol Independent Multicast (PIM)"
 ZEBRA_ROUTE_HSLS,   "Hazy-Sighted Link State Protocol (HSLS)"
+ZEBRA_ROUTE_VNC,    "Virtual Network Control (VNC)"
 ZEBRA_ROUTE_OLSR,   "Optimised Link State Routing (OLSR)"
-ZEBRA_ROUTE_BABEL,  "Babel routing protocol (Babel)"
+ZEBRA_ROUTE_TABLE,  "Non-main Kernel Routing Table"
+ZEBRA_ROUTE_LDP,    "Label Distribution Protocol (LDP)"
+ZEBRA_ROUTE_VNC_DIRECT,    "VNC direct (not via zebra) routes"

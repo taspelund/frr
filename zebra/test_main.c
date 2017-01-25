@@ -25,6 +25,8 @@
 #include "thread.h"
 #include "filter.h"
 #include "memory.h"
+#include "zebra_memory.h"
+#include "memory_vty.h"
 #include "prefix.h"
 #include "log.h"
 #include "privs.h"
@@ -32,7 +34,9 @@
 #include "vrf.h"
 
 #include "zebra/rib.h"
+#include "zebra/zebra_ns.h"
 #include "zebra/zserv.h"
+#include "zebra/zebra_vrf.h"
 #include "zebra/debug.h"
 #include "zebra/router-id.h"
 #include "zebra/interface.h"
@@ -46,6 +50,9 @@ struct zebra_t zebrad =
 /* process id. */
 pid_t pid;
 
+/* Allow non-quagga entities to delete quagga routes */
+int allow_delete = 0;
+
 /* zebra_rib's workqueue hold time. Private export for use by test code only */
 extern int rib_process_hold_time;
 
@@ -55,14 +62,15 @@ struct thread_master *master;
 /* Command line options. */
 struct option longopts[] = 
 {
-  { "batch",       no_argument,       NULL, 'b'},
-  { "daemon",      no_argument,       NULL, 'd'},
-  { "config_file", required_argument, NULL, 'f'},
-  { "help",        no_argument,       NULL, 'h'},
-  { "vty_addr",    required_argument, NULL, 'A'},
-  { "vty_port",    required_argument, NULL, 'P'},
-  { "version",     no_argument,       NULL, 'v'},
-  { "rib_hold",	   required_argument, NULL, 'r'},
+  { "batch",        no_argument,       NULL, 'b'},
+  { "daemon",       no_argument,       NULL, 'd'},
+  { "allow_delete", no_argument,       NULL, 'a'},
+  { "config_file",  required_argument, NULL, 'f'},
+  { "help",         no_argument,       NULL, 'h'},
+  { "vty_addr",     required_argument, NULL, 'A'},
+  { "vty_port",     required_argument, NULL, 'P'},
+  { "version",      no_argument,       NULL, 'v'},
+  { "rib_hold",     required_argument, NULL, 'r'},
   { 0 }
 };
 
@@ -92,6 +100,7 @@ usage (char *progname, int status)
 	      "redistribution between different routing protocols.\n\n"\
 	      "-b, --batch        Runs in batch mode\n"\
 	      "-d, --daemon       Runs in daemon mode\n"\
+	      "-a, --allow_delete Allow other processes to delete Quagga Routes\n" \
 	      "-f, --config_file  Set configuration file name\n"\
 	      "-A, --vty_addr     Set vty's bind address\n"\
 	      "-P, --vty_port     Set vty's port number\n"\
@@ -99,7 +108,7 @@ usage (char *progname, int status)
               "-v, --version      Print program version\n"\
 	      "-h, --help         Display this help and exit\n"\
 	      "\n"\
-	      "Report bugs to %s\n", progname, ZEBRA_BUG_ADDRESS);
+	      "Report bugs to %s\n", progname, FRR_BUG_ADDRESS);
     }
 
   exit (status);
@@ -110,16 +119,14 @@ static ifindex_t test_ifindex = 0;
 /* testrib commands */
 DEFUN (test_interface_state,
        test_interface_state_cmd,
-       "state (up|down)",
+       "state <up|down>",
        "configure interface\n"
        "up\n"
        "down\n")
 {
-  struct interface *ifp;
-  if (argc < 1)
-    return CMD_WARNING;
+  int idx_up_down = 1;
+  VTY_DECLVAR_CONTEXT (interface, ifp);
   
-  ifp = vty->index;
   if (ifp->ifindex == IFINDEX_INTERNAL)
     {
       ifp->ifindex = ++test_ifindex;
@@ -127,7 +134,7 @@ DEFUN (test_interface_state,
       ifp->flags = IFF_BROADCAST|IFF_MULTICAST;
     }
   
-  switch (argv[0][0])
+  switch (argv[idx_up_down]->arg[0])
     {
       case 'u':
         SET_FLAG (ifp->flags, IFF_UP);
@@ -196,72 +203,6 @@ struct quagga_signal_t zebra_signals[] =
     .handler = &sigint,
   },
 };
-
-/* Callback upon creating a new VRF. */
-static int
-zebra_vrf_new (vrf_id_t vrf_id, void **info)
-{
-  struct zebra_vrf *zvrf = *info;
-
-  if (! zvrf)
-    {
-      zvrf = zebra_vrf_alloc (vrf_id);
-      *info = (void *)zvrf;
-    }
-
-  return 0;
-}
-
-/* Callback upon enabling a VRF. */
-static int
-zebra_vrf_enable (vrf_id_t vrf_id, void **info)
-{
-  struct zebra_vrf *zvrf = (struct zebra_vrf *) (*info);
-
-  assert (zvrf);
-
-  kernel_init (zvrf);
-  route_read (zvrf);
-
-  return 0;
-}
-
-/* Callback upon disabling a VRF. */
-static int
-zebra_vrf_disable (vrf_id_t vrf_id, void **info)
-{
-  struct zebra_vrf *zvrf = (struct zebra_vrf *) (*info);
-  struct listnode *list_node;
-  struct interface *ifp;
-
-  assert (zvrf);
-
-  rib_close_table (zvrf->table[AFI_IP][SAFI_UNICAST]);
-  rib_close_table (zvrf->table[AFI_IP6][SAFI_UNICAST]);
-
-  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (vrf_id), list_node, ifp))
-    {
-      int operative = if_is_operative (ifp);
-      UNSET_FLAG (ifp->flags, IFF_UP);
-      if (operative)
-        if_down (ifp);
-    }
-
-  kernel_terminate (zvrf);
-
-  return 0;
-}
-
-/* Zebra VRF initialization. */
-static void
-zebra_vrf_init (void)
-{
-  vrf_add_hook (VRF_NEW_HOOK, zebra_vrf_new);
-  vrf_add_hook (VRF_ENABLE_HOOK, zebra_vrf_enable);
-  vrf_add_hook (VRF_DISABLE_HOOK, zebra_vrf_disable);
-  vrf_init ();
-}
-
 /* Main startup routine. */
 int
 main (int argc, char **argv)
@@ -281,14 +222,14 @@ main (int argc, char **argv)
   /* preserve my name */
   progname = ((p = strrchr (argv[0], '/')) ? ++p : argv[0]);
 
-  zlog_default = openzlog (progname, ZLOG_ZEBRA,
+  zlog_default = openzlog (progname, ZLOG_ZEBRA, 0,
 			   LOG_CONS|LOG_NDELAY|LOG_PID, LOG_DAEMON);
 
   while (1) 
     {
       int opt;
   
-      opt = getopt_long (argc, argv, "bdf:hA:P:r:v", longopts, 0);
+      opt = getopt_long (argc, argv, "bdaf:hA:P:r:v", longopts, 0);
 
       if (opt == EOF)
 	break;
@@ -301,6 +242,9 @@ main (int argc, char **argv)
 	  batch_mode = 1;
 	case 'd':
 	  daemon_mode = 1;
+	  break;
+	case 'a':
+	  allow_delete =1;
 	  break;
 	case 'f':
 	  config_file = optarg;
@@ -348,6 +292,7 @@ main (int argc, char **argv)
   /* Vty related initialize. */
   signal_init (zebrad.master, array_size(zebra_signals), zebra_signals);
   cmd_init (1);
+  vty_config_lockless ();
   vty_init (zebrad.master);
   memory_init ();
   zebra_debug_init ();
@@ -386,7 +331,7 @@ main (int argc, char **argv)
   vty_serv_sock (vty_addr, vty_port, "/tmp/test_zebra");
 
   /* Print banner. */
-  zlog_notice ("Zebra %s starting: vty@%d", QUAGGA_VERSION, vty_port);
+  zlog_notice ("Zebra %s starting: vty@%d", FRR_VERSION, vty_port);
 
   while (thread_fetch (zebrad.master, &thread))
     thread_call (&thread);

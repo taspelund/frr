@@ -29,6 +29,10 @@
 #include "prefix.h"
 #include "log.h"
 
+DEFINE_MTYPE_STATIC(LIB, STREAM,      "Stream")
+DEFINE_MTYPE_STATIC(LIB, STREAM_DATA, "Stream data")
+DEFINE_MTYPE_STATIC(LIB, STREAM_FIFO, "Stream FIFO")
+
 /* Tests whether a position is valid */ 
 #define GETP_VALID(S,G) \
   ((G) <= (S)->endp)
@@ -92,12 +96,6 @@ stream_new (size_t size)
   struct stream *s;
 
   assert (size > 0);
-  
-  if (size == 0)
-    {
-      zlog_warn ("stream_new(): called with 0 size!");
-      return NULL;
-    }
   
   s = XCALLOC (MTYPE_STREAM, sizeof (struct stream));
 
@@ -379,6 +377,47 @@ stream_getw_from (struct stream *s, size_t from)
   return w;
 }
 
+/* Get next 3-byte from the stream. */
+u_int32_t
+stream_get3_from (struct stream *s, size_t from)
+{
+  u_int32_t l;
+
+  STREAM_VERIFY_SANE(s);
+  
+  if (!GETP_VALID (s, from + 3))
+    {
+      STREAM_BOUND_WARN (s, "get 3byte");
+      return 0;
+    }
+  
+  l  = s->data[from++] << 16;
+  l |= s->data[from++] << 8;
+  l |= s->data[from];
+  
+  return l;
+}
+
+u_int32_t
+stream_get3 (struct stream *s)
+{
+  u_int32_t l;
+
+  STREAM_VERIFY_SANE(s);
+  
+  if (STREAM_READABLE (s) < 3)
+    {
+      STREAM_BOUND_WARN (s, "get 3byte");
+      return 0;
+    }
+  
+  l  = s->data[s->getp++] << 16;
+  l |= s->data[s->getp++] << 8;
+  l |= s->data[s->getp++];
+  
+  return l;
+}
+
 /* Get next long word from the stream. */
 u_int32_t
 stream_getl_from (struct stream *s, size_t from)
@@ -399,6 +438,21 @@ stream_getl_from (struct stream *s, size_t from)
   l |= s->data[from];
   
   return l;
+}
+
+/* Copy from stream at specific location to destination. */
+void
+stream_get_from (void *dst, struct stream *s, size_t from, size_t size)
+{
+  STREAM_VERIFY_SANE(s);
+
+  if (!GETP_VALID (s, from + size))
+    {
+      STREAM_BOUND_WARN (s, "get from");
+      return;
+    }
+
+  memcpy (dst, s->data + from, size);
 }
 
 u_int32_t
@@ -496,11 +550,6 @@ stream_get_ipv4 (struct stream *s)
 float
 stream_getf (struct stream *s)
 {
-#if !defined(__STDC_IEC_559__) && __GCC_IEC_559 < 1
-#warning "Unknown floating-point format, __func__ may be wrong"
-#endif
-/* we assume 'float' is in the single precision IEC 60559 binary
-   format, in host byte order */
   union {
     float r;
     uint32_t d;
@@ -512,9 +561,6 @@ stream_getf (struct stream *s)
 double
 stream_getd (struct stream *s)
 {
-#if !defined(__STDC_IEC_559__) && __GCC_IEC_559 < 1
-#warning "Unknown floating-point format, __func__ may be wrong"
-#endif
   union {
     double r;
     uint64_t d;
@@ -589,6 +635,25 @@ stream_putw (struct stream *s, u_int16_t w)
 
 /* Put long word to the stream. */
 int
+stream_put3 (struct stream *s, u_int32_t l)
+{
+  STREAM_VERIFY_SANE (s);
+
+  if (STREAM_WRITEABLE (s) < 3)
+    {
+      STREAM_BOUND_WARN (s, "put");
+      return 0;
+    }
+  
+  s->data[s->endp++] = (u_char)(l >> 16);
+  s->data[s->endp++] = (u_char)(l >>  8);
+  s->data[s->endp++] = (u_char)l;
+
+  return 3;
+}
+
+/* Put long word to the stream. */
+int
 stream_putl (struct stream *s, u_int32_t l)
 {
   STREAM_VERIFY_SANE (s);
@@ -634,12 +699,6 @@ stream_putq (struct stream *s, uint64_t q)
 int
 stream_putf (struct stream *s, float f)
 {
-#if !defined(__STDC_IEC_559__) && __GCC_IEC_559 < 1
-#warning "Unknown floating-point format, __func__ may be wrong"
-#endif
-
-/* we can safely assume 'float' is in the single precision
-   IEC 60559 binary format in host order */
   union {
     float i;
     uint32_t o;
@@ -651,9 +710,6 @@ stream_putf (struct stream *s, float f)
 int
 stream_putd (struct stream *s, double d)
 {
-#if !defined(__STDC_IEC_559__) && __GCC_IEC_559 < 1
-#warning "Unknown floating-point format, __func__ may be wrong"
-#endif
   union {
     double i;
     uint64_t o;
@@ -693,6 +749,23 @@ stream_putw_at (struct stream *s, size_t putp, u_int16_t w)
   s->data[putp + 1] = (u_char) w;
   
   return 2;
+}
+
+int
+stream_put3_at (struct stream *s, size_t putp, u_int32_t l)
+{
+  STREAM_VERIFY_SANE(s);
+  
+  if (!PUT_AT_VALID (s, putp + 3))
+    {
+      STREAM_BOUND_WARN (s, "put");
+      return 0;
+    }
+  s->data[putp] = (u_char)(l >> 16);
+  s->data[putp + 1] = (u_char)(l >>  8);
+  s->data[putp + 2] = (u_char)l;
+  
+  return 3;
 }
 
 int
@@ -770,28 +843,82 @@ stream_put_in_addr (struct stream *s, struct in_addr *addr)
   return sizeof (u_int32_t);
 }
 
+/* Put in_addr at location in the stream. */
+int
+stream_put_in_addr_at (struct stream *s, size_t putp, struct in_addr *addr)
+{
+  STREAM_VERIFY_SANE(s);
+
+  if (!PUT_AT_VALID (s, putp + 4))
+    {
+      STREAM_BOUND_WARN (s, "put");
+      return 0;
+    }
+
+  memcpy (&s->data[putp], addr, 4);
+  return 4;
+}
+
+/* Put in6_addr at location in the stream. */
+int
+stream_put_in6_addr_at (struct stream *s, size_t putp, struct in6_addr *addr)
+{
+  STREAM_VERIFY_SANE(s);
+
+  if (!PUT_AT_VALID (s, putp + 16))
+    {
+      STREAM_BOUND_WARN (s, "put");
+      return 0;
+    }
+
+  memcpy (&s->data[putp], addr, 16);
+  return 16;
+}
+
 /* Put prefix by nlri type format. */
 int
-stream_put_prefix (struct stream *s, struct prefix *p)
+stream_put_prefix_addpath (struct stream *s, struct prefix *p,
+                           int addpath_encode, u_int32_t addpath_tx_id)
 {
   size_t psize;
+  size_t psize_with_addpath;
   
   STREAM_VERIFY_SANE(s);
   
   psize = PSIZE (p->prefixlen);
+
+  if (addpath_encode)
+    psize_with_addpath = psize + 4;
+  else
+    psize_with_addpath = psize;
   
-  if (STREAM_WRITEABLE (s) < (psize + sizeof (u_char)))
+  if (STREAM_WRITEABLE (s) < (psize_with_addpath + sizeof (u_char)))
     {
       STREAM_BOUND_WARN (s, "put");
       return 0;
     }
   
+  if (addpath_encode)
+    {
+        s->data[s->endp++] = (u_char)(addpath_tx_id >> 24);
+        s->data[s->endp++] = (u_char)(addpath_tx_id >> 16);
+        s->data[s->endp++] = (u_char)(addpath_tx_id >>  8);
+        s->data[s->endp++] = (u_char)addpath_tx_id;
+    }
+
   s->data[s->endp++] = p->prefixlen;
   memcpy (s->data + s->endp, &p->u.prefix, psize);
   s->endp += psize;
   
   return psize;
 }
+
+int
+stream_put_prefix (struct stream *s, struct prefix *p)
+{
+  return stream_put_prefix_addpath (s, p, 0, 0);
+}
+
 
 /* Read size from fd. */
 int

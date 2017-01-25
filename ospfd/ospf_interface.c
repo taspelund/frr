@@ -31,6 +31,8 @@
 #include "command.h"
 #include "stream.h"
 #include "log.h"
+#include "zclient.h"
+#include "bfd.h"
 
 #include "ospfd/ospfd.h"
 #include "ospfd/ospf_spf.h"
@@ -49,6 +51,7 @@
 #include "ospfd/ospf_snmp.h"
 #endif /* HAVE_SNMP */
 
+DEFINE_QOBJ_TYPE(ospf_interface)
 
 int
 ospf_if_get_output_cost (struct ospf_interface *oi)
@@ -244,7 +247,8 @@ ospf_if_new (struct ospf *ospf, struct interface *ifp, struct prefix *p)
   ospf_opaque_type9_lsa_init (oi);
 
   oi->ospf = ospf;
-  
+  QOBJ_REG (oi, ospf_interface);
+
   return oi;
 }
 
@@ -293,7 +297,7 @@ ospf_if_cleanup (struct ospf_interface *oi)
   ospf_ls_upd_queue_empty (oi);
   
   /* Reset pseudo neighbor. */
-  ospf_nbr_self_reset (oi);
+  ospf_nbr_self_reset (oi, oi->ospf->router_id);
 }
 
 void
@@ -304,6 +308,8 @@ ospf_if_free (struct ospf_interface *oi)
   assert (oi->state == ISM_Down);
 
   ospf_opaque_type9_lsa_term (oi);
+
+  QOBJ_UNREG (oi);
 
   /* Free Pseudo Neighbour */
   ospf_nbr_delete (oi->nbr_self);
@@ -347,7 +353,12 @@ ospf_if_is_configured (struct ospf *ospf, struct in_addr *address)
   for (ALL_LIST_ELEMENTS (ospf->oiflist, node, nnode, oi))
     if (oi->type != OSPF_IFTYPE_VIRTUALLINK)
       {
-        if (oi->type == OSPF_IFTYPE_POINTOPOINT)
+        if (CHECK_FLAG(oi->connected->flags, ZEBRA_IFA_UNNUMBERED))
+          {
+            if (htonl(oi->ifp->ifindex) == address->s_addr)
+              return oi;
+          }
+        else if (oi->type == OSPF_IFTYPE_POINTOPOINT)
 	  {
 	    /* special leniency: match if addr is anywhere on peer subnet */
 	    if (prefix_match(CONNECTED_PREFIX(oi->connected),
@@ -471,8 +482,10 @@ ospf_if_lookup_recv_if (struct ospf *ospf, struct in_addr src,
       if (if_is_loopback (oi->ifp))
         continue;
 
-      if (prefix_match (CONNECTED_PREFIX(oi->connected),
-      			(struct prefix *) &addr))
+      if (CHECK_FLAG(oi->connected->flags, ZEBRA_IFA_UNNUMBERED))
+        match = oi;
+      else if (prefix_match (CONNECTED_PREFIX(oi->connected),
+                             (struct prefix *) &addr))
 	{
 	  if ( (match == NULL) || 
 	       (match->address->prefixlen < oi->address->prefixlen)
@@ -547,6 +560,7 @@ void
 ospf_del_if_params (struct ospf_if_params *oip)
 {
   list_delete (oip->auth_crypt);
+  bfd_info_free(&(oip->bfd_info));
   XFREE (MTYPE_OSPF_IF_PARAMS, oip);
 }
 
@@ -787,11 +801,6 @@ ospf_if_up (struct ospf_interface *oi)
     OSPF_ISM_EVENT_SCHEDULE (oi, ISM_LoopInd);
   else
     {
-      struct ospf *ospf = ospf_lookup ();
-      if (ospf != NULL)
-        ospf_adjust_sndbuflen (ospf, oi->ifp->mtu);
-      else
-        zlog_warn ("%s: ospf_lookup() returned NULL", __func__);
       ospf_if_stream_set (oi);
       OSPF_ISM_EVENT_SCHEDULE (oi, ISM_InterfaceUp);
     }
@@ -866,9 +875,11 @@ ospf_vl_new (struct ospf *ospf, struct ospf_vl_data *vl_data)
 
   snprintf (ifname, sizeof(ifname), "VLINK%d", vlink_count);
   vi = if_create (ifname, strnlen(ifname, sizeof(ifname)));
-  /* Ensure that linkdetection is not enabled on the stub interfaces
-   * created for OSPF virtual links. */
-  UNSET_FLAG(vi->status, ZEBRA_INTERFACE_LINKDETECTION);
+  /*
+   * if_create sets ZEBRA_INTERFACE_LINKDETECTION
+   * virtual links don't need this.
+   */
+  UNSET_FLAG (vi->status, ZEBRA_INTERFACE_LINKDETECTION);
   co = connected_new ();
   co->ifp = vi;
   listnode_add (vi->connected, co);
@@ -906,7 +917,7 @@ ospf_vl_new (struct ospf *ospf, struct ospf_vl_data *vl_data)
     zlog_debug ("ospf_vl_new(): set associated area to the backbone");
 
   /* Add pseudo neighbor. */
-  ospf_nbr_self_reset (voi);
+  ospf_nbr_self_reset (voi, voi->ospf->router_id);
 
   ospf_area_add_if (voi->area, voi);
 
@@ -1249,7 +1260,7 @@ void
 ospf_if_init ()
 {
   /* Initialize Zebra interface data structure. */
-  om->iflist = iflist;
+  om->iflist = vrf_iflist (VRF_DEFAULT);
   if_add_hook (IF_NEW_HOOK, ospf_if_new_hook);
   if_add_hook (IF_DELETE_HOOK, ospf_if_delete_hook);
 }

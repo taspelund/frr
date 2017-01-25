@@ -31,7 +31,9 @@
 #include "ospf6_proto.h"
 #include "ospf6_lsa.h"
 #include "ospf6_lsdb.h"
+#include "ospf6_route.h"
 #include "ospf6d.h"
+#include "bitfield.h"
 
 struct ospf6_lsdb *
 ospf6_lsdb_create (void *data)
@@ -236,7 +238,7 @@ ospf6_lsdb_lookup_next (u_int16_t type, u_int32_t id, u_int32_t adv_router,
   p = (struct prefix *) &key;
 
   {
-    char buf[64];
+    char buf[PREFIX2STR_BUFFER];
     prefix2str (p, buf, sizeof (buf));
     zlog_debug ("lsdb_lookup_next: key: %s", buf);
   }
@@ -545,21 +547,24 @@ ospf6_lsdb_show (struct vty *vty, enum ospf_lsdb_show_level level,
     }
 }
 
-/* Decide new Link State ID to originate.
-   note return value is network byte order */
 u_int32_t
 ospf6_new_ls_id (u_int16_t type, u_int32_t adv_router,
                  struct ospf6_lsdb *lsdb)
 {
   struct ospf6_lsa *lsa;
-  u_int32_t id = 1;
+  u_int32_t id = 1, tmp_id;
 
+  /* This routine is curently invoked only for Inter-Prefix LSAs for
+   * non-summarized routes (no area/range).
+   */
   for (lsa = ospf6_lsdb_type_router_head (type, adv_router, lsdb); lsa;
        lsa = ospf6_lsdb_type_router_next (type, adv_router, lsa))
     {
-      if (ntohl (lsa->header->id) < id)
-        continue;
-      if (ntohl (lsa->header->id) > id)
+      tmp_id = ntohl (lsa->header->id);
+      if (tmp_id < id)
+	continue;
+
+      if (tmp_id > id)
       {
 	ospf6_lsdb_lsa_unlock (lsa);
         break;

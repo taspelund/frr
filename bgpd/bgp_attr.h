@@ -47,12 +47,38 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #define BGP_ATTR_MIN_LEN        3       /* Attribute flag, type length. */
 #define BGP_ATTR_DEFAULT_WEIGHT 32768
 
+/* Valid lengths for mp_nexthop_len */
+#define BGP_ATTR_NHLEN_IPV4               IPV4_MAX_BYTELEN
+#define BGP_ATTR_NHLEN_VPNV4              8+IPV4_MAX_BYTELEN
+#define BGP_ATTR_NHLEN_IPV6_GLOBAL        IPV6_MAX_BYTELEN
+#define BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL (IPV6_MAX_BYTELEN * 2)
+#define BGP_ATTR_NHLEN_VPNV6_GLOBAL       8+IPV6_MAX_BYTELEN
+#define BGP_ATTR_NHLEN_VPNV6_GLOBAL_AND_LL ((8+IPV6_MAX_BYTELEN) * 2)
+
+
 struct bgp_attr_encap_subtlv {
     struct bgp_attr_encap_subtlv	*next;		/* for chaining */
+    /* Reference count of this attribute. */
+    unsigned long refcnt;
     uint16_t				type;
     uint16_t				length;
     uint8_t				value[1];	/* will be extended */
 };
+
+#if ENABLE_BGP_VNC
+/*
+ * old rfp<->rfapi representation
+ */
+struct bgp_tea_options {
+    struct bgp_tea_options *next;
+    uint8_t               options_count;
+    uint16_t              options_length; /* each TLV may be 256 in length */
+    uint8_t               type;
+    uint8_t               length;
+    void                 *value; /* pointer to data */
+};
+
+#endif
 
 /* Additional/uncommon BGP attributes.
  * lazily allocated as and when a struct attr
@@ -90,11 +116,18 @@ struct attr_extra
   /* MP Nexthop length */
   u_char mp_nexthop_len;
 
-  uint16_t			encap_tunneltype;	/* grr */
-  struct bgp_attr_encap_subtlv *encap_subtlvs;		/* rfc5512 */
+  /* MP Nexthop preference */
+  u_char mp_nexthop_prefer_global;
 
   /* route tag */
   route_tag_t tag;
+
+  uint16_t			encap_tunneltype;	/* grr */
+  struct bgp_attr_encap_subtlv *encap_subtlvs;		/* rfc5512 */
+
+#if ENABLE_BGP_VNC
+  struct bgp_attr_encap_subtlv *vnc_subtlvs;		/* VNC-specific */
+#endif
 };
 
 /* BGP core attribute structure. */
@@ -119,10 +152,24 @@ struct attr
   struct in_addr nexthop;
   u_int32_t med;
   u_int32_t local_pref;
+  ifindex_t nh_ifindex;
   
   /* Path origin attribute */
   u_char origin;
+
+  /* has the route-map changed any attribute?
+     Used on the peer outbound side. */
+  u_int32_t rmap_change_flags;
 };
+
+/* rmap_change_flags definition */
+#define BATTR_RMAP_IPV4_NHOP_CHANGED (1 << 0)
+#define BATTR_RMAP_NEXTHOP_PEER_ADDRESS (1 << 1)
+#define BATTR_REFLECTED (1 << 2)
+#define BATTR_RMAP_NEXTHOP_UNCHANGED (1 << 3)
+#define BATTR_RMAP_IPV6_GLOBAL_NHOP_CHANGED (1 << 4)
+#define BATTR_RMAP_IPV6_LL_NHOP_CHANGED (1 << 5)
+#define BATTR_RMAP_IPV6_PREFER_GLOBAL_CHANGED (1 << 6)
 
 /* Router Reflector related structure. */
 struct cluster_list
@@ -142,6 +189,10 @@ struct transit
 
 #define ATTR_FLAG_BIT(X)  (1 << ((X) - 1))
 
+#define BGP_CLUSTER_LIST_LENGTH(attr)				\
+  (((attr)->flag & ATTR_FLAG_BIT(BGP_ATTR_CLUSTER_LIST)) ?	\
+   (attr)->extra->cluster->length : 0)
+
 typedef enum {
  BGP_ATTR_PARSE_PROCEED = 0,
  BGP_ATTR_PARSE_ERROR = -1,
@@ -150,6 +201,8 @@ typedef enum {
  /* only used internally, send notify + convert to BGP_ATTR_PARSE_ERROR */
  BGP_ATTR_PARSE_ERROR_NOTIFYPLS = -3,
 } bgp_attr_parse_ret_t;
+
+struct bpacket_attr_vec_arr;
 
 /* Prototypes. */
 extern void bgp_attr_init (void);
@@ -160,7 +213,10 @@ extern bgp_attr_parse_ret_t bgp_attr_parse (struct peer *, struct attr *,
 extern struct attr_extra *bgp_attr_extra_get (struct attr *);
 extern void bgp_attr_extra_free (struct attr *);
 extern void bgp_attr_dup (struct attr *, struct attr *);
+extern void bgp_attr_deep_dup (struct attr *, struct attr *);
+extern void bgp_attr_deep_free (struct attr *);
 extern struct attr *bgp_attr_intern (struct attr *attr);
+extern struct attr *bgp_attr_refcount (struct attr *attr);
 extern void bgp_attr_unintern_sub (struct attr *);
 extern void bgp_attr_unintern (struct attr **);
 extern void bgp_attr_flush (struct attr *);
@@ -171,11 +227,12 @@ extern struct attr *bgp_attr_aggregate_intern (struct bgp *, u_char,
                                         struct community *, int as_set, u_char);
 extern bgp_size_t bgp_packet_attribute (struct bgp *bgp, struct peer *,
 					struct stream *, struct attr *,
+					struct bpacket_attr_vec_arr *vecarr,
 					struct prefix *, afi_t, safi_t,
 					struct peer *, struct prefix_rd *,
-					u_char *);
+					u_char *, int, u_int32_t);
 extern void bgp_dump_routes_attr (struct stream *, struct attr *,
-				  struct prefix *);
+                                  struct prefix *);
 extern int attrhash_cmp (const void *, const void *);
 extern unsigned int attrhash_key_make (void *);
 extern void attr_show_all (struct vty *);
@@ -217,10 +274,13 @@ bgp_attr_flush_encap(struct attr *attr);
  * finally the _end() function.
  */
 extern size_t bgp_packet_mpattr_start(struct stream *s, afi_t afi, safi_t safi,
+                                      afi_t nh_afi,
+                                      struct bpacket_attr_vec_arr *vecarr,
 				      struct attr *attr);
 extern void bgp_packet_mpattr_prefix(struct stream *s, afi_t afi, safi_t safi,
 				     struct prefix *p, struct prefix_rd *prd,
-				     u_char *tag);
+				     u_char *tag, int addpath_encode,
+                                     u_int32_t addpath_tx_id);
 extern size_t bgp_packet_mpattr_prefix_size(afi_t afi, safi_t safi,
                                             struct prefix *p);
 extern void bgp_packet_mpattr_end(struct stream *s, size_t sizep);
@@ -229,7 +289,19 @@ extern size_t bgp_packet_mpunreach_start (struct stream *s, afi_t afi,
 					  safi_t safi);
 extern void bgp_packet_mpunreach_prefix (struct stream *s, struct prefix *p,
 			     afi_t afi, safi_t safi, struct prefix_rd *prd,
-			     u_char *tag);
+			     u_char *tag, int, u_int32_t);
 extern void bgp_packet_mpunreach_end (struct stream *s, size_t attrlen_pnt);
+
+static inline int
+bgp_rmap_nhop_changed(u_int32_t out_rmap_flags, u_int32_t in_rmap_flags)
+{
+  return ((CHECK_FLAG(out_rmap_flags, BATTR_RMAP_NEXTHOP_PEER_ADDRESS) ||
+           CHECK_FLAG(out_rmap_flags, BATTR_RMAP_NEXTHOP_UNCHANGED) ||
+           CHECK_FLAG(out_rmap_flags, BATTR_RMAP_IPV4_NHOP_CHANGED) ||
+           CHECK_FLAG(out_rmap_flags, BATTR_RMAP_IPV6_GLOBAL_NHOP_CHANGED) ||
+           CHECK_FLAG(out_rmap_flags, BATTR_RMAP_IPV6_PREFER_GLOBAL_CHANGED) ||
+           CHECK_FLAG(out_rmap_flags, BATTR_RMAP_IPV6_LL_NHOP_CHANGED) ||
+           CHECK_FLAG(in_rmap_flags, BATTR_RMAP_NEXTHOP_UNCHANGED)) ? 1 : 0);
+}
 
 #endif /* _QUAGGA_BGP_ATTR_H */

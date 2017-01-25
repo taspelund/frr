@@ -23,16 +23,8 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 
 #include "table.h"
 
-typedef enum
-{
-  BGP_TABLE_MAIN,
-  BGP_TABLE_RSCLIENT,
-} bgp_table_t;
-
 struct bgp_table
 {
-  bgp_table_t type;
-  
   /* afi/safi of this table */
   afi_t afi;
   safi_t safi;
@@ -43,6 +35,7 @@ struct bgp_table
   struct peer *owner;
 
   struct route_table *route_table;
+  uint64_t version;
 };
 
 struct bgp_node
@@ -63,6 +56,7 @@ struct bgp_node
 
   struct bgp_node *prn;
 
+  uint64_t version;
   u_char flags;
 #define BGP_NODE_PROCESS_SCHEDULED	(1 << 0)
 #define BGP_NODE_USER_CLEAR             (1 << 1)
@@ -309,6 +303,20 @@ static inline int
 bgp_table_iter_started (bgp_table_iter_t * iter)
 {
   return route_table_iter_started (&iter->rt_iter);
+}
+
+/* This would benefit from a real atomic operation...
+ * until then. */
+static inline uint64_t
+bgp_table_next_version (struct bgp_table *table)
+{
+  return ++table->version;
+}
+
+static inline uint64_t
+bgp_table_version (struct bgp_table *table)
+{
+  return table->version;
 }
 
 #endif /* _QUAGGA_BGP_TABLE_H */

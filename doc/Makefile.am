@@ -7,7 +7,7 @@
 #
 # Here we use 'convert' from the well known 'ImageMagick' package
 # to do conversion from png to eps/pdf for figures. 
-# PDF form is required for quagga.pdf, using PDFTex at least.
+# PDF form is required for frr.pdf, using PDFTex at least.
 #
 # TeX implementation, which we depend on already anyway.
 #
@@ -19,17 +19,28 @@ PNGTOEPS = convert -antialias -contrast -despeckle
 PNGTOPDF = $(PNGTOEPS)
 EPSTOPDF = epstopdf
 
+VNCFIGURES_PNG = 
+VNCFIGURES_DIA = -vnc-mesh -vnc-frr-route-reflector		\
+-vnc-commercial-route-reflector -vnc-redundant-route-reflectors	\
+-vnc-gw -vnc-gw-rr
+
+# TODO: A target that creates an empty text file for each member of
+# VNCFIGURES_TXT
+VNCFIGURES_TXT = $(VNCFIGURES:%.png=%.txt)
+
 # The figure sources
 figures_names_parts = -normal-processing -rs-processing \
-	_topologies_full _topologies_rs
+	_topologies_full _topologies_rs \
+	$(VNCFIGURES_DIA)
+
 figures_sources = $(figures_names_parts:%=fig%.dia)
-figures_png = $(figures_names_parts:%=fig%.png)
-figures_pdf = $(figures_names_parts:%=fig%.pdf)
-figures_eps = $(figures_names_parts:%=fig%.eps)
+figures_png = $(figures_names_parts:%=fig%.png) $(VNCFIGURES_PNG)
+figures_pdf = $(figures_names_parts:%=fig%.pdf) $(VNCFIGURES_PNG:%.png=%.pdf)
+figures_eps = $(figures_names_parts:%=fig%.eps) $(VNCFIGURES_PNG:%.png=%.eps)
 figures_txt = $(figures_names_parts:%=fig%.txt)
 
 # rather twisted logic because we have to build PDFs of the EPS figures for
-# PDFTex and yet build one PDF, quagga.pdf, from texi source. Which means we
+# PDFTex and yet build one PDF, frr.pdf, from texi source. Which means we
 # cant rely on a single automatic rule for *.pdf, eg the one automatically
 # provided by automake. If you are an automake wizard, please feel free to
 # compact it somehow.
@@ -37,16 +48,17 @@ figures_txt = $(figures_names_parts:%=fig%.txt)
 # Built from defines.texi.in
 BUILT_SOURCES = defines.texi
 
-info_TEXINFOS = quagga.texi
+info_TEXINFOS = frr.texi
 
-# Have to manually specify the quagga.pdf rule in order to allow
+# Have to manually specify the frr.pdf rule in order to allow
 # us to have a generic automatic .pdf rule to build the figure sources
 # because it cant just work from the png's directly it seems - contrary
 # to the documentation...
-quagga.pdf: $(info_TEXINFOS) $(figures_pdf) $(quagga_TEXINFOS)
+frr.pdf: $(info_TEXINFOS) $(figures_pdf) $(frr_TEXINFOS)
 	$(TEXI2PDF) -o "$@" $< || true
 
-quagga_TEXINFOS = appendix.texi basic.texi bgpd.texi filter.texi \
+frr_TEXINFOS = appendix.texi basic.texi bgpd.texi isisd.texi filter.texi \
+	vnc.texi \
 	install.texi ipv6.texi kernel.texi main.texi ospf6d.texi ospfd.texi \
 	overview.texi protocol.texi ripd.texi ripngd.texi routemap.texi \
 	snmp.texi vtysh.texi routeserver.texi defines.texi $(figures_png) \
@@ -61,7 +73,7 @@ quagga_TEXINFOS = appendix.texi basic.texi bgpd.texi filter.texi \
 .dia.png:
 	$(DIATOPNG) "$@" $<
 
-man_MANS =
+man_MANS = frr.1
 
 if PIMD
 man_MANS += pimd.8
@@ -87,6 +99,10 @@ if OSPFD
 man_MANS += ospfd.8
 endif
 
+if LDPD
+man_MANS += ldpd.8
+endif
+
 if RIPD
 man_MANS += ripd.8
 endif
@@ -99,8 +115,8 @@ if VTYSH
 man_MANS += vtysh.1
 endif
 
-if WATCHQUAGGA
-man_MANS += watchquagga.8
+if WATCHFRR
+man_MANS += watchfrr.8
 endif
 
 if ZEBRA
@@ -108,12 +124,32 @@ man_MANS += zebra.8
 endif
 
 EXTRA_DIST = BGP-TypeCode draft-zebra-00.ms draft-zebra-00.txt \
-	bgpd.8 isisd.8 ospf6d.8 ospfclient.8 ospfd.8 ripd.8 \
-	ripngd.8 pimd.8 vtysh.1 watchquagga.8 zebra.8 \
+	\
+	bgpd.8.in \
+	isisd.8.in \
+	ospf6d.8.in \
+	ospfclient.8.in \
+	ospfd.8.in \
+	ldpd.8.in \
+	ripd.8.in \
+	ripngd.8.in \
+	pimd.8.in \
+	vtysh.1.in \
+	watchfrr.8.in \
+	zebra.8.in \
+	frr.1.in \
+	\
 	mpls/ChangeLog.opaque.txt mpls/cli_summary.txt \
 	mpls/opaque_lsa.txt mpls/ospfd.conf \
-	$(figures_sources) $(figures_png) $(figures_txt) \
-	texinfo.tex
+	$(figures_sources) $(figures_png) $(figures_txt)
 
 draft-zebra-00.txt: draft-zebra-00.ms
 	groff -T ascii -ms $< > $@
+
+# Ensure that all of the figures are copied into the html directory
+html-local: $(HTMLS)
+	if test -d $(HTMLS) ; then \
+		cp -p $(figures_png) $(HTMLS) ; \
+	else \
+		echo "$(HTMLS) is not a directory. Make it so, the rerun make."; \
+	fi

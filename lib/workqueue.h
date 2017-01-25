@@ -24,6 +24,9 @@
 #ifndef _QUAGGA_WORK_QUEUE_H
 #define _QUAGGA_WORK_QUEUE_H
 
+#include "memory.h"
+DECLARE_MTYPE(WORK_QUEUE)
+
 /* Hold time for the initial schedule of a queue run, in  millisec */
 #define WORK_QUEUE_DEFAULT_HOLD  50 
 
@@ -84,11 +87,14 @@ struct work_queue
     unsigned int max_retries;	
 
     unsigned int hold;	/* hold time for first run, in ms */
+
+    unsigned long yield; /* yield time in us for associated thread */
   } spec;
   
   /* remaining fields should be opaque to users */
   struct list *items;                 /* queue item list */
   unsigned long runs;                 /* runs count */
+  unsigned long yields;               /* yields count */
   
   struct {
     unsigned int best;
@@ -123,5 +129,7 @@ bool work_queue_is_scheduled (struct work_queue *);
 
 /* Helpers, exported for thread.c and command.c */
 extern int work_queue_run (struct thread *);
-extern struct cmd_element show_work_queues_cmd;
+
+extern void workqueue_cmd_init (void);
+
 #endif /* _QUAGGA_WORK_QUEUE_H */

@@ -65,7 +65,7 @@ ripng_multicast_join (struct interface *ifp)
   struct ipv6_mreq mreq;
   int save_errno;
 
-  if (if_is_up (ifp) && if_is_multicast (ifp)) {
+  if (if_is_multicast (ifp)) {
     memset (&mreq, 0, sizeof (mreq));
     inet_pton(AF_INET6, RIPNG_GROUP, &mreq.ipv6mr_multiaddr);
     mreq.ipv6mr_interface = ifp->ifindex;
@@ -116,7 +116,7 @@ ripng_multicast_leave (struct interface *ifp)
   int ret;
   struct ipv6_mreq mreq;
 
-  if (if_is_up (ifp) && if_is_multicast (ifp)) {
+  if (if_is_multicast (ifp)) {
     memset (&mreq, 0, sizeof (mreq));
     inet_pton(AF_INET6, RIPNG_GROUP, &mreq.ipv6mr_multiaddr);
     mreq.ipv6mr_interface = ifp->ifindex;
@@ -297,7 +297,7 @@ ripng_interface_delete (int command, struct zclient *zclient,
 
   /* To support pseudo interface do not free interface structure.  */
   /* if_delete(ifp); */
-  ifp->ifindex = IFINDEX_INTERNAL;
+  ifp->ifindex = IFINDEX_DELETED;
 
   return 0;
 }
@@ -309,7 +309,7 @@ ripng_interface_clean (void)
   struct interface *ifp;
   struct ripng_interface *ri;
 
-  for (ALL_LIST_ELEMENTS (iflist, node, nnode, ifp))
+  for (ALL_LIST_ELEMENTS (vrf_iflist (VRF_DEFAULT), node, nnode, ifp))
     {
       ri = ifp->info;
 
@@ -332,7 +332,7 @@ ripng_interface_reset (void)
   struct interface *ifp;
   struct ripng_interface *ri;
 
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     {
       ri = ifp->info;
 
@@ -383,7 +383,7 @@ ripng_apply_address_add (struct connected *ifc) {
   if ((ripng_enable_if_lookup(ifc->ifp->name) >= 0) ||
       (ripng_enable_network_lookup2(ifc) >= 0))
     ripng_redistribute_add(ZEBRA_ROUTE_CONNECT, RIPNG_ROUTE_INTERFACE,
-                           &address, ifc->ifp->ifindex, NULL);
+                           &address, ifc->ifp->ifindex, NULL, 0);
 
 }
 
@@ -570,7 +570,7 @@ ripng_enable_network_add (struct prefix *p)
       return -1;
     }
   else
-    node->info = (char *) "enabled";
+    node->info = (void *)1;
 
   /* XXX: One should find a better solution than a generic one */
   ripng_enable_apply_all();
@@ -704,13 +704,13 @@ ripng_connect_set (struct interface *ifp, int set)
         if ((ripng_enable_if_lookup(connected->ifp->name) >= 0) ||
             (ripng_enable_network_lookup2(connected) >= 0))
           ripng_redistribute_add (ZEBRA_ROUTE_CONNECT, RIPNG_ROUTE_INTERFACE,
-                                  &address, connected->ifp->ifindex, NULL);
+                                  &address, connected->ifp->ifindex, NULL, 0);
       } else {
         ripng_redistribute_delete (ZEBRA_ROUTE_CONNECT, RIPNG_ROUTE_INTERFACE,
                                    &address, connected->ifp->ifindex);
         if (ripng_redistribute_check (ZEBRA_ROUTE_CONNECT))
           ripng_redistribute_add (ZEBRA_ROUTE_CONNECT, RIPNG_ROUTE_REDISTRIBUTE,
-                                  &address, connected->ifp->ifindex, NULL);
+                                  &address, connected->ifp->ifindex, NULL, 0);
       }
     }
 }
@@ -789,7 +789,7 @@ ripng_enable_apply_all (void)
   struct interface *ifp;
   struct listnode *node;
 
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     ripng_enable_apply (ifp);
 }
 
@@ -854,7 +854,7 @@ ripng_passive_interface_apply_all (void)
   struct interface *ifp;
   struct listnode *node;
 
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     ripng_passive_interface_apply (ifp);
 }
 
@@ -953,20 +953,21 @@ DEFUN (ripng_network,
        "RIPng enable on specified interface or network.\n"
        "Interface or address")
 {
+  int idx_if_or_addr = 1;
   int ret;
   struct prefix p;
 
-  ret = str2prefix (argv[0], &p);
+  ret = str2prefix (argv[idx_if_or_addr]->arg, &p);
 
   /* Given string is IPv6 network or interface name. */
   if (ret)
     ret = ripng_enable_network_add (&p);
   else
-    ret = ripng_enable_if_add (argv[0]);
+    ret = ripng_enable_if_add (argv[idx_if_or_addr]->arg);
 
   if (ret < 0)
     {
-      vty_out (vty, "There is same network configuration %s%s", argv[0],
+      vty_out (vty, "There is same network configuration %s%s", argv[idx_if_or_addr]->arg,
 	       VTY_NEWLINE);
       return CMD_WARNING;
     }
@@ -982,20 +983,21 @@ DEFUN (no_ripng_network,
        "RIPng enable on specified interface or network.\n"
        "Interface or address")
 {
+  int idx_if_or_addr = 2;
   int ret;
   struct prefix p;
 
-  ret = str2prefix (argv[0], &p);
+  ret = str2prefix (argv[idx_if_or_addr]->arg, &p);
 
   /* Given string is interface name. */
   if (ret)
     ret = ripng_enable_network_delete (&p);
   else
-    ret = ripng_enable_if_delete (argv[0]);
+    ret = ripng_enable_if_delete (argv[idx_if_or_addr]->arg);
 
   if (ret < 0)
     {
-      vty_out (vty, "can't find network %s%s", argv[0],
+      vty_out (vty, "can't find network %s%s", argv[idx_if_or_addr]->arg,
 	       VTY_NEWLINE);
       return CMD_WARNING;
     }
@@ -1010,10 +1012,9 @@ DEFUN (ipv6_ripng_split_horizon,
        "Routing Information Protocol\n"
        "Perform split horizon\n")
 {
-  struct interface *ifp;
+  VTY_DECLVAR_CONTEXT(interface, ifp);
   struct ripng_interface *ri;
 
-  ifp = vty->index;
   ri = ifp->info;
 
   ri->split_horizon = RIPNG_SPLIT_HORIZON;
@@ -1028,10 +1029,9 @@ DEFUN (ipv6_ripng_split_horizon_poisoned_reverse,
        "Perform split horizon\n"
        "With poisoned-reverse\n")
 {
-  struct interface *ifp;
+  VTY_DECLVAR_CONTEXT(interface, ifp);
   struct ripng_interface *ri;
 
-  ifp = vty->index;
   ri = ifp->info;
 
   ri->split_horizon = RIPNG_SPLIT_HORIZON_POISONED_REVERSE;
@@ -1040,30 +1040,21 @@ DEFUN (ipv6_ripng_split_horizon_poisoned_reverse,
 
 DEFUN (no_ipv6_ripng_split_horizon,
        no_ipv6_ripng_split_horizon_cmd,
-       "no ipv6 ripng split-horizon",
-       NO_STR
-       IPV6_STR
-       "Routing Information Protocol\n"
-       "Perform split horizon\n")
-{
-  struct interface *ifp;
-  struct ripng_interface *ri;
-
-  ifp = vty->index;
-  ri = ifp->info;
-
-  ri->split_horizon = RIPNG_NO_SPLIT_HORIZON;
-  return CMD_SUCCESS;
-}
-
-ALIAS (no_ipv6_ripng_split_horizon,
-       no_ipv6_ripng_split_horizon_poisoned_reverse_cmd,
-       "no ipv6 ripng split-horizon poisoned-reverse",
+       "no ipv6 ripng split-horizon [poisoned-reverse]",
        NO_STR
        IPV6_STR
        "Routing Information Protocol\n"
        "Perform split horizon\n"
        "With poisoned-reverse\n")
+{
+  VTY_DECLVAR_CONTEXT(interface, ifp);
+  struct ripng_interface *ri;
+
+  ri = ifp->info;
+
+  ri->split_horizon = RIPNG_NO_SPLIT_HORIZON;
+  return CMD_SUCCESS;
+}
 
 DEFUN (ripng_passive_interface,
        ripng_passive_interface_cmd,
@@ -1071,7 +1062,8 @@ DEFUN (ripng_passive_interface,
        "Suppress routing updates on an interface\n"
        "Interface name\n")
 {
-  return ripng_passive_interface_set (vty, argv[0]);
+  int idx_ifname = 1;
+  return ripng_passive_interface_set (vty, argv[idx_ifname]->arg);
 }
 
 DEFUN (no_ripng_passive_interface,
@@ -1081,7 +1073,8 @@ DEFUN (no_ripng_passive_interface,
        "Suppress routing updates on an interface\n"
        "Interface name\n")
 {
-  return ripng_passive_interface_unset (vty, argv[0]);
+  int idx_ifname = 2;
+  return ripng_passive_interface_unset (vty, argv[idx_ifname]->arg);
 }
 
 static struct ripng_interface *
@@ -1125,7 +1118,7 @@ interface_config_write (struct vty *vty)
   struct ripng_interface *ri;
   int write = 0;
 
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     {
       ri = ifp->info;
 
@@ -1194,13 +1187,7 @@ ripng_if_init ()
 
   /* Install interface node. */
   install_node (&interface_node, interface_config_write);
-  
-  /* Install commands. */
-  install_element (CONFIG_NODE, &interface_cmd);
-  install_element (CONFIG_NODE, &no_interface_cmd);
-  install_default (INTERFACE_NODE);
-  install_element (INTERFACE_NODE, &interface_desc_cmd);
-  install_element (INTERFACE_NODE, &no_interface_desc_cmd);
+  if_cmd_init ();
 
   install_element (RIPNG_NODE, &ripng_network_cmd);
   install_element (RIPNG_NODE, &no_ripng_network_cmd);
@@ -1210,5 +1197,4 @@ ripng_if_init ()
   install_element (INTERFACE_NODE, &ipv6_ripng_split_horizon_cmd);
   install_element (INTERFACE_NODE, &ipv6_ripng_split_horizon_poisoned_reverse_cmd);
   install_element (INTERFACE_NODE, &no_ipv6_ripng_split_horizon_cmd);
-  install_element (INTERFACE_NODE, &no_ipv6_ripng_split_horizon_poisoned_reverse_cmd);
 }

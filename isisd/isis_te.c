@@ -1,7 +1,7 @@
 /*
  * IS-IS Rout(e)ing protocol - isis_te.c
  *
- * This is an implementation of RFC5305
+ * This is an implementation of RFC5305 & RFC 7810
  *
  *      Copyright (C) 2014 Orange Labs
  *      http://www.orange.com
@@ -37,6 +37,7 @@
 #include "command.h"
 #include "hash.h"
 #include "if.h"
+#include "vrf.h"
 #include "checksum.h"
 #include "md5.h"
 #include "sockunion.h"
@@ -535,7 +536,7 @@ isis_link_params_update (struct isis_circuit *circuit, struct interface *ifp)
       return;
 
   zlog_info ("MPLS-TE: Initialize circuit parameters for interface %s", ifp->name);
-  
+
   /* Check if MPLS TE Circuit context has not been already created */
   if (circuit->mtc == NULL)
       circuit->mtc = mpls_te_circuit_new();
@@ -590,7 +591,7 @@ isis_link_params_update (struct isis_circuit *circuit, struct interface *ifp)
       else
         SUBTLV_TYPE(mtc->unrsv_bw) = 0;
 
-      if (IS_PARAM_SET(ifp->link_params, LP_TE))
+      if (IS_PARAM_SET(ifp->link_params, LP_TE_METRIC))
         set_circuitparams_te_metric(mtc, ifp->link_params->te_metric);
       else
         SUBTLV_TYPE(mtc->te_metric) = 0;
@@ -989,9 +990,6 @@ mpls_te_print_detail(struct vty *vty, struct te_is_neigh *te)
 
   zlog_debug ("ISIS MPLS-TE: Show database TE detail");
 
-  if (te->sub_tlvs == NULL)
-    return;
-
   tlvh = (struct subtlv_header *)te->sub_tlvs;
 
   for (; sum < te->sub_tlvs_length; tlvh = (next ? next : SUBTLV_HDR_NEXT (tlvh)))
@@ -1063,9 +1061,6 @@ mpls_te_print_detail(struct vty *vty, struct te_is_neigh *te)
 void
 isis_mpls_te_config_write_router (struct vty *vty)
 {
-
-  zlog_debug ("ISIS MPLS-TE: Write ISIS router configuration");
-
   if (IS_MPLS_TE(isisMplsTE))
     {
       vty_out (vty, "  mpls-te on%s", VTY_NEWLINE);
@@ -1165,11 +1160,12 @@ DEFUN (isis_mpls_te_router_addr,
        "Stable IP address of the advertising router\n"
        "MPLS-TE router address in IPv4 address format\n")
 {
+  int idx_ipv4 = 2;
   struct in_addr value;
   struct listnode *node;
   struct isis_area *area;
 
-  if (! inet_aton (argv[0], &value))
+  if (! inet_aton (argv[idx_ipv4]->arg, &value))
     {
       vty_out (vty, "Please specify Router-Addr by A.B.C.D%s", VTY_NEWLINE);
       return CMD_WARNING;
@@ -1192,7 +1188,7 @@ DEFUN (isis_mpls_te_router_addr,
 
 DEFUN (isis_mpls_te_inter_as,
        isis_mpls_te_inter_as_cmd,
-       "mpls-te inter-as (level-1|level-1-2|level-2-only)",
+       "mpls-te inter-as <level-1|level-1-2|level-2-only>",
        MPLS_TE_STR
        "Configure MPLS-TE Inter-AS support\n"
        "AREA native mode self originate INTER-AS LSP with L1 only flooding scope)\n"
@@ -1319,19 +1315,20 @@ DEFUN (show_isis_mpls_te_interface,
        "Interface information\n"
        "Interface name\n")
 {
+  int idx_interface = 4;
   struct interface *ifp;
   struct listnode *node;
 
   /* Show All Interfaces. */
-  if (argc == 0)
+  if (argc == 4)
     {
-      for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+      for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
         show_mpls_te_sub (vty, ifp);
     }
   /* Interface name is specified. */
   else
     {
-      if ((ifp = if_lookup_by_name (argv[0])) == NULL)
+      if ((ifp = if_lookup_by_name (argv[idx_interface]->arg)) == NULL)
         vty_out (vty, "No such interface name%s", VTY_NEWLINE);
       else
         show_mpls_te_sub (vty, ifp);
@@ -1354,7 +1351,7 @@ isis_mpls_te_init (void)
   isisMplsTE.interas_areaid.s_addr = 0;
   isisMplsTE.cir_list = list_new();
   isisMplsTE.router_id.s_addr = 0;
-  
+
   /* Register new VTY commands */
   install_element (VIEW_NODE, &show_isis_mpls_te_router_cmd);
   install_element (VIEW_NODE, &show_isis_mpls_te_interface_cmd);
@@ -1367,4 +1364,3 @@ isis_mpls_te_init (void)
 
   return;
 }
-

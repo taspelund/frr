@@ -111,9 +111,7 @@ ripng_make_socket (void)
       return sock;
     }
 
-  ret = setsockopt_so_recvbuf (sock, 8096);
-  if (ret < 0)
-    return ret;
+  setsockopt_so_recvbuf (sock, 8096);
   ret = setsockopt_ipv6_pktinfo (sock, 1);
   if (ret < 0)
     return ret;
@@ -229,7 +227,7 @@ ripng_send_packet (caddr_t buf, int bufsize, struct sockaddr_in6 *to,
 /* Receive UDP RIPng packet from socket. */
 static int
 ripng_recv_packet (int sock, u_char *buf, int bufsize,
-		   struct sockaddr_in6 *from, ifindex_t *ifindex, 
+		   struct sockaddr_in6 *from, ifindex_t *ifindex,
 		   int *hoplimit)
 {
   int ret;
@@ -237,6 +235,8 @@ ripng_recv_packet (int sock, u_char *buf, int bufsize,
   struct iovec iov;
   struct cmsghdr  *cmsgptr;
   struct in6_addr dst = { .s6_addr = { 0 } };
+
+  memset(&dst, 0, sizeof(struct in6_addr));
 
   /* Ancillary data.  This store cmsghdr and in6_pktinfo.  But at this
      point I can't determine size of cmsghdr */
@@ -319,9 +319,9 @@ ripng_packet_dump (struct ripng_packet *packet, int size, const char *sndrcv)
       if (rte->metric == RIPNG_METRIC_NEXTHOP)
 	zlog_debug ("  nexthop %s/%d", inet6_ntoa (rte->addr), rte->prefixlen);
       else
-	zlog_debug ("  %s/%d metric %d tag %d", 
+	zlog_debug ("  %s/%d metric %d tag %"ROUTE_TAG_PRI,
 		   inet6_ntoa (rte->addr), rte->prefixlen, 
-		   rte->metric, ntohs (rte->tag));
+		   rte->metric, (route_tag_t)ntohs (rte->tag));
     }
 }
 
@@ -335,15 +335,15 @@ ripng_nexthop_rte (struct rte *rte,
 
   /* Logging before checking RTE. */
   if (IS_RIPNG_DEBUG_RECV)
-    zlog_debug ("RIPng nexthop RTE address %s tag %d prefixlen %d",
-	       inet6_ntoa (rte->addr), ntohs (rte->tag), rte->prefixlen);
+    zlog_debug ("RIPng nexthop RTE address %s tag %"ROUTE_TAG_PRI" prefixlen %d",
+	       inet6_ntoa (rte->addr), (route_tag_t)ntohs (rte->tag), rte->prefixlen);
 
   /* RFC2080 2.1.1 Next Hop: 
    The route tag and prefix length in the next hop RTE must be
    set to zero on sending and ignored on receiption.  */
   if (ntohs (rte->tag) != 0)
-    zlog_warn ("RIPng nexthop RTE with non zero tag value %d from %s",
-	       ntohs (rte->tag), inet6_ntoa (from->sin6_addr));
+    zlog_warn ("RIPng nexthop RTE with non zero tag value %"ROUTE_TAG_PRI" from %s",
+	       (route_tag_t)ntohs (rte->tag), inet6_ntoa (from->sin6_addr));
 
   if (rte->prefixlen != 0)
     zlog_warn ("RIPng nexthop RTE with non zero prefixlen value %d from %s",
@@ -627,11 +627,11 @@ ripng_filter (int ripng_distribute, struct prefix_ipv6 *p,
 	  if (IS_RIPNG_DEBUG_PACKET)
 	    zlog_debug ("%s/%d filtered by distribute %s",
                         inet6_ntoa (p->prefix), p->prefixlen, inout);
-	  return -1;
-	}
-    }
+		  return -1;
+		}
+	    }
   if (ri->prefix[ripng_distribute])
-    {
+{
       if (prefix_list_apply (ri->prefix[ripng_distribute],
 			     (struct prefix *) p) == PREFIX_DENY)
 	{
@@ -649,7 +649,7 @@ ripng_filter (int ripng_distribute, struct prefix_ipv6 *p,
       if (dist->list[distribute])
 	{
 	  alist = access_list_lookup (AFI_IP6, dist->list[distribute]);
-
+	    
 	  if (alist)
 	    {
 	      if (access_list_apply (alist,
@@ -665,7 +665,7 @@ ripng_filter (int ripng_distribute, struct prefix_ipv6 *p,
       if (dist->prefix[distribute])
 	{
 	  plist = prefix_list_lookup (AFI_IP6, dist->prefix[distribute]);
-
+	  
 	  if (plist)
 	    {
 	      if (prefix_list_apply (plist,
@@ -827,8 +827,10 @@ ripng_route_process (struct rte *rte, struct sockaddr_in6 *from,
                * with the new one in below. */
               break;
 
-            /* Metrics are same. Keep "rinfo" null and the new route
-             * is added in the ECMP list in below. */
+            /* Metrics are same. Unless ECMP is disabled, keep "rinfo" null and
+	     * the new route is added in the ECMP list in below. */
+	    if (! ripng->ecmp)
+	      break;
           }
       }
 
@@ -872,11 +874,24 @@ ripng_route_process (struct rte *rte, struct sockaddr_in6 *from,
       same = (IN6_ARE_ADDR_EQUAL (&rinfo->from, &from->sin6_addr) 
 	      && (rinfo->ifindex == ifp->ifindex));
 
+      /*
+       * RFC 2080 - Section 2.4.2:
+       * "If the new metric is the same as the old one, examine the timeout
+       * for the existing route.  If it is at least halfway to the expiration
+       * point, switch to the new route.  This heuristic is optional, but
+       * highly recommended".
+       */
+      if (!ripng->ecmp && !same &&
+	  rinfo->metric == rte->metric && rinfo->t_timeout &&
+	  (thread_timer_remain_second (rinfo->t_timeout) < (ripng->timeout_time / 2)))
+	{
+	  ripng_ecmp_replace (&newinfo);
+	}
       /* Next, compare the metrics.  If the datagram is from the same
 	 router as the existing route, and the new metric is different
 	 than the old one; or, if the new metric is lower than the old
 	 one; do the following actions: */
-      if ((same && rinfo->metric != rte->metric) ||
+      else if ((same && rinfo->metric != rte->metric) ||
 	  rte->metric < rinfo->metric)
 	{
           if (listcount (list) == 1)
@@ -905,7 +920,8 @@ ripng_route_process (struct rte *rte, struct sockaddr_in6 *from,
 /* Add redistributed route to RIPng table. */
 void
 ripng_redistribute_add (int type, int sub_type, struct prefix_ipv6 *p, 
-			ifindex_t ifindex, struct in6_addr *nexthop)
+			ifindex_t ifindex, struct in6_addr *nexthop,
+			route_tag_t tag)
 {
   struct route_node *rp;
   struct ripng_info *rinfo = NULL, newinfo;
@@ -924,6 +940,8 @@ ripng_redistribute_add (int type, int sub_type, struct prefix_ipv6 *p,
   newinfo.sub_type = sub_type;
   newinfo.ifindex = ifindex;
   newinfo.metric = 1;
+  if (tag <= UINT16_MAX) /* RIPng only supports 16 bit tags */
+    newinfo.tag = tag;
   newinfo.rp = rp;
   if (nexthop && IN6_IS_ADDR_LINKLOCAL(nexthop))
     newinfo.nexthop = *nexthop;
@@ -1411,7 +1429,7 @@ ripng_update (struct thread *t)
     zlog_debug ("RIPng update timer expired!");
 
   /* Supply routes to each interface. */
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     {
       ri = ifp->info;
 
@@ -1494,7 +1512,7 @@ ripng_triggered_update (struct thread *t)
 
   /* Split Horizon processing is done when generating triggered
      updates as well as normal updates (see section 2.6). */
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     {
       ri = ifp->info;
 
@@ -2015,8 +2033,8 @@ DEFUN (show_ipv6_ripng,
 	  vty_out (vty, "%*s", 18, " ");
 
 	  vty_out (vty, "%*s", 28, " ");
-	  vty_out (vty, "self      %2d  %3d%s", aggregate->metric,
-		   aggregate->tag,
+	  vty_out (vty, "self      %2d  %3"ROUTE_TAG_PRI"%s", aggregate->metric,
+		   (route_tag_t)aggregate->tag,
 		   VTY_NEWLINE);
 	}
 
@@ -2060,8 +2078,8 @@ DEFUN (show_ipv6_ripng,
 	  if (len > 0)
 	    vty_out (vty, "%*s", len, " ");
 
-	  vty_out (vty, " %2d  %3d  ",
-		   rinfo->metric, rinfo->tag);
+	  vty_out (vty, " %2d  %3"ROUTE_TAG_PRI"  ",
+		   rinfo->metric, (route_tag_t)rinfo->tag);
 
 	  /* time */
 	  if ((rinfo->type == ZEBRA_ROUTE_RIPNG) && 
@@ -2124,7 +2142,7 @@ DEFUN (show_ipv6_ripng_status,
 
   vty_out (vty, "    Interface        Send  Recv%s", VTY_NEWLINE);
 
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     {
       struct ripng_interface *ri;
       
@@ -2148,6 +2166,54 @@ DEFUN (show_ipv6_ripng_status,
   ripng_peer_display (vty);
 
   return CMD_SUCCESS;  
+}
+
+DEFUN (clear_ipv6_rip,
+       clear_ipv6_rip_cmd,
+       "clear ipv6 ripng",
+       CLEAR_STR
+       IPV6_STR
+       "Clear IPv6 RIP database")
+{
+  struct route_node *rp;
+  struct ripng_info *rinfo;
+  struct list *list;
+  struct listnode *listnode;
+
+  /* Clear received RIPng routes */
+  for (rp = route_top (ripng->table); rp; rp = route_next (rp))
+    {
+      list = rp->info;
+      if (list == NULL)
+	continue;
+
+      for (ALL_LIST_ELEMENTS_RO (list, listnode, rinfo))
+	{
+	  if (! ripng_route_rte (rinfo))
+	    continue;
+
+	  if (CHECK_FLAG (rinfo->flags, RIPNG_RTF_FIB))
+	    ripng_zebra_ipv6_delete (rp);
+	  break;
+	}
+
+      if (rinfo)
+	{
+	  RIPNG_TIMER_OFF (rinfo->t_timeout);
+	  RIPNG_TIMER_OFF (rinfo->t_garbage_collect);
+	  listnode_delete (list, rinfo);
+	  ripng_info_free (rinfo);
+	}
+
+      if (list_isempty (list))
+	{
+	  list_free (list);
+	  rp->info = NULL;
+	  route_unlock_node (rp);
+	}
+    }
+
+  return CMD_SUCCESS;
 }
 
 DEFUN (router_ripng,
@@ -2193,11 +2259,12 @@ DEFUN (ripng_route,
        "Static route setup\n"
        "Set static RIPng route announcement\n")
 {
+  int idx_ipv6addr = 1;
   int ret;
   struct prefix_ipv6 p;
   struct route_node *rp;
 
-  ret = str2prefix_ipv6 (argv[0], (struct prefix_ipv6 *)&p);
+  ret = str2prefix_ipv6 (argv[idx_ipv6addr]->arg, (struct prefix_ipv6 *)&p);
   if (ret <= 0)
     {
       vty_out (vty, "Malformed address%s", VTY_NEWLINE);
@@ -2214,7 +2281,7 @@ DEFUN (ripng_route,
     }
   rp->info = (void *)1;
 
-  ripng_redistribute_add (ZEBRA_ROUTE_RIPNG, RIPNG_ROUTE_STATIC, &p, 0, NULL);
+  ripng_redistribute_add (ZEBRA_ROUTE_RIPNG, RIPNG_ROUTE_STATIC, &p, 0, NULL, 0);
 
   return CMD_SUCCESS;
 }
@@ -2226,11 +2293,12 @@ DEFUN (no_ripng_route,
        "Static route setup\n"
        "Delete static RIPng route announcement\n")
 {
+  int idx_ipv6addr = 2;
   int ret;
   struct prefix_ipv6 p;
   struct route_node *rp;
 
-  ret = str2prefix_ipv6 (argv[0], (struct prefix_ipv6 *)&p);
+  ret = str2prefix_ipv6 (argv[idx_ipv6addr]->arg, (struct prefix_ipv6 *)&p);
   if (ret <= 0)
     {
       vty_out (vty, "Malformed address%s", VTY_NEWLINE);
@@ -2260,11 +2328,12 @@ DEFUN (ripng_aggregate_address,
        "Set aggregate RIPng route announcement\n"
        "Aggregate network\n")
 {
+  int idx_ipv6_prefixlen = 1;
   int ret;
   struct prefix p;
   struct route_node *node;
 
-  ret = str2prefix_ipv6 (argv[0], (struct prefix_ipv6 *)&p);
+  ret = str2prefix_ipv6 (argv[idx_ipv6_prefixlen]->arg, (struct prefix_ipv6 *)&p);
   if (ret <= 0)
     {
       vty_out (vty, "Malformed address%s", VTY_NEWLINE);
@@ -2293,11 +2362,12 @@ DEFUN (no_ripng_aggregate_address,
        "Delete aggregate RIPng route announcement\n"
        "Aggregate network")
 {
+  int idx_ipv6_prefixlen = 2;
   int ret;
   struct prefix p;
   struct route_node *rn;
 
-  ret = str2prefix_ipv6 (argv[0], (struct prefix_ipv6 *) &p);
+  ret = str2prefix_ipv6 (argv[idx_ipv6_prefixlen]->arg, (struct prefix_ipv6 *) &p);
   if (ret <= 0)
     {
       vty_out (vty, "Malformed address%s", VTY_NEWLINE);
@@ -2321,20 +2391,21 @@ DEFUN (no_ripng_aggregate_address,
 
 DEFUN (ripng_default_metric,
        ripng_default_metric_cmd,
-       "default-metric <1-16>",
+       "default-metric (1-16)",
        "Set a metric of redistribute routes\n"
        "Default metric\n")
 {
+  int idx_number = 1;
   if (ripng)
     {
-      ripng->default_metric = atoi (argv[0]);
+      ripng->default_metric = atoi (argv[idx_number]->arg);
     }
   return CMD_SUCCESS;
 }
 
 DEFUN (no_ripng_default_metric,
        no_ripng_default_metric_cmd,
-       "no default-metric",
+       "no default-metric [(1-16)]",
        NO_STR
        "Set a metric of redistribute routes\n"
        "Default metric\n")
@@ -2346,12 +2417,6 @@ DEFUN (no_ripng_default_metric,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_ripng_default_metric,
-       no_ripng_default_metric_val_cmd,
-       "no default-metric <1-16>",
-       NO_STR
-       "Set a metric of redistribute routes\n"
-       "Default metric\n")
 
 #if 0
 /* RIPng update timer setup. */
@@ -2458,20 +2523,23 @@ DEFUN (no_ripng_garbage_timer,
 
 DEFUN (ripng_timers,
        ripng_timers_cmd,
-       "timers basic <0-65535> <0-65535> <0-65535>",
+       "timers basic (0-65535) (0-65535) (0-65535)",
        "RIPng timers setup\n"
        "Basic timer\n"
        "Routing table update timer value in second. Default is 30.\n"
        "Routing information timeout timer. Default is 180.\n"
        "Garbage collection timer. Default is 120.\n")
 {
+  int idx_number = 2;
+  int idx_number_2 = 3;
+  int idx_number_3 = 4;
   unsigned long update;
   unsigned long timeout;
   unsigned long garbage;
 
-  VTY_GET_INTEGER_RANGE("update timer", update, argv[0], 0, 65535);
-  VTY_GET_INTEGER_RANGE("timeout timer", timeout, argv[1], 0, 65535);
-  VTY_GET_INTEGER_RANGE("garbage timer", garbage, argv[2], 0, 65535);
+  VTY_GET_INTEGER_RANGE("update timer", update, argv[idx_number]->arg, 0, 65535);
+  VTY_GET_INTEGER_RANGE("timeout timer", timeout, argv[idx_number_2]->arg, 0, 65535);
+  VTY_GET_INTEGER_RANGE("garbage timer", garbage, argv[idx_number_3]->arg, 0, 65535);
 
   /* Set each timer value. */
   ripng->update_time = update;
@@ -2486,10 +2554,13 @@ DEFUN (ripng_timers,
 
 DEFUN (no_ripng_timers,
        no_ripng_timers_cmd,
-       "no timers basic",
+       "no timers basic [(0-65535) (0-65535) (0-65535)]",
        NO_STR
        "RIPng timers setup\n"
-       "Basic timer\n")
+       "Basic timer\n"
+       "Routing table update timer value in second. Default is 30.\n"
+       "Routing information timeout timer. Default is 180.\n"
+       "Garbage collection timer. Default is 120.\n")
 {
   /* Set each timer value to the default. */
   ripng->update_time = RIPNG_UPDATE_TIMER_DEFAULT;
@@ -2502,17 +2573,9 @@ DEFUN (no_ripng_timers,
   return CMD_SUCCESS;
 }
 
-ALIAS (no_ripng_timers,
-       no_ripng_timers_val_cmd,
-       "no timers basic <0-65535> <0-65535> <0-65535>",
-       NO_STR
-       "RIPng timers setup\n"
-       "Basic timer\n"
-       "Routing table update timer value in second. Default is 30.\n"
-       "Routing information timeout timer. Default is 180.\n"
-       "Garbage collection timer. Default is 120.\n")
-
-DEFUN (show_ipv6_protocols, show_ipv6_protocols_cmd,
+#if 0
+DEFUN (show_ipv6_protocols,
+       show_ipv6_protocols_cmd,
        "show ipv6 protocols",
        SHOW_STR
        IPV6_STR
@@ -2537,6 +2600,7 @@ DEFUN (show_ipv6_protocols, show_ipv6_protocols_cmd,
 
   return CMD_SUCCESS;
 }
+#endif
 
 /* Please be carefull to use this command. */
 DEFUN (ripng_default_information_originate,
@@ -2551,7 +2615,7 @@ DEFUN (ripng_default_information_originate,
     ripng->default_information = 1;
 
     str2prefix_ipv6 ("::/0", &p);
-    ripng_redistribute_add (ZEBRA_ROUTE_RIPNG, RIPNG_ROUTE_DEFAULT, &p, 0, NULL);
+    ripng_redistribute_add (ZEBRA_ROUTE_RIPNG, RIPNG_ROUTE_DEFAULT, &p, 0, NULL, 0);
   }
 
   return CMD_SUCCESS;
@@ -2819,7 +2883,7 @@ ripng_distribute_update_all (struct prefix_list *notused)
   struct interface *ifp;
   struct listnode *node;
 
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     ripng_distribute_update_interface (ifp);
 }
 
@@ -3007,7 +3071,7 @@ ripng_routemap_update (const char *unused)
   struct interface *ifp;
   struct listnode *node;
 
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     ripng_if_rmap_update_interface (ifp);
 
   ripng_routemap_update_redistribute ();
@@ -3027,6 +3091,8 @@ ripng_init ()
   install_element (VIEW_NODE, &show_ipv6_ripng_cmd);
   install_element (VIEW_NODE, &show_ipv6_ripng_status_cmd);
 
+  install_element (ENABLE_NODE, &clear_ipv6_rip_cmd);
+
   install_element (CONFIG_NODE, &router_ripng_cmd);
   install_element (CONFIG_NODE, &no_router_ripng_cmd);
 
@@ -3038,12 +3104,11 @@ ripng_init ()
 
   install_element (RIPNG_NODE, &ripng_default_metric_cmd);
   install_element (RIPNG_NODE, &no_ripng_default_metric_cmd);
-  install_element (RIPNG_NODE, &no_ripng_default_metric_val_cmd);
 
   install_element (RIPNG_NODE, &ripng_timers_cmd);
   install_element (RIPNG_NODE, &no_ripng_timers_cmd);
-  install_element (RIPNG_NODE, &no_ripng_timers_val_cmd);
 #if 0
+  install_element (VIEW_NODE, &show_ipv6_protocols_cmd);
   install_element (RIPNG_NODE, &ripng_update_timer_cmd);
   install_element (RIPNG_NODE, &no_ripng_update_timer_cmd);
   install_element (RIPNG_NODE, &ripng_timeout_timer_cmd);

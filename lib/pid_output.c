@@ -24,37 +24,9 @@
 #include <fcntl.h>
 #include <log.h>
 #include "version.h"
+#include "network.h"
 
 #define PIDFILE_MASK 0644
-#ifndef HAVE_FCNTL
-
-pid_t
-pid_output (const char *path)
-{
-  FILE *fp;
-  pid_t pid;
-  mode_t oldumask;
-
-  pid = getpid();
-
-  oldumask = umask(0777 & ~PIDFILE_MASK);
-  fp = fopen (path, "w");
-  if (fp != NULL) 
-    {
-      fprintf (fp, "%d\n", (int) pid);
-      fclose (fp);
-      umask(oldumask);
-      return pid;
-    }
-  /* XXX Why do we continue instead of exiting?  This seems incompatible
-     with the behavior of the fcntl version below. */
-  zlog_warn("Can't fopen pid lock file %s (%s), continuing",
-	    path, safe_strerror(errno));
-  umask(oldumask);
-  return -1;
-}
-
-#else /* HAVE_FCNTL */
 
 pid_t
 pid_output (const char *path)
@@ -84,6 +56,8 @@ pid_output (const char *path)
       umask(oldumask);
       memset (&lock, 0, sizeof(lock));
 
+      set_cloexec(fd);
+
       lock.l_type = F_WRLCK;
       lock.l_whence = SEEK_SET;
 
@@ -104,5 +78,3 @@ pid_output (const char *path)
     }
   return pid;
 }
-
-#endif /* HAVE_FCNTL */

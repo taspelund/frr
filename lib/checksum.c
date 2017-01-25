@@ -47,7 +47,7 @@ in_cksum(void *parg, int nbytes)
 }
 
 /* Fletcher Checksum -- Refer to RFC1008. */
-#define MODX                 4102   /* 5802 should be fine */
+#define MODX                 4102U   /* 5802 should be fine */
 
 /* To be consistent, offset is 0-based index, rather than the 1-based 
    index required in the specification ISO 8473, Annex C.1 */
@@ -58,13 +58,10 @@ fletcher_checksum(u_char * buffer, const size_t len, const uint16_t offset)
 {
   u_int8_t *p;
   int x, y, c0, c1;
-  u_int16_t checksum;
+  u_int16_t checksum = 0;
   u_int16_t *csum;
   size_t partial_len, i, left = len;
   
-  checksum = 0;
-
-
   if (offset != FLETCHER_CHECKSUM_VALIDATE)
     /* Zero the csum in the packet. */
     {

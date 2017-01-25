@@ -31,7 +31,7 @@ struct capability_header
 /* Generic MP capability data */
 struct capability_mp_data
 {
-  afi_t afi;
+  iana_afi_t afi;
   u_char reserved;
   safi_t safi;
 };
@@ -72,9 +72,14 @@ struct capability_gr
 #define CAPABILITY_CODE_ORF             3 /* Cooperative Route Filtering Capability */
 #define CAPABILITY_CODE_RESTART        64 /* Graceful Restart Capability */
 #define CAPABILITY_CODE_AS4            65 /* 4-octet AS number Capability */
-#define CAPABILITY_CODE_DYNAMIC        66 /* Dynamic Capability */
+#define CAPABILITY_CODE_DYNAMIC_OLD    66 /* Dynamic Capability, deprecated since 2003 */
+#define CAPABILITY_CODE_DYNAMIC        67 /* Dynamic Capability */
+#define CAPABILITY_CODE_ADDPATH        69 /* Addpath Capability */
+#define CAPABILITY_CODE_FQDN           73 /* Advertise hostname capabilty */
+#define CAPABILITY_CODE_ENHE            5 /* Extended Next Hop Encoding */
 #define CAPABILITY_CODE_REFRESH_OLD   128 /* Route Refresh Capability(cisco) */
 #define CAPABILITY_CODE_ORF_OLD       130 /* Cooperative Route Filtering Capability(cisco) */
+
 
 /* Capability Length */
 #define CAPABILITY_CODE_MP_LEN          4
@@ -82,6 +87,9 @@ struct capability_gr
 #define CAPABILITY_CODE_DYNAMIC_LEN     0
 #define CAPABILITY_CODE_RESTART_LEN     2 /* Receiving only case */
 #define CAPABILITY_CODE_AS4_LEN         4
+#define CAPABILITY_CODE_ADDPATH_LEN     4
+#define CAPABILITY_CODE_ENHE_LEN        6 /* NRLI AFI = 2, SAFI = 2, Nexthop AFI = 2 */
+#define CAPABILITY_CODE_MIN_FQDN_LEN    2
 #define CAPABILITY_CODE_ORF_LEN         5
 
 /* Cooperative Route Filtering Capability.  */
@@ -105,8 +113,7 @@ struct capability_gr
 
 extern int bgp_open_option_parse (struct peer *, u_char, int *);
 extern void bgp_open_capability (struct stream *, struct peer *);
-extern void bgp_capability_vty_out (struct vty *, struct peer *);
+extern void bgp_capability_vty_out (struct vty *, struct peer *, u_char, json_object *);
 extern as_t peek_for_as4_capability (struct peer *, u_char);
-extern int bgp_afi_safi_valid_indices (afi_t, safi_t *);
 
 #endif /* _QUAGGA_BGP_OPEN_H */

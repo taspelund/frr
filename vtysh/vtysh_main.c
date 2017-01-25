@@ -25,6 +25,8 @@
 #include <setjmp.h>
 #include <sys/wait.h>
 #include <pwd.h>
+#include <sys/file.h>
+#include <unistd.h>
 
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -33,6 +35,8 @@
 #include "getopt.h"
 #include "command.h"
 #include "memory.h"
+#include "linklist.h"
+#include "memory_vty.h"
 
 #include "vtysh/vtysh.h"
 #include "vtysh/vtysh_user.h"
@@ -41,7 +45,9 @@
 char *progname;
 
 /* Configuration file name and directory. */
-char config_default[] = SYSCONFDIR VTYSH_DEFAULT_CONFIG;
+static char vtysh_config_always[] = SYSCONFDIR VTYSH_DEFAULT_CONFIG;
+static char quagga_config_default[] = SYSCONFDIR QUAGGA_DEFAULT_CONFIG;
+char *quagga_config = quagga_config_default;
 char history_file[MAXPATHLEN];
 
 /* Flag for indicate executing child command. */
@@ -116,7 +122,7 @@ vtysh_signal_set (int signo, void (*func)(int))
 
 /* Initialization of signal handles. */
 static void
-vtysh_signal_init ()
+vtysh_signal_init (void)
 {
   vtysh_signal_set (SIGINT, sigint);
   vtysh_signal_set (SIGTSTP, sigtstp);
@@ -135,13 +141,16 @@ usage (int status)
 	    "-b, --boot               Execute boot startup configuration\n" \
 	    "-c, --command            Execute argument as command\n" \
 	    "-d, --daemon             Connect only to the specified daemon\n" \
+	    "-f, --inputfile          Execute commands from specific file and exit\n" \
 	    "-E, --echo               Echo prompt and command in -c mode\n" \
 	    "-C, --dryrun             Check configuration for validity and exit\n" \
+	    "-m, --markfile           Mark input file with context end\n"
+	    "-w, --writeconfig        Write integrated config (Quagga.conf) and exit\n"
 	    "-h, --help               Display this help and exit\n\n" \
 	    "Note that multiple commands may be executed from the command\n" \
 	    "line by passing multiple -c args, or by embedding linefeed\n" \
 	    "characters in one or more of the commands.\n\n" \
-	    "Report bugs to %s\n", progname, ZEBRA_BUG_ADDRESS);
+	    "Report bugs to %s\n", progname, FRR_BUG_ADDRESS);
 
   exit (status);
 }
@@ -154,16 +163,19 @@ struct option longopts[] =
   { "eval",                 required_argument,       NULL, 'e'},
   { "command",              required_argument,       NULL, 'c'},
   { "daemon",               required_argument,       NULL, 'd'},
+  { "inputfile",            required_argument,       NULL, 'f'},
   { "echo",                 no_argument,             NULL, 'E'},
   { "dryrun",		    no_argument,	     NULL, 'C'},
   { "help",                 no_argument,             NULL, 'h'},
   { "noerror",		    no_argument,	     NULL, 'n'},
+  { "mark",                 no_argument,             NULL, 'm'},
+  { "writeconfig",	    no_argument,	     NULL, 'w'},
   { 0 }
 };
 
 /* Read a string, and return a pointer to it.  Returns NULL on EOF. */
 static char *
-vtysh_rl_gets ()
+vtysh_rl_gets (void)
 {
   HIST_ENTRY *last;
   /* If the buffer has already been allocated, return the memory
@@ -207,6 +219,39 @@ static void log_it(const char *line)
   fprintf(logfile, "%s:%s %s\n", tod, user, line);
 }
 
+static int flock_fd;
+
+static void
+vtysh_flock_config (const char *flock_file)
+{
+  int count = 0;
+
+  flock_fd = open (flock_file, O_RDONLY, 0644);
+  if (flock_fd < 0)
+    {
+      fprintf (stderr, "Unable to create lock file: %s, %s\n",
+	       flock_file, safe_strerror (errno));
+      return;
+    }
+
+  while (count < 400 && (flock (flock_fd, LOCK_EX | LOCK_NB) < 0))
+    {
+      count++;
+      usleep (500000);
+    }
+
+  if (count >= 400)
+    fprintf(stderr, "Flock of %s failed, continuing this may cause issues\n",
+            flock_file);
+}
+
+static void
+vtysh_unflock_config (void)
+{
+  flock (flock_fd, LOCK_UN);
+  close (flock_fd);
+}
+
 /* VTY shell main routine. */
 int
 main (int argc, char **argv, char **env)
@@ -216,6 +261,7 @@ main (int argc, char **argv, char **env)
   int dryrun = 0;
   int boot_flag = 0;
   const char *daemon_name = NULL;
+  const char *inputfile = NULL;
   struct cmd_rec {
     const char *line;
     struct cmd_rec *next;
@@ -223,6 +269,9 @@ main (int argc, char **argv, char **env)
   struct cmd_rec *tail = NULL;
   int echo_command = 0;
   int no_error = 0;
+  int markfile = 0;
+  int writeconfig = 0;
+  int ret = 0;
   char *homedir = NULL;
 
   /* Preserve name of myself. */
@@ -235,7 +284,7 @@ main (int argc, char **argv, char **env)
   /* Option handling. */
   while (1) 
     {
-      opt = getopt_long (argc, argv, "be:c:d:nEhC", longopts, 0);
+      opt = getopt_long (argc, argv, "be:c:d:nf:mEhCw", longopts, 0);
     
       if (opt == EOF)
 	break;
@@ -264,6 +313,12 @@ main (int argc, char **argv, char **env)
 	case 'd':
 	  daemon_name = optarg;
 	  break;
+	case 'f':
+	  inputfile = optarg;
+	  break;
+	case 'm':
+	  markfile = 1;
+	  break;
 	case 'n':
 	  no_error = 1;
 	  break;
@@ -273,6 +328,9 @@ main (int argc, char **argv, char **env)
 	case 'C':
 	  dryrun = 1;
 	  break;
+	case 'w':
+	  writeconfig = 1;
+	  break;
 	case 'h':
 	  usage (0);
 	  break;
@@ -280,6 +338,18 @@ main (int argc, char **argv, char **env)
 	  usage (1);
 	  break;
 	}
+    }
+
+  if (markfile + writeconfig + dryrun + boot_flag > 1)
+    {
+      fprintf (stderr, "Invalid combination of arguments.  Please specify at "
+                       "most one of:\n\t-b, -C, -m, -w\n");
+      return 1;
+    }
+  if (inputfile && (writeconfig || boot_flag))
+    {
+      fprintf (stderr, "WARNING: Combinining the -f option with -b or -w is "
+                       "NOT SUPPORTED since its\nresults are inconsistent!\n");
     }
 
   /* Initialize user input buffer. */
@@ -298,15 +368,41 @@ main (int argc, char **argv, char **env)
   vty_init_vtysh ();
 
   /* Read vtysh configuration file before connecting to daemons. */
-  vtysh_read_config (config_default);
+  vtysh_read_config(vtysh_config_always);
+
+  if (markfile)
+    {
+      if (!inputfile)
+	{
+	  fprintf(stderr, "-f option MUST be specified with -m option\n");
+	  return(1);
+	}
+      return(vtysh_mark_file(inputfile));
+    }
 
   /* Start execution only if not in dry-run mode */
   if(dryrun)
-    return(0);
-  
+    {
+      if (inputfile)
+	{
+	  ret = vtysh_read_config(inputfile);
+	}
+      else
+	{
+	  ret = vtysh_read_config(quagga_config_default);
+	}
+      exit(ret);
+    }
+
   /* Ignore error messages */
   if (no_error)
-    freopen("/dev/null", "w", stdout);
+    {
+      if (freopen("/dev/null", "w", stdout) == NULL)
+	{
+	  fprintf(stderr, "Exiting: Failed to duplicate stdout with -n option");
+	  exit(1);
+	}
+    }
 
   /* Make sure we pass authentication before proceeding. */
   vtysh_auth ();
@@ -315,7 +411,24 @@ main (int argc, char **argv, char **env)
   if (vtysh_connect_all (daemon_name) <= 0)
     {
       fprintf(stderr, "Exiting: failed to connect to any daemons.\n");
-      exit(1);
+      if (no_error)
+        exit(0);
+      else
+        exit(1);
+    }
+
+  if (writeconfig)
+    {
+      vtysh_execute ("enable");
+      return vtysh_write_config_integrated ();
+    }
+
+  if (inputfile)
+    {
+      vtysh_flock_config (inputfile);
+      ret = vtysh_read_config(inputfile);
+      vtysh_unflock_config ();
+      exit(ret);
     }
 
   /*
@@ -393,22 +506,28 @@ main (int argc, char **argv, char **env)
 	    struct cmd_rec *cr;
 	    cr = cmd;
 	    cmd = cmd->next;
-	    XFREE(0, cr);
+	    XFREE(MTYPE_TMP, cr);
 	  }
         }
 
       history_truncate_file(history_file,1000);
       exit (0);
     }
-  
+
   /* Boot startup configuration file. */
   if (boot_flag)
     {
-      if (vtysh_read_config (integrate_default))
-	{
-	  fprintf (stderr, "Can't open configuration file [%s]\n",
-		   integrate_default);
-	  exit (1);
+      vtysh_flock_config (quagga_config);
+      int ret = vtysh_read_config (quagga_config);
+      vtysh_unflock_config ();
+      if (ret)
+        {
+	  fprintf (stderr, "Configuration file[%s] processing failure: %d\n",
+		   quagga_config, ret);
+	  if (no_error)
+	    exit (0);
+	  else
+	    exit (ret);
 	}
       else
 	exit (0);

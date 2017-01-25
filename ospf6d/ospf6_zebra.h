@@ -23,7 +23,6 @@
 #define OSPF6_ZEBRA_H
 
 #include "zclient.h"
-#include "ospf6_top.h"
 
 /* Debug option */
 extern unsigned char conf_debug_ospf6_zebra;
@@ -54,17 +53,19 @@ extern void ospf6_zebra_route_update_remove (struct ospf6_route *request);
 extern void ospf6_zebra_redistribute (int);
 extern void ospf6_zebra_no_redistribute (int);
 #define ospf6_zebra_is_redistribute(type) \
-    vrf_bitmap_check (zclient->redist[type], VRF_DEFAULT)
+    vrf_bitmap_check (zclient->redist[AFI_IP6][type], VRF_DEFAULT)
+extern void ospf6_zebra_init (struct thread_master *);
+extern void ospf6_zebra_add_discard (struct ospf6_route *request);
+extern void ospf6_zebra_delete_discard (struct ospf6_route *request);
 
+struct ospf6;
 extern void ospf6_distance_reset (struct ospf6 *);
-extern u_char ospf6_distance_apply (struct ospf6_route *,
-                                    struct ospf6 *);
+extern u_char ospf6_distance_apply (struct prefix_ipv6 *, struct ospf6_route *);
+
 extern int ospf6_distance_set (struct vty *, struct ospf6 *, const char *,
                                const char *, const char *);
 extern int ospf6_distance_unset (struct vty *, struct ospf6 *, const char *,
-                                 const char *);
-
-extern void ospf6_zebra_init(struct thread_master *);
+                                 const char *, const char *);
 
 extern int config_write_ospf6_debug_zebra (struct vty *vty);
 extern void install_element_ospf6_debug_zebra (void);

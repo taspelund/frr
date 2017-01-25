@@ -25,7 +25,6 @@ struct fifo
 {
   struct fifo *next;
   struct fifo *prev;
-  u_int32_t count;
 };
 
 #define FIFO_INIT(F)                                  \

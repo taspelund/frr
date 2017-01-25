@@ -25,6 +25,7 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "prefix.h"
 #include "hash.h"
 #include "thread.h"
+#include "queue.h"
 #include "filter.h"
 
 #include "bgpd/bgpd.h"
@@ -32,15 +33,17 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "bgpd/bgp_route.h"
 #include "bgpd/bgp_advertise.h"
 #include "bgpd/bgp_attr.h"
+#include "bgpd/bgp_debug.h"
 #include "bgpd/bgp_aspath.h"
 #include "bgpd/bgp_packet.h"
 #include "bgpd/bgp_fsm.h"
 #include "bgpd/bgp_mplsvpn.h"
+#include "bgpd/bgp_updgrp.h"
 
 /* BGP advertise attribute is used for pack same attribute update into
    one packet.  To do that we maintain attribute hash in struct
    peer.  */
-static struct bgp_advertise_attr *
+struct bgp_advertise_attr *
 baa_new (void)
 {
   return (struct bgp_advertise_attr *)
@@ -64,7 +67,7 @@ baa_hash_alloc (void *p)
   return baa;
 }
 
-static unsigned int
+unsigned int
 baa_hash_key (void *p)
 {
   struct bgp_advertise_attr * baa = (struct bgp_advertise_attr *) p;
@@ -72,7 +75,7 @@ baa_hash_key (void *p)
   return attrhash_key_make (baa->attr);
 }
 
-static int
+int
 baa_hash_cmp (const void *p1, const void *p2)
 {
   const struct bgp_advertise_attr * baa1 = p1;
@@ -84,14 +87,14 @@ baa_hash_cmp (const void *p1, const void *p2)
 /* BGP update and withdraw information is stored in BGP advertise
    structure.  This structure is referred from BGP adjacency
    information.  */
-static struct bgp_advertise *
+struct bgp_advertise *
 bgp_advertise_new (void)
 {
-  return (struct bgp_advertise *) 
+  return (struct bgp_advertise *)
     XCALLOC (MTYPE_BGP_ADVERTISE, sizeof (struct bgp_advertise));
 }
 
-static void
+void
 bgp_advertise_free (struct bgp_advertise *adv)
 {
   if (adv->binfo)
@@ -99,7 +102,7 @@ bgp_advertise_free (struct bgp_advertise *adv)
   XFREE (MTYPE_BGP_ADVERTISE, adv);
 }
 
-static void
+void
 bgp_advertise_add (struct bgp_advertise_attr *baa,
 		   struct bgp_advertise *adv)
 {
@@ -109,7 +112,7 @@ bgp_advertise_add (struct bgp_advertise_attr *baa,
   baa->adv = adv;
 }
 
-static void
+void
 bgp_advertise_delete (struct bgp_advertise_attr *baa,
 		      struct bgp_advertise *adv)
 {
@@ -121,7 +124,7 @@ bgp_advertise_delete (struct bgp_advertise_attr *baa,
     baa->adv = adv->next;
 }
 
-static struct bgp_advertise_attr *
+struct bgp_advertise_attr *
 bgp_advertise_intern (struct hash *hash, struct attr *attr)
 {
   struct bgp_advertise_attr ref;
@@ -134,7 +137,7 @@ bgp_advertise_intern (struct hash *hash, struct attr *attr)
   return baa;
 }
 
-static void
+void
 bgp_advertise_unintern (struct hash *hash, struct bgp_advertise_attr *baa)
 {
   if (baa->refcnt)
@@ -153,194 +156,47 @@ bgp_advertise_unintern (struct hash *hash, struct bgp_advertise_attr *baa)
     }
 }
 
-/* BGP adjacency keeps minimal advertisement information.  */
-static void
-bgp_adj_out_free (struct bgp_adj_out *adj)
-{
-  peer_unlock (adj->peer); /* adj_out peer reference */
-  XFREE (MTYPE_BGP_ADJ_OUT, adj);
-}
-
 int
-bgp_adj_out_lookup (struct peer *peer, struct prefix *p,
-		    afi_t afi, safi_t safi, struct bgp_node *rn)
+bgp_adj_out_lookup (struct peer *peer, struct bgp_node *rn,
+                    u_int32_t addpath_tx_id)
 {
   struct bgp_adj_out *adj;
+  struct peer_af *paf;
+  afi_t afi;
+  safi_t safi;
+  int addpath_capable;
 
   for (adj = rn->adj_out; adj; adj = adj->next)
-    if (adj->peer == peer)
-      break;
+    SUBGRP_FOREACH_PEER(adj->subgroup, paf)
+      if (paf->peer == peer)
+	{
+          afi = SUBGRP_AFI (adj->subgroup);
+          safi = SUBGRP_SAFI (adj->subgroup);
+          addpath_capable = bgp_addpath_encode_tx (peer, afi, safi);
 
-  if (! adj)
-    return 0;
+          /* Match on a specific addpath_tx_id if we are using addpath for this
+           * peer and if an addpath_tx_id was specified */
+          if (addpath_capable && addpath_tx_id && adj->addpath_tx_id != addpath_tx_id)
+            continue;
 
-  return (adj->adv 
-	  ? (adj->adv->baa ? 1 : 0)
-	  : (adj->attr ? 1 : 0));
+	  return (adj->adv
+		  ? (adj->adv->baa ? 1 : 0)
+		  : (adj->attr ? 1 : 0));
+	}
+
+  return 0;
 }
 
-struct bgp_advertise *
-bgp_advertise_clean (struct peer *peer, struct bgp_adj_out *adj,
-		     afi_t afi, safi_t safi)
-{
-  struct bgp_advertise *adv;
-  struct bgp_advertise_attr *baa;
-  struct bgp_advertise *next;
-  struct bgp_advertise_fifo *fhead;
-
-  adv = adj->adv;
-  baa = adv->baa;
-  next = NULL;
-  fhead = (struct bgp_advertise_fifo *)&peer->sync[afi][safi]->withdraw;
-
-  if (baa)
-    {
-      /* Unlink myself from advertise attribute FIFO.  */
-      bgp_advertise_delete (baa, adv);
-
-      /* Fetch next advertise candidate. */
-      next = baa->adv;
-
-      /* Unintern BGP advertise attribute.  */
-      bgp_advertise_unintern (peer->hash[afi][safi], baa);
-
-      fhead = (struct bgp_advertise_fifo *)&peer->sync[afi][safi]->update;
-    }
-
-  /* Unlink myself from advertisement FIFO.  */
-  BGP_ADV_FIFO_DEL (fhead, adv);
-
-  /* Free memory.  */
-  bgp_advertise_free (adj->adv);
-  adj->adv = NULL;
-
-  return next;
-}
 
 void
-bgp_adj_out_set (struct bgp_node *rn, struct peer *peer, struct prefix *p,
-		 struct attr *attr, afi_t afi, safi_t safi,
-		 struct bgp_info *binfo)
-{
-  struct bgp_adj_out *adj = NULL;
-  struct bgp_advertise *adv;
-
-  if (DISABLE_BGP_ANNOUNCE)
-    return;
-
-  /* Look for adjacency information. */
-  if (rn)
-    {
-      for (adj = rn->adj_out; adj; adj = adj->next)
-	if (adj->peer == peer)
-	  break;
-    }
-
-  if (! adj)
-    {
-      adj = XCALLOC (MTYPE_BGP_ADJ_OUT, sizeof (struct bgp_adj_out));
-      adj->peer = peer_lock (peer); /* adj_out peer reference */
-      
-      if (rn)
-        {
-          BGP_ADJ_OUT_ADD (rn, adj);
-          bgp_lock_node (rn);
-        }
-    }
-
-  if (adj->adv)
-    bgp_advertise_clean (peer, adj, afi, safi);
-  
-  adj->adv = bgp_advertise_new ();
-
-  adv = adj->adv;
-  adv->rn = rn;
-  
-  assert (adv->binfo == NULL);
-  adv->binfo = bgp_info_lock (binfo); /* bgp_info adj_out reference */
-  
-  if (attr)
-    adv->baa = bgp_advertise_intern (peer->hash[afi][safi], attr);
-  else
-    adv->baa = baa_new ();
-  adv->adj = adj;
-
-  /* Add new advertisement to advertisement attribute list. */
-  bgp_advertise_add (adv->baa, adv);
-
-  BGP_ADV_FIFO_ADD (&peer->sync[afi][safi]->update, &adv->fifo);
-}
-
-void
-bgp_adj_out_unset (struct bgp_node *rn, struct peer *peer, struct prefix *p, 
-		   afi_t afi, safi_t safi)
-{
-  struct bgp_adj_out *adj;
-  struct bgp_advertise *adv;
-
-  if (DISABLE_BGP_ANNOUNCE)
-    return;
-
-  /* Lookup existing adjacency, if it is not there return immediately.  */
-  for (adj = rn->adj_out; adj; adj = adj->next)
-    if (adj->peer == peer)
-      break;
-
-  if (! adj)
-    return;
-
-  /* Clearn up previous advertisement.  */
-  if (adj->adv)
-    bgp_advertise_clean (peer, adj, afi, safi);
-
-  if (adj->attr)
-    {
-      /* We need advertisement structure.  */
-      adj->adv = bgp_advertise_new ();
-      adv = adj->adv;
-      adv->rn = rn;
-      adv->adj = adj;
-
-      /* Add to synchronization entry for withdraw announcement.  */
-      BGP_ADV_FIFO_ADD (&peer->sync[afi][safi]->withdraw, &adv->fifo);
-
-      /* Schedule packet write. */
-      BGP_WRITE_ON (peer->t_write, bgp_write, peer->fd);
-    }
-  else
-    {
-      /* Remove myself from adjacency. */
-      BGP_ADJ_OUT_DEL (rn, adj);
-      
-      /* Free allocated information.  */
-      bgp_adj_out_free (adj);
-
-      bgp_unlock_node (rn);
-    }
-}
-
-void
-bgp_adj_out_remove (struct bgp_node *rn, struct bgp_adj_out *adj, 
-		    struct peer *peer, afi_t afi, safi_t safi)
-{
-  if (adj->attr)
-    bgp_attr_unintern (&adj->attr);
-
-  if (adj->adv)
-    bgp_advertise_clean (peer, adj, afi, safi);
-
-  BGP_ADJ_OUT_DEL (rn, adj);
-  bgp_adj_out_free (adj);
-}
-
-void
-bgp_adj_in_set (struct bgp_node *rn, struct peer *peer, struct attr *attr)
+bgp_adj_in_set (struct bgp_node *rn, struct peer *peer, struct attr *attr,
+                u_int32_t addpath_id)
 {
   struct bgp_adj_in *adj;
 
   for (adj = rn->adj_in; adj; adj = adj->next)
     {
-      if (adj->peer == peer)
+      if (adj->peer == peer && adj->addpath_rx_id == addpath_id)
 	{
 	  if (adj->attr != attr)
 	    {
@@ -353,6 +209,7 @@ bgp_adj_in_set (struct bgp_node *rn, struct peer *peer, struct attr *attr)
   adj = XCALLOC (MTYPE_BGP_ADJ_IN, sizeof (struct bgp_adj_in));
   adj->peer = peer_lock (peer); /* adj_in peer reference */
   adj->attr = bgp_attr_intern (attr);
+  adj->addpath_rx_id = addpath_id;
   BGP_ADJ_IN_ADD (rn, adj);
   bgp_lock_node (rn);
 }
@@ -367,19 +224,30 @@ bgp_adj_in_remove (struct bgp_node *rn, struct bgp_adj_in *bai)
 }
 
 int
-bgp_adj_in_unset (struct bgp_node *rn, struct peer *peer)
+bgp_adj_in_unset (struct bgp_node *rn, struct peer *peer,
+                  u_int32_t addpath_id)
 {
   struct bgp_adj_in *adj;
+  struct bgp_adj_in *adj_next;
 
-  for (adj = rn->adj_in; adj; adj = adj->next)
-    if (adj->peer == peer)
-      break;
+  adj = rn->adj_in;
 
-  if (! adj)
+  if (!adj)
     return 0;
 
-  bgp_adj_in_remove (rn, adj);
-  bgp_unlock_node (rn);
+  while (adj)
+    {
+      adj_next = adj->next;
+
+      if (adj->peer == peer && adj->addpath_rx_id == addpath_id)
+        {
+          bgp_adj_in_remove (rn, adj);
+          bgp_unlock_node (rn);
+        }
+
+      adj = adj_next;
+    }
+
   return 1;
 }
 

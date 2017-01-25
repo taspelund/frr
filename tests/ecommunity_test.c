@@ -24,6 +24,7 @@
 #include "stream.h"
 #include "privs.h"
 #include "memory.h"
+#include "queue.h"
 #include "filter.h"
 
 #include "bgpd/bgpd.h"

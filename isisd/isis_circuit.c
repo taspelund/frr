@@ -32,6 +32,7 @@
 
 #include "log.h"
 #include "memory.h"
+#include "vrf.h"
 #include "if.h"
 #include "linklist.h"
 #include "command.h"
@@ -40,9 +41,9 @@
 #include "hash.h"
 #include "prefix.h"
 #include "stream.h"
+#include "qobj.h"
 
 #include "isisd/dict.h"
-#include "isisd/include-netbsd/iso.h"
 #include "isisd/isis_constants.h"
 #include "isisd/isis_common.h"
 #include "isisd/isis_flags.h"
@@ -59,6 +60,8 @@
 #include "isisd/isis_csm.h"
 #include "isisd/isis_events.h"
 #include "isisd/isis_te.h"
+
+DEFINE_QOBJ_TYPE(isis_circuit)
 
 /*
  * Prototypes.
@@ -99,6 +102,8 @@ isis_circuit_new ()
 
   circuit->mtc = mpls_te_circuit_new();
 
+  QOBJ_REG (circuit, isis_circuit);
+
   return circuit;
 }
 
@@ -107,6 +112,8 @@ isis_circuit_del (struct isis_circuit *circuit)
 {
   if (!circuit)
     return;
+
+  QOBJ_UNREG (circuit);
 
   isis_circuit_if_unbind (circuit, circuit->interface);
 
@@ -202,12 +209,11 @@ isis_circuit_add_addr (struct isis_circuit *circuit,
 {
   struct listnode *node;
   struct prefix_ipv4 *ipv4;
-  u_char buf[BUFSIZ];
-#ifdef HAVE_IPV6
+#if defined(EXTREME_DEBUG)
+  char buf[PREFIX2STR_BUFFER];
+#endif
   struct prefix_ipv6 *ipv6;
-#endif /* HAVE_IPV6 */
 
-  memset (&buf, 0, BUFSIZ);
   if (connected->address->family == AF_INET)
     {
       u_int32_t addr = connected->address->u.prefix4.s_addr;
@@ -234,12 +240,11 @@ isis_circuit_add_addr (struct isis_circuit *circuit,
         lsp_regenerate_schedule (circuit->area, circuit->is_type, 0);
 
 #ifdef EXTREME_DEBUG
-      prefix2str (connected->address, buf, BUFSIZ);
+      prefix2str (connected->address, buf, sizeof (buf));
       zlog_debug ("Added IP address %s to circuit %d", buf,
 		 circuit->circuit_id);
 #endif /* EXTREME_DEBUG */
     }
-#ifdef HAVE_IPV6
   if (connected->address->family == AF_INET6)
     {
       if (IN6_IS_ADDR_LOOPBACK(&connected->address->u.prefix6))
@@ -264,12 +269,11 @@ isis_circuit_add_addr (struct isis_circuit *circuit,
         lsp_regenerate_schedule (circuit->area, circuit->is_type, 0);
 
 #ifdef EXTREME_DEBUG
-      prefix2str (connected->address, buf, BUFSIZ);
+      prefix2str (connected->address, buf, sizeof (buf));
       zlog_debug ("Added IPv6 address %s to circuit %d", buf,
 		 circuit->circuit_id);
 #endif /* EXTREME_DEBUG */
     }
-#endif /* HAVE_IPV6 */
   return;
 }
 
@@ -279,13 +283,10 @@ isis_circuit_del_addr (struct isis_circuit *circuit,
 {
   struct prefix_ipv4 *ipv4, *ip = NULL;
   struct listnode *node;
-  u_char buf[BUFSIZ];
-#ifdef HAVE_IPV6
+  char buf[PREFIX2STR_BUFFER];
   struct prefix_ipv6 *ipv6, *ip6 = NULL;
   int found = 0;
-#endif /* HAVE_IPV6 */
 
-  memset (&buf, 0, BUFSIZ);
   if (connected->address->family == AF_INET)
     {
       ipv4 = prefix_ipv4_new ();
@@ -304,7 +305,7 @@ isis_circuit_del_addr (struct isis_circuit *circuit,
 	}
       else
 	{
-	  prefix2str (connected->address, (char *)buf, BUFSIZ);
+	  prefix2str (connected->address, buf, sizeof (buf));
 	  zlog_warn ("Nonexitant ip address %s removal attempt from \
                       circuit %d", buf, circuit->circuit_id);
 	  zlog_warn ("Current ip addresses on %s:", circuit->interface->name);
@@ -318,7 +319,6 @@ isis_circuit_del_addr (struct isis_circuit *circuit,
 
       prefix_ipv4_free (ipv4);
     }
-#ifdef HAVE_IPV6
   if (connected->address->family == AF_INET6)
     {
       ipv6 = prefix_ipv6_new ();
@@ -354,7 +354,7 @@ isis_circuit_del_addr (struct isis_circuit *circuit,
 
       if (!found)
 	{
-	  prefix2str (connected->address, (char *)buf, BUFSIZ);
+	  prefix2str (connected->address, buf, sizeof (buf));
 	  zlog_warn ("Nonexitant ip address %s removal attempt from \
 		      circuit %d", buf, circuit->circuit_id);
 	  zlog_warn ("Current ip addresses on %s:", circuit->interface->name);
@@ -376,7 +376,6 @@ isis_circuit_del_addr (struct isis_circuit *circuit,
 
       prefix_ipv6_free (ipv6);
     }
-#endif /* HAVE_IPV6 */
   return;
 }
 
@@ -464,10 +463,8 @@ isis_circuit_if_add (struct isis_circuit *circuit, struct interface *ifp)
     }
 
   circuit->ip_addrs = list_new ();
-#ifdef HAVE_IPV6
   circuit->ipv6_link = list_new ();
   circuit->ipv6_non_link = list_new ();
-#endif /* HAVE_IPV6 */
 
   for (ALL_LIST_ELEMENTS (ifp->connected, node, nnode, conn))
     isis_circuit_add_addr (circuit, conn);
@@ -494,7 +491,6 @@ isis_circuit_if_del (struct isis_circuit *circuit, struct interface *ifp)
       circuit->ip_addrs = NULL;
     }
 
-#ifdef HAVE_IPV6
   if (circuit->ipv6_link)
     {
       assert (listcount(circuit->ipv6_link) == 0);
@@ -508,7 +504,6 @@ isis_circuit_if_del (struct isis_circuit *circuit, struct interface *ifp)
       list_delete (circuit->ipv6_non_link);
       circuit->ipv6_non_link = NULL;
     }
-#endif /* HAVE_IPV6 */
 
   circuit->circ_type = CIRCUIT_T_UNKNOWN;
   circuit->circuit_id = 0;
@@ -601,6 +596,18 @@ isis_circuit_stream(struct isis_circuit *circuit, struct stream **stream)
         stream_resize(*stream, stream_size);
       stream_reset(*stream);
     }
+}
+
+void
+isis_circuit_prepare (struct isis_circuit *circuit)
+{
+#ifdef GNU_LINUX
+  THREAD_READ_ON (master, circuit->t_read, isis_receive, circuit,
+                  circuit->fd);
+#else
+  THREAD_TIMER_MSEC_ON (master, circuit->t_read, isis_receive, circuit,
+			listcount (circuit->area->circuit_list) * 100);
+#endif
 }
 
 int
@@ -712,13 +719,7 @@ isis_circuit_up (struct isis_circuit *circuit)
   isis_circuit_stream(circuit, &circuit->rcv_stream);
   isis_circuit_stream(circuit, &circuit->snd_stream);
 
-#ifdef GNU_LINUX
-  THREAD_READ_ON (master, circuit->t_read, isis_receive, circuit,
-                  circuit->fd);
-#else
-  THREAD_TIMER_ON (master, circuit->t_read, isis_receive, circuit,
-                   circuit->fd);
-#endif
+  isis_circuit_prepare (circuit);
 
   circuit->lsp_queue = list_new ();
   circuit->lsp_queue_last_cleared = time (NULL);
@@ -848,13 +849,11 @@ circuit_update_nlpids (struct isis_circuit *circuit)
       circuit->nlpids.nlpids[0] = NLPID_IP;
       circuit->nlpids.count++;
     }
-#ifdef HAVE_IPV6
   if (circuit->ipv6_router)
     {
       circuit->nlpids.nlpids[circuit->nlpids.count] = NLPID_IPV6;
       circuit->nlpids.count++;
     }
-#endif /* HAVE_IPV6 */
   return;
 }
 
@@ -876,7 +875,7 @@ isis_circuit_print_vty (struct isis_circuit *circuit, struct vty *vty,
     {
       struct listnode *node;
       struct prefix *ip_addr;
-      u_char buf[BUFSIZ];
+      char buf[BUFSIZ];
 
       vty_out (vty, "  Interface: %s", circuit->interface->name);
       vty_out (vty, ", State: %s", circuit_state2string (circuit->state));
@@ -962,7 +961,7 @@ isis_circuit_print_vty (struct isis_circuit *circuit, struct vty *vty,
           vty_out (vty, "    IP Prefix(es):%s", VTY_NEWLINE);
           for (ALL_LIST_ELEMENTS_RO (circuit->ip_addrs, node, ip_addr))
             {
-              prefix2str (ip_addr, (char*)buf, BUFSIZ),
+              prefix2str (ip_addr, buf, sizeof (buf)),
               vty_out (vty, "      %s%s", buf, VTY_NEWLINE);
             }
         }
@@ -975,7 +974,7 @@ isis_circuit_print_vty (struct isis_circuit *circuit, struct vty *vty,
               vty_out(vty, "      %s%s", buf, VTY_NEWLINE);
             }
         }
-      if (circuit->ipv6_link && listcount(circuit->ipv6_non_link) > 0)
+      if (circuit->ipv6_non_link && listcount(circuit->ipv6_non_link) > 0)
         {
           vty_out(vty, "    IPv6 Prefixes:%s", VTY_NEWLINE);
           for (ALL_LIST_ELEMENTS_RO(circuit->ipv6_non_link, node, ip_addr))
@@ -1000,8 +999,11 @@ isis_interface_config_write (struct vty *vty)
   struct isis_circuit *circuit;
   int i;
 
-  for (ALL_LIST_ELEMENTS_RO (iflist, node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
     {
+      if (ifp->ifindex == IFINDEX_DELETED)
+        continue;
+
       /* IF name */
       vty_out (vty, "interface %s%s", ifp->name, VTY_NEWLINE);
       write++;
@@ -1033,14 +1035,12 @@ isis_interface_config_write (struct vty *vty)
               vty_out (vty, " isis network point-to-point%s", VTY_NEWLINE);
               write++;
             }
-#ifdef HAVE_IPV6
           if (circuit->ipv6_router)
             {
               vty_out (vty, " ipv6 router isis %s%s", area->area_tag,
                   VTY_NEWLINE);
               write++;
             }
-#endif /* HAVE_IPV6 */
 
           /* ISIS - circuit type */
           if (circuit->is_type == IS_LEVEL_1)
@@ -1412,12 +1412,7 @@ isis_circuit_init ()
 
   /* Install interface node */
   install_node (&interface_node, isis_interface_config_write);
-  install_element (CONFIG_NODE, &interface_cmd);
-  install_element (CONFIG_NODE, &no_interface_cmd);
-
-  install_default (INTERFACE_NODE);
-  install_element (INTERFACE_NODE, &interface_desc_cmd);
-  install_element (INTERFACE_NODE, &no_interface_desc_cmd);
+  if_cmd_init ();
 
   isis_vty_init ();
 }

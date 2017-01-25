@@ -1,6 +1,4 @@
 /*
- * $Quagga: $Format:%an, %ai, %h$ $
- *
  * GNU Zebra client test main routine.
  * Copyright (C) 1997 Kunihiro Ishiguro
  *
@@ -81,7 +79,6 @@ zebra_test_ipv4 (int command, int type, char *prefix, char *gateway,
     }
 }
 
-#ifdef HAVE_IPV6
 /* IPv6 route add and delete test. */
 void
 zebra_test_v6 (int sock)
@@ -97,7 +94,6 @@ zebra_test_v6 (int sock)
   sleep (5);
   /* zebra_ipv6_delete (sock, ZEBRA_ROUTE_STATIC, 0, &p, &nexthop, 1); */
 }
-#endif /* HAVE_IPV6 */
 
 /* Print out usage and exit. */
 void
@@ -116,7 +112,6 @@ struct zebra_info
   { "static", ZEBRA_ROUTE_STATIC },
   { "rip",    ZEBRA_ROUTE_RIP },
   { "ripng",  ZEBRA_ROUTE_RIPNG },
-  { "babel",  ZEBRA_ROUTE_BABEL },
   { "ospf",   ZEBRA_ROUTE_OSPF },
   { "ospf6",  ZEBRA_ROUTE_OSPF6 },
   { "bgp",    ZEBRA_ROUTE_BGP },
@@ -199,9 +194,9 @@ main (int argc, char **argv)
   if (argc == 1)
       usage_exit ();
 
-  master = thread_master_create ();
+  master = thread_master_create();
   /* Establish connection to zebra. */
-  zclient = zclient_new (master);
+  zclient = zclient_new(master);
   zclient->enable = 1;
 #ifdef HAVE_TCP_ZEBRA
   zclient->sock = zclient_socket ();
@@ -213,7 +208,8 @@ main (int argc, char **argv)
   fp = fopen (argv[1], "r");
   if (fp == NULL)
     {
-      fprintf (stderr, "can't open %s\n", argv[1]);
+      fprintf (stderr,"%% Can't open configuration file %s due to '%s'\n",
+               argv[1], safe_strerror(errno));
       exit (1);
     }
 

@@ -37,7 +37,21 @@
 #include "memory.h"
 #include "linklist.h"
 #include "command.h"
-#include "vtysh_user.h"
+#include "vtysh/vtysh_user.h"
+
+/* 
+ * Compiler is warning about prototypes not being declared.
+ * The DEFUNSH and DEFUN macro's are messing with the
+ * compiler I believe.  This is just to make it happy.
+ */
+#ifdef USE_PAM
+static int vtysh_pam(const char *);
+#endif
+int vtysh_auth(void);
+void vtysh_user_init(void);
+
+extern struct list *config_top;
+extern void config_add_line(struct list *config, const char *line);
 
 #ifdef USE_PAM
 static struct pam_conv conv = 
@@ -53,7 +67,7 @@ vtysh_pam (const char *user)
   pam_handle_t *pamh = NULL;
 
   /* Start PAM. */
-  ret = pam_start(QUAGGA_PROGNAME, user, &conv, &pamh);
+  ret = pam_start(FRR_PAM_NAME, user, &conv, &pamh);
   /* printf ("ret %d\n", ret); */
 
   /* Is user really user? */
@@ -100,18 +114,10 @@ struct vtysh_user
 struct list *userlist;
 
 static struct vtysh_user *
-user_new ()
+user_new (void)
 {
   return XCALLOC (MTYPE_TMP, sizeof (struct vtysh_user));
 }
-
-#if 0
-static void
-user_free (struct vtysh_user *user)
-{
-  XFREE (0, user);
-}
-#endif
 
 static struct vtysh_user *
 user_lookup (const char *name)
@@ -127,20 +133,22 @@ user_lookup (const char *name)
   return NULL;
 }
 
-#if 0
-static void
+void
 user_config_write ()
 {
   struct listnode *node, *nnode;
   struct vtysh_user *user;
+  char line[128];
 
   for (ALL_LIST_ELEMENTS (userlist, node, nnode, user))
     {
       if (user->nopassword)
-	printf (" username %s nopassword\n", user->name);
+	{
+	  sprintf(line, "username %s nopassword", user->name);
+	  config_add_line (config_top, line);
+	}
     }
 }
-#endif
 
 static struct vtysh_user *
 user_get (const char *name)
@@ -157,6 +165,18 @@ user_get (const char *name)
   return user;
 }
 
+DEFUN (vtysh_banner_motd_file,
+       vtysh_banner_motd_file_cmd,
+       "banner motd file FILE",
+       "Set banner\n"
+       "Banner for motd\n"
+       "Banner from a file\n"
+       "Filename\n")
+{
+  int idx_file = 3;
+  return cmd_banner_motd_file (argv[idx_file]->arg);
+}
+
 DEFUN (username_nopassword,
        username_nopassword_cmd,
        "username WORD nopassword",
@@ -164,8 +184,9 @@ DEFUN (username_nopassword,
        "\n"
        "\n")
 {
+  int idx_word = 1;
   struct vtysh_user *user;
-  user = user_get (argv[0]);
+  user = user_get (argv[idx_word]->arg);
   user->nopassword = 1;
   return CMD_SUCCESS;
 }
@@ -176,7 +197,11 @@ vtysh_auth (void)
   struct vtysh_user *user;
   struct passwd *passwd;
 
-  passwd = getpwuid (geteuid ());
+  if ((passwd = getpwuid (geteuid ())) == NULL)
+  {
+    fprintf (stderr, "could not lookup user ID %d\n", (int) geteuid());
+    exit (1);
+  }
 
   user = user_lookup (passwd->pw_name);
   if (user && user->nopassword)
@@ -206,4 +231,5 @@ vtysh_user_init (void)
 {
   userlist = list_new ();
   install_element (CONFIG_NODE, &username_nopassword_cmd);
+  install_element (CONFIG_NODE, &vtysh_banner_motd_file_cmd);
 }

@@ -16,8 +16,6 @@
   along with this program; see the file COPYING; if not, write to the
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
-  
-  $QuaggaId: $Format:%an, %ai, %h$ $
 */
 
 #ifndef PIM_ZEBRA_H
@@ -26,8 +24,9 @@
 #include "pim_igmp.h"
 #include "pim_ifchannel.h"
 
-void pim_zebra_init (struct thread_master *master, char *zebra_sock_path);
+void pim_zebra_init(char *zebra_sock_path);
 
+void pim_scan_individual_oil (struct channel_oil *c_oil);
 void pim_scan_oil(void);
 
 void igmp_anysource_forward_start(struct igmp_group *group);
@@ -39,4 +38,5 @@ void igmp_source_forward_stop(struct igmp_source *source);
 void pim_forward_start(struct pim_ifchannel *ch);
 void pim_forward_stop(struct pim_ifchannel *ch);
 
+void sched_rpf_cache_refresh(void);
 #endif /* PIM_ZEBRA_H */

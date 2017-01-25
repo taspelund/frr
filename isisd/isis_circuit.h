@@ -25,6 +25,7 @@
 
 #include "vty.h"
 #include "if.h"
+#include "qobj.h"
 
 #include "isis_constants.h"
 #include "isis_common.h"
@@ -123,11 +124,9 @@ struct isis_circuit
   int ip_router;		/* Route IP ? */
   int is_passive;		/* Is Passive ? */
   struct list *ip_addrs;	/* our IP addresses */
-#ifdef HAVE_IPV6
   int ipv6_router;		/* Route IPv6 ? */
   struct list *ipv6_link;	/* our link local IPv6 addresses */
   struct list *ipv6_non_link;	/* our non-link local IPv6 addresses */
-#endif				/* HAVE_IPV6 */
   u_int16_t upadjcount[2];
 #define ISIS_CIRCUIT_FLAPPED_AFTER_SPF 0x01
   u_char flags;
@@ -140,7 +139,10 @@ struct isis_circuit
   u_int32_t ctrl_pdus_txed;	/* controlPDUsSent */
   u_int32_t desig_changes[2];	/* lanLxDesignatedIntermediateSystemChanges */
   u_int32_t rej_adjacencies;	/* rejectedAdjacencies */
+
+  QOBJ_FIELDS
 };
+DECLARE_QOBJ_TYPE(isis_circuit)
 
 void isis_circuit_init (void);
 struct isis_circuit *isis_circuit_new (void);
@@ -164,6 +166,7 @@ void isis_circuit_add_addr (struct isis_circuit *circuit,
 			    struct connected *conn);
 void isis_circuit_del_addr (struct isis_circuit *circuit,
 			    struct connected *conn);
+void isis_circuit_prepare (struct isis_circuit *circuit);
 int isis_circuit_up (struct isis_circuit *circuit);
 void isis_circuit_down (struct isis_circuit *);
 void circuit_update_nlpids (struct isis_circuit *circuit);
