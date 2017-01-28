@@ -45,11 +45,11 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "bgpd/bgp_damp.h"
 #include "bgpd/bgp_debug.h"
 #include "bgpd/bgp_fsm.h"
-#include "bgpd/bgp_mplsvpn.h"
 #include "bgpd/bgp_nexthop.h"
 #include "bgpd/bgp_open.h"
 #include "bgpd/bgp_regex.h"
 #include "bgpd/bgp_route.h"
+#include "bgpd/bgp_mplsvpn.h"
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_table.h"
 #include "bgpd/bgp_vty.h"
@@ -168,17 +168,7 @@ bgp_vty_safi_from_arg(const char *safi_str)
 }
 
 int
-bgp_parse_safi(const char *str, safi_t *safi)
-{
-  *safi = bgp_vty_safi_from_arg(str);
-  if (*safi != SAFI_MAX)
-    return 0;
-  else
-    return -1;
-}
-
-int
-argv_find_and_parse_safi(struct cmd_token **argv, int argc, int *index, safi_t *safi)
+argv_find_and_parse_safi (struct cmd_token **argv, int argc, int *index, safi_t *safi)
 {
   int ret = 0;
   if (argv_find (argv, argc, "unicast", index))
@@ -206,6 +196,80 @@ argv_find_and_parse_safi(struct cmd_token **argv, int argc, int *index, safi_t *
         *safi = SAFI_ENCAP;
     }
   return ret;
+}
+
+/*
+ * bgp_vty_find_and_parse_afi_safi_vrf
+ *
+ * For a given 'show ...' command, correctly parse the afi/safi/vrf out from it
+ * This function *assumes* that the calling function pre-sets the afi/safi/vrf
+ * to appropriate values for the calling function.  This is to allow the
+ * calling function to make decisions appropriate for the show command
+ * that is being parsed.
+ *
+ * The show commands are generally of the form:
+ * "show [ip] bgp [<view|vrf> WORD] [<ipv4|ipv6> [<unicast|multicast|vpn|encap>]] ..."
+ *
+ * Since we use argv_find if the show command in particular doesn't have:
+ * [ip]
+ * [<view|vrf> WORD]
+ * [<ipv4|ipv6> [<unicast|multicast|vpn|encap>]]
+ * The command parsing should still be ok.
+ *
+ * vty  -> The vty for the command so we can output some useful data in
+ *         the event of a parse error in the vrf.
+ * argv -> The command tokens
+ * argc -> How many command tokens we have
+ * idx  -> The current place in the command, generally should be 0 for this function
+ * afi  -> The parsed afi if it was included in the show command, returned here
+ * safi -> The parsed safi if it was included in the show command, returned here
+ * vrf  -> The parsed vrf id if it was included in the show command, returned here
+ *
+ * The function returns the correct location in the parse tree for the
+ * last token found.
+ *
+ * Returns 0 for failure to parse correctly, else the idx position of where
+ * it found the last token.
+ */
+int
+bgp_vty_find_and_parse_afi_safi_vrf (struct vty *vty, struct cmd_token **argv, int argc, int *idx,
+                                     afi_t *afi, safi_t *safi, vrf_id_t *vrf)
+{
+  char *vrf_name = NULL;
+
+  assert (afi);
+  assert (safi);
+  assert (vrf && *vrf != VRF_UNKNOWN);
+
+  if (argv_find (argv, argc, "ip", idx))
+      *afi = AFI_IP;
+
+  if (argv_find (argv, argc, "view", idx) || argv_find (argv, argc, "vrf", idx))
+    {
+      vrf_name = argv[*idx + 1]->arg;
+      *idx += 2;
+    }
+
+  if (argv_find_and_parse_afi (argv, argc, idx, afi))
+    argv_find_and_parse_safi (argv, argc, idx, safi);
+
+  if (vrf_name)
+    {
+      if (strmatch(vrf_name, "all"))
+       *vrf = VRF_ALL;
+      else
+       *vrf = vrf_name_to_id (vrf_name);
+    }
+
+  if (*vrf == VRF_UNKNOWN)
+    {
+      vty_out (vty, "View/Vrf specified is unknown: %s", vrf_name);
+      *idx = 0;
+      return 0;
+    }
+
+  *idx += 1;
+  return *idx;
 }
 
 static int
@@ -5509,80 +5573,68 @@ DEFUN (no_neighbor_addpath_tx_bestpath_per_as,
 				 PEER_FLAG_ADDPATH_TX_BESTPATH_PER_AS);
 }
 
-
-/* Address Family configuration.  */
-DEFUN (address_family_ipv4,
-       address_family_ipv4_cmd,
-       "address-family ipv4",
-       "Enter Address Family command mode\n"
-       "Address Family\n")
-{
-  vty->node = BGP_IPV4_NODE;
-  return CMD_SUCCESS;
-}
-
 DEFUN (address_family_ipv4_safi,
        address_family_ipv4_safi_cmd,
-       "address-family ipv4 "BGP_SAFI_CMD_STR,
+       "address-family ipv4 [<unicast|multicast|vpn|encap>]",
        "Enter Address Family command mode\n"
        "Address Family\n"
        BGP_SAFI_HELP_STR)
 {
   int idx_safi = 2;
-  switch (bgp_vty_safi_from_arg(argv[idx_safi]->arg))
+  if (argc == (idx_safi + 1))
     {
-    case SAFI_MULTICAST:
-      vty->node = BGP_IPV4M_NODE;
-      break;
-    case SAFI_ENCAP:
-      vty->node = BGP_ENCAP_NODE;
-      break;
-    case SAFI_MPLS_VPN:
-      vty->node = BGP_VPNV4_NODE;
-      break;
-    case SAFI_UNICAST:
-    default:
-      vty->node = BGP_IPV4_NODE;
-      break;
+      switch (bgp_vty_safi_from_arg(argv[idx_safi]->arg))
+        {
+        case SAFI_MULTICAST:
+          vty->node = BGP_IPV4M_NODE;
+          break;
+        case SAFI_ENCAP:
+          vty->node = BGP_ENCAP_NODE;
+          break;
+        case SAFI_MPLS_VPN:
+          vty->node = BGP_VPNV4_NODE;
+          break;
+        case SAFI_UNICAST:
+        default:
+          vty->node = BGP_IPV4_NODE;
+          break;
+        }
     }
+  else
+    vty->node = BGP_IPV4_NODE;
 
-  return CMD_SUCCESS;
-}
-
-DEFUN (address_family_ipv6,
-       address_family_ipv6_cmd,
-       "address-family ipv6",
-       "Enter Address Family command mode\n"
-       "Address Family\n")
-{
-  vty->node = BGP_IPV6_NODE;
   return CMD_SUCCESS;
 }
 
 DEFUN (address_family_ipv6_safi,
        address_family_ipv6_safi_cmd,
-       "address-family ipv6 "BGP_SAFI_CMD_STR,
+       "address-family ipv6 [<unicast|multicast|vpn|encap>]",
        "Enter Address Family command mode\n"
        "Address Family\n"
        BGP_SAFI_HELP_STR)
 {
   int idx_safi = 2;
-  switch (bgp_vty_safi_from_arg(argv[idx_safi]->arg))
+  if (argc == (idx_safi + 1))
     {
-    case SAFI_MULTICAST:
-      vty->node = BGP_IPV6M_NODE;
-      break;
-    case SAFI_ENCAP:
-      vty->node = BGP_ENCAPV6_NODE;
-      break;
-    case SAFI_MPLS_VPN:
-      vty->node = BGP_VPNV6_NODE;
-      break;
-    case SAFI_UNICAST:
-    default:
-      vty->node = BGP_IPV6_NODE;
-      break;
+      switch (bgp_vty_safi_from_arg(argv[idx_safi]->arg))
+        {
+        case SAFI_MULTICAST:
+          vty->node = BGP_IPV6M_NODE;
+          break;
+        case SAFI_ENCAP:
+          vty->node = BGP_ENCAPV6_NODE;
+          break;
+        case SAFI_MPLS_VPN:
+          vty->node = BGP_VPNV6_NODE;
+          break;
+        case SAFI_UNICAST:
+        default:
+          vty->node = BGP_IPV6_NODE;
+          break;
+        }
     }
+  else
+    vty->node = BGP_IPV6_NODE;
 
   return CMD_SUCCESS;
 }
@@ -5609,29 +5661,7 @@ DEFUN (address_family_vpnv6,
   vty->node = BGP_VPNV6_NODE;
   return CMD_SUCCESS;
 }
-#endif /* KEEP_OLD_VPN_COMMANDS */
-
-DEFUN (address_family_ipv4_vpn,
-       address_family_ipv4_vpn_cmd,
-       "address-family ipv4 vpn",
-       "Enter Address Family command mode\n"
-       "Address Family\n"
-       "Subsequent Address Family modifier\n")
-{
-  vty->node = BGP_VPNV4_NODE;
-  return CMD_SUCCESS;
-}
-
-DEFUN (address_family_ipv6_vpn,
-       address_family_ipv6_vpn_cmd,
-       "address-family ipv6 vpn",
-       "Enter Address Family command mode\n"
-       "Address Family\n"
-       "Subsequent Address Family modifier\n")
-{
-  vty->node = BGP_VPNV6_NODE;
-  return CMD_SUCCESS;
-}
+#endif
 
 DEFUN (address_family_encap,
        address_family_encap_cmd,
@@ -8614,7 +8644,7 @@ DEFUN (show_ip_bgp_neighbors,
        SHOW_STR
        IP_STR
        BGP_STR
-       BGP_INSTANCE_ALL_HELP_STR
+       BGP_INSTANCE_HELP_STR
        "Address Family\n"
        "Address Family\n"
        "Address Family\n"
@@ -9280,7 +9310,7 @@ bgp_show_peer_group_vty (struct vty *vty, const char *name,
 
 DEFUN (show_ip_bgp_peer_groups,
        show_ip_bgp_peer_groups_cmd,
-       "show [ip] bgp [<view|vrf> VRFNAME] peer-group [PGNAME]",
+       "show [ip] bgp [<view|vrf> WORD] peer-group [PGNAME]",
        SHOW_STR
        IP_STR
        BGP_STR
@@ -9292,7 +9322,7 @@ DEFUN (show_ip_bgp_peer_groups,
   vrf = pg = NULL;
   int idx = 0;
 
-  vrf = argv_find (argv, argc, "VRFNAME", &idx) ? argv[idx]->arg : NULL;
+  vrf = argv_find (argv, argc, "WORD", &idx) ? argv[idx]->arg : NULL;
   pg = argv_find (argv, argc, "PGNAME", &idx) ? argv[idx]->arg : NULL;
 
   return bgp_show_peer_group_vty (vty, vrf, show_all_groups, pg);
@@ -9303,7 +9333,7 @@ DEFUN (show_ip_bgp_peer_groups,
 
 DEFUN (bgp_redistribute_ipv4,
        bgp_redistribute_ipv4_cmd,
-       "redistribute <kernel|connected|static|rip|ospf|isis|pim|table>",
+       "redistribute " FRR_IP_REDIST_STR_BGPD,
        "Redistribute information from another routing protocol\n"
        FRR_IP_REDIST_HELP_STR_BGPD)
 {
@@ -9323,7 +9353,7 @@ DEFUN (bgp_redistribute_ipv4,
 
 DEFUN (bgp_redistribute_ipv4_rmap,
        bgp_redistribute_ipv4_rmap_cmd,
-       "redistribute <kernel|connected|static|rip|ospf|isis|pim|table> route-map WORD",
+       "redistribute " FRR_IP_REDIST_STR_BGPD " route-map WORD",
        "Redistribute information from another routing protocol\n"
        FRR_IP_REDIST_HELP_STR_BGPD
        "Route map reference\n"
@@ -9349,7 +9379,7 @@ DEFUN (bgp_redistribute_ipv4_rmap,
 
 DEFUN (bgp_redistribute_ipv4_metric,
        bgp_redistribute_ipv4_metric_cmd,
-       "redistribute <kernel|connected|static|rip|ospf|isis|pim|table> metric (0-4294967295)",
+       "redistribute " FRR_IP_REDIST_STR_BGPD " metric (0-4294967295)",
        "Redistribute information from another routing protocol\n"
        FRR_IP_REDIST_HELP_STR_BGPD
        "Metric for redistributed routes\n"
@@ -9377,7 +9407,7 @@ DEFUN (bgp_redistribute_ipv4_metric,
 
 DEFUN (bgp_redistribute_ipv4_rmap_metric,
        bgp_redistribute_ipv4_rmap_metric_cmd,
-       "redistribute <kernel|connected|static|rip|ospf|isis|pim|table> route-map WORD metric (0-4294967295)",
+       "redistribute " FRR_IP_REDIST_STR_BGPD " route-map WORD metric (0-4294967295)",
        "Redistribute information from another routing protocol\n"
        FRR_IP_REDIST_HELP_STR_BGPD
        "Route map reference\n"
@@ -9409,7 +9439,7 @@ DEFUN (bgp_redistribute_ipv4_rmap_metric,
 
 DEFUN (bgp_redistribute_ipv4_metric_rmap,
        bgp_redistribute_ipv4_metric_rmap_cmd,
-       "redistribute <kernel|connected|static|rip|ospf|isis|pim|table> metric (0-4294967295) route-map WORD",
+       "redistribute " FRR_IP_REDIST_STR_BGPD " metric (0-4294967295) route-map WORD",
        "Redistribute information from another routing protocol\n"
        FRR_IP_REDIST_HELP_STR_BGPD
        "Metric for redistributed routes\n"
@@ -9627,7 +9657,7 @@ DEFUN (no_bgp_redistribute_ipv4_ospf,
 
 DEFUN (no_bgp_redistribute_ipv4,
        no_bgp_redistribute_ipv4_cmd,
-       "no redistribute <kernel|connected|static|rip|ospf|isis|pim|table> [metric (0-4294967295)] [route-map WORD]",
+       "no redistribute " FRR_IP_REDIST_STR_BGPD " [metric (0-4294967295)] [route-map WORD]",
        NO_STR
        "Redistribute information from another routing protocol\n"
        FRR_IP_REDIST_HELP_STR_BGPD
@@ -9651,7 +9681,7 @@ DEFUN (no_bgp_redistribute_ipv4,
 
 DEFUN (bgp_redistribute_ipv6,
        bgp_redistribute_ipv6_cmd,
-       "redistribute <kernel|connected|static|ripng|ospf6|isis|table>",
+       "redistribute " FRR_IP6_REDIST_STR_BGPD,
        "Redistribute information from another routing protocol\n"
        FRR_IP6_REDIST_HELP_STR_BGPD)
 {
@@ -9672,7 +9702,7 @@ DEFUN (bgp_redistribute_ipv6,
 
 DEFUN (bgp_redistribute_ipv6_rmap,
        bgp_redistribute_ipv6_rmap_cmd,
-       "redistribute <kernel|connected|static|ripng|ospf6|isis|table> route-map WORD",
+       "redistribute " FRR_IP6_REDIST_STR_BGPD " route-map WORD",
        "Redistribute information from another routing protocol\n"
        FRR_IP6_REDIST_HELP_STR_BGPD
        "Route map reference\n"
@@ -9698,7 +9728,7 @@ DEFUN (bgp_redistribute_ipv6_rmap,
 
 DEFUN (bgp_redistribute_ipv6_metric,
        bgp_redistribute_ipv6_metric_cmd,
-       "redistribute <kernel|connected|static|ripng|ospf6|isis|table> metric (0-4294967295)",
+       "redistribute " FRR_IP6_REDIST_STR_BGPD " metric (0-4294967295)",
        "Redistribute information from another routing protocol\n"
        FRR_IP6_REDIST_HELP_STR_BGPD
        "Metric for redistributed routes\n"
@@ -9726,7 +9756,7 @@ DEFUN (bgp_redistribute_ipv6_metric,
 
 DEFUN (bgp_redistribute_ipv6_rmap_metric,
        bgp_redistribute_ipv6_rmap_metric_cmd,
-       "redistribute <kernel|connected|static|ripng|ospf6|isis|table> route-map WORD metric (0-4294967295)",
+       "redistribute " FRR_IP6_REDIST_STR_BGPD " route-map WORD metric (0-4294967295)",
        "Redistribute information from another routing protocol\n"
        FRR_IP6_REDIST_HELP_STR_BGPD
        "Route map reference\n"
@@ -9758,7 +9788,7 @@ DEFUN (bgp_redistribute_ipv6_rmap_metric,
 
 DEFUN (bgp_redistribute_ipv6_metric_rmap,
        bgp_redistribute_ipv6_metric_rmap_cmd,
-       "redistribute <kernel|connected|static|ripng|ospf6|isis|table> metric (0-4294967295) route-map WORD",
+       "redistribute " FRR_IP6_REDIST_STR_BGPD " metric (0-4294967295) route-map WORD",
        "Redistribute information from another routing protocol\n"
        FRR_IP6_REDIST_HELP_STR_BGPD
        "Metric for redistributed routes\n"
@@ -9790,7 +9820,7 @@ DEFUN (bgp_redistribute_ipv6_metric_rmap,
 
 DEFUN (no_bgp_redistribute_ipv6,
        no_bgp_redistribute_ipv6_cmd,
-       "no redistribute <kernel|connected|static|ripng|ospf6|isis|table> [metric (0-4294967295)] [route-map WORD]",
+       "no redistribute " FRR_IP6_REDIST_STR_BGPD " [metric (0-4294967295)] [route-map WORD]",
        NO_STR
        "Redistribute information from another routing protocol\n"
        FRR_IP6_REDIST_HELP_STR_BGPD
@@ -10772,16 +10802,12 @@ bgp_vty_init (void)
   install_element (BGP_ENCAPV6_NODE, &no_neighbor_allowas_in_cmd);
 
   /* address-family commands. */
-  install_element (BGP_NODE, &address_family_ipv4_cmd);
   install_element (BGP_NODE, &address_family_ipv4_safi_cmd);
-  install_element (BGP_NODE, &address_family_ipv6_cmd);
   install_element (BGP_NODE, &address_family_ipv6_safi_cmd);
 #ifdef KEEP_OLD_VPN_COMMANDS
   install_element (BGP_NODE, &address_family_vpnv4_cmd);
   install_element (BGP_NODE, &address_family_vpnv6_cmd);
 #endif /* KEEP_OLD_VPN_COMMANDS */
-  install_element (BGP_NODE, &address_family_ipv4_vpn_cmd);
-  install_element (BGP_NODE, &address_family_ipv6_vpn_cmd);
 
   install_element (BGP_NODE, &address_family_encap_cmd);
   install_element (BGP_NODE, &address_family_encapv6_cmd);

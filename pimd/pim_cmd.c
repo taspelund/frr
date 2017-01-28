@@ -2423,8 +2423,11 @@ DEFUN (show_ip_igmp_interface,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-  if (argv[4]->arg)
-    igmp_show_interfaces_single(vty, argv[4]->arg, uj);
+  int idx = 0;
+
+  if (argv_find(argv, argc, "detail", &idx) ||
+      argv_find(argv, argc, "WORD", &idx))
+    igmp_show_interfaces_single(vty, argv[idx]->arg, uj);
   else
     igmp_show_interfaces(vty, uj);
 
@@ -2564,8 +2567,12 @@ DEFUN (show_ip_pim_interface,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-  if (argv[4]->arg)
-    pim_show_interfaces_single(vty, argv[4]->arg, uj);
+  int idx = 0;
+
+  if (argv_find(argv, argc, "WORD", &idx) ||
+      argv_find(argv, argc, "detail", &idx))
+    pim_show_interfaces_single(vty, argv[idx]->arg, uj);
+
   else
     pim_show_interfaces(vty, uj);
 
@@ -2578,7 +2585,8 @@ DEFUN (show_ip_pim_join,
        SHOW_STR
        IP_STR
        PIM_STR
-       "PIM interface join information\n")
+       "PIM interface join information\n"
+       JSON_STR)
 {
   u_char uj = use_json(argc, argv);
   pim_show_join(vty, uj);
@@ -2592,7 +2600,8 @@ DEFUN (show_ip_pim_local_membership,
        SHOW_STR
        IP_STR
        PIM_STR
-       "PIM interface local-membership\n")
+       "PIM interface local-membership\n"
+       JSON_STR)
 {
   u_char uj = use_json(argc, argv);
   pim_show_membership(vty, uj);
@@ -2612,8 +2621,11 @@ DEFUN (show_ip_pim_neighbor,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-  if (argv[4]->arg)
-    pim_show_neighbors_single(vty, argv[4]->arg, uj);
+  int idx = 0;
+
+  if (argv_find(argv, argc, "detail", &idx) ||
+      argv_find(argv, argc, "WORD", &idx))
+    pim_show_neighbors_single(vty, argv[idx]->arg, uj);
   else
     pim_show_neighbors(vty, uj);
 
@@ -2635,7 +2647,7 @@ DEFUN (show_ip_pim_secondary,
 
 DEFUN (show_ip_pim_state,
        show_ip_pim_state_cmd,
-       "show ip pim state [A.B.C.D] [A.B.C.D] [json]",
+       "show ip pim state [A.B.C.D [A.B.C.D]] [json]",
        SHOW_STR
        IP_STR
        PIM_STR
@@ -2647,9 +2659,16 @@ DEFUN (show_ip_pim_state,
   const char *src_or_group = NULL;
   const char *group = NULL;
   u_char uj = use_json(argc, argv);
+  if (uj)
+    argc--;
 
-  src_or_group = argv[4]->arg;
-  group = argv[5]->arg;
+  if (argc == 5)
+    {
+      src_or_group = argv[4]->arg;
+      group = argv[5]->arg;
+    }
+  else if (argc == 4)
+    src_or_group = argv[4]->arg;
 
   pim_show_state(vty, src_or_group, group, uj);
 
@@ -3134,7 +3153,8 @@ DEFUN (show_ip_mroute,
        "show ip mroute [json]",
        SHOW_STR
        IP_STR
-       MROUTE_STR)
+       MROUTE_STR
+       JSON_STR)
 {
   u_char uj = use_json(argc, argv);
   show_mroute(vty, uj);
@@ -3443,7 +3463,8 @@ DEFUN (ip_pim_packets,
        "ip pim packets <1-100>",
        IP_STR
        "pim multicast routing\n"
-       "Number of packets to process at one time per fd\n")
+       "packets to process at one time per fd\n"
+       "Number of packets\n")
 {
   qpim_packet_process = atoi (argv[3]->arg);
   return CMD_SUCCESS;
@@ -3455,7 +3476,8 @@ DEFUN (no_ip_pim_packets,
        NO_STR
        IP_STR
        "pim multicast routing\n"
-       "Number of packets to process at one time per fd\n")
+       "packets to process at one time per fd\n"
+       "Number of packets\n")
 {
   qpim_packet_process = PIM_DEFAULT_PACKET_PROCESS;
   return CMD_SUCCESS;
@@ -3467,10 +3489,15 @@ DEFUN (ip_pim_rp,
        IP_STR
        "pim multicast routing\n"
        "Rendevous Point\n"
-       "ip address of RP\n")
+       "ip address of RP\n"
+       "Group Address range to cover\n")
 {
   int idx_ipv4 = 3;
-  return pim_rp_cmd_worker (vty, argv[idx_ipv4]->arg, argv[idx_ipv4 + 1]->arg, NULL);
+
+  if (argc == (idx_ipv4 + 1))
+    return pim_rp_cmd_worker (vty, argv[idx_ipv4]->arg, argv[idx_ipv4 + 1]->arg, NULL);
+  else
+    return pim_rp_cmd_worker (vty, argv[idx_ipv4]->arg, NULL, NULL);
 }
 
 DEFUN (ip_pim_rp_prefix_list,
@@ -3520,10 +3547,15 @@ DEFUN (no_ip_pim_rp,
        IP_STR
        "pim multicast routing\n"
        "Rendevous Point\n"
-       "ip address of RP\n")
+       "ip address of RP\n"
+       "Group Address range to cover\n")
 {
   int idx_ipv4 = 4;
-  return pim_no_rp_cmd_worker (vty, argv[idx_ipv4]->arg, argv[idx_ipv4 + 1]->arg, NULL);
+
+  if (argc == (idx_ipv4 + 1))
+    return pim_no_rp_cmd_worker (vty, argv[idx_ipv4]->arg, argv[idx_ipv4 + 1]->arg, NULL);
+  else
+    return pim_no_rp_cmd_worker (vty, argv[idx_ipv4]->arg, NULL, NULL);
 }
 
 DEFUN (no_ip_pim_rp_prefix_list,
@@ -3578,7 +3610,7 @@ DEFUN (ip_ssmpingd,
   int idx_ipv4 = 2;
   int result;
   struct in_addr source_addr;
-  const char *source_str = (argc > idx_ipv4) ? argv[idx_ipv4]->arg : "0.0.0.0";
+  const char *source_str = (argc == idx_ipv4) ? argv[idx_ipv4]->arg : "0.0.0.0";
 
   result = inet_pton(AF_INET, source_str, &source_addr);
   if (result <= 0) {
@@ -3608,7 +3640,7 @@ DEFUN (no_ip_ssmpingd,
   int idx_ipv4 = 3;
   int result;
   struct in_addr source_addr;
-  const char *source_str = (argc > idx_ipv4) ? argv[idx_ipv4]->arg : "0.0.0.0";
+  const char *source_str = (argc == idx_ipv4) ? argv[idx_ipv4]->arg : "0.0.0.0";
 
   result = inet_pton(AF_INET, source_str, &source_addr);
   if (result <= 0) {
@@ -3930,7 +3962,7 @@ DEFUN (interface_ip_igmp_query_interval,
     return CMD_WARNING;
   }
 
-  query_interval = atoi(argv[4]->arg);
+  query_interval = atoi(argv[3]->arg);
   query_interval_dsec = 10 * query_interval;
 
   /*
@@ -3999,7 +4031,7 @@ DEFUN (interface_no_ip_igmp_query_interval,
 
 DEFUN (interface_ip_igmp_version,
        interface_ip_igmp_version_cmd,
-       "ip igmp version <2-3>",
+       "ip igmp version (2-3)",
        IP_STR
        IFACE_IGMP_STR
        "IGMP version\n"
@@ -4027,7 +4059,7 @@ DEFUN (interface_ip_igmp_version,
 
 DEFUN (interface_no_ip_igmp_version,
        interface_no_ip_igmp_version_cmd,
-       "no ip igmp version <2-3>",
+       "no ip igmp version (2-3)",
        NO_STR
        IP_STR
        IFACE_IGMP_STR
@@ -4072,7 +4104,7 @@ DEFUN (interface_ip_igmp_query_max_response_time,
     return CMD_WARNING;
   }
 
-  query_max_response_time = atoi(argv[4]->arg);
+  query_max_response_time = atoi(argv[3]->arg);
 
   if (query_max_response_time >= pim_ifp->igmp_default_query_interval * 10) {
     vty_out(vty,
@@ -4089,11 +4121,12 @@ DEFUN (interface_ip_igmp_query_max_response_time,
 
 DEFUN (interface_no_ip_igmp_query_max_response_time,
        interface_no_ip_igmp_query_max_response_time_cmd,
-       "no ip igmp query-max-response-time <10-250>",
+       "no ip igmp query-max-response-time (10-250)",
        NO_STR
        IP_STR
        IFACE_IGMP_STR
-       IFACE_IGMP_QUERY_MAX_RESPONSE_TIME_STR)
+       IFACE_IGMP_QUERY_MAX_RESPONSE_TIME_STR
+       "Time for response in deci-seconds\n")
 {
   VTY_DECLVAR_CONTEXT(interface, ifp);
   struct pim_interface *pim_ifp;
@@ -4568,7 +4601,7 @@ DEFUN (interface_ip_pim_hello,
 
   pim_ifp->pim_hello_period = strtol(argv[idx_time]->arg, NULL, 10);
 
-  if (argc > idx_hold)
+  if (argc == idx_hold)
     pim_ifp->pim_default_holdtime = strtol(argv[idx_hold]->arg, NULL, 10);
 
   return CMD_SUCCESS;
@@ -4823,22 +4856,9 @@ DEFUN (no_debug_pim_events,
   return CMD_SUCCESS;
 }
 
-
 DEFUN (debug_pim_packets,
        debug_pim_packets_cmd,
-       "debug pim packets",
-       DEBUG_STR
-       DEBUG_PIM_STR
-       DEBUG_PIM_PACKETS_STR)
-{
-    PIM_DO_DEBUG_PIM_PACKETS;
-    vty_out (vty, "PIM Packet debugging is on %s", VTY_NEWLINE);
-    return CMD_SUCCESS;
-}
-
-DEFUN (debug_pim_packets_filter,
-       debug_pim_packets_filter_cmd,
-       "debug pim packets <hello|joins|register>",
+       "debug pim packets [<hello|joins|register>]",
        DEBUG_STR
        DEBUG_PIM_STR
        DEBUG_PIM_PACKETS_STR
@@ -4846,66 +4866,60 @@ DEFUN (debug_pim_packets_filter,
        DEBUG_PIM_J_P_PACKETS_STR
        DEBUG_PIM_PIM_REG_PACKETS_STR)
 {
-  int idx_hello_join = 3;
-  if (strncmp(argv[idx_hello_join]->arg,"h",1) == 0) 
+  int idx;
+  if (argv_find (argv, argc, "hello", &idx))
     {
       PIM_DO_DEBUG_PIM_HELLO;
       vty_out (vty, "PIM Hello debugging is on%s", VTY_NEWLINE);
     }
-  else if (strncmp(argv[idx_hello_join]->arg,"j",1) == 0)
+  else if (argv_find (argv, argc ,"joins", &idx))
     {
       PIM_DO_DEBUG_PIM_J_P;
       vty_out (vty, "PIM Join/Prune debugging is on%s", VTY_NEWLINE);
     }
-  else if (strncmp(argv[idx_hello_join]->arg,"r",1) == 0)
+  else if (argv_find (argv, argc, "register", &idx))
     {
       PIM_DO_DEBUG_PIM_REG;
       vty_out (vty, "PIM Register debugging is on%s", VTY_NEWLINE);
+    }
+  else
+    {
+      PIM_DO_DEBUG_PIM_PACKETS;
+      vty_out (vty, "PIM Packet debugging is on %s", VTY_NEWLINE);
     }
   return CMD_SUCCESS;
 }
 
 DEFUN (no_debug_pim_packets,
        no_debug_pim_packets_cmd,
-       "no debug pim packets",
+       "no debug pim packets [<hello|joins|register>]",
        NO_STR
        DEBUG_STR
        DEBUG_PIM_STR
        DEBUG_PIM_PACKETS_STR
        DEBUG_PIM_HELLO_PACKETS_STR
-       DEBUG_PIM_J_P_PACKETS_STR)
+       DEBUG_PIM_J_P_PACKETS_STR
+       DEBUG_PIM_PIM_REG_PACKETS_STR)
 {
-  PIM_DONT_DEBUG_PIM_PACKETS;
-  vty_out (vty, "PIM Packet debugging is off %s", VTY_NEWLINE);
-  return CMD_SUCCESS;
-}
-
-DEFUN (no_debug_pim_packets_filter,
-       no_debug_pim_packets_filter_cmd,
-       "no debug pim packets <hello|joins|register>",
-       NO_STR
-       DEBUG_STR
-       DEBUG_PIM_STR
-       DEBUG_PIM_PACKETS_STR
-       DEBUG_PIM_HELLO_PACKETS_STR
-       DEBUG_PIM_J_P_PACKETS_STR)
-{
-  int idx_hello_join = 4;
-  if (strncmp(argv[idx_hello_join]->arg,"h",1) == 0) 
+  int idx = 0;
+  if (argv_find (argv, argc,"hello",&idx))
     {
       PIM_DONT_DEBUG_PIM_HELLO;
       vty_out (vty, "PIM Hello debugging is off %s", VTY_NEWLINE);
     }
-  else if (strncmp(argv[idx_hello_join]->arg,"j",1) == 0)
+  else if (argv_find (argv, argc, "joins", &idx))
     {
       PIM_DONT_DEBUG_PIM_J_P;
       vty_out (vty, "PIM Join/Prune debugging is off %s", VTY_NEWLINE);
     }
-  else if (strncmp (argv[idx_hello_join]->arg, "r", 1) == 0)
+  else if (argv_find (argv, argc, "register", &idx))
     {
       PIM_DONT_DEBUG_PIM_REG;
       vty_out (vty, "PIM Register debugging is off%s", VTY_NEWLINE);
     }
+  else
+    PIM_DONT_DEBUG_PIM_PACKETS;
+
   return CMD_SUCCESS;
 }
 
@@ -5459,9 +5473,10 @@ DEFUN (no_ip_msdp_mesh_group_source,
        CFG_MSDP_STR
        "Delete MSDP mesh-group source\n"
        "mesh group name\n"
+       "mesh group source\n"
        "mesh group local address\n")
 {
-  if (argv[6]->arg)
+  if (argc == 6)
     return ip_no_msdp_mesh_group_cmd_worker(vty, argv[6]->arg);
   else
     return ip_no_msdp_mesh_group_source_cmd_worker(vty, argv[4]->arg);
@@ -5706,7 +5721,10 @@ DEFUN (show_ip_msdp_peer_detail,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-  if (argv[4]->arg)
+  if (uj)
+    argc--;
+
+  if (argc == 4)
     ip_msdp_show_peers_detail(vty, argv[4]->arg, uj);
   else
     ip_msdp_show_peers(vty, uj);
@@ -5954,12 +5972,16 @@ DEFUN (show_ip_msdp_sa_sg,
        MSDP_STR
        "MSDP active-source information\n"
        "source or group ip\n"
+       "group ip\n"
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-  if (argv[5]->arg)
+  if (uj)
+    argc--;
+
+  if (argc == 5)
     ip_msdp_show_sa_sg(vty, argv[4]->arg, argv[5]->arg, uj);
-  else if (argv[4]->arg)
+  else if (argc == 4)
     ip_msdp_show_sa_addr(vty, argv[4]->arg, uj);
   else
     ip_msdp_show_sa(vty, uj);
@@ -6074,9 +6096,7 @@ void pim_cmd_init()
   install_element (ENABLE_NODE, &debug_pim_events_cmd);
   install_element (ENABLE_NODE, &no_debug_pim_events_cmd);
   install_element (ENABLE_NODE, &debug_pim_packets_cmd);
-  install_element (ENABLE_NODE, &debug_pim_packets_filter_cmd);
   install_element (ENABLE_NODE, &no_debug_pim_packets_cmd);
-  install_element (ENABLE_NODE, &no_debug_pim_packets_filter_cmd);
   install_element (ENABLE_NODE, &debug_pim_packetdump_send_cmd);
   install_element (ENABLE_NODE, &no_debug_pim_packetdump_send_cmd);
   install_element (ENABLE_NODE, &debug_pim_packetdump_recv_cmd);
@@ -6116,9 +6136,7 @@ void pim_cmd_init()
   install_element (CONFIG_NODE, &debug_pim_events_cmd);
   install_element (CONFIG_NODE, &no_debug_pim_events_cmd);
   install_element (CONFIG_NODE, &debug_pim_packets_cmd);
-  install_element (CONFIG_NODE, &debug_pim_packets_filter_cmd);
   install_element (CONFIG_NODE, &no_debug_pim_packets_cmd);
-  install_element (CONFIG_NODE, &no_debug_pim_packets_filter_cmd);
   install_element (CONFIG_NODE, &debug_pim_trace_cmd);
   install_element (CONFIG_NODE, &no_debug_pim_trace_cmd);
   install_element (CONFIG_NODE, &debug_ssmpingd_cmd);
@@ -6134,8 +6152,6 @@ void pim_cmd_init()
   install_element (CONFIG_NODE, &debug_msdp_packets_cmd);
   install_element (CONFIG_NODE, &no_debug_msdp_packets_cmd);
   install_element (CONFIG_NODE, &undebug_msdp_packets_cmd);
-  install_element (CONFIG_NODE, &ip_msdp_peer_cmd);
-  install_element (CONFIG_NODE, &no_ip_msdp_peer_cmd);
   install_element (CONFIG_NODE, &ip_msdp_mesh_group_member_cmd);
   install_element (CONFIG_NODE, &no_ip_msdp_mesh_group_member_cmd);
   install_element (CONFIG_NODE, &ip_msdp_mesh_group_source_cmd);

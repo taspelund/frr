@@ -312,6 +312,10 @@ vtysh_execute_func (const char *line, int pager)
 	{
 	  vtysh_execute("exit-address-family");
 	}
+      else if (saved_node == BGP_VRF_POLICY_NODE && (tried == 1))
+	{
+	  vtysh_execute("exit-vrf-policy");
+	}
       else if ((saved_node == BGP_VNC_DEFAULTS_NODE
            || saved_node == BGP_VNC_NVE_GROUP_NODE
            || saved_node == BGP_VNC_L2_GROUP_NODE) && (tried == 1))
@@ -963,6 +967,11 @@ static struct cmd_node bgp_vnc_nve_group_node =
   "%s(config-router-vnc-nve-group)# "
 };
 
+static struct cmd_node bgp_vrf_policy_node = {
+  BGP_VRF_POLICY_NODE,
+  "%s(config-router-vrf-policy)# "
+};
+
 static struct cmd_node bgp_vnc_l2_group_node =
 {
   BGP_VNC_L2_GROUP_NODE,
@@ -1140,48 +1149,56 @@ DEFUNSH (VTYSH_BGPD,
 DEFUNSH (VTYSH_BGPD,
 	 address_family_ipv4_unicast,
 	 address_family_ipv4_unicast_cmd,
-	 "address-family ipv4 unicast",
+	 "address-family ipv4 [<unicast|multicast|vpn|encap>]",
 	 "Enter Address Family command mode\n"
 	 "Address Family\n"
-	 "Address Family Modifier\n")
+	 "Address Family Modifier\n"
+  	 "Address Family Modifier\n"       
+ 	 "Address Family Modifier\n"
+         "Address Family Modifier\n") 
 {
-  vty->node = BGP_IPV4_NODE;
-  return CMD_SUCCESS;
-}
+  int idx = 0;
 
-DEFUNSH (VTYSH_BGPD,
-	 address_family_ipv4_multicast,
-	 address_family_ipv4_multicast_cmd,
-	 "address-family ipv4 multicast",
-	 "Enter Address Family command mode\n"
-	 "Address Family\n"
-	 "Address Family Modifier\n")
-{
-  vty->node = BGP_IPV4M_NODE;
+  if (argv_find (argv, argc, "multicast", &idx))
+    vty->node = BGP_IPV4M_NODE;
+
+  else if (argv_find (argv, argc, "encap", &idx))
+    vty->node = BGP_ENCAP_NODE;
+
+  else if (argv_find (argv, argc, "vpn", &idx))
+    vty->node = BGP_VPNV4_NODE;
+
+  else
+    vty->node = BGP_IPV4_NODE;
+
   return CMD_SUCCESS;
 }
 
 DEFUNSH (VTYSH_BGPD,
 	 address_family_ipv6,
 	 address_family_ipv6_cmd,
-	 "address-family ipv6 [unicast]",
+	 "address-family ipv6 [<unicast|multicast|vpn|encap>]",
 	 "Enter Address Family command mode\n"
 	 "Address Family\n"
-	 "Address Family Modifier\n")
+	 "Address Family Modifier\n"
+	 "Address Family Modifier\n"
+    	 "Address Family Modifier\n"
+       	 "Address Family Modifier\n")
 {
-  vty->node = BGP_IPV6_NODE;
-  return CMD_SUCCESS;
-}
+  int idx = 0;
 
-DEFUNSH (VTYSH_BGPD,
-	 address_family_ipv6_multicast,
-	 address_family_ipv6_multicast_cmd,
-	 "address-family ipv6 multicast",
-	 "Enter Address Family command mode\n"
-	 "Address Family\n"
-	 "Address Family Modifier\n")
-{
-  vty->node = BGP_IPV6M_NODE;
+  if (argv_find (argv, argc, "multicast", &idx))
+    vty->node = BGP_IPV6M_NODE;
+
+  else if (argv_find (argv, argc, "encap", &idx))
+    vty->node = BGP_ENCAPV6_NODE;
+
+  else if (argv_find (argv, argc, "vpn", &idx))
+    vty->node = BGP_VPNV6_NODE;
+
+  else
+    vty->node = BGP_IPV6_NODE;
+
   return CMD_SUCCESS;
 }
 
@@ -1206,6 +1223,17 @@ DEFUNSH (VTYSH_BGPD,
          "Group name\n")
 {
   vty->node = BGP_VNC_NVE_GROUP_NODE;
+  return CMD_SUCCESS;
+}
+
+DEFUNSH (VTYSH_BGPD,
+         vnc_vrf_policy,
+         vnc_vrf_policy_cmd,
+         "vrf-policy NAME",
+         "Configure a VRF policy group\n"
+         "Group name\n")
+{
+  vty->node = BGP_VRF_POLICY_NODE;
   return CMD_SUCCESS;
 }
 
@@ -1481,6 +1509,7 @@ vtysh_exit (struct vty *vty)
     case BGP_IPV4M_NODE:
     case BGP_IPV6_NODE:
     case BGP_IPV6M_NODE:
+    case BGP_VRF_POLICY_NODE:
     case BGP_VNC_DEFAULTS_NODE:
     case BGP_VNC_NVE_GROUP_NODE:
     case BGP_VNC_L2_GROUP_NODE:
@@ -1556,6 +1585,17 @@ DEFUNSH (VTYSH_BGPD,
   if (vty->node == BGP_VNC_DEFAULTS_NODE
       || vty->node == BGP_VNC_NVE_GROUP_NODE
       || vty->node == BGP_VNC_L2_GROUP_NODE)
+    vty->node = BGP_NODE;
+  return CMD_SUCCESS;
+}
+
+DEFUNSH (VTYSH_BGPD,
+	 exit_vrf_policy,
+	 exit_vrf_policy_cmd,
+	 "exit-vrf-policy",
+	 "Exit from VRF  configuration mode\n")
+{
+  if (vty->node == BGP_VRF_POLICY_NODE)
     vty->node = BGP_NODE;
   return CMD_SUCCESS;
 }
@@ -3042,6 +3082,7 @@ vtysh_init_vty (void)
   install_node (&bgp_ipv4m_node, NULL);
   install_node (&bgp_ipv6_node, NULL);
   install_node (&bgp_ipv6m_node, NULL);
+  install_node (&bgp_vrf_policy_node, NULL);
   install_node (&bgp_vnc_defaults_node, NULL);
   install_node (&bgp_vnc_nve_group_node, NULL);
   install_node (&bgp_vnc_l2_group_node, NULL);
@@ -3079,6 +3120,7 @@ vtysh_init_vty (void)
   vtysh_install_default (BGP_IPV6_NODE);
   vtysh_install_default (BGP_IPV6M_NODE);
 #if ENABLE_BGP_VNC
+  vtysh_install_default (BGP_VRF_POLICY_NODE);
   vtysh_install_default (BGP_VNC_DEFAULTS_NODE);
   vtysh_install_default (BGP_VNC_NVE_GROUP_NODE);
   vtysh_install_default (BGP_VNC_L2_GROUP_NODE);
@@ -3150,6 +3192,8 @@ vtysh_init_vty (void)
   install_element (BGP_IPV6M_NODE, &vtysh_exit_bgpd_cmd);
   install_element (BGP_IPV6M_NODE, &vtysh_quit_bgpd_cmd);
 #if defined (ENABLE_BGP_VNC)
+  install_element (BGP_VRF_POLICY_NODE, &vtysh_exit_bgpd_cmd);
+  install_element (BGP_VRF_POLICY_NODE, &vtysh_quit_bgpd_cmd);
   install_element (BGP_VNC_DEFAULTS_NODE, &vtysh_exit_bgpd_cmd);
   install_element (BGP_VNC_DEFAULTS_NODE, &vtysh_quit_bgpd_cmd);
   install_element (BGP_VNC_NVE_GROUP_NODE, &vtysh_exit_bgpd_cmd);
@@ -3191,6 +3235,7 @@ vtysh_init_vty (void)
   install_element (BGP_ENCAPV6_NODE, &vtysh_end_all_cmd);
   install_element (BGP_IPV6_NODE, &vtysh_end_all_cmd);
   install_element (BGP_IPV6M_NODE, &vtysh_end_all_cmd);
+  install_element (BGP_VRF_POLICY_NODE, &vtysh_end_all_cmd);
   install_element (BGP_VNC_DEFAULTS_NODE, &vtysh_end_all_cmd);
   install_element (BGP_VNC_NVE_GROUP_NODE, &vtysh_end_all_cmd);
   install_element (BGP_VNC_L2_GROUP_NODE, &vtysh_end_all_cmd);
@@ -3239,14 +3284,13 @@ vtysh_init_vty (void)
   install_element (BGP_NODE, &address_family_encapv4_cmd);
   install_element (BGP_NODE, &address_family_encapv6_cmd);
 #if defined(ENABLE_BGP_VNC)
+  install_element (BGP_NODE, &vnc_vrf_policy_cmd);
   install_element (BGP_NODE, &vnc_defaults_cmd);
   install_element (BGP_NODE, &vnc_nve_group_cmd);
   install_element (BGP_NODE, &vnc_l2_group_cmd);
 #endif
   install_element (BGP_NODE, &address_family_ipv4_unicast_cmd);
-  install_element (BGP_NODE, &address_family_ipv4_multicast_cmd);
   install_element (BGP_NODE, &address_family_ipv6_cmd);
-  install_element (BGP_NODE, &address_family_ipv6_multicast_cmd);
   install_element (BGP_VPNV4_NODE, &exit_address_family_cmd);
   install_element (BGP_VPNV6_NODE, &exit_address_family_cmd);
   install_element (BGP_ENCAP_NODE, &exit_address_family_cmd);
@@ -3256,6 +3300,7 @@ vtysh_init_vty (void)
   install_element (BGP_IPV6_NODE, &exit_address_family_cmd);
   install_element (BGP_IPV6M_NODE, &exit_address_family_cmd);
 
+  install_element (BGP_VRF_POLICY_NODE, &exit_vrf_policy_cmd);
   install_element (BGP_VNC_DEFAULTS_NODE, &exit_vnc_config_cmd);
   install_element (BGP_VNC_NVE_GROUP_NODE, &exit_vnc_config_cmd);
   install_element (BGP_VNC_L2_GROUP_NODE, &exit_vnc_config_cmd);

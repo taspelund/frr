@@ -3992,7 +3992,7 @@ DEFUN (set_lcommunity_delete,
 
 DEFUN (no_set_lcommunity_delete,
        no_set_lcommunity_delete_cmd,
-       "no set large-comm-list <(1-99|(100-500)|WORD)> [delete]",
+       "no set large-comm-list <(1-99)|(100-500)|WORD> [delete]",
        NO_STR
        SET_STR
        "set BGP large community list (for deletion)\n"
@@ -4399,7 +4399,7 @@ DEFUN (no_set_vpn_nexthop,
 
 DEFUN (set_ipx_vpn_nexthop,
        set_ipx_vpn_nexthop_cmd,
-       "set <ipv4|ipv6> vpn next-hop [A.B.C.D|X:X::X:X]",
+       "set <ipv4|ipv6> vpn next-hop [<A.B.C.D|X:X::X:X>]",
        SET_STR
        "IPv4 information\n"
        "IPv6 information\n"
@@ -4426,7 +4426,7 @@ DEFUN (set_ipx_vpn_nexthop,
 
 DEFUN (no_set_ipx_vpn_nexthop,
        no_set_ipx_vpn_nexthop_cmd,
-       "no set <ipv4|ipv6> vpn next-hop [A.B.C.D|X:X::X:X]",
+       "no set <ipv4|ipv6> vpn next-hop [<A.B.C.D|X:X::X:X>]",
        NO_STR
        SET_STR
        "IPv4 information\n"
