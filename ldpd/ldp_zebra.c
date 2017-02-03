@@ -398,6 +398,17 @@ ldp_zebra_read_route(int command, struct zclient *zclient, zebra_size_t length,
 	    (kr.af == AF_INET6 && IN6_IS_SCOPE_EMBED(&kr.prefix.v6)))
 		return (0);
 
+	if (kr.af == AF_INET6 &&
+	    CHECK_FLAG(message_flags, ZAPI_MESSAGE_SRCPFX)) {
+		uint8_t src_prefixlen;
+
+		src_prefixlen = stream_getc(s);
+
+		/* we completely ignore srcdest routes for now. */
+		if (src_prefixlen)
+			return (0);
+	}
+
 	nhnum = stream_getc(s);
 	nhmark = stream_get_getp(s);
 	stream_set_getp(s, nhmark + nhnum * (nhlen + 5));
@@ -485,4 +496,12 @@ ldp_zebra_init(struct thread_master *master)
 	zclient->redistribute_route_ipv4_del = ldp_zebra_read_route;
 	zclient->redistribute_route_ipv6_add = ldp_zebra_read_route;
 	zclient->redistribute_route_ipv6_del = ldp_zebra_read_route;
+}
+
+void
+ldp_zebra_destroy(void)
+{
+	zclient_stop(zclient);
+	zclient_free(zclient);
+	zclient = NULL;
 }
