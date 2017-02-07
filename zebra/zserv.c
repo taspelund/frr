@@ -92,6 +92,7 @@ zserv_flush_data(struct thread *thread)
       zlog_warn("%s: buffer_flush_available failed on zserv client fd %d, "
       		"closing", __func__, client->sock);
       zebra_client_close(client);
+      client = NULL;
       break;
     case BUFFER_PENDING:
       client->t_write = thread_add_write(zebrad.master, zserv_flush_data,
@@ -101,7 +102,8 @@ zserv_flush_data(struct thread *thread)
       break;
     }
 
-  client->last_write_time = monotime(NULL);
+  if (client)
+    client->last_write_time = monotime(NULL);
   return 0;
 }
 
@@ -751,28 +753,28 @@ zsend_redistribute_route (int add, struct zserv *client, struct prefix *p,
 
 	  /* ldpd needs all nexthops */
 	  if (client->proto != ZEBRA_ROUTE_LDP)
-          break;
+            break;
         }
     }
 
   /* Distance */
-      SET_FLAG (zapi_flags, ZAPI_MESSAGE_DISTANCE);
-      stream_putc (s, rib->distance);
+  SET_FLAG (zapi_flags, ZAPI_MESSAGE_DISTANCE);
+  stream_putc (s, rib->distance);
 
   /* Metric */
-      SET_FLAG (zapi_flags, ZAPI_MESSAGE_METRIC);
-      stream_putl (s, rib->metric);
+  SET_FLAG (zapi_flags, ZAPI_MESSAGE_METRIC);
+  stream_putl (s, rib->metric);
 
   /* Tag */
-      if (rib->tag)
-        {
-          SET_FLAG(zapi_flags, ZAPI_MESSAGE_TAG);
+  if (rib->tag)
+    {
+      SET_FLAG(zapi_flags, ZAPI_MESSAGE_TAG);
       stream_putl(s, rib->tag);
-        }
+    }
 
   /* MTU */
-      SET_FLAG (zapi_flags, ZAPI_MESSAGE_MTU);
-      stream_putl (s, rib->mtu);
+  SET_FLAG (zapi_flags, ZAPI_MESSAGE_MTU);
+  stream_putl (s, rib->mtu);
 
   /* write real message flags value */
   stream_putc_at (s, messmark, zapi_flags);

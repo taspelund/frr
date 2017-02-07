@@ -362,8 +362,8 @@ thread_master_create (void)
 #if defined(HAVE_POLL)
   rv->handler.pfdsize = rv->fd_limit;
   rv->handler.pfdcount = 0;
-  rv->handler.pfds = (struct pollfd *) malloc (sizeof (struct pollfd) * rv->handler.pfdsize);
-  memset (rv->handler.pfds, 0, sizeof (struct pollfd) * rv->handler.pfdsize);
+  rv->handler.pfds = XCALLOC (MTYPE_THREAD_MASTER,
+                              sizeof (struct pollfd) * rv->handler.pfdsize);
 #endif
   return rv;
 }
@@ -719,7 +719,7 @@ funcname_thread_add_read_write (int dir, struct thread_master *m,
 #else
   if (FD_ISSET (fd, fdset))
     {
-      zlog (NULL, LOG_WARNING, "There is already %s fd [%d]", (dir = THREAD_READ) ? "read" : "write", fd);
+      zlog (NULL, LOG_WARNING, "There is already %s fd [%d]", (dir == THREAD_READ) ? "read" : "write", fd);
       return NULL;
     }
 
