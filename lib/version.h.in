@@ -51,8 +51,6 @@
 	FRR_COPYRIGHT "\r\n" \
 	GIT_INFO "\r\n"
 
-#define QUAGGA_CONFIG_ARGS "@CONFIG_ARGS@"
-
 pid_t pid_output (const char *);
 
 #endif /* _ZEBRA_VERSION_H */
