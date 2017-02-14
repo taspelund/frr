@@ -1810,6 +1810,7 @@ AC_CONFIG_FILES([Makefile
 	  vtysh/Makefile
 	  doc/Makefile tests/Makefile
 	  bgpd/rfp-example/rfptest/Makefile bgpd/rfp-example/librfp/Makefile
+	  debian/Makefile
 	  redhat/frr.spec
 	  snapcraft/snapcraft.yaml
 	  lib/version.h
