@@ -35,17 +35,58 @@
 #include "sockunion.h"
 
 #ifndef ETHER_ADDR_LEN
+#ifdef ETHERADDRL
 #define ETHER_ADDR_LEN  ETHERADDRL
+#else
+#define ETHER_ADDR_LEN 6
+#endif
 #endif
 
+#define ETHER_ADDR_STRLEN (3*ETHER_ADDR_LEN)
 /*
  * there isn't a portable ethernet address type. We define our
  * own to simplify internal handling
  */
 struct ethaddr {
     u_char octet[ETHER_ADDR_LEN];
-} __packed;
+} __attribute__ ((packed));
 
+
+/* length is the number of valuable bits of prefix structure 
+* 18 bytes is current length in structure, if address is ipv4
+* 30 bytes is in case of ipv6
+*/
+#define PREFIX_LEN_ROUTE_TYPE_5_IPV4 (18*8)
+#define PREFIX_LEN_ROUTE_TYPE_5_IPV6 (30*8)
+
+/* EVPN address (RFC 7432) */
+struct evpn_addr
+{
+  u_char route_type;
+  u_char flags;
+#define IP_ADDR_NONE      0x0
+#define IP_ADDR_V4        0x1
+#define IP_ADDR_V6        0x2
+#define IP_PREFIX_V4      0x4
+#define IP_PREFIX_V6      0x8
+  struct ethaddr mac;
+  uint32_t eth_tag;
+  u_char ip_prefix_length;
+  union
+  {
+    u_char addr;
+    struct in_addr v4_addr;
+    struct in6_addr v6_addr;
+  } ip;
+};
+
+/* EVPN prefix structure. */
+struct prefix_evpn
+{
+  u_char family;
+  u_char prefixlen;
+  struct evpn_addr prefix __attribute__ ((aligned (8)));
+};
 
 /*
  * A struct prefix contains an address family, a prefix length, and an
@@ -83,6 +124,7 @@ struct prefix
     struct ethaddr prefix_eth;	/* AF_ETHERNET */
     u_char val[8];
     uintptr_t ptr;
+    struct evpn_addr prefix_evpn;
   } u __attribute__ ((aligned (8)));
 };
 
@@ -147,18 +189,20 @@ struct prefix_sg
  * side, which strips type safety since the cast will accept any pointer
  * type.)
  */
-union prefix46ptr
+union prefixptr
 {
   struct prefix *p;
   struct prefix_ipv4 *p4;
   struct prefix_ipv6 *p6;
+  struct prefix_evpn *evp;
 } __attribute__ ((transparent_union));
 
-union prefix46constptr
+union prefixconstptr
 {
   const struct prefix *p;
   const struct prefix_ipv4 *p4;
   const struct prefix_ipv6 *p6;
+  const struct prefix_evpn *evp;
 } __attribute__ ((transparent_union));
 
 #ifndef INET_ADDRSTRLEN
@@ -232,7 +276,7 @@ extern int str2prefix (const char *, struct prefix *);
 
 #define PREFIX2STR_BUFFER  PREFIX_STRLEN
 
-extern const char *prefix2str (union prefix46constptr, char *, int);
+extern const char *prefix2str (union prefixconstptr, char *, int);
 extern int prefix_match (const struct prefix *, const struct prefix *);
 extern int prefix_same (const struct prefix *, const struct prefix *);
 extern int prefix_cmp (const struct prefix *, const struct prefix *);
@@ -282,6 +326,9 @@ extern int ip6_masklen (struct in6_addr);
 extern void masklen2ip6 (const int, struct in6_addr *);
 
 extern const char *inet6_ntoa (struct in6_addr);
+
+extern int prefix_str2mac(const char *str, struct ethaddr *mac);
+extern char *prefix_mac2str(const struct ethaddr *mac, char *buf, int size);
 
 static inline int ipv6_martian (struct in6_addr *addr)
 {
