@@ -214,10 +214,10 @@ argv_find_and_parse_safi (struct cmd_token **argv, int argc, int *index, safi_t 
 }
 
 /*
- * bgp_vty_find_and_parse_afi_safi_vrf
+ * bgp_vty_find_and_parse_afi_safi_bgp
  *
- * For a given 'show ...' command, correctly parse the afi/safi/vrf out from it
- * This function *assumes* that the calling function pre-sets the afi/safi/vrf
+ * For a given 'show ...' command, correctly parse the afi/safi/bgp out from it
+ * This function *assumes* that the calling function pre-sets the afi/safi/bgp
  * to appropriate values for the calling function.  This is to allow the
  * calling function to make decisions appropriate for the show command
  * that is being parsed.
@@ -238,7 +238,7 @@ argv_find_and_parse_safi (struct cmd_token **argv, int argc, int *index, safi_t 
  * idx  -> The current place in the command, generally should be 0 for this function
  * afi  -> The parsed afi if it was included in the show command, returned here
  * safi -> The parsed safi if it was included in the show command, returned here
- * vrf  -> The parsed vrf id if it was included in the show command, returned here
+ * bgp  -> Pointer to the bgp data structure we need to fill in.
  *
  * The function returns the correct location in the parse tree for the
  * last token found.
@@ -247,14 +247,14 @@ argv_find_and_parse_safi (struct cmd_token **argv, int argc, int *index, safi_t 
  * it found the last token.
  */
 int
-bgp_vty_find_and_parse_afi_safi_vrf (struct vty *vty, struct cmd_token **argv, int argc, int *idx,
-                                     afi_t *afi, safi_t *safi, vrf_id_t *vrf)
+bgp_vty_find_and_parse_afi_safi_bgp (struct vty *vty, struct cmd_token **argv, int argc, int *idx,
+                                     afi_t *afi, safi_t *safi, struct bgp **bgp)
 {
   char *vrf_name = NULL;
 
   assert (afi);
   assert (safi);
-  assert (vrf && *vrf != VRF_UNKNOWN);
+  assert (bgp);
 
   if (argv_find (argv, argc, "ip", idx))
       *afi = AFI_IP;
@@ -263,25 +263,33 @@ bgp_vty_find_and_parse_afi_safi_vrf (struct vty *vty, struct cmd_token **argv, i
     {
       vrf_name = argv[*idx + 1]->arg;
       *idx += 2;
+
+      if (strmatch (vrf_name, "all"))
+        *bgp = NULL;
+      else
+        {
+          *bgp = bgp_lookup_by_name (vrf_name);
+          if (!*bgp)
+            {
+              vty_out (vty, "View/Vrf specified is unknown: %s%s", vrf_name, VTY_NEWLINE);
+              *idx = 0;
+              return 0;
+            }
+        }
+    }
+  else
+    {
+      *bgp = bgp_get_default ();
+      if (!*bgp)
+        {
+          vty_out (vty, "Unable to find default BGP instance%s", VTY_NEWLINE);
+          *idx = 0;
+          return 0;
+        }
     }
 
   if (argv_find_and_parse_afi (argv, argc, idx, afi))
     argv_find_and_parse_safi (argv, argc, idx, safi);
-
-  if (vrf_name)
-    {
-      if (strmatch(vrf_name, "all"))
-       *vrf = VRF_ALL;
-      else
-       *vrf = vrf_name_to_id (vrf_name);
-    }
-
-  if (*vrf == VRF_UNKNOWN)
-    {
-      vty_out (vty, "View/Vrf specified is unknown: %s", vrf_name);
-      *idx = 0;
-      return 0;
-    }
 
   *idx += 1;
   return *idx;
@@ -3409,28 +3417,62 @@ DEFUN (no_neighbor_passive,
 }
 
 /* neighbor shutdown. */
-DEFUN (neighbor_shutdown,
+DEFUN (neighbor_shutdown_msg,
+       neighbor_shutdown_msg_cmd,
+       "neighbor <A.B.C.D|X:X::X:X|WORD> shutdown message MSG...",
+       NEIGHBOR_STR
+       NEIGHBOR_ADDR_STR2
+       "Administratively shut down this neighbor\n"
+       "Add a shutdown message (draft-ietf-idr-shutdown-06)\n"
+       "Shutdown message\n")
+{
+  int idx_peer = 1;
+
+  if (argc >= 5)
+    {
+      struct peer *peer = peer_lookup_vty (vty, argv[idx_peer]->arg);
+      char *message;
+
+      message = argv_concat (argv, argc, 4);
+      peer_tx_shutdown_message_set (peer, message);
+      XFREE (MTYPE_TMP, message);
+    }
+
+  return peer_flag_set_vty (vty, argv[idx_peer]->arg, PEER_FLAG_SHUTDOWN);
+}
+
+ALIAS (neighbor_shutdown_msg,
        neighbor_shutdown_cmd,
        "neighbor <A.B.C.D|X:X::X:X|WORD> shutdown",
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
        "Administratively shut down this neighbor\n")
+
+DEFUN (no_neighbor_shutdown_msg,
+       no_neighbor_shutdown_msg_cmd,
+       "no neighbor <A.B.C.D|X:X::X:X|WORD> shutdown message MSG...",
+       NO_STR
+       NEIGHBOR_STR
+       NEIGHBOR_ADDR_STR2
+       "Administratively shut down this neighbor\n"
+       "Remove a shutdown message (draft-ietf-idr-shutdown-06)\n"
+       "Shutdown message\n")
 {
-  int idx_peer = 1;
-  return peer_flag_set_vty (vty, argv[idx_peer]->arg, PEER_FLAG_SHUTDOWN);
+  int idx_peer = 2;
+
+  struct peer *peer = peer_lookup_vty (vty, argv[idx_peer]->arg);
+  peer_tx_shutdown_message_unset (peer);
+
+  return peer_flag_unset_vty (vty, argv[idx_peer]->arg, PEER_FLAG_SHUTDOWN);
 }
 
-DEFUN (no_neighbor_shutdown,
+ALIAS (no_neighbor_shutdown_msg,
        no_neighbor_shutdown_cmd,
        "no neighbor <A.B.C.D|X:X::X:X|WORD> shutdown",
        NO_STR
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
        "Administratively shut down this neighbor\n")
-{
-  int idx_peer = 2;
-  return peer_flag_unset_vty (vty, argv[idx_peer]->arg, PEER_FLAG_SHUTDOWN);
-}
 
 /* neighbor capability dynamic. */
 DEFUN (neighbor_capability_dynamic,
@@ -8277,6 +8319,20 @@ bgp_show_peer (struct vty *vty, struct peer *p, u_char use_json, json_object *js
               json_object_string_add(json_neigh, "lastErrorCodeSubcode", errorcodesubcode_hexstr);
               snprintf(errorcodesubcode_str, 255, "%s%s", code_str, subcode_str);
               json_object_string_add(json_neigh, "lastNotificationReason", errorcodesubcode_str);
+              if (p->last_reset == PEER_DOWN_NOTIFY_RECEIVED
+                  && p->notify.code == BGP_NOTIFY_CEASE
+                  && (p->notify.subcode == BGP_NOTIFY_CEASE_ADMIN_SHUTDOWN
+                      || p->notify.subcode == BGP_NOTIFY_CEASE_ADMIN_RESET)
+                  && p->notify.length)
+                {
+                  char msgbuf[1024];
+                  const char *msg_str;
+
+                  msg_str = bgp_notify_admin_message(msgbuf, sizeof(msgbuf),
+                                                     (u_char*)p->notify.data, p->notify.length);
+                  if (msg_str)
+                    json_object_string_add(json_neigh, "lastShutdownDescription", msg_str);
+                }
             }
         }
       else
@@ -8292,6 +8348,20 @@ bgp_show_peer (struct vty *vty, struct peer *p, u_char use_json, json_object *js
               vty_out (vty, "due to NOTIFICATION %s (%s%s)%s",
                        p->last_reset == PEER_DOWN_NOTIFY_SEND ? "sent" : "received",
                        code_str, subcode_str, VTY_NEWLINE);
+              if (p->last_reset == PEER_DOWN_NOTIFY_RECEIVED
+                  && p->notify.code == BGP_NOTIFY_CEASE
+                  && (p->notify.subcode == BGP_NOTIFY_CEASE_ADMIN_SHUTDOWN
+                      || p->notify.subcode == BGP_NOTIFY_CEASE_ADMIN_RESET)
+                  && p->notify.length)
+                {
+                  char msgbuf[1024];
+                  const char *msg_str;
+
+                  msg_str = bgp_notify_admin_message(msgbuf, sizeof(msgbuf),
+                                                     (u_char*)p->notify.data, p->notify.length);
+                  if (msg_str)
+                    vty_out (vty, "    Message: \"%s\"%s", msg_str, VTY_NEWLINE);
+                }
             }
           else
             {
@@ -10575,6 +10645,8 @@ bgp_vty_init (void)
   /* "neighbor shutdown" commands. */
   install_element (BGP_NODE, &neighbor_shutdown_cmd);
   install_element (BGP_NODE, &no_neighbor_shutdown_cmd);
+  install_element (BGP_NODE, &neighbor_shutdown_msg_cmd);
+  install_element (BGP_NODE, &no_neighbor_shutdown_msg_cmd);
 
   /* "neighbor capability extended-nexthop" commands.*/
   install_element (BGP_NODE, &neighbor_capability_enhe_cmd);

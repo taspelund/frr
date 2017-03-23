@@ -80,6 +80,8 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "bgpd/bgp_memory.h"
 #include "bgpd/bgp_evpn_vty.h"
 
+
+DEFINE_MTYPE_STATIC(BGPD, PEER_TX_SHUTDOWN_MSG, "Peer shutdown message (TX)");
 DEFINE_QOBJ_TYPE(bgp_master)
 DEFINE_QOBJ_TYPE(bgp)
 DEFINE_QOBJ_TYPE(peer)
@@ -1071,6 +1073,8 @@ peer_free (struct peer *peer)
       !peer_dynamic_neighbor (peer))
     bgp_delete_connected_nexthop (family2afi(peer->su.sa.sa_family), peer);
 
+  XFREE (MTYPE_PEER_TX_SHUTDOWN_MSG, peer->tx_shutdown_message);
+
   if (peer->desc)
     {
       XFREE (MTYPE_PEER_DESC, peer->desc);
@@ -1431,7 +1435,7 @@ bgp_peer_conf_if_to_su_update (struct peer *peer)
     return;
 
   prev_family = peer->su.sa.sa_family;
-  if ((ifp = if_lookup_by_name_vrf (peer->conf_if, peer->bgp->vrf_id)))
+  if ((ifp = if_lookup_by_name (peer->conf_if, peer->bgp->vrf_id)))
     {
       peer->ifp = ifp;
       /* If BGP unnumbered is not "v6only", we first see if we can derive the
@@ -2529,13 +2533,13 @@ peer_group_delete (struct peer_group *group)
   XFREE(MTYPE_PEER_GROUP_HOST, group->name);
   group->name = NULL;
 
+  bfd_info_free(&(group->conf->bfd_info));
+
   group->conf->group = NULL;
   peer_delete (group->conf);
 
   /* Delete from all peer_group list. */
   listnode_delete (bgp->group, group);
-
-  bfd_info_free(&(group->conf->bfd_info));
 
   peer_group_free (group);
 
@@ -3811,8 +3815,31 @@ peer_flag_modify_action (struct peer *peer, u_int32_t flag)
             peer_nsf_stop (peer);
 
 	  if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->status))
-	    bgp_notify_send (peer, BGP_NOTIFY_CEASE,
-			     BGP_NOTIFY_CEASE_ADMIN_SHUTDOWN);
+            {
+              char *msg = peer->tx_shutdown_message;
+              size_t msglen;
+
+              if (!msg && peer_group_active (peer))
+                 msg = peer->group->conf->tx_shutdown_message;
+              msglen = msg ? strlen(msg) : 0;
+              if (msglen > 128)
+                 msglen = 128;
+
+              if (msglen)
+                {
+                  u_char msgbuf[129];
+
+                  msgbuf[0] = msglen;
+                  memcpy(msgbuf + 1, msg, msglen);
+
+                  bgp_notify_send_with_data (peer, BGP_NOTIFY_CEASE,
+                                             BGP_NOTIFY_CEASE_ADMIN_SHUTDOWN,
+                                             msgbuf, msglen + 1);
+                }
+              else
+                bgp_notify_send (peer, BGP_NOTIFY_CEASE,
+                                 BGP_NOTIFY_CEASE_ADMIN_SHUTDOWN);
+            }
 	  else
             bgp_session_reset(peer);
 	}
@@ -4093,6 +4120,21 @@ peer_af_flag_unset (struct peer *peer, afi_t afi, safi_t safi, u_int32_t flag)
 {
   return peer_af_flag_modify (peer, afi, safi, flag, 0);
 }
+
+
+int peer_tx_shutdown_message_set (struct peer *peer, const char *msg)
+{
+  XFREE (MTYPE_PEER_TX_SHUTDOWN_MSG, peer->tx_shutdown_message);
+  peer->tx_shutdown_message = msg ? XSTRDUP (MTYPE_PEER_TX_SHUTDOWN_MSG, msg) : NULL;
+  return 0;
+}
+
+int peer_tx_shutdown_message_unset (struct peer *peer)
+{
+  XFREE (MTYPE_PEER_TX_SHUTDOWN_MSG, peer->tx_shutdown_message);
+  return 0;
+}
+
 
 /* EBGP multihop configuration. */
 int
@@ -6615,9 +6657,14 @@ bgp_config_write_peer_global (struct vty *vty, struct bgp *bgp,
   if (CHECK_FLAG (peer->flags, PEER_FLAG_SHUTDOWN))
     {
       if (! peer_group_active (peer) ||
-          ! CHECK_FLAG (g_peer->flags, PEER_FLAG_SHUTDOWN))
+          ! CHECK_FLAG (g_peer->flags, PEER_FLAG_SHUTDOWN) ||
+          peer->tx_shutdown_message)
         {
-          vty_out (vty, " neighbor %s shutdown%s", addr, VTY_NEWLINE);
+          if (peer->tx_shutdown_message)
+            vty_out (vty, " neighbor %s shutdown message %s%s", addr,
+                     peer->tx_shutdown_message, VTY_NEWLINE);
+          else
+            vty_out (vty, " neighbor %s shutdown%s", addr, VTY_NEWLINE);
         }
     }
 
@@ -7541,7 +7588,7 @@ bgp_config_write (struct vty *vty)
 }
 
 void
-bgp_master_init (void)
+bgp_master_init (struct thread_master *master)
 {
   qobj_init ();
 
@@ -7551,7 +7598,7 @@ bgp_master_init (void)
   bm->bgp = list_new ();
   bm->listen_sockets = list_new ();
   bm->port = BGP_PORT_DEFAULT;
-  bm->master = thread_master_create ();
+  bm->master = master;
   bm->start_time = bgp_clock ();
   bm->t_rmap_update = NULL;
   bm->rmap_update_timer = RMAP_DEFAULT_UPDATE_TIMER;

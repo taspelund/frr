@@ -24,6 +24,7 @@ Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 #include "qobj.h"
 #include "lib/json.h"
 #include "vrf.h"
+#include "vty.h"
 
 /* For union sockunion.  */
 #include "queue.h"
@@ -399,6 +400,7 @@ struct bgp_notify
   u_char subcode;
   char *data;
   bgp_size_t length;
+  u_char *raw_data;
 };
 
 /* Next hop self address. */
@@ -674,6 +676,8 @@ struct peer
 #if ENABLE_BGP_VNC
 #define PEER_FLAG_IS_RFAPI_HD		    (1 << 15) /* attached to rfapi HD */
 #endif
+  /* outgoing message sent in CEASE_ADMIN_SHUTDOWN notify */
+  char *tx_shutdown_message;
 
   /* NSF mode (graceful restart) */
   u_char nsf[AFI_MAX][SAFI_MAX];
@@ -1214,7 +1218,7 @@ extern char *peer_uptime (time_t, char *, size_t, u_char, json_object *);
 extern int bgp_config_write (struct vty *);
 extern void bgp_config_write_family_header (struct vty *, afi_t, safi_t, int *);
 
-extern void bgp_master_init (void);
+extern void bgp_master_init (struct thread_master *master);
 
 extern void bgp_init (void);
 extern void bgp_route_map_init (void);
@@ -1352,6 +1356,9 @@ extern int peer_clear_soft (struct peer *, afi_t, safi_t, enum bgp_clear_type);
 
 extern int peer_ttl_security_hops_set (struct peer *, int);
 extern int peer_ttl_security_hops_unset (struct peer *);
+
+extern int peer_tx_shutdown_message_set (struct peer *, const char *msg);
+extern int peer_tx_shutdown_message_unset (struct peer *);
 
 extern int bgp_route_map_update_timer (struct thread *thread);
 extern void bgp_route_map_terminate(void);

@@ -1168,7 +1168,8 @@ static void pim_show_join(struct vty *vty, u_char uj)
       json_object_string_add(json_row, "upTime", uptime);
       json_object_string_add(json_row, "expire", expire);
       json_object_string_add(json_row, "prune", prune);
-      json_object_string_add(json_row, "channelJoinName", pim_ifchannel_ifjoin_name(ch->ifjoin_state));
+      json_object_string_add(json_row, "channelJoinName",
+                             pim_ifchannel_ifjoin_name(ch->ifjoin_state, ch->flags));
       if (PIM_IF_FLAG_TEST_S_G_RPT(ch->flags))
         json_object_int_add(json_row, "SGRpt", 1);
 
@@ -1187,7 +1188,7 @@ static void pim_show_join(struct vty *vty, u_char uj)
 	      inet_ntoa(ifaddr),
 	      ch_src_str,
 	      ch_grp_str,
-	      pim_ifchannel_ifjoin_name(ch->ifjoin_state),
+	      pim_ifchannel_ifjoin_name(ch->ifjoin_state, ch->flags),
 	      uptime,
 	      expire,
 	      prune,
@@ -1422,6 +1423,14 @@ pim_show_state(struct vty *vty, const char *src_or_group, const char *group, u_c
       if (!json_ifp_in) {
         json_ifp_in = json_object_new_object();
         json_object_object_add(json_source, in_ifname, json_ifp_in);
+        json_object_int_add (json_source, "Installed", c_oil->installed);
+        json_object_int_add (json_source, "RefCount", c_oil->oil_ref_count);
+        json_object_int_add (json_source, "OilListSize", c_oil->oil_size);
+        json_object_int_add (json_source, "OilRescan", c_oil->oil_inherited_rescan);
+        json_object_int_add (json_source, "LastUsed", c_oil->cc.lastused);
+        json_object_int_add (json_source, "PacketCount", c_oil->cc.pktcnt);
+        json_object_int_add (json_source, "ByteCount", c_oil->cc.bytecnt);
+        json_object_int_add (json_source, "WrongInterface", c_oil->cc.wrong_if);
       }
     } else {
         vty_out(vty, "%-9d %-15s  %-15s  %-7s  ",
@@ -1643,6 +1652,44 @@ json_object_pim_upstream_add (json_object *json, struct pim_upstream *up)
     json_object_boolean_true_add(json, "sourceMsdp");
 }
 
+static const char *
+pim_upstream_state2brief_str (enum pim_upstream_state join_state, char *state_str)
+{
+  switch (join_state)
+    {
+    case PIM_UPSTREAM_NOTJOINED:
+      strcpy (state_str, "NotJ");
+      break;
+    case PIM_UPSTREAM_JOINED:
+      strcpy (state_str, "J");
+      break;
+    default:
+      strcpy (state_str, "Unk");
+    }
+  return state_str;
+}
+
+static const char *
+pim_reg_state2brief_str (enum pim_reg_state reg_state, char *state_str)
+{
+  switch (reg_state)
+    {
+    case PIM_REG_NOINFO:
+      strcpy (state_str, "RegNI");
+      break;
+    case PIM_REG_JOIN:
+      strcpy (state_str, "RegJ");
+      break;
+    case PIM_REG_JOIN_PENDING:
+    case PIM_REG_PRUNE:
+      strcpy (state_str, "RegP");
+      break;
+    default:
+      strcpy (state_str, "Unk");
+    }
+  return state_str;
+}
+
 static void pim_show_upstream(struct vty *vty, u_char uj)
 {
   struct listnode     *upnode;
@@ -1667,14 +1714,37 @@ static void pim_show_upstream(struct vty *vty, u_char uj)
     char rs_timer[10];
     char ka_timer[10];
     char msdp_reg_timer[10];
+    char state_str[PIM_REG_STATE_STR_LEN];
 
     pim_inet4_dump("<src?>", up->sg.src, src_str, sizeof(src_str));
     pim_inet4_dump("<grp?>", up->sg.grp, grp_str, sizeof(grp_str));
     pim_time_uptime(uptime, sizeof(uptime), now - up->state_transition);
     pim_time_timer_to_hhmmss (join_timer, sizeof(join_timer), up->t_join_timer);
+
+    /*
+     * If we have a J/P timer for the neighbor display that
+     */
+    if (!up->t_join_timer)
+      {
+        struct pim_neighbor *nbr;
+
+        nbr = pim_neighbor_find (up->rpf.source_nexthop.interface,
+                                 up->rpf.rpf_addr.u.prefix4);
+        if (nbr)
+          pim_time_timer_to_hhmmss (join_timer, sizeof(join_timer), nbr->jp_timer);
+      }
+
     pim_time_timer_to_hhmmss (rs_timer, sizeof (rs_timer), up->t_rs_timer);
     pim_time_timer_to_hhmmss (ka_timer, sizeof (ka_timer), up->t_ka_timer);
     pim_time_timer_to_hhmmss (msdp_reg_timer, sizeof (msdp_reg_timer), up->t_msdp_reg_timer);
+
+    pim_upstream_state2brief_str (up->join_state, state_str);
+    if (up->reg_state != PIM_REG_NOINFO) {
+      char tmp_str[PIM_REG_STATE_STR_LEN];
+
+      sprintf (state_str + strlen (state_str), ",%s",
+               pim_reg_state2brief_str (up->reg_state, tmp_str));
+    }
 
     if (uj) {
       json_object_object_get_ex(json, grp_str, &json_group);
@@ -1689,7 +1759,9 @@ static void pim_show_upstream(struct vty *vty, u_char uj)
       json_object_string_add(json_row, "inboundInterface", up->rpf.source_nexthop.interface->name);
       json_object_string_add(json_row, "source", src_str);
       json_object_string_add(json_row, "group", grp_str);
-      json_object_string_add(json_row, "state", pim_upstream_state2str (up->join_state));
+      json_object_string_add(json_row, "state", state_str);
+      json_object_string_add(json_row, "joinState", pim_upstream_state2str (up->join_state));
+      json_object_string_add(json_row, "regState", pim_reg_state2str (up->reg_state, state_str));
       json_object_string_add(json_row, "upTime", uptime);
       json_object_string_add(json_row, "joinTimer", join_timer);
       json_object_string_add(json_row, "resetTimer", rs_timer);
@@ -1703,7 +1775,7 @@ static void pim_show_upstream(struct vty *vty, u_char uj)
               up->rpf.source_nexthop.interface->name,
               src_str,
               grp_str,
-              pim_upstream_state2str (up->join_state),
+              state_str,
               uptime,
               join_timer,
               rs_timer,
@@ -2342,44 +2414,6 @@ static void mroute_del_all()
   }
 }
 
-static void static_mroute_add_all()
-{
-  struct listnode     *node;
-  struct static_route *s_route;
-
-  for (ALL_LIST_ELEMENTS_RO(qpim_static_route_list, node, s_route)) {
-    if (pim_mroute_add(&s_route->c_oil, __PRETTY_FUNCTION__)) {
-      /* just log warning */
-      char source_str[INET_ADDRSTRLEN];
-      char group_str[INET_ADDRSTRLEN];
-      pim_inet4_dump("<source?>", s_route->c_oil.oil.mfcc_origin, source_str, sizeof(source_str));
-      pim_inet4_dump("<group?>", s_route->c_oil.oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-      zlog_warn("%s %s: (S,G)=(%s,%s) failure writing MFC",
-      __FILE__, __PRETTY_FUNCTION__,
-      source_str, group_str);
-    }
-  }
-}
-
-static void static_mroute_del_all()
-{
-   struct listnode     *node;
-   struct static_route *s_route;
-
-   for (ALL_LIST_ELEMENTS_RO(qpim_static_route_list, node, s_route)) {
-     if (pim_mroute_del(&s_route->c_oil, __PRETTY_FUNCTION__)) {
-       /* just log warning */
-       char source_str[INET_ADDRSTRLEN];
-       char group_str[INET_ADDRSTRLEN];
-       pim_inet4_dump("<source?>", s_route->c_oil.oil.mfcc_origin, source_str, sizeof(source_str));
-       pim_inet4_dump("<group?>", s_route->c_oil.oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-       zlog_warn("%s %s: (S,G)=(%s,%s) failure clearing MFC",
-       __FILE__, __PRETTY_FUNCTION__,
-       source_str, group_str);
-     }
-   }
-}
-
 DEFUN (clear_ip_mroute,
        clear_ip_mroute_cmd,
        "clear ip mroute",
@@ -2670,12 +2704,12 @@ DEFUN (show_ip_pim_state,
   if (uj)
     argc--;
 
-  if (argc == 5)
+  if (argc == 6)
     {
       src_or_group = argv[4]->arg;
       group = argv[5]->arg;
     }
-  else if (argc == 4)
+  else if (argc == 5)
     src_or_group = argv[4]->arg;
 
   pim_show_state(vty, src_or_group, group, uj);
@@ -2815,22 +2849,16 @@ DEFUN (show_ip_multicast,
 {
   time_t now = pim_time_monotonic_sec();
 
-  if (PIM_MROUTE_IS_ENABLED) {
-    char uptime[10];
+  char uptime[10];
 
-    vty_out(vty, "Mroute socket descriptor: %d%s",
-	    qpim_mroute_socket_fd,
-	    VTY_NEWLINE);
+  vty_out(vty, "Mroute socket descriptor: %d%s",
+          qpim_mroute_socket_fd,
+          VTY_NEWLINE);
 
-    pim_time_uptime(uptime, sizeof(uptime), now - qpim_mroute_socket_creation);
-    vty_out(vty, "Mroute socket uptime: %s%s",
-	    uptime,
-	    VTY_NEWLINE);
-  }
-  else {
-    vty_out(vty, "Multicast disabled%s",
-	    VTY_NEWLINE);
-  }
+  pim_time_uptime(uptime, sizeof(uptime), now - qpim_mroute_socket_creation);
+  vty_out(vty, "Mroute socket uptime: %s%s",
+          uptime,
+          VTY_NEWLINE);
 
   vty_out(vty, "%s", VTY_NEWLINE);
 
@@ -3570,31 +3598,24 @@ DEFUN (no_ip_pim_rp_prefix_list,
   return pim_no_rp_cmd_worker (vty, argv[4]->arg, NULL, argv[6]->arg);
 }
 
-DEFUN (ip_multicast_routing,
-       ip_multicast_routing_cmd,
-       "ip multicast-routing",
-       IP_STR
-       "Enable IP multicast forwarding\n")
+DEFUN_HIDDEN (ip_multicast_routing,
+              ip_multicast_routing_cmd,
+              "ip multicast-routing",
+              IP_STR
+              "Enable IP multicast forwarding\n")
 {
-  pim_mroute_socket_enable();
-  pim_if_add_vif_all();
-  mroute_add_all();
-  static_mroute_add_all();
   return CMD_SUCCESS;
 }
 
-DEFUN (no_ip_multicast_routing,
-       no_ip_multicast_routing_cmd,
-       "no ip multicast-routing",
-       NO_STR
-       IP_STR
-       "Global IP configuration subcommands\n"
-       "Enable IP multicast forwarding\n")
+DEFUN_HIDDEN (no_ip_multicast_routing,
+              no_ip_multicast_routing_cmd,
+              "no ip multicast-routing",
+              NO_STR
+              IP_STR
+              "Global IP configuration subcommands\n"
+              "Enable IP multicast forwarding\n")
 {
-  mroute_del_all();
-  static_mroute_del_all();
-  pim_if_del_vif_all();
-  pim_mroute_socket_disable();
+  vty_out (vty, "Command is Disabled and will be removed in a future version%s",  VTY_NEWLINE);
   return CMD_SUCCESS;
 }
 
@@ -3657,13 +3678,9 @@ DEFUN (no_ip_ssmpingd,
   return CMD_SUCCESS;
 }
 
-DEFUN (interface_ip_igmp,
-       interface_ip_igmp_cmd,
-       "ip igmp",
-       IP_STR
-       IFACE_IGMP_STR)
+static int
+pim_cmd_igmp_start (struct vty *vty, struct interface *ifp)
 {
-  VTY_DECLVAR_CONTEXT(interface, ifp);
   struct pim_interface *pim_ifp;
 
   pim_ifp = ifp->info;
@@ -3684,6 +3701,17 @@ DEFUN (interface_ip_igmp,
   pim_if_membership_refresh(ifp);
 
   return CMD_SUCCESS;
+}
+
+DEFUN (interface_ip_igmp,
+       interface_ip_igmp_cmd,
+       "ip igmp",
+       IP_STR
+       IFACE_IGMP_STR)
+{
+  VTY_DECLVAR_CONTEXT(interface, ifp);
+
+  return pim_cmd_igmp_start(vty, ifp);
 }
 
 DEFUN (interface_no_ip_igmp,
@@ -3949,15 +3977,15 @@ DEFUN (interface_ip_igmp_query_interval,
   struct pim_interface *pim_ifp;
   int query_interval;
   int query_interval_dsec;
+  int ret;
 
   pim_ifp = ifp->info;
 
   if (!pim_ifp) {
-    vty_out(vty,
-	    "IGMP not enabled on interface %s. Please enable IGMP first.%s",
-	    ifp->name,
-	    VTY_NEWLINE);
-    return CMD_WARNING;
+    ret = pim_cmd_igmp_start(vty, ifp);
+    if (ret != CMD_SUCCESS)
+      return ret;
+    pim_ifp = ifp->info;
   }
 
   query_interval = atoi(argv[3]->arg);
@@ -4038,15 +4066,15 @@ DEFUN (interface_ip_igmp_version,
   VTY_DECLVAR_CONTEXT(interface,ifp);
   struct pim_interface *pim_ifp;
   int igmp_version;
+  int ret;
 
   pim_ifp = ifp->info;
 
   if (!pim_ifp) {
-    vty_out(vty,
-	    "IGMP not enabled on interface %s. Please enable IGMP first.%s",
-	    ifp->name,
-	    VTY_NEWLINE);
-    return CMD_WARNING;
+    ret = pim_cmd_igmp_start(vty, ifp);
+    if (ret != CMD_SUCCESS)
+      return ret;
+    pim_ifp = ifp->info;
   }
 
   igmp_version = atoi(argv[3]->arg);
@@ -4091,15 +4119,15 @@ DEFUN (interface_ip_igmp_query_max_response_time,
   VTY_DECLVAR_CONTEXT(interface, ifp);
   struct pim_interface *pim_ifp;
   int query_max_response_time;
+  int ret;
 
   pim_ifp = ifp->info;
 
   if (!pim_ifp) {
-    vty_out(vty,
-	    "IGMP not enabled on interface %s. Please enable IGMP first.%s",
-	    ifp->name,
-	    VTY_NEWLINE);
-    return CMD_WARNING;
+    ret = pim_cmd_igmp_start(vty, ifp);
+    if (ret != CMD_SUCCESS)
+      return ret;
+    pim_ifp = ifp->info;
   }
 
   query_max_response_time = atoi(argv[3]->arg);
@@ -4154,15 +4182,15 @@ DEFUN_HIDDEN (interface_ip_igmp_query_max_response_time_dsec,
   struct pim_interface *pim_ifp;
   int query_max_response_time_dsec;
   int default_query_interval_dsec;
+  int ret;
 
   pim_ifp = ifp->info;
 
   if (!pim_ifp) {
-    vty_out(vty,
-	    "IGMP not enabled on interface %s. Please enable IGMP first.%s",
-	    ifp->name,
-	    VTY_NEWLINE);
-    return CMD_WARNING;
+    ret = pim_cmd_igmp_start(vty, ifp);
+    if (ret != CMD_SUCCESS)
+      return ret;
+    pim_ifp = ifp->info;
   }
 
   query_max_response_time_dsec = atoi(argv[4]->arg);
@@ -4399,7 +4427,7 @@ DEFUN (interface_ip_mroute,
    int               result;
 
    oifname = argv[idx_interface]->arg;
-   oif = if_lookup_by_name(oifname);
+   oif = if_lookup_by_name(oifname, VRF_DEFAULT);
    if (!oif) {
      vty_out(vty, "No such interface name %s%s",
         oifname, VTY_NEWLINE);
@@ -4446,7 +4474,7 @@ DEFUN (interface_ip_mroute_source,
    int               result;
 
    oifname = argv[idx_interface]->arg;
-   oif = if_lookup_by_name(oifname);
+   oif = if_lookup_by_name(oifname, VRF_DEFAULT);
    if (!oif) {
      vty_out(vty, "No such interface name %s%s",
         oifname, VTY_NEWLINE);
@@ -4497,7 +4525,7 @@ DEFUN (interface_no_ip_mroute,
    int               result;
 
    oifname = argv[idx_interface]->arg;
-   oif = if_lookup_by_name(oifname);
+   oif = if_lookup_by_name(oifname, VRF_DEFAULT);
    if (!oif) {
      vty_out(vty, "No such interface name %s%s",
         oifname, VTY_NEWLINE);
@@ -4545,7 +4573,7 @@ DEFUN (interface_no_ip_mroute_source,
    int               result;
 
    oifname = argv[idx_interface]->arg;
-   oif = if_lookup_by_name(oifname);
+   oif = if_lookup_by_name(oifname, VRF_DEFAULT);
    if (!oif) {
      vty_out(vty, "No such interface name %s%s",
         oifname, VTY_NEWLINE);

@@ -118,7 +118,6 @@ pim_mroute_msg_nocache (int fd, struct interface *ifp, const struct igmpmsg *msg
   struct pim_upstream *up;
   struct pim_rpf *rpg;
   struct prefix_sg sg;
-  struct channel_oil *oil;
 
   rpg = RP(msg->im_dst);
   /*
@@ -153,25 +152,17 @@ pim_mroute_msg_nocache (int fd, struct interface *ifp, const struct igmpmsg *msg
   sg.src = msg->im_src;
   sg.grp = msg->im_dst;
 
-  oil = pim_channel_oil_add (&sg, pim_ifp->mroute_vif_index);
-  if (!oil) {
-    if (PIM_DEBUG_MROUTE) {
-      zlog_debug("%s: Failure to add channel oil for %s",
-		 __PRETTY_FUNCTION__,
-		 pim_str_sg_dump (&sg));
+  up = pim_upstream_find_or_add (&sg, ifp, PIM_UPSTREAM_FLAG_MASK_FHR, __PRETTY_FUNCTION__);
+  if (!up)
+    {
+      if (PIM_DEBUG_MROUTE)
+        {
+          zlog_debug("%s: Failure to add upstream information for %s",
+                     __PRETTY_FUNCTION__,
+                     pim_str_sg_dump (&sg));
+        }
+      return 0;
     }
-    return 0;
-  }
-
-  up = pim_upstream_add (&sg, ifp, PIM_UPSTREAM_FLAG_MASK_FHR, __PRETTY_FUNCTION__);
-  if (!up) {
-    if (PIM_DEBUG_MROUTE) {
-      zlog_debug("%s: Failure to add upstream information for %s",
-		 __PRETTY_FUNCTION__,
-		 pim_str_sg_dump (&sg));
-    }
-    return 0;
-  }
 
   /*
    * I moved this debug till after the actual add because
@@ -185,11 +176,10 @@ pim_mroute_msg_nocache (int fd, struct interface *ifp, const struct igmpmsg *msg
   PIM_UPSTREAM_FLAG_SET_SRC_STREAM(up->flags);
   pim_upstream_keep_alive_timer_start (up, qpim_keep_alive_time);
 
-  up->channel_oil = oil;
   up->channel_oil->cc.pktcnt++;
   PIM_UPSTREAM_FLAG_SET_FHR(up->flags);
   pim_channel_add_oif (up->channel_oil, pim_regiface, PIM_OIF_FLAG_PROTO_PIM);
-  up->join_state = PIM_UPSTREAM_JOINED;
+  up->reg_state = PIM_REG_JOIN;
 
   return 0;
 }
@@ -453,7 +443,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
       up->channel_oil = oil;
       up->channel_oil->cc.pktcnt++;
       pim_channel_add_oif (up->channel_oil, pim_regiface, PIM_OIF_FLAG_PROTO_PIM);
-      up->join_state = PIM_UPSTREAM_JOINED;
+      up->reg_state = PIM_REG_JOIN;
       pim_upstream_inherited_olist (up);
 
       // Send the packet to the RP
@@ -608,7 +598,6 @@ static int mroute_read(struct thread *t)
 static void mroute_read_on()
 {
   zassert(!qpim_mroute_socket_reader);
-  zassert(PIM_MROUTE_IS_ENABLED);
 
   THREAD_READ_ON(master, qpim_mroute_socket_reader,
 		 mroute_read, 0, qpim_mroute_socket_fd);
@@ -622,9 +611,6 @@ static void mroute_read_off()
 int pim_mroute_socket_enable()
 {
   int fd;
-
-  if (PIM_MROUTE_IS_ENABLED)
-    return -1;
 
   if ( pimd_privs.change (ZPRIVS_RAISE) )
     zlog_err ("pim_mroute_socket_enable: could not raise privs, %s",
@@ -659,9 +645,6 @@ int pim_mroute_socket_enable()
 
 int pim_mroute_socket_disable()
 {
-  if (PIM_MROUTE_IS_DISABLED)
-    return -1;
-
   if (pim_mroute_set(qpim_mroute_socket_fd, 0)) {
     zlog_warn("Could not disable mroute on socket fd=%d: errno=%d: %s",
 	      qpim_mroute_socket_fd, errno, safe_strerror(errno));
@@ -690,12 +673,6 @@ int pim_mroute_add_vif(struct interface *ifp, struct in_addr ifaddr, unsigned ch
   struct pim_interface *pim_ifp = ifp->info;
   struct vifctl vc;
   int err;
-
-  if (PIM_MROUTE_IS_DISABLED) {
-    zlog_warn("%s: global multicast is disabled",
-	      __PRETTY_FUNCTION__);
-    return -1;
-  }
 
   memset(&vc, 0, sizeof(vc));
   vc.vifc_vifi = pim_ifp->mroute_vif_index;
@@ -740,12 +717,6 @@ int pim_mroute_del_vif(int vif_index)
   struct vifctl vc;
   int err;
 
-  if (PIM_MROUTE_IS_DISABLED) {
-    zlog_warn("%s: global multicast is disabled",
-	      __PRETTY_FUNCTION__);
-    return -1;
-  }
-
   if (PIM_DEBUG_MROUTE)
     {
       struct interface *ifp = pim_if_find_by_vif_index (vif_index);
@@ -777,13 +748,8 @@ int pim_mroute_add(struct channel_oil *c_oil, const char *name)
   qpim_mroute_add_last = pim_time_monotonic_sec();
   ++qpim_mroute_add_events;
 
-  if (PIM_MROUTE_IS_DISABLED) {
-    zlog_warn("%s: global multicast is disabled",
-	      __PRETTY_FUNCTION__);
-    return -1;
-  }
   /* Do not install route if incoming interface is undefined. */
-  if (c_oil->oil.mfcc_parent == MAXVIFS)
+  if (c_oil->oil.mfcc_parent >= MAXVIFS)
     {
       if (PIM_DEBUG_MROUTE)
         {
@@ -857,12 +823,6 @@ int pim_mroute_del (struct channel_oil *c_oil, const char *name)
 
   qpim_mroute_del_last = pim_time_monotonic_sec();
   ++qpim_mroute_del_events;
-
-  if (PIM_MROUTE_IS_DISABLED) {
-    zlog_warn("%s: global multicast is disabled",
-	      __PRETTY_FUNCTION__);
-    return -1;
-  }
 
   if (!c_oil->installed)
     {

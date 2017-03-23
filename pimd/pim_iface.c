@@ -83,12 +83,15 @@ static void *if_list_clean(struct pim_interface *pim_ifp)
     list_delete(pim_ifp->pim_neighbor_list);
   }
 
+  if (pim_ifp->upstream_switch_list)
+    list_delete(pim_ifp->upstream_switch_list);
+
   if (pim_ifp->pim_ifchannel_list) {
     list_delete(pim_ifp->pim_ifchannel_list);
   }
 
   if (pim_ifp->pim_ifchannel_hash)
-    hash_free (pim_ifp->pim_ifchannel_hash);
+    hash_free(pim_ifp->pim_ifchannel_hash);
 
   XFREE(MTYPE_PIM_INTERFACE, pim_ifp);
 
@@ -134,6 +137,7 @@ struct pim_interface *pim_if_new(struct interface *ifp, int igmp, int pim)
   pim_ifp->igmp_join_list = NULL;
   pim_ifp->igmp_socket_list = NULL;
   pim_ifp->pim_neighbor_list = NULL;
+  pim_ifp->upstream_switch_list = NULL;
   pim_ifp->pim_ifchannel_list = NULL;
   pim_ifp->pim_ifchannel_hash = NULL;
   pim_ifp->pim_generation_id = 0;
@@ -156,6 +160,13 @@ struct pim_interface *pim_if_new(struct interface *ifp, int igmp, int pim)
   }
   pim_ifp->pim_neighbor_list->del = (void (*)(void *)) pim_neighbor_free;
 
+  pim_ifp->upstream_switch_list = list_new();
+  if (!pim_ifp->upstream_switch_list) {
+    zlog_err("%s %s: failure: upstream_switch_list=list_new()",
+             __FILE__, __PRETTY_FUNCTION__);
+    return if_list_clean(pim_ifp);
+  }
+
   /* list of struct pim_ifchannel */
   pim_ifp->pim_ifchannel_list = list_new();
   if (!pim_ifp->pim_ifchannel_list) {
@@ -173,9 +184,7 @@ struct pim_interface *pim_if_new(struct interface *ifp, int igmp, int pim)
 
   pim_sock_reset(ifp);
 
-  if (PIM_MROUTE_IS_ENABLED) {
-    pim_if_add_vif(ifp);
-  }
+  pim_if_add_vif(ifp);
 
   return pim_ifp;
 }
@@ -197,12 +206,11 @@ void pim_if_delete(struct interface *ifp)
 
   pim_neighbor_delete_all (ifp, "Interface removed from configuration");
 
-  if (PIM_MROUTE_IS_ENABLED) {
-    pim_if_del_vif(ifp);
-  }
+  pim_if_del_vif(ifp);
 
   list_delete(pim_ifp->igmp_socket_list);
   list_delete(pim_ifp->pim_neighbor_list);
+  list_delete(pim_ifp->upstream_switch_list);
   list_delete(pim_ifp->pim_ifchannel_list);
 
   hash_free (pim_ifp->pim_ifchannel_hash);
@@ -591,16 +599,14 @@ void pim_if_addr_add(struct connected *ifc)
     }
   } /* pim */
 
-  if (PIM_MROUTE_IS_ENABLED) {
     /*
       PIM or IGMP is enabled on interface, and there is at least one
       address assigned, then try to create a vif_index.
     */
-    if (pim_ifp->mroute_vif_index < 0) {
-      pim_if_add_vif(ifp);
-    }
-    pim_ifchannel_scan_forward_start (ifp);
+  if (pim_ifp->mroute_vif_index < 0) {
+    pim_if_add_vif(ifp);
   }
+  pim_ifchannel_scan_forward_start (ifp);
 }
 
 static void pim_if_addr_del_igmp(struct connected *ifc)
@@ -730,16 +736,14 @@ void pim_if_addr_add_all(struct interface *ifp)
 	}
       } /* pim */
     }
-  if (PIM_MROUTE_IS_ENABLED) {
-    /*
-     * PIM or IGMP is enabled on interface, and there is at least one
-     * address assigned, then try to create a vif_index.
-     */
-    if (pim_ifp->mroute_vif_index < 0) {
-      pim_if_add_vif(ifp);
-    }
-    pim_ifchannel_scan_forward_start (ifp);
+  /*
+   * PIM or IGMP is enabled on interface, and there is at least one
+   * address assigned, then try to create a vif_index.
+   */
+  if (pim_ifp->mroute_vif_index < 0) {
+    pim_if_add_vif(ifp);
   }
+  pim_ifchannel_scan_forward_start (ifp);
 
   pim_rp_setup();
   pim_rp_check_on_if_add(pim_ifp);
@@ -854,7 +858,7 @@ pim_find_primary_addr (struct interface *ifp)
   if (!v4_addrs && v6_addrs && !if_is_loopback (ifp))
     {
       struct interface *lo_ifp;
-      lo_ifp = if_lookup_by_name_vrf ("lo", VRF_DEFAULT);
+      lo_ifp = if_lookup_by_name ("lo", VRF_DEFAULT);
       if (lo_ifp)
 	return pim_find_primary_addr (lo_ifp);
     }
@@ -1001,7 +1005,7 @@ struct interface *pim_if_find_by_vif_index(ifindex_t vif_index)
   struct interface *ifp;
 
   if (vif_index == 0)
-    return if_lookup_by_name_vrf ("pimreg", VRF_DEFAULT);
+    return if_lookup_by_name ("pimreg", VRF_DEFAULT);
 
   for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), ifnode, ifp)) {
     if (ifp->info) {
@@ -1024,7 +1028,7 @@ int pim_if_find_vifindex_by_ifindex(ifindex_t ifindex)
   struct pim_interface *pim_ifp;
   struct interface *ifp;
 
-  ifp = if_lookup_by_index_vrf (ifindex, VRF_DEFAULT);
+  ifp = if_lookup_by_index (ifindex, VRF_DEFAULT);
   if (!ifp || !ifp->info)
     return -1;
   pim_ifp = ifp->info;
@@ -1467,7 +1471,7 @@ void pim_if_update_assert_tracking_desired(struct interface *ifp)
 void pim_if_create_pimreg (void)
 {
   if (!pim_regiface) {
-    pim_regiface = if_create("pimreg", strlen("pimreg"));
+    pim_regiface = if_create("pimreg", strlen("pimreg"), VRF_DEFAULT);
     pim_regiface->ifindex = PIM_OIF_PIM_REGISTER_VIF;
 
     pim_if_new(pim_regiface, 0, 0);

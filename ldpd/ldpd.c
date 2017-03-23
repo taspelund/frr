@@ -40,12 +40,12 @@
 #include "zclient.h"
 #include "vrf.h"
 #include "filter.h"
-#include "sockopt.h"
 #include "qobj.h"
+#include "libfrr.h"
 
 static void		 ldpd_shutdown(void);
 static pid_t		 start_child(enum ldpd_process, char *, int, int,
-			    const char *, const char *, const char *);
+			    const char *, const char *, const char *, const char *);
 static int		 main_dispatch_ldpe(struct thread *);
 static int		 main_dispatch_lde(struct thread *);
 static int		 main_imsg_send_ipc_sockets(struct imsgbuf *,
@@ -90,12 +90,6 @@ static pid_t		 lde_pid;
 /* Master of threads. */
 struct thread_master *master;
 
-/* Process ID saved for use by init system */
-static const char *pid_file = PATH_LDPD_PID;
-
-/* Configuration filename and directory. */
-static char config_default[] = SYSCONFDIR LDP_DEFAULT_CONFIG;
-
 /* ldpd privileges */
 static zebra_capabilities_t _caps_p [] =
 {
@@ -117,62 +111,17 @@ struct zebra_privs_t ldpd_privs =
 	.cap_num_i = 0
 };
 
-/* VTY Socket prefix */
-char vty_sock_path[MAXPATHLEN] = LDP_VTYSH_PATH;
-
 /* CTL Socket path */
 char ctl_sock_path[MAXPATHLEN] = LDPD_SOCKET;
 
 /* LDPd options. */
-#define OPTION_VTYSOCK 1000
 #define OPTION_CTLSOCK 1001
 static struct option longopts[] =
 {
-	{ "daemon",      no_argument,       NULL, 'd'},
-	{ "config_file", required_argument, NULL, 'f'},
-	{ "pid_file",    required_argument, NULL, 'i'},
-	{ "socket",      required_argument, NULL, 'z'},
-	{ "dryrun",      no_argument,       NULL, 'C'},
-	{ "help",        no_argument,       NULL, 'h'},
-	{ "vty_addr",    required_argument, NULL, 'A'},
-	{ "vty_port",    required_argument, NULL, 'P'},
-	{ "vty_socket",  required_argument, NULL, OPTION_VTYSOCK},
 	{ "ctl_socket",  required_argument, NULL, OPTION_CTLSOCK},
-	{ "user",        required_argument, NULL, 'u'},
-	{ "group",       required_argument, NULL, 'g'},
-	{ "version",     no_argument,       NULL, 'v'},
+	{ "instance",    required_argument, NULL, 'n'},
 	{ 0 }
 };
-
-/* Help information display. */
-static void __attribute__ ((noreturn))
-usage(char *progname, int status)
-{
-	if (status != 0)
-		fprintf(stderr, "Try `%s --help' for more information.\n",
-		    progname);
-	else {
-		printf("Usage : %s [OPTION...]\n\
-Daemon which manages LDP.\n\n\
--d, --daemon       Runs in daemon mode\n\
--f, --config_file  Set configuration file name\n\
--i, --pid_file     Set process identifier file name\n\
--z, --socket       Set path of zebra socket\n\
--A, --vty_addr     Set vty's bind address\n\
--P, --vty_port     Set vty's port number\n\
-    --vty_socket   Override vty socket path\n\
-    --ctl_socket   Override ctl socket path\n\
--u, --user         User to run as\n\
--g, --group        Group to run as\n\
--v, --version      Print program version\n\
--C, --dryrun       Check configuration for validity and exit\n\
--h, --help         Display this help and exit\n\
-\n\
-Report bugs to %s\n", progname, FRR_BUG_ADDRESS);
-	}
-
-	exit(status);
-}
 
 /* SIGHUP handler. */
 static void
@@ -193,7 +142,7 @@ sigint(void)
 static void
 sigusr1(void)
 {
-	zlog_rotate(NULL);
+	zlog_rotate();
 }
 
 static struct quagga_signal_t ldp_signals[] =
@@ -216,6 +165,17 @@ static struct quagga_signal_t ldp_signals[] =
 	}
 };
 
+FRR_DAEMON_INFO(ldpd, LDP,
+	.vty_port = LDP_VTY_PORT,
+
+	.proghelp = "Implementation of the LDP protocol.",
+
+	.signals = ldp_signals,
+	.n_signals = array_size(ldp_signals),
+
+	.privs = &ldpd_privs,
+)
+
 int
 main(int argc, char *argv[])
 {
@@ -223,73 +183,34 @@ main(int argc, char *argv[])
 	int			 lflag = 0, eflag = 0;
 	int			 pipe_parent2ldpe[2], pipe_parent2ldpe_sync[2];
 	int			 pipe_parent2lde[2], pipe_parent2lde_sync[2];
-	char			*p;
-	char			*vty_addr = NULL;
-	int			 vty_port = LDP_VTY_PORT;
 	char			*ctl_sock_custom_path = NULL;
 	char			*ctl_sock_name;
-	int			 daemon_mode = 0;
 	const char		*user = NULL;
 	const char		*group = NULL;
-	char			*config_file = NULL;
-	char			*progname;
-	struct thread		 thread;
-	int			 dryrun = 0;
+	u_short			 instance = 0;
+	const char		*instance_char = NULL;
 
 	ldpd_process = PROC_MAIN;
-
-	/* Set umask before anything for security */
-	umask(0027);
-
-	/* get program name */
-	progname = ((p = strrchr(argv[0], '/')) ? ++p : argv[0]);
 
 	saved_argv0 = argv[0];
 	if (saved_argv0 == NULL)
 		saved_argv0 = (char *)"ldpd";
 
+	frr_preinit(&ldpd_di, argc, argv);
+	frr_opt_add("LEn:", longopts,
+		"      --ctl_socket   Override ctl socket path\n"
+		"-n,   --instance     Instance id\n");
+
 	while (1) {
 		int opt;
 
-		opt = getopt_long(argc, argv, "df:i:z:hA:P:u:g:vCLE",
-		    longopts, 0);
+		opt = frr_getopt(argc, argv, NULL);
 
 		if (opt == EOF)
 			break;
 
 		switch (opt) {
 		case 0:
-			break;
-		case 'd':
-			daemon_mode = 1;
-			break;
-		case 'f':
-			config_file = optarg;
-			break;
-		case 'A':
-			vty_addr = optarg;
-			break;
-		case 'i':
-			pid_file = optarg;
-			break;
-		case 'z':
-			zclient_serv_path_set(optarg);
-			break;
-		case 'P':
-			/*
-			 * Deal with atoi() returning 0 on failure, and ldpd
-			 * not listening on ldpd port.
-			 */
-			if (strcmp(optarg, "0") == 0) {
-				vty_port = 0;
-				break;
-			}
-			vty_port = atoi(optarg);
-			if (vty_port <= 0 || vty_port > 0xffff)
-				vty_port = LDP_VTY_PORT;
-			break;
-		case OPTION_VTYSOCK:
-			set_socket_path(vty_sock_path, LDP_VTYSH_PATH, optarg, sizeof (vty_sock_path));
 			break;
 		case OPTION_CTLSOCK:
 			ctl_sock_name = strrchr(LDPD_SOCKET, '/');
@@ -310,21 +231,11 @@ main(int argc, char *argv[])
 			strlcat(ctl_sock_path, ctl_sock_name,
 			    sizeof(ctl_sock_path));
 			break;
-		case 'u':
-			user = optarg;
-			break;
-		case 'g':
-			group = optarg;
-			break;
-		case 'v':
-			print_version(progname);
-			exit(0);
-			break;
-		case 'C':
-			dryrun = 1;
-			break;
-		case 'h':
-			usage(progname, 0);
+		case 'n':
+			instance = atoi(optarg);
+			instance_char = optarg;
+			if (instance < 1)
+				exit(0);
 			break;
 		case 'L':
 			lflag = 1;
@@ -333,28 +244,31 @@ main(int argc, char *argv[])
 			eflag = 1;
 			break;
 		default:
-			usage(progname, 1);
+			frr_help_exit(1);
 			break;
 		}
 	}
 
+	user = ldpd_privs.user;
+	group = ldpd_privs.group;
+
 	argc -= optind;
 	argv += optind;
 	if (argc > 0 || (lflag && eflag))
-		usage(progname, 1);
+		frr_help_exit(1);
 
 	/* check for root privileges  */
 	if (geteuid() != 0) {
 		errno = EPERM;
-		perror(progname);
+		perror(ldpd_di.progname);
 		exit(1);
 	}
 
-	zlog_default = openzlog(progname, ZLOG_LDP, 0,
+	openzlog(ldpd_di.progname, "LDP", 0,
 	    LOG_CONS | LOG_NDELAY | LOG_PID, LOG_DAEMON);
 
 	if (lflag)
-		lde(user, group);
+		lde(user, group, instance);
 	else if (eflag)
 		ldpe(user, group, ctl_sock_path);
 
@@ -371,18 +285,10 @@ main(int argc, char *argv[])
 	/* Get configuration file. */
 	ldpd_conf = config_new_empty();
 	ldp_config_reset_main(ldpd_conf, NULL);
-	vty_read_config(config_file, config_default);
 
-	/* Start execution only if not in dry-run mode */
-	if (dryrun)
-		exit(0);
+	frr_config_fork();
 
 	QOBJ_REG (ldpd_conf, ldpd_conf);
-
-	if (daemon_mode && daemon(0, 0) < 0) {
-		log_warn("LDPd daemon failed");
-		exit(1);
-	}
 
 	if (socketpair(AF_UNIX, SOCK_STREAM, PF_UNSPEC, pipe_parent2ldpe) == -1)
 		fatal("socketpair");
@@ -412,16 +318,12 @@ main(int argc, char *argv[])
 	/* start children */
 	lde_pid = start_child(PROC_LDE_ENGINE, saved_argv0,
 	    pipe_parent2lde[1], pipe_parent2lde_sync[1],
-	    user, group, ctl_sock_custom_path);
+	    user, group, ctl_sock_custom_path, instance_char);
 	ldpe_pid = start_child(PROC_LDP_ENGINE, saved_argv0,
 	    pipe_parent2ldpe[1], pipe_parent2ldpe_sync[1],
-	    user, group, ctl_sock_custom_path);
+	    user, group, ctl_sock_custom_path, instance_char);
 
 	/* drop privileges */
-	if (user)
-		ldpd_privs.user = user;
-	if (group)
-		ldpd_privs.group = group;
 	zprivs_init(&ldpd_privs);
 
 	/* setup signal handler */
@@ -471,18 +373,7 @@ main(int argc, char *argv[])
 	if (ldpd_conf->ipv6.flags & F_LDPD_AF_ENABLED)
 		main_imsg_send_net_sockets(AF_INET6);
 
-	/* Process id file create. */
-	pid_output(pid_file);
-
-	/* Create VTY socket */
-	vty_serv_sock(vty_addr, vty_port, vty_sock_path);
-
-	/* Print banner. */
-	log_notice("LDPd %s starting: vty@%d", FRR_VERSION, vty_port);
-
-	/* Fetch next active thread. */
-	while (thread_fetch(master, &thread))
-		thread_call(&thread);
+	frr_run(master);
 
 	/* NOTREACHED */
 	return (0);
@@ -526,16 +417,17 @@ ldpd_shutdown(void)
 	ldp_zebra_destroy();
 	zprivs_terminate(&ldpd_privs);
 	thread_master_free(master);
-	closezlog(zlog_default);
+	closezlog();
 
 	exit(0);
 }
 
 static pid_t
 start_child(enum ldpd_process p, char *argv0, int fd_async, int fd_sync,
-    const char *user, const char *group, const char *ctl_sock_custom_path)
+    const char *user, const char *group, const char *ctl_sock_custom_path,
+    const char *instance)
 {
-	char	*argv[9];
+	char	*argv[13];
 	int	 argc = 0;
 	pid_t	 pid;
 
@@ -577,6 +469,14 @@ start_child(enum ldpd_process p, char *argv0, int fd_async, int fd_sync,
 	if (ctl_sock_custom_path) {
 		argv[argc++] = (char *)"--ctl_socket";
 		argv[argc++] = (char *)ctl_sock_custom_path;
+	}
+	/* zclient serv path */
+	argv[argc++] = (char *)"-z";
+	argv[argc++] = (char *)zclient_serv_path_get();
+	/* instance */
+	if (instance) {
+		argv[argc++] = (char *)"-n";
+		argv[argc++] = (char *)instance;
 	}
 	argv[argc++] = NULL;
 
@@ -1479,7 +1379,7 @@ merge_iface_af(struct iface_af *ia, struct iface_af *xi)
 	if (ia->enabled != xi->enabled) {
 		ia->enabled = xi->enabled;
 		if (ldpd_process == PROC_LDP_ENGINE)
-			if_update(ia->iface, ia->af);
+			ldp_if_update(ia->iface, ia->af);
 	}
 	ia->hello_holdtime = xi->hello_holdtime;
 	ia->hello_interval = xi->hello_interval;

@@ -28,6 +28,7 @@
 #include "zebra_memory.h"
 #include "command.h"
 #include "log.h"
+#include "log_int.h"
 #include "sockunion.h"
 #include "linklist.h"
 #include "thread.h"
@@ -78,6 +79,7 @@ static const struct
   [ZEBRA_ROUTE_OSPF6]   = {ZEBRA_ROUTE_OSPF6,   110},
   [ZEBRA_ROUTE_ISIS]    = {ZEBRA_ROUTE_ISIS,    115},
   [ZEBRA_ROUTE_BGP]     = {ZEBRA_ROUTE_BGP,      20  /* IBGP is 200. */},
+  [ZEBRA_ROUTE_NHRP]    = {ZEBRA_ROUTE_NHRP,     10},
   /* no entry/default: 150 */
 };
 
@@ -110,7 +112,7 @@ _rnode_zlog(const char *_func, vrf_id_t vrf_id, struct route_node *rn, int prior
       snprintf(buf, sizeof(buf), "{(route_node *) NULL}");
     }
 
-  zlog (NULL, priority, "%s: %d:%s: %s", _func, vrf_id, buf, msgbuf);
+  zlog (priority, "%s: %d:%s: %s", _func, vrf_id, buf, msgbuf);
 }
 
 #define rnode_debug(node, vrf_id, ...) \
@@ -270,7 +272,7 @@ rib_nexthop_ipv4_ifindex_add (struct rib *rib, struct in_addr *ipv4,
   if (src)
     nexthop->src.ipv4 = *src;
   nexthop->ifindex = ifindex;
-  ifp = if_lookup_by_index (nexthop->ifindex);
+  ifp = if_lookup_by_index (nexthop->ifindex, VRF_DEFAULT);
   /*Pending: need to think if null ifp here is ok during bootup?
     There was a crash because ifp here was coming to be NULL */
   if (ifp)
@@ -386,7 +388,7 @@ nexthop_active (afi_t afi, struct rib *rib, struct nexthop *nexthop, int set,
    */
   if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ONLINK))
     {
-      ifp = if_lookup_by_index (nexthop->ifindex);
+      ifp = if_lookup_by_index (nexthop->ifindex, VRF_DEFAULT);
       if (ifp && connected_is_unnumbered(ifp))
 	{
 	  if (if_is_operative(ifp))
@@ -936,7 +938,7 @@ nexthop_active_check (struct route_node *rn, struct rib *rib,
   switch (nexthop->type)
     {
     case NEXTHOP_TYPE_IFINDEX:
-      ifp = if_lookup_by_index_vrf (nexthop->ifindex, rib->vrf_id);
+      ifp = if_lookup_by_index (nexthop->ifindex, rib->vrf_id);
       if (ifp && if_is_operative(ifp))
 	SET_FLAG (nexthop->flags, NEXTHOP_FLAG_ACTIVE);
       else
@@ -963,7 +965,7 @@ nexthop_active_check (struct route_node *rn, struct rib *rib,
 	family = AFI_IP6;
       if (IN6_IS_ADDR_LINKLOCAL (&nexthop->gate.ipv6))
 	{
-	  ifp = if_lookup_by_index_vrf (nexthop->ifindex, rib->vrf_id);
+	  ifp = if_lookup_by_index (nexthop->ifindex, rib->vrf_id);
 	  if (ifp && if_is_operative(ifp))
 	    SET_FLAG (nexthop->flags, NEXTHOP_FLAG_ACTIVE);
 	  else
@@ -1019,7 +1021,7 @@ nexthop_active_check (struct route_node *rn, struct rib *rib,
 	  srcdest_rnode2str(rn, buf, sizeof(buf));
 	  zlog_debug("%u:%s: Filtering out with NH out %s due to route map",
 		     rib->vrf_id, buf,
-		     ifindex2ifname_vrf (nexthop->ifindex, rib->vrf_id));
+		     ifindex2ifname (nexthop->ifindex, rib->vrf_id));
 	}
       UNSET_FLAG (nexthop->flags, NEXTHOP_FLAG_ACTIVE);
     }
@@ -1822,6 +1824,7 @@ static const u_char meta_queue_map[ZEBRA_ROUTE_MAX] = {
   [ZEBRA_ROUTE_OSPF]    = 2,
   [ZEBRA_ROUTE_OSPF6]   = 2,
   [ZEBRA_ROUTE_ISIS]    = 2,
+  [ZEBRA_ROUTE_NHRP]    = 2,
   [ZEBRA_ROUTE_BGP]     = 3,
   [ZEBRA_ROUTE_HSLS]    = 4,
   [ZEBRA_ROUTE_TABLE]   = 1,
