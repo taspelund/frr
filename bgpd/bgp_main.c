@@ -401,7 +401,7 @@ int main(int argc, char **argv)
 
 	frr_config_fork();
 	/* must be called after fork() */
-	bgp_pthreads_init();
+	bgp_pthreads_run();
 	frr_run(bm->master);
 
 	/* Not reached. */
