@@ -24,6 +24,9 @@
 #include <stdint.h>
 #include "zebra.h"
 #include "libfrr.h"
+#include "prefix.h"
+#include "vty.h"
+#include "plist.h"
 
 #include "pim_str.h"
 #include "pim_memory.h"
@@ -234,12 +237,24 @@ extern int32_t qpim_register_probe_time;
 #define PIM_DONT_DEBUG_MSDP_PACKETS        (qpim_debugs &= ~PIM_MASK_MSDP_PACKETS)
 #define PIM_DONT_DEBUG_MSDP_INTERNAL       (qpim_debugs &= ~PIM_MASK_MSDP_INTERNAL)
 
+enum pim_spt_switchover {
+  PIM_SPT_IMMEDIATE,
+  PIM_SPT_INFINITY,
+};
+
 /* Per VRF PIM DB */
 struct pim_instance
 {
   afi_t afi;
   vrf_id_t vrf_id;
+
+  enum pim_spt_switchover spt_switchover;
+
   struct hash *rpf_hash;
+
+  void *ssm_info; /* per-vrf SSM configuration */
+  
+  int send_v6_secondary;
 };
 
 extern struct pim_instance *pimg; //Pim Global Instance
@@ -250,5 +265,6 @@ void pim_terminate(void);
 extern void pim_route_map_init (void);
 extern void pim_route_map_terminate(void);
 void pim_vrf_init (void);
+void pim_prefix_list_update (struct prefix_list *plist);
 
 #endif /* PIMD_H */

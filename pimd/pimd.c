@@ -41,6 +41,7 @@
 #include "pim_ssmpingd.h"
 #include "pim_static.h"
 #include "pim_rp.h"
+#include "pim_ssm.h"
 #include "pim_zlookup.h"
 #include "pim_nht.h"
 
@@ -107,8 +108,17 @@ pim_vrf_enable (struct vrf *vrf)
     {
       pimg = pim_instance_init (VRF_DEFAULT, AFI_IP);
       if (pimg == NULL)
-        zlog_err ("%s %s: pim class init failure ", __FILE__,
-              __PRETTY_FUNCTION__);
+        {
+          zlog_err ("%s %s: pim class init failure ", __FILE__,
+                    __PRETTY_FUNCTION__);
+          /*
+           * We will crash and burn otherwise
+           */
+          exit(1);
+      }
+
+    pimg->send_v6_secondary = 1;
+
     }
   return 0;
 }
@@ -182,14 +192,28 @@ pim_rp_list_hash_clean (void *data)
     list_delete_all_node (pnc->upstream_list);
 }
 
+void
+pim_prefix_list_update (struct prefix_list *plist)
+{
+    pim_rp_prefix_list_update (plist);
+    pim_ssm_prefix_list_update (plist);
+}
+
 static void
 pim_instance_terminate (void)
 {
   /* Traverse and cleanup rpf_hash */
-  if (pimg && pimg->rpf_hash)
+  if (pimg->rpf_hash)
     {
       hash_clean (pimg->rpf_hash, (void *) pim_rp_list_hash_clean);
       hash_free (pimg->rpf_hash);
+      pimg->rpf_hash = NULL;
+    }
+
+  if (pimg->ssm_info)
+    {
+      pim_ssm_terminate (pimg->ssm_info);
+      pimg->ssm_info = NULL;
     }
 
   XFREE (MTYPE_PIM_PIM_INSTANCE, pimg);
@@ -228,11 +252,17 @@ pim_instance_init (vrf_id_t vrf_id, afi_t afi)
   pim->vrf_id = vrf_id;
   pim->afi = afi;
 
+  pim->spt_switchover = PIM_SPT_IMMEDIATE;
   pim->rpf_hash = hash_create_size (256, pim_rpf_hash_key, pim_rpf_equal);
 
   if (PIM_DEBUG_ZEBRA)
     zlog_debug ("%s: NHT rpf hash init ", __PRETTY_FUNCTION__);
 
+  pim->ssm_info = pim_ssm_init (vrf_id);
+  if (!pim->ssm_info) {
+    pim_instance_terminate ();
+    return NULL;
+  }
 
   return pim;
 }

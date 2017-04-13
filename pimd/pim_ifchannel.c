@@ -41,6 +41,7 @@
 #include "pim_macro.h"
 #include "pim_oil.h"
 #include "pim_upstream.h"
+#include "pim_ssm.h"
 
 int
 pim_ifchannel_compare (struct pim_ifchannel *ch1, struct pim_ifchannel *ch2)
@@ -898,6 +899,7 @@ void pim_ifchannel_prune(struct interface *ifp,
 	THREAD_TIMER_ON(master, ch->t_ifjoin_expiry_timer,
 			on_ifjoin_expiry_timer,
 			ch, holdtime);
+        pim_upstream_update_join_desired(ch->upstream);
       }
     break;
   case PIM_IFJOIN_PRUNE_PENDING:
@@ -966,6 +968,18 @@ pim_ifchannel_local_membership_add(struct interface *ifp,
   if (!PIM_IF_TEST_PIM(pim_ifp->options))
     return 0;
 
+  /* skip (*,G) ch creation if G is of type SSM */
+  if (sg->src.s_addr == INADDR_ANY)
+    {
+      if (pim_is_grp_ssm (sg->grp))
+        {
+          if (PIM_DEBUG_PIM_EVENTS)
+            zlog_debug("%s: local membership (S,G)=%s ignored as group is SSM",
+                __PRETTY_FUNCTION__, pim_str_sg_dump (sg));
+          return 1;
+        }
+    }
+
   ch = pim_ifchannel_add(ifp, sg, PIM_UPSTREAM_FLAG_MASK_SRC_IGMP);
   if (!ch) {
     return 0;
@@ -992,6 +1006,8 @@ pim_ifchannel_local_membership_add(struct interface *ifp,
 	      pim_upstream_switch (child, PIM_UPSTREAM_JOINED);
 	    }
         }
+      if (pimg->spt_switchover != PIM_SPT_INFINITY)
+        pim_channel_add_oif(up->channel_oil, pim_regiface, PIM_OIF_FLAG_PROTO_IGMP);
     }
 
   return 1;

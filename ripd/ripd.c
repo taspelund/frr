@@ -2802,7 +2802,7 @@ rip_event (enum rip_event event, int sock)
     }
 }
 
-DEFUN (router_rip,
+DEFUN_NOSH (router_rip,
        router_rip_cmd,
        "router rip",
        "Enable a routing process\n"
@@ -4063,11 +4063,6 @@ rip_init (void)
 
   /* Debug related init. */
   rip_debug_init ();
-
-  /* SNMP init. */
-#ifdef HAVE_SNMP
-  rip_snmp_init ();
-#endif /* HAVE_SNMP */
 
   /* Access list install. */
   access_list_init ();

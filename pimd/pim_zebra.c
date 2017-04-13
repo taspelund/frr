@@ -46,6 +46,7 @@
 #include "pim_igmpv3.h"
 #include "pim_jp_agg.h"
 #include "pim_nht.h"
+#include "pim_ssm.h"
 
 #undef PIM_DEBUG_IFADDR_DUMP
 #define PIM_DEBUG_IFADDR_DUMP
@@ -53,9 +54,6 @@
 static struct zclient *zclient = NULL;
 
 static int fib_lookup_if_vif_index(struct in_addr addr);
-static int del_oif(struct channel_oil *channel_oil,
-		   struct interface *oif,
-		   uint32_t proto_mask);
 
 /* Router-id update message from zebra. */
 static int pim_router_id_update_zebra(int command, struct zclient *zclient,
@@ -260,31 +258,11 @@ static int pim_zebra_if_address_add(int command, struct zclient *zclient,
 #endif
   }
 
-  if (p->family != AF_INET)
-    {
-      struct listnode *cnode;
-      struct connected *conn;
-      int v4addrs = 0;
-
-      for (ALL_LIST_ELEMENTS_RO (c->ifp->connected, cnode, conn))
-        {
-          if (conn->address->family == AF_INET)
-	    v4addrs++;
-        }
-      if (!v4addrs && pim_ifp) 
-	{
-	  pim_ifp->primary_address = pim_find_primary_addr (c->ifp);
-	  pim_if_addr_add_all (c->ifp);
-          pim_if_add_vif (c->ifp);
-	}
-      return 0;
-    }
-
   if (!CHECK_FLAG(c->flags, ZEBRA_IFA_SECONDARY)) {
     /* trying to add primary address */
 
     struct in_addr primary_addr = pim_find_primary_addr(c->ifp);
-    if (primary_addr.s_addr != p->u.prefix4.s_addr) {
+    if (p->family != AF_INET || primary_addr.s_addr != p->u.prefix4.s_addr) {
       if (PIM_DEBUG_ZEBRA) {
 	/* but we had a primary address already */
 
@@ -521,8 +499,6 @@ pim_scan_individual_oil (struct channel_oil *c_oil, int in_vif_index)
 		   source_str, group_str,
 		   new_iif->name, input_iface_vif_index);
       }
-
-      //del_oif(c_oil, new_iif, PIM_OIF_FLAG_PROTO_ANY);
     }
 
     /* update iif vif_index */
@@ -606,14 +582,6 @@ void sched_rpf_cache_refresh(void)
                        0, qpim_rpf_cache_refresh_delay_msec);
 }
 
-static int
-pim_zebra_nexthop_update (int command, struct zclient *zclient,
-                          zebra_size_t length, vrf_id_t vrf_id)
-{
-  pim_parse_nexthop_update (zclient, command, vrf_id);
-  return 0;
-}
-
 static void
 pim_zebra_connected (struct zclient *zclient)
 {
@@ -641,7 +609,7 @@ void pim_zebra_init(void)
   zclient->interface_down           = pim_zebra_if_state_down;
   zclient->interface_address_add    = pim_zebra_if_address_add;
   zclient->interface_address_delete = pim_zebra_if_address_del;
-  zclient->nexthop_update           = pim_zebra_nexthop_update;
+  zclient->nexthop_update           = pim_parse_nexthop_update;
 
   zclient_init(zclient, ZEBRA_ROUTE_PIM, 0);
   if (PIM_DEBUG_PIM_TRACE) {
@@ -765,135 +733,82 @@ static int fib_lookup_if_vif_index(struct in_addr addr)
   return vif_index;
 }
 
-static int del_oif(struct channel_oil *channel_oil,
-		   struct interface *oif,
-		   uint32_t proto_mask)
+static void
+igmp_source_forward_reevaluate_one(struct igmp_source *source)
 {
-  struct pim_interface *pim_ifp;
-  int old_ttl;
+  struct prefix_sg sg;
+  struct igmp_group *group = source->source_group;
+  struct pim_ifchannel *ch;
 
-  pim_ifp = oif->info;
+  if ((source->source_addr.s_addr != INADDR_ANY) ||
+      !IGMP_SOURCE_TEST_FORWARDING (source->source_flags))
+    return;
 
-  if (PIM_DEBUG_MROUTE) {
-    char group_str[INET_ADDRSTRLEN]; 
-    char source_str[INET_ADDRSTRLEN];
-    pim_inet4_dump("<group?>", channel_oil->oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-    pim_inet4_dump("<source?>", channel_oil->oil.mfcc_origin, source_str, sizeof(source_str));
-    zlog_debug("%s %s: (S,G)=(%s,%s): proto_mask=%u OIF=%s vif_index=%d",
-	       __FILE__, __PRETTY_FUNCTION__,
-	       source_str, group_str,
-	       proto_mask, oif->name, pim_ifp->mroute_vif_index);
-  }
+  memset (&sg, 0, sizeof (struct prefix_sg));
+  sg.src = source->source_addr;
+  sg.grp = group->group_addr;
 
-  /* Prevent single protocol from unsubscribing same interface from
-     channel (S,G) multiple times */
-  if (!(channel_oil->oif_flags[pim_ifp->mroute_vif_index] & proto_mask)) {
-    if (PIM_DEBUG_MROUTE)
-      {
-	char group_str[INET_ADDRSTRLEN]; 
-	char source_str[INET_ADDRSTRLEN];
-	pim_inet4_dump("<group?>", channel_oil->oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-	pim_inet4_dump("<source?>", channel_oil->oil.mfcc_origin, source_str, sizeof(source_str));
-	zlog_debug("%s %s: nonexistent protocol mask %u removed OIF %s (vif_index=%d, min_ttl=%d) from channel (S,G)=(%s,%s)",
-		   __FILE__, __PRETTY_FUNCTION__,
-		   proto_mask, oif->name, pim_ifp->mroute_vif_index,
-		   channel_oil->oil.mfcc_ttls[pim_ifp->mroute_vif_index],
-		   source_str, group_str);
-      }
-    return -2;
-  }
-
-  /* Mark that protocol is no longer interested in this OIF */
-  channel_oil->oif_flags[pim_ifp->mroute_vif_index] &= ~proto_mask;
-
-  /* Allow multiple protocols to unsubscribe same interface from
-     channel (S,G) multiple times, by silently ignoring requests while
-     there is at least one protocol interested in the channel */
-  if (channel_oil->oif_flags[pim_ifp->mroute_vif_index] & PIM_OIF_FLAG_PROTO_ANY) {
-
-    /* Check the OIF keeps existing before returning, and only log
-       warning otherwise */
-    if (channel_oil->oil.mfcc_ttls[pim_ifp->mroute_vif_index] < 1) {
-      if (PIM_DEBUG_MROUTE)
-	{
-	  char group_str[INET_ADDRSTRLEN];
-	  char source_str[INET_ADDRSTRLEN];
-	  pim_inet4_dump("<group?>", channel_oil->oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-	  pim_inet4_dump("<source?>", channel_oil->oil.mfcc_origin, source_str, sizeof(source_str));
-	  zlog_debug("%s %s: protocol mask %u removing nonexistent OIF %s (vif_index=%d, min_ttl=%d) from channel (S,G)=(%s,%s)",
-		     __FILE__, __PRETTY_FUNCTION__,
-		     proto_mask, oif->name, pim_ifp->mroute_vif_index,
-		     channel_oil->oil.mfcc_ttls[pim_ifp->mroute_vif_index],
-		     source_str, group_str);
-	}
+  ch = pim_ifchannel_find (group->group_igmp_sock->interface, &sg);
+  if (pim_is_grp_ssm (group->group_addr))
+    {
+      /* If SSM group withdraw local membership */
+      if (ch && (ch->local_ifmembership == PIM_IFMEMBERSHIP_INCLUDE))
+        {
+          if (PIM_DEBUG_PIM_EVENTS)
+            zlog_debug ("local membership del for %s as G is now SSM",
+                        pim_str_sg_dump (&sg));
+          pim_ifchannel_local_membership_del (group->group_igmp_sock->interface, &sg);
+        }
     }
-
-    return 0;
-  }
-
-  old_ttl = channel_oil->oil.mfcc_ttls[pim_ifp->mroute_vif_index];
-
-  if (old_ttl < 1) {
-    if (PIM_DEBUG_MROUTE)
-      {
-	char group_str[INET_ADDRSTRLEN];
-	char source_str[INET_ADDRSTRLEN];
-	pim_inet4_dump("<group?>", channel_oil->oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-	pim_inet4_dump("<source?>", channel_oil->oil.mfcc_origin, source_str, sizeof(source_str));
-	zlog_debug("%s %s: interface %s (vif_index=%d) is not output for channel (S,G)=(%s,%s)",
-		   __FILE__, __PRETTY_FUNCTION__,
-		   oif->name, pim_ifp->mroute_vif_index,
-		   source_str, group_str);
-      }
-    return -3;
-  }
-
-  channel_oil->oil.mfcc_ttls[pim_ifp->mroute_vif_index] = 0;
-
-  if (pim_mroute_add(channel_oil, __PRETTY_FUNCTION__)) {
-    char group_str[INET_ADDRSTRLEN];
-    char source_str[INET_ADDRSTRLEN];
-    pim_inet4_dump("<group?>", channel_oil->oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-    pim_inet4_dump("<source?>", channel_oil->oil.mfcc_origin, source_str, sizeof(source_str));
-    zlog_warn("%s %s: could not remove output interface %s (vif_index=%d) from channel (S,G)=(%s,%s)",
-	      __FILE__, __PRETTY_FUNCTION__,
-	      oif->name, pim_ifp->mroute_vif_index,
-	      source_str, group_str);
-    
-    channel_oil->oil.mfcc_ttls[pim_ifp->mroute_vif_index] = old_ttl;
-    return -4;
-  }
-
-  --channel_oil->oil_size;
-
-  if (channel_oil->oil_size < 1) {
-    if (pim_mroute_del(channel_oil, __PRETTY_FUNCTION__)) {
-      if (PIM_DEBUG_MROUTE)
-	{
-	  /* just log a warning in case of failure */
-	  char group_str[INET_ADDRSTRLEN];
-	  char source_str[INET_ADDRSTRLEN];
-	  pim_inet4_dump("<group?>", channel_oil->oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-	  pim_inet4_dump("<source?>", channel_oil->oil.mfcc_origin, source_str, sizeof(source_str));
-	  zlog_debug("%s %s: failure removing OIL for channel (S,G)=(%s,%s)",
-		     __FILE__, __PRETTY_FUNCTION__,
-		     source_str, group_str);
-	}
+  else
+    {
+      /* If ASM group add local membership */
+      if (!ch || (ch->local_ifmembership == PIM_IFMEMBERSHIP_NOINFO))
+        {
+          if (PIM_DEBUG_PIM_EVENTS)
+            zlog_debug ("local membership add for %s as G is now ASM",
+                        pim_str_sg_dump (&sg));
+          pim_ifchannel_local_membership_add (group->group_igmp_sock->interface, &sg);
+        }
     }
-  }
+}
 
-  if (PIM_DEBUG_MROUTE) {
-    char group_str[INET_ADDRSTRLEN]; 
-    char source_str[INET_ADDRSTRLEN];
-    pim_inet4_dump("<group?>", channel_oil->oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-    pim_inet4_dump("<source?>", channel_oil->oil.mfcc_origin, source_str, sizeof(source_str));
-    zlog_debug("%s %s: (S,G)=(%s,%s): proto_mask=%u OIF=%s vif_index=%d: DONE",
-	       __FILE__, __PRETTY_FUNCTION__,
-	       source_str, group_str,
-	       proto_mask, oif->name, pim_ifp->mroute_vif_index);
-  }
+void
+igmp_source_forward_reevaluate_all(void)
+{
+  struct listnode *ifnode;
+  struct interface *ifp;
 
-  return 0;
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), ifnode, ifp))
+    {
+      struct pim_interface *pim_ifp = ifp->info;
+      struct listnode  *sock_node;
+      struct igmp_sock *igmp;
+
+      if (!pim_ifp)
+        continue;
+
+      /* scan igmp sockets */
+      for (ALL_LIST_ELEMENTS_RO (pim_ifp->igmp_socket_list, sock_node, igmp))
+        {
+          struct listnode *grpnode;
+          struct igmp_group *grp;
+
+          /* scan igmp groups */
+          for (ALL_LIST_ELEMENTS_RO (igmp->igmp_group_list, grpnode, grp))
+            {
+              struct listnode    *srcnode;
+              struct igmp_source *src;
+
+              /* scan group sources */
+              for (ALL_LIST_ELEMENTS_RO (grp->group_source_list,
+                                        srcnode, src))
+                {
+                  igmp_source_forward_reevaluate_one (src);
+                } /* scan group sources */
+            } /* scan igmp groups */
+        } /* scan igmp sockets */
+    } /* scan interfaces */
 }
 
 void igmp_source_forward_start(struct igmp_source *source)
@@ -1050,16 +965,16 @@ void igmp_source_forward_stop(struct igmp_source *source)
    Possibly because of multiple calls. When that happens, we
    enter the below if statement and this function returns early
    which in turn triggers the calling function to assert.
-   Making the call to del_oif and ignoring the return code 
-   fixes the issue without ill effect, similar to 
-   pim_forward_stop below.   
+   Making the call to pim_channel_del_oif and ignoring the return code
+   fixes the issue without ill effect, similar to
+   pim_forward_stop below.
   */
-  result = del_oif(source->source_channel_oil,
-		   group->group_igmp_sock->interface,
-		   PIM_OIF_FLAG_PROTO_IGMP);
+  result = pim_channel_del_oif(source->source_channel_oil,
+                               group->group_igmp_sock->interface,
+                               PIM_OIF_FLAG_PROTO_IGMP);
   if (result) {
     if (PIM_DEBUG_IGMP_TRACE)
-      zlog_debug("%s: del_oif() failed with return=%d",
+      zlog_debug("%s: pim_channel_del_oif() failed with return=%d",
 		 __func__, result);
     return;
   }
@@ -1133,18 +1048,9 @@ void pim_forward_stop(struct pim_ifchannel *ch)
 	       ch->sg_str, ch->interface->name);
   }
 
-  if (!up->channel_oil) {
-    if (PIM_DEBUG_PIM_TRACE)
-      zlog_debug("%s: (S,G)=%s oif=%s missing channel OIL",
-		 __PRETTY_FUNCTION__,
-		 ch->sg_str, ch->interface->name);
-
-    return;
-  }
-
-  del_oif(up->channel_oil,
-	  ch->interface,
-	  PIM_OIF_FLAG_PROTO_PIM);
+  pim_channel_del_oif(up->channel_oil,
+                      ch->interface,
+                      PIM_OIF_FLAG_PROTO_PIM);
 }
 
 void

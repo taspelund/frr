@@ -54,6 +54,7 @@
 #include "pim_rp.h"
 #include "pim_zlookup.h"
 #include "pim_msdp.h"
+#include "pim_ssm.h"
 
 static struct cmd_node pim_global_node = {
   PIM_NODE,
@@ -816,6 +817,7 @@ static void pim_show_interfaces_single(struct vty *vty, const char *ifname, u_ch
     mloop = pim_socket_mcastloop_get(pim_ifp->pim_sock_fd);
 
     if (uj) {
+      char pbuf[PREFIX2STR_BUFFER];
       json_row = json_object_new_object();
       json_object_pim_ifp_add(json_row, ifp);
 
@@ -827,7 +829,10 @@ static void pim_show_interfaces_single(struct vty *vty, const char *ifname, u_ch
 
         sec_list = json_object_new_array();
         for (ALL_LIST_ELEMENTS_RO(pim_ifp->sec_addr_list, sec_node, sec_addr)) {
-          json_object_array_add(sec_list, json_object_new_string(inet_ntoa(sec_addr->addr)));
+          json_object_array_add(sec_list,
+                                json_object_new_string(prefix2str(&sec_addr->addr,
+								  pbuf,
+								  sizeof(pbuf))));
         }
         json_object_object_add(json_row, "secondaryAddressList", sec_list);
       }
@@ -918,11 +923,14 @@ static void pim_show_interfaces_single(struct vty *vty, const char *ifname, u_ch
         vty_out(vty, "Use Source : %s%s", inet_ntoa(pim_ifp->update_source), VTY_NEWLINE);
       }
       if (pim_ifp->sec_addr_list) {
+        char pbuf[PREFIX2STR_BUFFER];
         vty_out(vty, "Address    : %s (primary)%s",
-                                    inet_ntoa(ifaddr), VTY_NEWLINE);
+                inet_ntoa(ifaddr), VTY_NEWLINE);
         for (ALL_LIST_ELEMENTS_RO(pim_ifp->sec_addr_list, sec_node, sec_addr)) {
           vty_out(vty, "             %s%s",
-                                    inet_ntoa(sec_addr->addr), VTY_NEWLINE);
+                  prefix2str(&sec_addr->addr,
+			     pbuf,
+			     sizeof(pbuf)), VTY_NEWLINE);
         }
       } else {
         vty_out(vty, "Address    : %s%s", inet_ntoa(ifaddr), VTY_NEWLINE);
@@ -1039,6 +1047,7 @@ static void pim_show_interfaces(struct vty *vty, u_char uj)
   struct pim_upstream *up;
   int fhr = 0;
   int pim_nbrs = 0;
+  int pim_ifchannels = 0;
   json_object *json = NULL;
   json_object *json_row = NULL;
   json_object *json_tmp;
@@ -1055,6 +1064,7 @@ static void pim_show_interfaces(struct vty *vty, u_char uj)
       continue;
 
     pim_nbrs = pim_ifp->pim_neighbor_list->count;
+    pim_ifchannels = pim_ifp->pim_ifchannel_list->count;
     fhr = 0;
 
     for (ALL_LIST_ELEMENTS_RO(pim_upstream_list, upnode, up))
@@ -1065,6 +1075,7 @@ static void pim_show_interfaces(struct vty *vty, u_char uj)
     json_row = json_object_new_object();
     json_object_pim_ifp_add(json_row, ifp);
     json_object_int_add(json_row, "pimNeighbors", pim_nbrs);
+    json_object_int_add(json_row, "pimIfChannels", pim_ifchannels);
     json_object_int_add(json_row, "firstHopRouter", fhr);
     json_object_string_add(json_row, "pimDesignatedRouter", inet_ntoa(pim_ifp->pim_dr_addr));
 
@@ -1077,7 +1088,7 @@ static void pim_show_interfaces(struct vty *vty, u_char uj)
   if (uj) {
     vty_out (vty, "%s%s", json_object_to_json_string_ext(json, JSON_C_TO_STRING_PRETTY), VTY_NEWLINE);
   } else {
-    vty_out(vty, "Interface  State          Address  PIM Nbrs           PIM DR  FHR%s", VTY_NEWLINE);
+    vty_out(vty, "Interface  State          Address  PIM Nbrs           PIM DR  FHR IfChannels%s", VTY_NEWLINE);
 
     json_object_object_foreach(json, key, val) {
       vty_out(vty, "%-9s  ", key);
@@ -1099,7 +1110,10 @@ static void pim_show_interfaces(struct vty *vty, u_char uj)
       }
 
       json_object_object_get_ex(val, "firstHopRouter", &json_tmp);
-      vty_out(vty, "%3d%s", json_object_get_int(json_tmp), VTY_NEWLINE);
+      vty_out(vty, "%3d  ", json_object_get_int(json_tmp));
+
+      json_object_object_get_ex(val, "pimIfChannels", &json_tmp);
+      vty_out(vty, "%9d%s", json_object_get_int(json_tmp), VTY_NEWLINE);
     }
   }
 
@@ -1607,13 +1621,9 @@ static void pim_show_neighbors_secondary(struct vty *vty)
 		     neigh_src_str, sizeof(neigh_src_str));
 
       for (ALL_LIST_ELEMENTS_RO(neigh->prefix_list, prefix_node, p)) {
-	char neigh_sec_str[INET_ADDRSTRLEN];
+	char neigh_sec_str[PREFIX2STR_BUFFER];
 
-	if (p->family != AF_INET)
-	  continue;
-
-	pim_inet4_dump("<src?>", p->u.prefix4,
-		       neigh_sec_str, sizeof(neigh_sec_str));
+	prefix2str(p, neigh_sec_str, sizeof(neigh_sec_str));
 
 	vty_out(vty, "%-9s %-15s %-15s %-15s%s",
 		ifp->name,
@@ -3409,6 +3419,35 @@ pim_rp_cmd_worker (struct vty *vty, const char *rp, const char *group, const cha
   return CMD_SUCCESS;
 }
 
+DEFUN (ip_pim_spt_switchover_infinity,
+       ip_pim_spt_switchover_infinity_cmd,
+       "ip pim spt-switchover infinity-and-beyond",
+       IP_STR
+       PIM_STR
+       "SPT-Switchover\n"
+       "Never switch to SPT Tree\n")
+{
+  pimg->spt_switchover = PIM_SPT_INFINITY;
+
+  pim_upstream_remove_lhr_star_pimreg();
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ip_pim_spt_switchover_infinity,
+       no_ip_pim_spt_switchover_infinity_cmd,
+       "no ip pim spt-switchover infinity-and-beyond",
+       NO_STR
+       IP_STR
+       PIM_STR
+       "SPT_Switchover\n"
+       "Never switch to SPT Tree\n")
+{
+  pimg->spt_switchover = PIM_SPT_IMMEDIATE;
+
+  pim_upstream_add_lhr_star_pimreg();
+  return CMD_SUCCESS;
+}
+
 DEFUN (ip_pim_joinprune_time,
        ip_pim_joinprune_time_cmd,
        "ip pim join-prune-interval <60-600>",
@@ -3509,6 +3548,31 @@ DEFUN (no_ip_pim_packets,
   return CMD_SUCCESS;
 }
 
+DEFUN (ip_pim_v6_secondary,
+       ip_pim_v6_secondary_cmd,
+       "ip pim send-v6-secondary",
+       IP_STR
+       "pim multicast routing\n"
+       "Send v6 secondary addresses\n")
+{
+  pimg->send_v6_secondary = 1;
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_ip_pim_v6_secondary,
+       no_ip_pim_v6_secondary_cmd,
+       "no ip pim send-v6-secondary",
+       NO_STR
+       IP_STR
+       "pim multicast routing\n"
+       "Send v6 secondary addresses\n")
+{
+  pimg->send_v6_secondary = 0;
+
+  return CMD_SUCCESS;
+}
+
 DEFUN (ip_pim_rp,
        ip_pim_rp_cmd,
        "ip pim rp A.B.C.D [A.B.C.D/M]",
@@ -3596,6 +3660,153 @@ DEFUN (no_ip_pim_rp_prefix_list,
        "Name of a prefix-list\n")
 {
   return pim_no_rp_cmd_worker (vty, argv[4]->arg, NULL, argv[6]->arg);
+}
+
+static int
+pim_ssm_cmd_worker (struct vty *vty, const char *plist)
+{
+  int result = pim_ssm_range_set (VRF_DEFAULT, plist);
+
+  if (result == PIM_SSM_ERR_NONE)
+    return CMD_SUCCESS;
+
+  switch (result)
+    {
+    case PIM_SSM_ERR_NO_VRF:
+      vty_out (vty, "%% VRF doesn't exist%s", VTY_NEWLINE);
+      break;
+    case PIM_SSM_ERR_DUP:
+      vty_out (vty, "%% duplicate config%s", VTY_NEWLINE);
+      break;
+    default:
+      vty_out (vty, "%% ssm range config failed%s", VTY_NEWLINE);
+    }
+
+  return CMD_WARNING;
+}
+
+DEFUN (ip_pim_ssm_prefix_list,
+       ip_pim_ssm_prefix_list_cmd,
+       "ip pim ssm prefix-list WORD",
+       IP_STR
+       "pim multicast routing\n"
+       "Source Specific Multicast\n"
+       "group range prefix-list filter\n"
+       "Name of a prefix-list\n")
+{
+  return pim_ssm_cmd_worker (vty, argv[0]->arg);
+}
+
+DEFUN (no_ip_pim_ssm_prefix_list,
+       no_ip_pim_ssm_prefix_list_cmd,
+       "no ip pim ssm prefix-list",
+       NO_STR
+       IP_STR
+       "pim multicast routing\n"
+       "Source Specific Multicast\n"
+       "group range prefix-list filter\n")
+{
+  return pim_ssm_cmd_worker (vty, NULL);
+}
+
+DEFUN (no_ip_pim_ssm_prefix_list_name,
+       no_ip_pim_ssm_prefix_list_name_cmd,
+       "no ip pim ssm prefix-list WORD",
+       NO_STR
+       IP_STR
+       "pim multicast routing\n"
+       "Source Specific Multicast\n"
+       "group range prefix-list filter\n"
+       "Name of a prefix-list\n")
+{
+  struct pim_ssm *ssm = pimg->ssm_info;
+
+  if (ssm->plist_name && !strcmp(ssm->plist_name, argv[0]->arg))
+    return pim_ssm_cmd_worker (vty, NULL);
+
+  vty_out (vty, "%% pim ssm prefix-list %s doesn't exist%s",
+           argv[0]->arg, VTY_NEWLINE);
+
+  return CMD_WARNING;
+}
+
+static void
+ip_pim_ssm_show_group_range(struct vty *vty, u_char uj)
+{
+  struct pim_ssm *ssm = pimg->ssm_info;
+  const char *range_str = ssm->plist_name?ssm->plist_name:PIM_SSM_STANDARD_RANGE;
+
+  if (uj)
+    {
+      json_object *json;
+      json = json_object_new_object();
+      json_object_string_add(json, "ssmGroups", range_str);
+      vty_out (vty, "%s%s", json_object_to_json_string_ext(json, JSON_C_TO_STRING_PRETTY), VTY_NEWLINE);
+      json_object_free(json);
+    }
+  else
+    vty_out(vty, "SSM group range : %s%s", range_str, VTY_NEWLINE);
+}
+
+DEFUN (show_ip_pim_ssm_range,
+       show_ip_pim_ssm_range_cmd,
+       "show ip pim group-type [json]",
+       SHOW_STR
+       IP_STR
+       PIM_STR
+       "PIM group type\n"
+       "JavaScript Object Notation\n")
+{
+  u_char uj = use_json(argc, argv);
+  ip_pim_ssm_show_group_range(vty, uj);
+
+  return CMD_SUCCESS;
+}
+
+static void
+ip_pim_ssm_show_group_type(struct vty *vty, u_char uj, const char *group)
+{
+  struct in_addr group_addr;
+  const char *type_str;
+  int result;
+
+  result = inet_pton(AF_INET, group, &group_addr);
+  if (result <= 0)
+    type_str = "invalid";
+  else
+    {
+      if (pim_is_group_224_4 (group_addr))
+        type_str = pim_is_grp_ssm (group_addr)?"SSM":"ASM";
+      else
+        type_str = "not-multicast";
+    }
+
+  if (uj)
+    {
+      json_object *json;
+      json = json_object_new_object();
+      json_object_string_add(json, "groupType", type_str);
+      vty_out (vty, "%s%s", json_object_to_json_string_ext(json, JSON_C_TO_STRING_PRETTY), VTY_NEWLINE);
+      json_object_free(json);
+    }
+  else
+    vty_out(vty, "Group type : %s%s", type_str, VTY_NEWLINE);
+}
+
+DEFUN (show_ip_pim_group_type,
+       show_ip_pim_group_type_cmd,
+       "show ip pim group-type A.B.C.D [json]",
+       SHOW_STR
+       IP_STR
+       PIM_STR
+       "multicast group type\n"
+       "group address\n"
+       "JavaScript Object Notation\n")
+{
+  u_char uj = use_json(argc, argv);
+  ip_pim_ssm_show_group_type(vty, uj, argv[0]->arg);
+
+  return CMD_SUCCESS;
 }
 
 DEFUN_HIDDEN (ip_multicast_routing,
@@ -4292,7 +4503,7 @@ DEFUN (interface_no_ip_pim_drprio,
 }
 
 static int
-pim_cmd_interface_add (struct interface *ifp, enum pim_interface_type itype)
+pim_cmd_interface_add (struct interface *ifp)
 {
   struct pim_interface *pim_ifp = ifp->info;
 
@@ -4306,14 +4517,12 @@ pim_cmd_interface_add (struct interface *ifp, enum pim_interface_type itype)
     PIM_IF_DO_PIM(pim_ifp->options);
   }
 
-  pim_ifp->itype = itype;
   pim_if_addr_add_all(ifp);
   pim_if_membership_refresh(ifp);
   return 1;
 }
 
-
-DEFUN (interface_ip_pim_ssm,
+DEFUN_HIDDEN (interface_ip_pim_ssm,
        interface_ip_pim_ssm_cmd,
        "ip pim ssm",
        IP_STR
@@ -4322,11 +4531,12 @@ DEFUN (interface_ip_pim_ssm,
 {
   VTY_DECLVAR_CONTEXT(interface, ifp);
 
-  if (!pim_cmd_interface_add(ifp, PIM_INTERFACE_SSM)) {
-    vty_out(vty, "Could not enable PIM SSM on interface%s", VTY_NEWLINE);
+  if (!pim_cmd_interface_add(ifp)) {
+    vty_out(vty, "Could not enable PIM SM on interface%s", VTY_NEWLINE);
     return CMD_WARNING;
   }
 
+  vty_out(vty, "WARN: Enabled PIM SM on interface; configure PIM SSM range if needed%s", VTY_NEWLINE);
   return CMD_SUCCESS;
 }
 
@@ -4338,7 +4548,7 @@ DEFUN (interface_ip_pim_sm,
        IFACE_PIM_SM_STR)
 {
   VTY_DECLVAR_CONTEXT(interface, ifp);
-  if (!pim_cmd_interface_add(ifp, PIM_INTERFACE_SM)) {
+  if (!pim_cmd_interface_add(ifp)) {
     vty_out(vty, "Could not enable PIM SM on interface%s", VTY_NEWLINE);
     return CMD_WARNING;
   }
@@ -4374,7 +4584,7 @@ pim_cmd_interface_delete (struct interface *ifp)
   return 1;
 }
 
-DEFUN (interface_no_ip_pim_ssm,
+DEFUN_HIDDEN (interface_no_ip_pim_ssm,
        interface_no_ip_pim_ssm_cmd,
        "no ip pim ssm",
        NO_STR
@@ -6029,14 +6239,21 @@ void pim_cmd_init()
   install_element (CONFIG_NODE, &no_ip_pim_rp_cmd);
   install_element (CONFIG_NODE, &ip_pim_rp_prefix_list_cmd);
   install_element (CONFIG_NODE, &no_ip_pim_rp_prefix_list_cmd);
+  install_element (CONFIG_NODE, &no_ip_pim_ssm_prefix_list_cmd);
+  install_element (CONFIG_NODE, &no_ip_pim_ssm_prefix_list_name_cmd);
+  install_element (CONFIG_NODE, &ip_pim_ssm_prefix_list_cmd);
   install_element (CONFIG_NODE, &ip_pim_register_suppress_cmd);
   install_element (CONFIG_NODE, &no_ip_pim_register_suppress_cmd);
+  install_element (CONFIG_NODE, &ip_pim_spt_switchover_infinity_cmd);
+  install_element (CONFIG_NODE, &no_ip_pim_spt_switchover_infinity_cmd);
   install_element (CONFIG_NODE, &ip_pim_joinprune_time_cmd);
   install_element (CONFIG_NODE, &no_ip_pim_joinprune_time_cmd);
   install_element (CONFIG_NODE, &ip_pim_keep_alive_cmd);
   install_element (CONFIG_NODE, &no_ip_pim_keep_alive_cmd);
   install_element (CONFIG_NODE, &ip_pim_packets_cmd);
   install_element (CONFIG_NODE, &no_ip_pim_packets_cmd);
+  install_element (CONFIG_NODE, &ip_pim_v6_secondary_cmd);
+  install_element (CONFIG_NODE, &no_ip_pim_v6_secondary_cmd);
   install_element (CONFIG_NODE, &ip_ssmpingd_cmd);
   install_element (CONFIG_NODE, &no_ip_ssmpingd_cmd); 
   install_element (CONFIG_NODE, &ip_msdp_peer_cmd);
@@ -6186,6 +6403,8 @@ void pim_cmd_init()
   install_element (VIEW_NODE, &show_ip_msdp_sa_detail_cmd);
   install_element (VIEW_NODE, &show_ip_msdp_sa_sg_cmd);
   install_element (VIEW_NODE, &show_ip_msdp_mesh_group_cmd);
+  install_element (VIEW_NODE, &show_ip_pim_ssm_range_cmd);
+  install_element (VIEW_NODE, &show_ip_pim_group_type_cmd);
   install_element (INTERFACE_NODE, &interface_pim_use_source_cmd);
   install_element (INTERFACE_NODE, &interface_no_pim_use_source_cmd);
 }

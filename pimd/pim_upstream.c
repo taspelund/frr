@@ -53,6 +53,7 @@
 #include "pim_msdp.h"
 #include "pim_jp_agg.h"
 #include "pim_nht.h"
+#include "pim_ssm.h"
 
 struct hash *pim_upstream_hash = NULL;
 struct list *pim_upstream_list = NULL;
@@ -197,7 +198,20 @@ pim_upstream_del(struct pim_upstream *up, const char *name)
   upstream_channel_oil_detach(up);
 
   if (up->sources)
-    list_delete (up->sources);
+    {
+      struct listnode *node, *nnode;
+      struct pim_upstream *child;
+      for (ALL_LIST_ELEMENTS (up->sources, node, nnode, child))
+	{
+	  if (PIM_UPSTREAM_FLAG_TEST_SRC_LHR(child->flags))
+	    {
+	      PIM_UPSTREAM_FLAG_UNSET_SRC_LHR(child->flags);
+	      pim_upstream_del(child, __PRETTY_FUNCTION__);
+	    }
+	}
+
+      list_delete (up->sources);
+    }
   up->sources = NULL;
 
   /*
@@ -476,6 +490,51 @@ pim_upstream_could_register (struct pim_upstream *up)
   return 0;
 }
 
+/* Source registration is supressed for SSM groups. When the SSM range changes
+ * we re-revaluate register setup for existing upstream entries */
+void
+pim_upstream_register_reevaluate (void)
+{
+  struct listnode *upnode;
+  struct pim_upstream *up;
+
+  for (ALL_LIST_ELEMENTS_RO (pim_upstream_list, upnode, up))
+    {
+      /* If FHR is set CouldRegister is True. Also check if the flow
+       * is actually active; if it is not kat setup will trigger source
+       * registration whenever the flow becomes active. */
+      if (!PIM_UPSTREAM_FLAG_TEST_FHR (up->flags) || !up->t_ka_timer)
+        continue;
+
+      if (pim_is_grp_ssm (up->sg.grp))
+        {
+          /* clear the register state  for SSM groups */
+          if (up->reg_state != PIM_REG_NOINFO)
+            {
+              if (PIM_DEBUG_PIM_EVENTS)
+                zlog_debug ("Clear register for %s as G is now SSM",
+                            up->sg_str);
+              /* remove regiface from the OIL if it is there*/
+              pim_channel_del_oif (up->channel_oil, pim_regiface,
+                                   PIM_OIF_FLAG_PROTO_PIM);
+              up->reg_state = PIM_REG_NOINFO;
+            }
+        }
+      else
+        {
+          /* register ASM sources with the RP */
+          if (up->reg_state == PIM_REG_NOINFO)
+            {
+              if (PIM_DEBUG_PIM_EVENTS)
+                zlog_debug ("Register %s as G is now ASM", up->sg_str);
+              pim_channel_add_oif (up->channel_oil, pim_regiface,
+                                   PIM_OIF_FLAG_PROTO_PIM);
+              up->reg_state = PIM_REG_JOIN;
+            }
+        }
+    }
+}
+
 void
 pim_upstream_switch(struct pim_upstream *up,
 		    enum pim_upstream_state new_state)
@@ -507,9 +566,8 @@ pim_upstream_switch(struct pim_upstream *up,
             PIM_UPSTREAM_FLAG_SET_FHR(up->flags);
             if (!old_fhr && PIM_UPSTREAM_FLAG_TEST_SRC_STREAM(up->flags))
               {
-                up->reg_state = PIM_REG_JOIN;
                 pim_upstream_keep_alive_timer_start (up, qpim_keep_alive_time);
-	        pim_channel_add_oif (up->channel_oil, pim_regiface, PIM_OIF_FLAG_PROTO_PIM);
+                pim_register_join (up);
               }
 	  }
 	else
@@ -756,6 +814,16 @@ pim_upstream_evaluate_join_desired_interface (struct pim_upstream *up,
    */
   if (parent && ch->upstream == parent)
     {
+      struct listnode *ch_node;
+      struct pim_ifchannel *child;
+      for (ALL_LIST_ELEMENTS_RO (ch->sources, ch_node, child))
+        {
+          if (child->upstream == up)
+            {
+               if (PIM_IF_FLAG_TEST_S_G_RPT(child->flags))
+                 return 0;
+             }
+        }
       if (!pim_macro_ch_lost_assert (ch) && pim_macro_chisin_joins_or_include (ch))
 	return 1;
     }
@@ -1008,10 +1076,8 @@ static void pim_upstream_fhr_kat_start(struct pim_upstream *up)
       zlog_debug ("kat started on %s; set fhr reg state to joined", up->sg_str);
 
     PIM_UPSTREAM_FLAG_SET_FHR(up->flags);
-    if (up->reg_state == PIM_REG_NOINFO) {
-      pim_channel_add_oif (up->channel_oil, pim_regiface, PIM_OIF_FLAG_PROTO_PIM);
-      up->reg_state = PIM_REG_JOIN;
-    }
+    if (up->reg_state == PIM_REG_NOINFO)
+      pim_register_join (up);
   }
 }
 
@@ -1030,26 +1096,31 @@ pim_upstream_keep_alive_timer (struct thread *t)
   up->t_ka_timer = NULL;
 
   if (I_am_RP (up->sg.grp))
-  {
-    pim_br_clear_pmbr (&up->sg);
-    /*
-     * We need to do more here :)
-     * But this is the start.
-     */
-  }
+    {
+      pim_br_clear_pmbr (&up->sg);
+      /*
+       * We need to do more here :)
+       * But this is the start.
+       */
+    }
 
   /* source is no longer active - pull the SA from MSDP's cache */
   pim_msdp_sa_local_del(&up->sg);
 
   /* if entry was created because of activity we need to deref it */
   if (PIM_UPSTREAM_FLAG_TEST_SRC_STREAM(up->flags))
-  {
-    pim_upstream_fhr_kat_expiry(up);
-    if (PIM_DEBUG_TRACE)
-      zlog_debug ("kat expired on %s; remove stream reference", up->sg_str);
-    PIM_UPSTREAM_FLAG_UNSET_SRC_STREAM(up->flags);
-    pim_upstream_del(up, __PRETTY_FUNCTION__);
-  }
+    {
+      pim_upstream_fhr_kat_expiry(up);
+      if (PIM_DEBUG_TRACE)
+	zlog_debug ("kat expired on %s; remove stream reference", up->sg_str);
+      PIM_UPSTREAM_FLAG_UNSET_SRC_STREAM(up->flags);
+      pim_upstream_del(up, __PRETTY_FUNCTION__);
+    }
+  else if (PIM_UPSTREAM_FLAG_TEST_SRC_LHR(up->flags))
+    {
+      PIM_UPSTREAM_FLAG_UNSET_SRC_LHR(up->flags);
+      pim_upstream_del(up, __PRETTY_FUNCTION__);
+    }
 
   return 0;
 }
@@ -1580,26 +1651,65 @@ pim_upstream_sg_running (void *arg)
       return;
     }
 
-  if (pim_upstream_kat_start_ok(up)) {
-    /* Add a source reference to the stream if
-     * one doesn't already exist */
-    if (!PIM_UPSTREAM_FLAG_TEST_SRC_STREAM(up->flags))
+  if (pim_upstream_kat_start_ok(up))
     {
-      if (PIM_DEBUG_TRACE)
-        zlog_debug ("source reference created on kat restart %s", up->sg_str);
+      /* Add a source reference to the stream if
+       * one doesn't already exist */
+      if (!PIM_UPSTREAM_FLAG_TEST_SRC_STREAM(up->flags))
+	{
+	  if (PIM_DEBUG_TRACE)
+	    zlog_debug ("source reference created on kat restart %s", up->sg_str);
 
-      pim_upstream_ref(up, PIM_UPSTREAM_FLAG_MASK_SRC_STREAM);
-      PIM_UPSTREAM_FLAG_SET_SRC_STREAM(up->flags);
-      pim_upstream_fhr_kat_start(up);
+	  pim_upstream_ref(up, PIM_UPSTREAM_FLAG_MASK_SRC_STREAM);
+	  PIM_UPSTREAM_FLAG_SET_SRC_STREAM(up->flags);
+	  pim_upstream_fhr_kat_start(up);
+	}
+      pim_upstream_keep_alive_timer_start(up, qpim_keep_alive_time);
     }
+  else if (PIM_UPSTREAM_FLAG_TEST_SRC_LHR(up->flags))
     pim_upstream_keep_alive_timer_start(up, qpim_keep_alive_time);
-  }
 
   if (up->sptbit != PIM_UPSTREAM_SPTBIT_TRUE)
-  {
-    pim_upstream_set_sptbit(up, up->rpf.source_nexthop.interface);
-  }
+    {
+      pim_upstream_set_sptbit(up, up->rpf.source_nexthop.interface);
+    }
   return;
+}
+
+void
+pim_upstream_add_lhr_star_pimreg (void)
+{
+  struct pim_upstream *up;
+  struct listnode *node;
+
+  for (ALL_LIST_ELEMENTS_RO (pim_upstream_list, node, up))
+    {
+      if (up->sg.src.s_addr != INADDR_ANY)
+        continue;
+
+      if (!PIM_UPSTREAM_FLAG_TEST_SRC_IGMP (up->flags))
+        continue;
+
+      pim_channel_add_oif (up->channel_oil, pim_regiface, PIM_OIF_FLAG_PROTO_IGMP);
+    }
+}
+
+void
+pim_upstream_remove_lhr_star_pimreg (void)
+{
+  struct pim_upstream *up;
+  struct listnode *node;
+
+  for (ALL_LIST_ELEMENTS_RO (pim_upstream_list, node, up))
+    {
+      if (up->sg.src.s_addr != INADDR_ANY)
+        continue;
+
+      if (!PIM_UPSTREAM_FLAG_TEST_SRC_IGMP (up->flags))
+        continue;
+
+      pim_channel_del_oif (up->channel_oil, pim_regiface, PIM_OIF_FLAG_PROTO_IGMP);
+    }
 }
 
 void

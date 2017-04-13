@@ -34,7 +34,11 @@
   From:
   http://www.iana.org/assignments/address-family-numbers
 */
-#define PIM_MSG_ADDRESS_FAMILY_IPV4 (1)
+enum pim_msg_address_family {
+  PIM_MSG_ADDRESS_FAMILY_RESERVED,
+  PIM_MSG_ADDRESS_FAMILY_IPV4,
+  PIM_MSG_ADDRESS_FAMILY_IPV6,
+};
 
 /*
  * Network Order pim_msg_hdr
@@ -96,5 +100,5 @@ uint8_t *pim_msg_addr_encode_ipv4_source(uint8_t *buf,
 
 
 size_t pim_msg_get_jp_group_size (struct list *sources);
-size_t pim_msg_build_jp_groups (struct pim_jp_groups *grp, struct pim_jp_agg_group *sgs);
+size_t pim_msg_build_jp_groups (struct pim_jp_groups *grp, struct pim_jp_agg_group *sgs, size_t size);
 #endif /* PIM_MSG_H */

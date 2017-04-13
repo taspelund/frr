@@ -1056,8 +1056,8 @@ if_dump_vty (struct vty *vty, struct interface *ifp)
       return;
     }
 
-  vty_out (vty, "  index %d metric %d mtu %d ",
-	   ifp->ifindex, ifp->metric, ifp->mtu);
+  vty_out (vty, "  index %d metric %d mtu %d speed %u ",
+	   ifp->ifindex, ifp->metric, ifp->mtu, ifp->speed);
   if (ifp->mtu6 != ifp->mtu)
     vty_out (vty, "mtu6 %d ", ifp->mtu6);
   vty_out (vty, "%s  flags: %s%s", VTY_NEWLINE,
@@ -1697,7 +1697,7 @@ link_param_cmd_unset (struct interface *ifp, uint32_t type)
     zebra_interface_parameters_update (ifp);
 }
 
-DEFUN (link_params,
+DEFUN_NOSH (link_params,
        link_params_cmd,
        "link-params",
        LINK_PARAMS_STR)
@@ -1708,7 +1708,7 @@ DEFUN (link_params,
   return CMD_SUCCESS;
 }
 
-DEFUN (exit_link_params,
+DEFUN_NOSH (exit_link_params,
        exit_link_params_cmd,
        "exit-link-params",
        "Exit from Link Params configuration mode\n")
