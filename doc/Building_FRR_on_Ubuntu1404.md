@@ -25,8 +25,9 @@ any packages**
 
     sudo groupadd -g 92 frr
     sudo groupadd -r -g 85 frrvty
-    sudo adduser --system --ingroup frr --groups frrvty --home /var/run/frr/ \
+    sudo adduser --system --ingroup frr --home /var/run/frr/ \
        --gecos "FRR suite" --shell /sbin/nologin frr
+    sudo usermod -a -G frrvty frr
 
 ### Download Source, configure and compile it
 (You may prefer different options on configure statement. These are just 
@@ -36,6 +37,7 @@ an example.)
     cd frr
     ./bootstrap.sh
     ./configure \
+        --prefix=/usr \
         --enable-exampledir=/usr/share/doc/frr/examples/ \
         --localstatedir=/var/run/frr \
         --sbindir=/usr/lib/frr \
@@ -53,6 +55,7 @@ an example.)
         --enable-rtadv \
         --enable-tcp-zebra \
         --enable-fpm \
+        --enable-ldpd \
         --with-pkg-git-version \
         --with-pkg-extra-version=-MyOwnFRRVersion   
     make
@@ -61,21 +64,19 @@ an example.)
 
 ### Create empty FRR configuration files
 
-    sudo mkdir /var/log/frr
-    sudo chown frr:frr /var/log/frr
-    sudo mkdir /etc/frr
-    sudo touch /etc/frr/zebra.conf
-    sudo touch /etc/frr/bgpd.conf
-    sudo touch /etc/frr/ospfd.conf
-    sudo touch /etc/frr/ospf6d.conf
-    sudo touch /etc/frr/isisd.conf
-    sudo touch /etc/frr/ripd.conf
-    sudo touch /etc/frr/ripngd.conf
-    sudo touch /etc/frr/pimd.conf
-    sudo chown frr:frr /etc/frr/
-    sudo touch /etc/frr/vtysh.conf
-    sudo chown frr:frrvty /etc/frr/vtysh.conf
-    sudo chmod 640 /etc/frr/*.conf
+    sudo install -m 755 -o frr -g frr -d /var/log/frr
+    sudo install -m 775 -o frr -g frrvty -d /etc/frr
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/zebra.conf
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/bgpd.conf
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/ospfd.conf
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/ospf6d.conf
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/isisd.conf
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/ripd.conf
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/ripngd.conf
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/pimd.conf
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/ldpd.conf
+    sudo install -m 640 -o frr -g frr /dev/null /etc/frr/nhrpd.conf    
+    sudo install -m 640 -o frr -g frrvty /dev/null /etc/frr/vtysh.conf
 
 ### Enable IP & IPv6 forwarding
 
@@ -90,4 +91,30 @@ other settings)
     #  based on Router Advertisements for this host
     net.ipv6.conf.all.forwarding=1
 
-**Reboot** or use `sysctl` to apply the same config to the running system
+**Reboot** or use `sysctl -p` to apply the same config to the running system
+### Install the init.d service
+
+    sudo install -m 755 tools/frr /etc/init.d/frr  
+    sudo install -m 644 cumulus/etc/frr/daemons /etc/frr/daemons    
+    sudo install -m 644 cumulus/etc/frr/debian.conf /etc/frr/debian.conf    
+    sudo install -m 644 -o frr -g frr cumulus/etc/frr/vtysh.conf /etc/frr/vtysh.conf   
+ 
+ 
+### Enable daemons 
+
+Edit `/etc/frr/daemons` and change the value from "no" to "yes" for those daemons you want to start by systemd.  
+For example.
+
+    zebra=yes  
+    bgpd=yes  
+    ospfd=yes  
+    ospf6d=yes  
+    ripd=yes  
+    ripngd=yes  
+    isisd=yes 
+    
+### Start the init.d service
+- /etc/init.d/frr start
+- use `/etc/init.d/frr status` to check its status.
+    
+ 

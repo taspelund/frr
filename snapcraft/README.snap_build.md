@@ -12,7 +12,12 @@ which uses earlier versions of snaps)
         git clone https://github.com/frrouting/frr.git
         cd frr
 
-3. Run Bootstrap and make distribution tar.gz
+3. (Optional) Add extra version information to 
+   `snapcraft/extra_version_info.txt`. Information in this file will
+   be displayed with the frr.version command (simple `cat` after
+   the display of the `zebra --version` output)
+
+4. Run Bootstrap and make distribution tar.gz
 
         ./bootstrap.sh
         ./configure --with-pkg-extra-version=-MySnapVersion
@@ -25,7 +30,7 @@ which uses earlier versions of snaps)
     This will build `frr-something.tar.gz` - the distribution tar and 
     the snapcraft/snapcraft.yaml with the matching version number
 
-4. Create snap
+5. Create snap
 
         cd snapcraft
         snapcraft
@@ -47,8 +52,10 @@ Installing the snap
 
     Connect the priviledged `network-control` plug to the snap:
 
-        snap connect frr:network-control ubuntu-core:network-control
+        snap connect frr:network-control core:network-control
 
+See README.usage.md for more details on setting up and using the snap
+        
 DONE.
 
 The Snap will be auto-started and running. 

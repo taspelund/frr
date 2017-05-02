@@ -64,7 +64,7 @@ ifp2kif(struct interface *ifp, struct kif *kif)
 	memset(kif, 0, sizeof(*kif));
 	strlcpy(kif->ifname, ifp->name, sizeof(kif->ifname));
 	kif->ifindex = ifp->ifindex;
-	kif->flags = ifp->flags;
+	kif->operative = if_is_operative(ifp);
 	if (ifp->ll_type == ZEBRA_LLT_ETHER)
 		memcpy(kif->mac, ifp->hw_addr, ETHER_ADDR_LEN);
 }
@@ -73,6 +73,7 @@ static void
 ifc2kaddr(struct interface *ifp, struct connected *ifc, struct kaddr *ka)
 {
 	memset(ka, 0, sizeof(*ka));
+	strlcpy(ka->ifname, ifp->name, sizeof(ka->ifname));
 	ka->ifindex = ifp->ifindex;
 	ka->af = ifc->address->family;
 	ka->prefixlen = ifc->address->prefixlen;
@@ -232,6 +233,7 @@ ldp_interface_delete(int command, struct zclient *zclient, zebra_size_t length,
     vrf_id_t vrf_id)
 {
 	struct interface	*ifp;
+	struct kif		 kif;
 
 	/* zebra_interface_state_read() updates interface structure in iflist */
 	ifp = zebra_interface_state_read(zclient->ibuf, vrf_id);
@@ -243,7 +245,10 @@ ldp_interface_delete(int command, struct zclient *zclient, zebra_size_t length,
 
 	/* To support pseudo interface do not free interface structure.  */
 	/* if_delete(ifp); */
-	ifp->ifindex = IFINDEX_INTERNAL;
+	ifp->ifindex = IFINDEX_DELETED;
+
+	ifp2kif(ifp, &kif);
+	main_imsg_compose_both(IMSG_IFSTATUS, &kif, sizeof(kif));
 
 	return (0);
 }
@@ -257,7 +262,6 @@ ldp_interface_status_change(int command, struct zclient *zclient,
 	struct connected	*ifc;
 	struct kif		 kif;
 	struct kaddr		 ka;
-	int			 link_new;
 
 	/*
 	 * zebra_interface_state_read() updates interface structure in
@@ -272,8 +276,7 @@ ldp_interface_status_change(int command, struct zclient *zclient,
 	ifp2kif(ifp, &kif);
 	main_imsg_compose_both(IMSG_IFSTATUS, &kif, sizeof(kif));
 
-	link_new = (ifp->flags & IFF_UP) && (ifp->flags & IFF_RUNNING);
-	if (link_new) {
+	if (if_is_operative(ifp)) {
 		for (ALL_LIST_ELEMENTS_RO(ifp->connected, node, ifc)) {
 			ifc2kaddr(ifp, ifc, &ka);
 			main_imsg_compose_ldpe(IMSG_NEWADDR, 0, &ka,
@@ -309,8 +312,8 @@ ldp_interface_address_add(int command, struct zclient *zclient,
 	if (bad_addr(ka.af, &ka.addr))
 		return (0);
 
-	debug_zebra_in("address add %s/%u", log_addr(ka.af, &ka.addr),
-	    ka.prefixlen);
+	debug_zebra_in("address add %s/%u interface %s",
+	    log_addr(ka.af, &ka.addr), ka.prefixlen, ifp->name);
 
 	/* notify ldpe about new address */
 	main_imsg_compose_ldpe(IMSG_NEWADDR, 0, &ka, sizeof(ka));
@@ -338,8 +341,8 @@ ldp_interface_address_delete(int command, struct zclient *zclient,
 	if (bad_addr(ka.af, &ka.addr))
 		return (0);
 
-	debug_zebra_in("address delete %s/%u", log_addr(ka.af, &ka.addr),
-	    ka.prefixlen);
+	debug_zebra_in("address delete %s/%u interface %s",
+	    log_addr(ka.af, &ka.addr), ka.prefixlen, ifp->name);
 
 	/* notify ldpe about removed address */
 	main_imsg_compose_ldpe(IMSG_DELADDR, 0, &ka, sizeof(ka));
@@ -357,6 +360,7 @@ ldp_zebra_read_route(int command, struct zclient *zclient, zebra_size_t length,
 	struct kroute		 kr;
 	int			 nhnum = 0, nhlen;
 	size_t			 nhmark;
+	int			 add = 0;
 
 	memset(&kr, 0, sizeof(kr));
 	s = zclient->ibuf;
@@ -423,21 +427,14 @@ ldp_zebra_read_route(int command, struct zclient *zclient, zebra_size_t length,
 	if (CHECK_FLAG(message_flags, ZAPI_MESSAGE_NEXTHOP))
 		stream_set_getp(s, nhmark);
 
-	if (nhnum == 0) {
-		switch (command) {
-		case ZEBRA_REDISTRIBUTE_IPV4_ADD:
-		case ZEBRA_REDISTRIBUTE_IPV6_ADD:
-			return (0);
-		case ZEBRA_REDISTRIBUTE_IPV4_DEL:
-		case ZEBRA_REDISTRIBUTE_IPV6_DEL:
-			debug_zebra_in("route delete %s/%d (%s)",
-			    log_addr(kr.af, &kr.prefix), kr.prefixlen,
-			    zebra_route_string(type));
-			break;
-		default:
-			fatalx("ldp_zebra_read_route: unknown command");
-		}
-	}
+	if (command == ZEBRA_REDISTRIBUTE_IPV4_ADD ||
+	    command == ZEBRA_REDISTRIBUTE_IPV6_ADD)
+		add = 1;
+
+	if (nhnum == 0)
+		debug_zebra_in("route %s %s/%d (%s)", (add) ? "add" : "delete",
+		    log_addr(kr.af, &kr.prefix), kr.prefixlen,
+		    zebra_route_string(type));
 
 	/* loop through all the nexthops */
 	for (; nhnum > 0; nhnum--) {
@@ -454,19 +451,14 @@ ldp_zebra_read_route(int command, struct zclient *zclient, zebra_size_t length,
 		stream_getc(s);	/* ifindex_num, unused. */
 		kr.ifindex = stream_getl(s);
 
-		switch (command) {
-		case ZEBRA_REDISTRIBUTE_IPV4_ADD:
-		case ZEBRA_REDISTRIBUTE_IPV6_ADD:
-			debug_zebra_in("route add %s/%d nexthop %s "
-			    "ifindex %u (%s)", log_addr(kr.af, &kr.prefix),
-			    kr.prefixlen, log_addr(kr.af, &kr.nexthop),
-			    kr.ifindex, zebra_route_string(type));
+		debug_zebra_in("route %s %s/%d nexthop %s ifindex %u (%s)",
+		    (add) ? "add" : "delete", log_addr(kr.af, &kr.prefix),
+		    kr.prefixlen, log_addr(kr.af, &kr.nexthop), kr.ifindex,
+		    zebra_route_string(type));
+
+		if (add)
 			main_imsg_compose_lde(IMSG_NETWORK_ADD, 0, &kr,
 			    sizeof(kr));
-			break;
-		default:
-			break;
-		}
 	}
 
 	main_imsg_compose_lde(IMSG_NETWORK_UPDATE, 0, &kr, sizeof(kr));

@@ -146,8 +146,15 @@ enum imsg_type {
 	IMSG_DEBUG_UPDATE,
 	IMSG_LOG,
 	IMSG_ACL_CHECK,
-	IMSG_GET_LABEL_CHUNK,
-	IMSG_RELEASE_LABEL_CHUNK
+	IMSG_INIT
+};
+
+struct ldpd_init {
+	char		 user[256];
+	char		 group[256];
+	char		 ctl_sock_path[MAXPATHLEN];
+	char		 zclient_serv_path[MAXPATHLEN];
+	u_short		 instance;
 };
 
 union ldpd_addr {
@@ -298,7 +305,7 @@ struct iface {
 	struct if_addr_head	 addr_list;
 	struct in6_addr		 linklocal;
 	enum iface_type		 type;
-	uint16_t		 flags;
+	int			 operative;
 	struct iface_af		 ipv4;
 	struct iface_af		 ipv6;
 	QOBJ_FIELDS
@@ -380,7 +387,7 @@ struct l2vpn_if {
 	struct l2vpn		*l2vpn;
 	char			 ifname[IF_NAMESIZE];
 	unsigned int		 ifindex;
-	uint16_t		 flags;
+	int			 operative;
 	uint8_t			 mac[ETHER_ADDR_LEN];
 	QOBJ_FIELDS
 };
@@ -438,6 +445,12 @@ enum ldpd_process {
 	PROC_LDP_ENGINE,
 	PROC_LDE_ENGINE
 } ldpd_process;
+
+static const char * const log_procnames[] = {
+	"parent",
+	"ldpe",
+	"lde"
+};
 
 enum socket_type {
 	LDP_SOCKET_DISC,
@@ -504,7 +517,6 @@ struct ldpd_af_global {
 struct ldpd_global {
 	int			 cmd_opts;
 	int			 sighup;
-	time_t			 uptime;
 	struct in_addr		 rtr_id;
 	struct ldpd_af_global	 ipv4;
 	struct ldpd_af_global	 ipv6;
@@ -541,6 +553,7 @@ struct kpw {
 };
 
 struct kaddr {
+	char			 ifname[IF_NAMESIZE];
 	unsigned short		 ifindex;
 	int			 af;
 	union ldpd_addr		 addr;
@@ -552,6 +565,7 @@ struct kif {
 	char			 ifname[IF_NAMESIZE];
 	unsigned short		 ifindex;
 	int			 flags;
+	int			 operative;
 	uint8_t			 mac[ETHER_ADDR_LEN];
 	int			 mtu;
 };
@@ -569,7 +583,6 @@ struct ctl_iface {
 	char			 name[IF_NAMESIZE];
 	unsigned int		 ifindex;
 	int			 state;
-	uint16_t		 flags;
 	enum iface_type		 type;
 	uint16_t		 hello_holdtime;
 	uint16_t		 hello_interval;
@@ -648,6 +661,7 @@ struct ctl_pw {
 
 extern struct ldpd_conf		*ldpd_conf, *vty_conf;
 extern struct ldpd_global	 global;
+extern struct ldpd_init		 init;
 
 /* parse.y */
 struct ldpd_conf	*parse_config(char *);
@@ -760,6 +774,30 @@ int		 sock_set_ipv6_ucast_hops(int, int);
 int		 sock_set_ipv6_mcast_hops(int, int);
 int		 sock_set_ipv6_mcast(struct iface *);
 int		 sock_set_ipv6_mcast_loop(int);
+
+/* logmsg.h */
+struct in6_addr;
+union ldpd_addr;
+struct hello_source;
+struct fec;
+
+const char	*log_sockaddr(void *);
+const char	*log_in6addr(const struct in6_addr *);
+const char	*log_in6addr_scope(const struct in6_addr *, unsigned int);
+const char	*log_addr(int, const union ldpd_addr *);
+char		*log_label(uint32_t);
+const char	*log_time(time_t);
+char		*log_hello_src(const struct hello_source *);
+const char	*log_map(const struct map *);
+const char	*log_fec(const struct fec *);
+const char	*af_name(int);
+const char	*socket_name(int);
+const char	*nbr_state_name(int);
+const char	*if_state_name(int);
+const char	*if_type_name(enum iface_type);
+const char	*msg_name(uint16_t);
+const char	*status_code_name(uint32_t);
+const char	*pw_type_name(uint16_t);
 
 /* quagga */
 extern struct thread_master	*master;
