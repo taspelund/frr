@@ -59,7 +59,7 @@ pim_sendmsg_zebra_rnh (struct zclient *zclient, struct pim_nexthop_cache *pnc,
   p = &(pnc->rpf.rpf_addr);
   s = zclient->obuf;
   stream_reset (s);
-  zclient_create_header (s, command, VRF_DEFAULT);
+  zclient_create_header (s, command, pimg->vrf_id);
   /* get update for all routes for a prefix */
   stream_putc (s, 0);
 
@@ -317,8 +317,7 @@ pim_resolve_upstream_nh (struct prefix *nht_p)
         {
           if (nh_node->gate.ipv4.s_addr == 0)
             {
-              struct interface *ifp1 = if_lookup_by_index(nh_node->ifindex,
-                                                             VRF_DEFAULT);
+              struct interface *ifp1 = if_lookup_by_index(nh_node->ifindex, pimg->vrf_id);
               nbr = pim_neighbor_find_if (ifp1);
               if (nbr)
                 {
@@ -440,7 +439,7 @@ pim_update_upstream_nh (struct pim_nexthop_cache *pnc)
         }
     }                           /* for (pnc->upstream_list) */
 
-  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), ifnode, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (pimg->vrf_id), ifnode, ifp))
     if (ifp->info)
       {
         struct pim_interface *pim_ifp = ifp->info;
@@ -575,7 +574,7 @@ pim_ecmp_nexthop_search (struct pim_nexthop_cache *pnc,
        nh_node = nh_node->next)
     {
       first_ifindex = nh_node->ifindex;
-      ifp = if_lookup_by_index(first_ifindex, VRF_DEFAULT);
+      ifp = if_lookup_by_index (first_ifindex, pimg->vrf_id);
       if (!ifp)
         {
           if (PIM_DEBUG_ZEBRA)
@@ -753,7 +752,7 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
             case NEXTHOP_TYPE_IPV6_IFINDEX:
               stream_get (&nexthop->gate.ipv6, s, 16);
               nexthop->ifindex = stream_getl (s);
-              struct interface *ifp1 = if_lookup_by_index (nexthop->ifindex, VRF_DEFAULT);
+              struct interface *ifp1 = if_lookup_by_index (nexthop->ifindex, pimg->vrf_id);
               nbr = pim_neighbor_find_if (ifp1);
               /* Overwrite with Nbr address as NH addr */
               if (nbr)
@@ -797,7 +796,7 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
                  metric);
             }
 
-          ifp = if_lookup_by_index (nexthop->ifindex, VRF_DEFAULT);
+          ifp = if_lookup_by_index (nexthop->ifindex, pimg->vrf_id);
           if (!ifp)
             {
               if (PIM_DEBUG_ZEBRA)
@@ -922,7 +921,7 @@ pim_ecmp_nexthop_lookup (struct pim_nexthop *nexthop, struct in_addr addr,
     {
       first_ifindex = nexthop_tab[i].ifindex;
 
-      ifp = if_lookup_by_index (first_ifindex, VRF_DEFAULT);
+      ifp = if_lookup_by_index (first_ifindex, pimg->vrf_id);
       if (!ifp)
         {
           if (PIM_DEBUG_ZEBRA)
@@ -1049,7 +1048,7 @@ int pim_ecmp_fib_lookup_if_vif_index(struct in_addr addr,
       pim_inet4_dump("<ifaddr?>", addr, addr_str, sizeof(addr_str));
       zlog_debug("%s %s: found nexthop ifindex=%d (interface %s) for address %s",
                 __FILE__, __PRETTY_FUNCTION__,
-                first_ifindex, ifindex2ifname(first_ifindex, VRF_DEFAULT), addr_str);
+                first_ifindex, ifindex2ifname(first_ifindex, pimg->vrf_id), addr_str);
     }
 
   vif_index = pim_if_find_vifindex_by_ifindex(first_ifindex);

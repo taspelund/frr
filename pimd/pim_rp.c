@@ -265,7 +265,7 @@ pim_rp_check_interfaces (struct rp_info *rp_info)
   struct interface *ifp;
 
   rp_info->i_am_rp = 0;
-  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), node, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (pimg->vrf_id), node, ifp))
     {
       struct pim_interface *pim_ifp = ifp->info;
 
@@ -858,7 +858,7 @@ pim_rp_check_is_my_ip_address (struct in_addr group, struct in_addr dest_addr)
        return 1;
     }
 
-  if (if_lookup_exact_address (&dest_addr, AF_INET, VRF_DEFAULT))
+  if (if_lookup_exact_address (&dest_addr, AF_INET, pimg->vrf_id))
     return 1;
 
   return 0;
@@ -973,8 +973,9 @@ pim_resolve_rp_nh (void)
             {
               if (nh_node->gate.ipv4.s_addr == 0)
                 {
-                  nbr = pim_neighbor_find_if (if_lookup_by_index
-                                          (nh_node->ifindex, VRF_DEFAULT));
+                  nbr =
+                    pim_neighbor_find_if (if_lookup_by_index
+                                          (nh_node->ifindex, pimg->vrf_id));
                   if (nbr)
                     {
                       nh_node->gate.ipv4 = nbr->source_addr;
@@ -982,8 +983,7 @@ pim_resolve_rp_nh (void)
                         {
                           char str[PREFIX_STRLEN];
                           char str1[INET_ADDRSTRLEN];
-                          struct interface *ifp1 = if_lookup_by_index(nh_node->ifindex,
-                                                                              VRF_DEFAULT);
+                          struct interface *ifp1 = if_lookup_by_index(nh_node->ifindex, pimg->vrf_id);
                           pim_inet4_dump ("<nht_nbr?>", nbr->source_addr,
                                           str1, sizeof (str1));
                           pim_addr_dump ("<nht_addr?>", &nht_p, str,

@@ -924,7 +924,7 @@ pim_find_primary_addr (struct interface *ifp)
   if (!v4_addrs && v6_addrs && !if_is_loopback (ifp))
     {
       struct interface *lo_ifp;
-      lo_ifp = if_lookup_by_name ("lo", VRF_DEFAULT);
+      lo_ifp = if_lookup_by_name ("lo", pimg->vrf_id);
       if (lo_ifp)
 	return pim_find_primary_addr (lo_ifp);
     }
@@ -1043,7 +1043,7 @@ void pim_if_add_vif_all()
   struct listnode  *ifnextnode;
   struct interface *ifp;
 
-  for (ALL_LIST_ELEMENTS (vrf_iflist (VRF_DEFAULT), ifnode, ifnextnode, ifp)) {
+  for (ALL_LIST_ELEMENTS (vrf_iflist (pimg->vrf_id), ifnode, ifnextnode, ifp)) {
     if (!ifp->info)
       continue;
 
@@ -1057,7 +1057,7 @@ void pim_if_del_vif_all()
   struct listnode  *ifnextnode;
   struct interface *ifp;
 
-  for (ALL_LIST_ELEMENTS (vrf_iflist (VRF_DEFAULT), ifnode, ifnextnode, ifp)) {
+  for (ALL_LIST_ELEMENTS (vrf_iflist (pimg->vrf_id), ifnode, ifnextnode, ifp)) {
     if (!ifp->info)
       continue;
 
@@ -1071,9 +1071,9 @@ struct interface *pim_if_find_by_vif_index(ifindex_t vif_index)
   struct interface *ifp;
 
   if (vif_index == 0)
-    return if_lookup_by_name ("pimreg", VRF_DEFAULT);
+    return if_lookup_by_name ("pimreg", pimg->vrf_id);
 
-  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (VRF_DEFAULT), ifnode, ifp)) {
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (pimg->vrf_id), ifnode, ifp)) {
     if (ifp->info) {
       struct pim_interface *pim_ifp;
       pim_ifp = ifp->info;
@@ -1094,7 +1094,7 @@ int pim_if_find_vifindex_by_ifindex(ifindex_t ifindex)
   struct pim_interface *pim_ifp;
   struct interface *ifp;
 
-  ifp = if_lookup_by_index (ifindex, VRF_DEFAULT);
+  ifp = if_lookup_by_index (ifindex, pimg->vrf_id);
   if (!ifp || !ifp->info)
     return -1;
   pim_ifp = ifp->info;
@@ -1542,7 +1542,7 @@ void pim_if_update_assert_tracking_desired(struct interface *ifp)
 void pim_if_create_pimreg (void)
 {
   if (!pim_regiface) {
-    pim_regiface = if_create("pimreg", strlen("pimreg"), VRF_DEFAULT);
+    pim_regiface = if_create("pimreg", strlen("pimreg"), pimg->vrf_id);
     pim_regiface->ifindex = PIM_OIF_PIM_REGISTER_VIF;
 
     pim_if_new(pim_regiface, 0, 0);

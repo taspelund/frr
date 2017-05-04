@@ -259,9 +259,9 @@ static int zclient_read_nexthop(struct zclient *zlookup,
        * If we are sending v6 secondary assume we receive v6 secondary
        */
       if (pimg->send_v6_secondary)
-        nbr = pim_neighbor_find_by_secondary(if_lookup_by_index (nexthop_tab[num_ifindex].ifindex, VRF_DEFAULT), &p);
+        nbr = pim_neighbor_find_by_secondary(if_lookup_by_index (nexthop_tab[num_ifindex].ifindex, pimg->vrf_id), &p);
       else
-        nbr = pim_neighbor_find_if (if_lookup_by_index (nexthop_tab[num_ifindex].ifindex, VRF_DEFAULT));
+        nbr = pim_neighbor_find_if (if_lookup_by_index (nexthop_tab[num_ifindex].ifindex, pimg->vrf_id));
       if (nbr)
         {
           nexthop_tab[num_ifindex].nexthop_addr.family = AF_INET;
@@ -311,7 +311,7 @@ zclient_lookup_nexthop_once (struct pim_zlookup_nexthop nexthop_tab[],
   
   s = zlookup->obuf;
   stream_reset(s);
-  zclient_create_header(s, ZEBRA_IPV4_NEXTHOP_LOOKUP_MRIB, VRF_DEFAULT);
+  zclient_create_header(s, ZEBRA_IPV4_NEXTHOP_LOOKUP_MRIB, pimg->vrf_id);
   stream_put_in_addr(s, &addr);
   stream_putw_at(s, 0, stream_get_endp(s));
   
@@ -471,7 +471,7 @@ pim_zlookup_sg_statistics (struct channel_oil *c_oil)
     return -1;
 
   stream_reset (s);
-  zclient_create_header (s, ZEBRA_IPMR_ROUTE_STATS, VRF_DEFAULT);
+  zclient_create_header (s, ZEBRA_IPMR_ROUTE_STATS, pimg->vrf_id);
   stream_put_in_addr (s, &c_oil->oil.mfcc_origin);
   stream_put_in_addr (s, &c_oil->oil.mfcc_mcastgrp);
   stream_putl (s,  ifp->ifindex);
