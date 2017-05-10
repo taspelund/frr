@@ -113,7 +113,8 @@ pim_is_group_224_0_0_0_24 (struct in_addr group_addr)
 
   if (first)
     {
-      str2prefix ("224.0.0.0/24", &group_224);
+      if (!str2prefix ("224.0.0.0/24", &group_224))
+	return 0;
       first = 0;
     }
 
@@ -133,7 +134,8 @@ pim_is_group_224_4 (struct in_addr group_addr)
 
   if (first)
     {
-      str2prefix ("224.0.0.0/4", &group_all);
+      if (!str2prefix ("224.0.0.0/4", &group_all))
+	return 0;
       first = 0;
     }
 
