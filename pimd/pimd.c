@@ -52,8 +52,6 @@ const char *const PIM_ALL_IGMP_ROUTERS = MCAST_ALL_IGMP_ROUTERS;
 
 struct thread_master     *master = NULL;
 uint32_t                  qpim_debugs = 0;
-int                       qpim_mroute_socket_fd = -1;
-int64_t                   qpim_mroute_socket_creation = 0; /* timestamp of creation */
 int                       qpim_t_periodic = PIM_DEFAULT_T_PERIODIC; /* Period between Join/Prune Messages */
 struct pim_assert_metric  qpim_infinite_assert_metric;
 long                      qpim_rpf_cache_refresh_delay_msec = 50;
@@ -65,10 +63,6 @@ struct list              *qpim_ssmpingd_list = NULL;
 struct in_addr            qpim_ssmpingd_group_addr;
 int64_t                   qpim_scan_oil_events = 0;
 int64_t                   qpim_scan_oil_last = 0;
-int64_t                   qpim_mroute_add_events = 0;
-int64_t                   qpim_mroute_add_last = 0;
-int64_t                   qpim_mroute_del_events = 0;
-int64_t                   qpim_mroute_del_last = 0;
 struct list              *qpim_static_route_list = NULL;
 unsigned int              qpim_keep_alive_time = PIM_KEEPALIVE_PERIOD;
 signed int                qpim_rp_keep_alive_time = 0;
@@ -118,7 +112,9 @@ pim_vrf_enable (struct vrf *vrf)
           exit(1);
       }
 
-    pimg->send_v6_secondary = 1;
+      pimg->mroute_socket = -1;
+
+      pimg->send_v6_secondary = 1;
 
     }
   return 0;

@@ -2146,16 +2146,16 @@ static void show_scan_oil_stats(struct vty *vty, time_t now)
   char uptime_mroute_del[10];
 
   pim_time_uptime_begin(uptime_scan_oil, sizeof(uptime_scan_oil), now, qpim_scan_oil_last);
-  pim_time_uptime_begin(uptime_mroute_add, sizeof(uptime_mroute_add), now, qpim_mroute_add_last);
-  pim_time_uptime_begin(uptime_mroute_del, sizeof(uptime_mroute_del), now, qpim_mroute_del_last);
+  pim_time_uptime_begin(uptime_mroute_add, sizeof(uptime_mroute_add), now, pimg->mroute_add_last);
+  pim_time_uptime_begin(uptime_mroute_del, sizeof(uptime_mroute_del), now, pimg->mroute_del_last);
 
   vty_out(vty,
           "Scan OIL - Last: %s  Events: %lld%s"
           "MFC Add  - Last: %s  Events: %lld%s"
           "MFC Del  - Last: %s  Events: %lld%s",
           uptime_scan_oil,   (long long) qpim_scan_oil_events,   VTY_NEWLINE,
-          uptime_mroute_add, (long long) qpim_mroute_add_events, VTY_NEWLINE,
-          uptime_mroute_del, (long long) qpim_mroute_del_events, VTY_NEWLINE);
+          uptime_mroute_add, (long long) pimg->mroute_add_events, VTY_NEWLINE,
+          uptime_mroute_del, (long long) pimg->mroute_del_events, VTY_NEWLINE);
 }
 
 static void pim_show_rpf(struct vty *vty, u_char uj)
@@ -3185,7 +3185,7 @@ static void show_multicast_interfaces(struct vty *vty)
     memset(&vreq, 0, sizeof(vreq));
     vreq.vifi = pim_ifp->mroute_vif_index;
 
-    if (ioctl(qpim_mroute_socket_fd, SIOCGETVIFCNT, &vreq)) {
+    if (ioctl(pimg->mroute_socket, SIOCGETVIFCNT, &vreq)) {
       zlog_warn("ioctl(SIOCGETVIFCNT=%lu) failure for interface %s vif_index=%d: errno=%d: %s%s",
 		(unsigned long)SIOCGETVIFCNT,
 		ifp->name,
@@ -3222,10 +3222,10 @@ DEFUN (show_ip_multicast,
   char uptime[10];
 
   vty_out(vty, "Mroute socket descriptor: %d%s",
-          qpim_mroute_socket_fd,
+          pimg->mroute_socket,
           VTY_NEWLINE);
 
-  pim_time_uptime(uptime, sizeof(uptime), now - qpim_mroute_socket_creation);
+  pim_time_uptime(uptime, sizeof(uptime), now - pimg->mroute_socket_creation);
   vty_out(vty, "Mroute socket uptime: %s%s",
           uptime,
           VTY_NEWLINE);
