@@ -97,6 +97,7 @@ pim_vrf_enable (struct vrf *vrf)
 {
   struct pim_instance *pim;
 
+zlog_debug ("%s: for %s", __PRETTY_FUNCTION__, vrf->name);
   pim = pim_instance_init (vrf);
   if (pim == NULL)
     {
@@ -249,8 +250,12 @@ pim_instance_init (struct vrf *vrf)
     return NULL;
   }
 
-  pim->mroute_socket = -1;
   pim->send_v6_secondary = 1;
+
+  if (vrf->vrf_id == VRF_DEFAULT)
+    pimg = pim;
+
+  pim_mroute_socket_enable(pim);
 
   return pim;
 }
@@ -280,9 +285,6 @@ void pim_init()
     return;
   }
   qpim_static_route_list->del = (void (*)(void *)) pim_static_route_free;
-
-  pim_mroute_socket_enable(pimg);
-
 
   /*
     RFC 4601: 4.6.3.  Assert Metrics
