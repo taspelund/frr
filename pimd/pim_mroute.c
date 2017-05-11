@@ -499,7 +499,8 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
   return 0;
 }
 
-int pim_mroute_msg(int fd, const char *buf, int buf_size)
+static int
+pim_mroute_msg (struct pim_instance *pim, const char *buf, int buf_size)
 {
   struct interface     *ifp;
   struct pim_interface *pim_ifp;
@@ -520,7 +521,7 @@ int pim_mroute_msg(int fd, const char *buf, int buf_size)
      * received on. Find the interface that is on the same subnet as the source
      * of the IP packet.
      */
-    ifp = pim_if_lookup_address_vrf (ip_hdr->ip_src, pimg->vrf_id);
+    ifp = pim_if_lookup_address_vrf (ip_hdr->ip_src, pim->vrf_id);
 
     if (!ifp) {
       if (PIM_DEBUG_MROUTE_DETAIL) {
@@ -571,7 +572,7 @@ int pim_mroute_msg(int fd, const char *buf, int buf_size)
                 igmpmsgtype2str[msg->im_msgtype],
                 msg->im_msgtype,
                 ip_hdr->ip_p,
-                fd,
+                pim->mroute_socket,
                 src_str,
                 grp_str,
                 ifp->name,
@@ -580,16 +581,16 @@ int pim_mroute_msg(int fd, const char *buf, int buf_size)
 
     switch (msg->im_msgtype) {
     case IGMPMSG_WRONGVIF:
-      return pim_mroute_msg_wrongvif(fd, ifp, msg);
+      return pim_mroute_msg_wrongvif(pim->mroute_socket, ifp, msg);
       break;
     case IGMPMSG_NOCACHE:
-      return pim_mroute_msg_nocache(fd, ifp, msg);
+      return pim_mroute_msg_nocache(pim->mroute_socket, ifp, msg);
       break;
     case IGMPMSG_WHOLEPKT:
-      return pim_mroute_msg_wholepkt(fd, ifp, (const char *)msg);
+      return pim_mroute_msg_wholepkt(pim->mroute_socket, ifp, (const char *)msg);
       break;
     case IGMPMSG_WRVIFWHOLE:
-      return pim_mroute_msg_wrvifwhole (fd, ifp, (const char *)msg);
+      return pim_mroute_msg_wrvifwhole (pim->mroute_socket, ifp, (const char *)msg);
       break;
     default:
       break;
@@ -625,7 +626,7 @@ static int mroute_read(struct thread *t)
 	goto done;
       }
 
-      result = pim_mroute_msg(pim->mroute_socket, buf, rd);
+      result = pim_mroute_msg(pim, buf, rd);
 
       count++;
       if (count % qpim_packet_process == 0)
@@ -693,13 +694,13 @@ pim_mroute_socket_disable (struct pim_instance *pim)
 {
   if (pim_mroute_set(pim, 0)) {
     zlog_warn("Could not disable mroute on socket fd=%d: errno=%d: %s",
-	      pimg->mroute_socket, errno, safe_strerror(errno));
+	      pim->mroute_socket, errno, safe_strerror(errno));
     return -2;
   }
 
   if (close(pim->mroute_socket)) {
     zlog_warn("Failure closing mroute socket: fd=%d errno=%d: %s",
-	      pimg->mroute_socket, errno, safe_strerror(errno));
+	      pim->mroute_socket, errno, safe_strerror(errno));
     return -3;
   }
 
