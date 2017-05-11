@@ -141,9 +141,8 @@ static int zclient_connect(struct thread *t)
 
 	if (zclient_socket_connect(zclient) < 0) {
 		zlog_err("Error connecting synchronous zclient!");
-		THREAD_TIMER_ON(zebrad.master, zclient->t_connect,
-						zclient_connect,
-						zclient, CONNECTION_DELAY);
+		thread_add_timer(zebrad.master, zclient_connect, zclient,
+				 CONNECTION_DELAY, &zclient->t_connect);
 		return -1;
 	}
 
@@ -205,7 +204,6 @@ struct label_manager_chunk *assign_label_chunk(u_char proto, u_short instance,
 	struct label_manager_chunk *lmc;
 	struct listnode *node;
 
-	node = lbl_mgr.lc_list->head;
 	/* first check if there's one available */
 	for (ALL_LIST_ELEMENTS_RO(lbl_mgr.lc_list, node, lmc)) {
 		if (lmc->proto == NO_PROTO && lmc->end - lmc->start + 1 == size) {
@@ -228,6 +226,7 @@ struct label_manager_chunk *assign_label_chunk(u_char proto, u_short instance,
 	if (lmc->start > MPLS_MAX_UNRESERVED_LABEL - size + 1) {
 		zlog_err("Reached max labels. Start: %u, size: %u", lmc->start,
 			 size);
+                XFREE(MTYPE_LM_CHUNK, lmc);
 		return NULL;
 	}
 	lmc->end = lmc->start + size - 1;

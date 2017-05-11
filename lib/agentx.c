@@ -85,8 +85,11 @@ agentx_events_update(void)
   FD_ZERO (&fds);
   snmp_select_info (&maxfd, &fds, &timeout, &block);
 
-  if (!block)
-    timeout_thr = thread_add_timer_tv (agentx_tm, agentx_timeout, NULL, &timeout);
+  if (!block) {
+    timeout_thr = NULL;
+    thread_add_timer_tv(agentx_tm, agentx_timeout, NULL, &timeout,
+                        &timeout_thr);
+  }
 
   ln = listhead (events);
   thr = ln ? listgetdata (ln) : NULL;
@@ -114,7 +117,8 @@ agentx_events_update(void)
       else if (FD_ISSET (fd, &fds))
         {
           struct listnode *newln;
-          thr = thread_add_read (agentx_tm, agentx_read, NULL, fd);
+          thr = NULL;
+          thread_add_read(agentx_tm, agentx_read, NULL, fd, &thr);
           newln = listnode_add_before (events, ln, thr);
           thr->arg = newln;
         }
@@ -134,7 +138,8 @@ agentx_events_update(void)
 static struct cmd_node agentx_node =
 {
   SMUX_NODE,
-  ""                            /* AgentX has no interface. */
+  "",                           /* AgentX has no interface. */
+  1
 };
 
 /* Logging NetSNMP messages */
@@ -165,7 +170,7 @@ config_write_agentx (struct vty *vty)
 {
   if (agentx_enabled)
       vty_out (vty, "agentx%s", VTY_NEWLINE);
-  return 0;
+  return 1;
 }
 
 DEFUN (agentx_enable,
@@ -183,7 +188,7 @@ DEFUN (agentx_enable,
       return CMD_SUCCESS;
     }
   vty_out (vty, "SNMP AgentX already enabled%s", VTY_NEWLINE);
-  return CMD_WARNING;
+  return CMD_SUCCESS;
 }
 
 DEFUN (no_agentx,

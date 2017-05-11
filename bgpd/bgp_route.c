@@ -2017,9 +2017,10 @@ bgp_process_main (struct work_queue *wq, void *data)
       if (!bgp->t_rmap_def_originate_eval)
         {
           bgp_lock (bgp);
-          THREAD_TIMER_ON(bm->master, bgp->t_rmap_def_originate_eval,
-                          update_group_refresh_default_originate_route_map,
-                          bgp, RMAP_DEFAULT_ORIGINATE_EVAL_TIMER);
+          thread_add_timer(bm->master,
+                           update_group_refresh_default_originate_route_map,
+                           bgp, RMAP_DEFAULT_ORIGINATE_EVAL_TIMER,
+                           &bgp->t_rmap_def_originate_eval);
         }
     }
 
@@ -3088,9 +3089,6 @@ bgp_announce_route_timer_expired (struct thread *t)
   paf = THREAD_ARG (t);
   peer = paf->peer;
 
-  assert (paf->t_announce_route);
-  paf->t_announce_route = NULL;
-
   if (peer->status != Established)
     return 0;
 
@@ -3130,11 +3128,9 @@ bgp_announce_route (struct peer *peer, afi_t afi, safi_t safi)
    * multiple peers and the announcement doesn't happen in the
    * vty context.
    */
-  THREAD_TIMER_MSEC_ON (bm->master, paf->t_announce_route,
-			bgp_announce_route_timer_expired, paf,
-                        (subgrp->peer_count == 1) ?
-			BGP_ANNOUNCE_ROUTE_SHORT_DELAY_MS :
-			BGP_ANNOUNCE_ROUTE_DELAY_MS);
+  thread_add_timer_msec(bm->master, bgp_announce_route_timer_expired, paf,
+                        (subgrp->peer_count == 1) ? BGP_ANNOUNCE_ROUTE_SHORT_DELAY_MS : BGP_ANNOUNCE_ROUTE_DELAY_MS,
+                        &paf->t_announce_route);
 }
 
 /*
@@ -5757,11 +5753,11 @@ bgp_aggregate_unset (struct vty *vty, const char *prefix_str,
     }
 
   aggregate = rn->info;
-  if (aggregate->safi & SAFI_UNICAST)
+  if (aggregate->safi == SAFI_UNICAST)
     bgp_aggregate_delete (bgp, &p, afi, SAFI_UNICAST, aggregate);
-  if (aggregate->safi & SAFI_LABELED_UNICAST)
+  if (aggregate->safi == SAFI_LABELED_UNICAST)
     bgp_aggregate_delete (bgp, &p, afi, SAFI_LABELED_UNICAST, aggregate);
-  if (aggregate->safi & SAFI_MULTICAST)
+  if (aggregate->safi == SAFI_MULTICAST)
     bgp_aggregate_delete (bgp, &p, afi, SAFI_MULTICAST, aggregate);
 
   /* Unlock aggregate address configuration. */
@@ -5817,11 +5813,11 @@ bgp_aggregate_set (struct vty *vty, const char *prefix_str,
   rn->info = aggregate;
 
   /* Aggregate address insert into BGP routing table. */
-  if (safi & SAFI_UNICAST)
+  if (safi == SAFI_UNICAST)
     bgp_aggregate_add (bgp, &p, afi, SAFI_UNICAST, aggregate);
-  if (safi & SAFI_LABELED_UNICAST)
+  if (safi == SAFI_LABELED_UNICAST)
     bgp_aggregate_add (bgp, &p, afi, SAFI_LABELED_UNICAST, aggregate);
-  if (safi & SAFI_MULTICAST)
+  if (safi == SAFI_MULTICAST)
     bgp_aggregate_add (bgp, &p, afi, SAFI_MULTICAST, aggregate);
 
   return CMD_SUCCESS;
@@ -5860,9 +5856,8 @@ DEFUN (aggregate_address_mask,
 {
   int idx = 0;
   argv_find (argv, argc, "A.B.C.D", &idx);
-  char *prefix = argv[idx++]->arg;
-  argv_find (argv, argc, "A.B.C.D", &idx);
-  char *mask = argv[idx]->arg;
+  char *prefix = argv[idx]->arg;
+  char *mask = argv[idx+1]->arg;
   int as_set = argv_find (argv, argc, "as-set", &idx) ? AGGREGATE_AS_SET : 0;
   idx = 0;
   int summary_only = argv_find (argv, argc, "summary-only", &idx) ? AGGREGATE_SUMMARY_ONLY : 0;
@@ -5910,9 +5905,8 @@ DEFUN (no_aggregate_address_mask,
 {
   int idx = 0;
   argv_find (argv, argc, "A.B.C.D", &idx);
-  char *prefix = argv[idx++]->arg;
-  argv_find (argv, argc, "A.B.C.D", &idx);
-  char *mask = argv[idx]->arg;
+  char *prefix = argv[idx]->arg;
+  char *mask = argv[idx+1]->arg;
 
   char prefix_str[BUFSIZ];
   int ret = netmask_str2prefix_str (prefix, mask, prefix_str);

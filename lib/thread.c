@@ -379,7 +379,7 @@ thread_master_create (void)
   rv->spin = true;
   rv->handle_signals = true;
 
-#if defined(HAVE_POLL)
+#if defined(HAVE_POLL_CALL)
   rv->handler.pfdsize = rv->fd_limit;
   rv->handler.pfdcount = 0;
   rv->handler.pfds = XCALLOC (MTYPE_THREAD_MASTER,
@@ -454,6 +454,7 @@ thread_add_unuse (struct thread_master *m, struct thread *thread)
   assert (m != NULL && thread != NULL);
   assert (thread->next == NULL);
   assert (thread->prev == NULL);
+  thread->ref = NULL;
 
   thread->type = THREAD_UNUSED;
   thread->hist->total_active--;
@@ -543,7 +544,7 @@ thread_master_free (struct thread_master *m)
   thread_queue_free (m, m->background);
   pthread_mutex_destroy (&m->mtx);
 
-#if defined(HAVE_POLL)
+#if defined(HAVE_POLL_CALL)
   XFREE (MTYPE_THREAD_MASTER, m->handler.pfds);
 #endif
   XFREE (MTYPE_THREAD_MASTER, m);
@@ -644,7 +645,7 @@ thread_get (struct thread_master *m, u_char type,
   return thread;
 }
 
-#if defined (HAVE_POLL)
+#if defined (HAVE_POLL_CALL)
 
 #define fd_copy_fd_set(X) (X)
 
@@ -712,7 +713,7 @@ fd_select (struct thread_master *m, int size, thread_fd_set *read, thread_fd_set
    * no event is detected. If the value is zero, the behavior is default.
    */
 
-#if defined(HAVE_POLL)
+#if defined(HAVE_POLL_CALL)
   int timeout = -1;
 
   if (timer_wait != NULL && m->selectpoll_timeout == 0) // use the default value
@@ -725,6 +726,7 @@ fd_select (struct thread_master *m, int size, thread_fd_set *read, thread_fd_set
   num = poll (m->handler.pfds, m->handler.pfdcount + m->handler.pfdcountsnmp, timeout);
 #else
   struct timeval timeout;
+
   if (m->selectpoll_timeout > 0) // use the user's timeout
   {
     timeout.tv_sec = m->selectpoll_timeout / 1000;
@@ -746,7 +748,7 @@ fd_select (struct thread_master *m, int size, thread_fd_set *read, thread_fd_set
 static int
 fd_is_set (struct thread *thread, thread_fd_set *fdset, int pos)
 {
-#if defined(HAVE_POLL)
+#if defined(HAVE_POLL_CALL)
   return 1;
 #else
   return FD_ISSET (THREAD_FD (thread), fdset);
@@ -756,7 +758,7 @@ fd_is_set (struct thread *thread, thread_fd_set *fdset, int pos)
 static int
 fd_clear_read_write (struct thread *thread)
 {
-#if !defined(HAVE_POLL)
+#if !defined(HAVE_POLL_CALL)
   thread_fd_set *fdset = NULL;
   int fd = THREAD_FD (thread);
 
@@ -774,18 +776,30 @@ fd_clear_read_write (struct thread *thread)
 }
 
 /* Add new read thread. */
-struct thread *
+void
 funcname_thread_add_read_write (int dir, struct thread_master *m,
-				int (*func) (struct thread *), void *arg, int fd,
-				debugargdef)
+        int (*func) (struct thread *), void *arg, int fd, struct thread **t_ptr,
+        debugargdef)
 {
   struct thread *thread = NULL;
 
   pthread_mutex_lock (&m->mtx);
   {
-#if defined (HAVE_POLL)
+    if (t_ptr && *t_ptr) // thread is already scheduled; don't reschedule
+      {
+        pthread_mutex_unlock (&m->mtx);
+        return;
+      }
+
+#if defined (HAVE_POLL_CALL)
     thread = generic_thread_add(m, func, arg, fd, dir, debugargpass);
 #else
+    if (fd >= FD_SETSIZE)
+      {
+        zlog_err ("File descriptor %d is >= FD_SETSIZE (%d). Please recompile"
+                  "with --enable-poll=yes", fd, FD_SETSIZE);
+        assert (fd < FD_SETSIZE && !"fd >= FD_SETSIZE");
+      }
     thread_fd_set *fdset = NULL;
     if (dir == THREAD_READ)
       fdset = &m->handler.readfd;
@@ -816,19 +830,20 @@ funcname_thread_add_read_write (int dir, struct thread_master *m,
         }
         pthread_mutex_unlock (&thread->mtx);
       }
+
+    if (t_ptr)
+      {
+        *t_ptr = thread;
+        thread->ref = t_ptr;
+      }
   }
   pthread_mutex_unlock (&m->mtx);
-
-  return thread;
 }
 
-static struct thread *
+static void
 funcname_thread_add_timer_timeval (struct thread_master *m,
-                                   int (*func) (struct thread *), 
-                                  int type,
-                                  void *arg, 
-                                  struct timeval *time_relative,
-				  debugargdef)
+         int (*func) (struct thread *), int type, void *arg,
+         struct timeval *time_relative, struct thread **t_ptr, debugargdef)
 {
   struct thread *thread;
   struct pqueue *queue;
@@ -840,6 +855,12 @@ funcname_thread_add_timer_timeval (struct thread_master *m,
   
   pthread_mutex_lock (&m->mtx);
   {
+    if (t_ptr && *t_ptr) // thread is already scheduled; don't reschedule
+      {
+        pthread_mutex_unlock (&m->mtx);
+        return;
+      }
+
     queue = ((type == THREAD_TIMER) ? m->timer : m->background);
     thread = thread_get (m, type, func, arg, debugargpass);
 
@@ -850,19 +871,22 @@ funcname_thread_add_timer_timeval (struct thread_master *m,
       pqueue_enqueue(thread, queue);
     }
     pthread_mutex_unlock (&thread->mtx);
+
+    if (t_ptr)
+      {
+        *t_ptr = thread;
+        thread->ref = t_ptr;
+      }
   }
   pthread_mutex_unlock (&m->mtx);
-
-  return thread;
 }
 
 
 /* Add timer event thread. */
-struct thread *
+void
 funcname_thread_add_timer (struct thread_master *m,
-		           int (*func) (struct thread *), 
-		           void *arg, long timer,
-			   debugargdef)
+        int (*func) (struct thread *), void *arg, long timer,
+        struct thread **t_ptr, debugargdef)
 {
   struct timeval trel;
 
@@ -871,16 +895,15 @@ funcname_thread_add_timer (struct thread_master *m,
   trel.tv_sec = timer;
   trel.tv_usec = 0;
 
-  return funcname_thread_add_timer_timeval (m, func, THREAD_TIMER, arg, 
-                                            &trel, debugargpass);
+  return funcname_thread_add_timer_timeval (m, func, THREAD_TIMER, arg, &trel,
+                                            t_ptr, debugargpass);
 }
 
 /* Add timer event thread with "millisecond" resolution */
-struct thread *
+void
 funcname_thread_add_timer_msec (struct thread_master *m,
-                                int (*func) (struct thread *), 
-                                void *arg, long timer,
-				debugargdef)
+        int (*func) (struct thread *), void *arg, long timer,
+        struct thread **t_ptr, debugargdef)
 {
   struct timeval trel;
 
@@ -889,27 +912,25 @@ funcname_thread_add_timer_msec (struct thread_master *m,
   trel.tv_sec = timer / 1000;
   trel.tv_usec = 1000*(timer % 1000);
 
-  return funcname_thread_add_timer_timeval (m, func, THREAD_TIMER, 
-                                            arg, &trel, debugargpass);
+  funcname_thread_add_timer_timeval (m, func, THREAD_TIMER, arg, &trel,
+                                     t_ptr, debugargpass);
 }
 
 /* Add timer event thread with "millisecond" resolution */
-struct thread *
+void
 funcname_thread_add_timer_tv (struct thread_master *m,
-                              int (*func) (struct thread *),
-                              void *arg, struct timeval *tv,
-                              debugargdef)
+        int (*func) (struct thread *), void *arg, struct timeval *tv,
+        struct thread **t_ptr, debugargdef)
 {
-  return funcname_thread_add_timer_timeval (m, func, THREAD_TIMER,
-                                            arg, tv, debugargpass);
+  funcname_thread_add_timer_timeval (m, func, THREAD_TIMER, arg, tv, t_ptr,
+                                     debugargpass);
 }
 
 /* Add a background thread, with an optional millisec delay */
-struct thread *
+void
 funcname_thread_add_background (struct thread_master *m,
-                                int (*func) (struct thread *),
-                                void *arg, long delay,
-				debugargdef)
+        int (*func) (struct thread *), void *arg, long delay,
+        struct thread **t_ptr, debugargdef)
 {
   struct timeval trel;
   
@@ -926,15 +947,15 @@ funcname_thread_add_background (struct thread_master *m,
       trel.tv_usec = 0;
     }
 
-  return funcname_thread_add_timer_timeval (m, func, THREAD_BACKGROUND,
-                                            arg, &trel, debugargpass);
+  funcname_thread_add_timer_timeval (m, func, THREAD_BACKGROUND, arg, &trel,
+                                     t_ptr, debugargpass);
 }
 
 /* Add simple event thread. */
-struct thread *
+void
 funcname_thread_add_event (struct thread_master *m,
-		  int (*func) (struct thread *), void *arg, int val,
-		  debugargdef)
+        int (*func) (struct thread *), void *arg, int val,
+        struct thread **t_ptr, debugargdef)
 {
   struct thread *thread;
 
@@ -942,6 +963,12 @@ funcname_thread_add_event (struct thread_master *m,
 
   pthread_mutex_lock (&m->mtx);
   {
+    if (t_ptr && *t_ptr) // thread is already scheduled; don't reschedule
+      {
+        pthread_mutex_unlock (&m->mtx);
+        return;
+      }
+
     thread = thread_get (m, THREAD_EVENT, func, arg, debugargpass);
     pthread_mutex_lock (&thread->mtx);
     {
@@ -949,16 +976,20 @@ funcname_thread_add_event (struct thread_master *m,
       thread_list_add (&m->event, thread);
     }
     pthread_mutex_unlock (&thread->mtx);
+
+    if (t_ptr)
+      {
+        *t_ptr = thread;
+        thread->ref = t_ptr;
+      }
   }
   pthread_mutex_unlock (&m->mtx);
-
-  return thread;
 }
 
 static void
 thread_cancel_read_or_write (struct thread *thread, short int state)
 {
-#if defined(HAVE_POLL)
+#if defined(HAVE_POLL_CALL)
   nfds_t i;
 
   for (i=0;i<thread->master->handler.pfdcount;++i)
@@ -1000,7 +1031,7 @@ thread_cancel (struct thread *thread)
   switch (thread->type)
     {
     case THREAD_READ:
-#if defined (HAVE_POLL)
+#if defined (HAVE_POLL_CALL)
       thread_cancel_read_or_write (thread, POLLIN | POLLHUP);
 #else
       thread_cancel_read_or_write (thread, 0);
@@ -1008,7 +1039,7 @@ thread_cancel (struct thread *thread)
       thread_array = thread->master->read;
       break;
     case THREAD_WRITE:
-#if defined (HAVE_POLL)
+#if defined (HAVE_POLL_CALL)
       thread_cancel_read_or_write (thread, POLLOUT | POLLHUP);
 #else
       thread_cancel_read_or_write (thread, 0);
@@ -1050,6 +1081,9 @@ thread_cancel (struct thread *thread)
       assert(!"Thread should be either in queue or list or array!");
     }
 
+  if (thread->ref)
+    *thread->ref = NULL;
+
   thread_add_unuse (thread->master, thread);
 
 done:
@@ -1079,6 +1113,8 @@ thread_cancel_event (struct thread_master *m, void *arg)
             {
               ret++;
               thread_list_delete (&m->event, t);
+              if (t->ref)
+                *t->ref = NULL;
               thread_add_unuse (m, t);
             }
         }
@@ -1098,6 +1134,8 @@ thread_cancel_event (struct thread_master *m, void *arg)
             {
               ret++;
               thread_list_delete (&m->ready, t);
+              if (t->ref)
+                *t->ref = NULL;
               thread_add_unuse (m, t);
             }
         }
@@ -1148,7 +1186,7 @@ thread_process_fds_helper (struct thread_master *m, struct thread *thread, threa
       thread_delete_fd (thread_array, thread);
       thread_list_add (&m->ready, thread);
       thread->type = THREAD_READY;
-#if defined(HAVE_POLL)
+#if defined(HAVE_POLL_CALL)
       thread->master->handler.pfds[pos].events &= ~(state);
 #endif
       return 1;
@@ -1156,7 +1194,7 @@ thread_process_fds_helper (struct thread_master *m, struct thread *thread, threa
   return 0;
 }
 
-#if defined(HAVE_POLL)
+#if defined(HAVE_POLL_CALL)
 
 /* check poll events */
 static void
@@ -1197,7 +1235,7 @@ check_pollfds(struct thread_master *m, fd_set *readfd, int num)
 static void
 thread_process_fds (struct thread_master *m, thread_fd_set *rset, thread_fd_set *wset, int num)
 {
-#if defined (HAVE_POLL)
+#if defined (HAVE_POLL_CALL)
   check_pollfds (m, rset, num);
 #else
   int ready = 0, index;
@@ -1279,6 +1317,8 @@ thread_fetch (struct thread_master *m, struct thread *fetch)
       if ((thread = thread_trim_head (&m->ready)) != NULL)
         {
           fetch = thread_run (m, thread, fetch);
+          if (fetch->ref)
+            *fetch->ref = NULL;
           pthread_mutex_unlock (&m->mtx);
           return fetch;
         }
@@ -1292,7 +1332,7 @@ thread_fetch (struct thread_master *m, struct thread *fetch)
       thread_process (&m->event);
       
       /* Structure copy.  */
-#if !defined(HAVE_POLL)
+#if !defined(HAVE_POLL_CALL)
       readfd = fd_copy_fd_set(m->handler.readfd);
       writefd = fd_copy_fd_set(m->handler.writefd);
       exceptfd = fd_copy_fd_set(m->handler.exceptfd);
@@ -1348,6 +1388,8 @@ thread_fetch (struct thread_master *m, struct thread *fetch)
       if ((thread = thread_trim_head (&m->ready)) != NULL)
         {
           fetch = thread_run (m, thread, fetch);
+          if (fetch->ref)
+            *fetch->ref = NULL;
           pthread_mutex_unlock (&m->mtx);
           return fetch;
         }
@@ -1359,6 +1401,8 @@ thread_fetch (struct thread_master *m, struct thread *fetch)
       if ((thread = thread_trim_head (&m->ready)) != NULL)
         {
           fetch = thread_run (m, thread, fetch);
+          if (fetch->ref)
+            *fetch->ref = NULL;
           pthread_mutex_unlock (&m->mtx);
           return fetch;
         }
@@ -1466,7 +1510,7 @@ thread_call (struct thread *thread)
 }
 
 /* Execute thread */
-struct thread *
+void
 funcname_thread_execute (struct thread_master *m,
                 int (*func)(struct thread *), 
                 void *arg,
@@ -1498,6 +1542,4 @@ funcname_thread_execute (struct thread_master *m,
   dummy.schedfrom_line = fromln;
 
   thread_call (&dummy);
-
-  return NULL;
 }

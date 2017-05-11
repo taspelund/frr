@@ -14,7 +14,7 @@ Add packages:
 
     apt-get install git autoconf automake libtool make gawk libreadline-dev \
        texinfo dejagnu pkg-config libpam0g-dev libjson-c-dev bison flex \
-       python-pytest libc-ares-dev python3-dev
+       python-pytest libc-ares-dev python3-dev libsystemd-dev
 
 Get FRR, compile it and install it (from Git)
 ---------------------------------------------
@@ -56,6 +56,7 @@ an example.)
         --enable-rtadv \
         --enable-tcp-zebra \
         --enable-fpm \
+	--enable-systemd=yes \
         --with-pkg-git-version \
         --with-pkg-extra-version=-MyOwnFRRVersion   
     make
@@ -118,7 +119,7 @@ Add the following lines to `/etc/modules-load.d/modules.conf`:
     sudo install -m 644 tools/frr.service /etc/systemd/system/frr.service  
     sudo install -m 644 cumulus/etc/default/frr /etc/default/frr  
     sudo install -m 644 cumulus/etc/frr/daemons /etc/frr/daemons  
-    sudo install -m 644 cumulus/etc/frr/debian.conf /etc/frr/debian.conf  
+    sudo install -m 644 cumulus/etc/frr/daemons.conf /etc/frr/daemons.conf  
     sudo install -m 644 cumulus/etc/frr/Frr.conf /etc/frr/Frr.conf  
     sudo install -m 644 -o frr -g frr cumulus/etc/frr/vtysh.conf /etc/frr/vtysh.conf   
 
@@ -136,13 +137,8 @@ For example.
     isisd=yes
 
 ### Enable the systemd serivce
-Edit `/etc/systemd/system/frr.service` and remove the line **OnFailure=heartbeat-failed@%n.service**  
-For example.
+ - systemctl enable frr
 
-    [Unit]  
-    Description=Cumulus Linux FRR  
-    After=syslog.target networking.service  
-    
 ### Start the systemd service
 - systemctl start frr
 - use `systemctl status frr` to check its status.

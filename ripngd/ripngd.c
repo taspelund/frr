@@ -970,11 +970,11 @@ ripng_redistribute_add (int type, int sub_type, struct prefix_ipv6 *p,
 	}
       }
 
-      rinfo = ripng_ecmp_replace (&newinfo);
+      ripng_ecmp_replace (&newinfo);
       route_unlock_node (rp);
     }
   else
-    rinfo = ripng_ecmp_add (&newinfo);
+    ripng_ecmp_add (&newinfo);
 
   if (IS_RIPNG_DEBUG_EVENT) {
     if (!nexthop)
@@ -1539,8 +1539,9 @@ ripng_triggered_update (struct thread *t)
      update is triggered when the timer expires. */
   interval = (random () % 5) + 1;
 
-  ripng->t_triggered_interval = 
-    thread_add_timer (master, ripng_triggered_interval, NULL, interval);
+  ripng->t_triggered_interval = NULL;
+  thread_add_timer(master, ripng_triggered_interval, NULL, interval,
+                   &ripng->t_triggered_interval);
 
   return 0;
 }
@@ -1898,8 +1899,7 @@ ripng_event (enum ripng_event event, int sock)
   switch (event)
     {
     case RIPNG_READ:
-      if (!ripng->t_read)
-	ripng->t_read = thread_add_read (master, ripng_read, NULL, sock);
+      thread_add_read(master, ripng_read, NULL, sock, &ripng->t_read);
       break;
     case RIPNG_UPDATE_EVENT:
       if (ripng->t_update)
@@ -1910,16 +1910,15 @@ ripng_event (enum ripng_event event, int sock)
       /* Update timer jitter. */
       jitter = ripng_update_jitter (ripng->update_time);
 
-      ripng->t_update = 
-	thread_add_timer (master, ripng_update, NULL, 
-			  sock ? 2 : ripng->update_time + jitter);
+      ripng->t_update = NULL;
+      thread_add_timer(master, ripng_update, NULL, sock ? 2 : ripng->update_time + jitter,
+                       &ripng->t_update);
       break;
     case RIPNG_TRIGGERED_UPDATE:
       if (ripng->t_triggered_interval)
 	ripng->trigger = 1;
-      else if (! ripng->t_triggered_update)
-	ripng->t_triggered_update = 
-	  thread_add_event (master, ripng_triggered_update, NULL, 0);
+      else thread_add_event(master, ripng_triggered_update, NULL, 0,
+                            &ripng->t_triggered_update);
       break;
     default:
       break;
@@ -2021,11 +2020,11 @@ DEFUN (show_ipv6_ripng,
 	  p = (struct prefix_ipv6 *) &rp->p;
 
 #ifdef DEBUG
-	  len = vty_out (vty, "R(a) %d/%d %s/%d ",
+	  vty_out (vty, "R(a) %d/%d %s/%d ",
 			 aggregate->count, aggregate->suppress,
 			 inet6_ntoa (p->prefix), p->prefixlen);
 #else
-	  len = vty_out (vty, "R(a) %s/%d ", 
+	  vty_out (vty, "R(a) %s/%d ",
 			 inet6_ntoa (p->prefix), p->prefixlen);
 #endif /* DEBUG */
 	  vty_out (vty, "%s", VTY_NEWLINE);
@@ -2043,13 +2042,13 @@ DEFUN (show_ipv6_ripng,
 	  p = (struct prefix_ipv6 *) &rp->p;
 
 #ifdef DEBUG
-	  len = vty_out (vty, "%c(%s) 0/%d %s/%d ",
+	  vty_out (vty, "%c(%s) 0/%d %s/%d ",
 			 zebra_route_char(rinfo->type),
 			 ripng_route_subtype_print(rinfo),
 			 rinfo->suppress,
 			 inet6_ntoa (p->prefix), p->prefixlen);
 #else
-	  len = vty_out (vty, "%c(%s) %s/%d ",
+	  vty_out (vty, "%c(%s) %s/%d ",
 			 zebra_route_char(rinfo->type),
 			 ripng_route_subtype_print(rinfo),
 			 inet6_ntoa (p->prefix), p->prefixlen);

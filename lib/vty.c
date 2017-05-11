@@ -734,6 +734,7 @@ vty_end_config (struct vty *vty)
     case ZEBRA_NODE:
     case RIP_NODE:
     case RIPNG_NODE:
+    case EIGRP_NODE:
     case BGP_NODE:
     case BGP_VPNV4_NODE:
     case BGP_VPNV6_NODE:
@@ -1163,6 +1164,7 @@ vty_stop_input (struct vty *vty)
     case ZEBRA_NODE:
     case RIP_NODE:
     case RIPNG_NODE:
+    case EIGRP_NODE:
     case BGP_NODE:
     case RMAP_NODE:
     case OSPF_NODE:
@@ -2616,36 +2618,41 @@ vty_event (enum event event, int sock, struct vty *vty)
   switch (event)
     {
     case VTY_SERV:
-      vty_serv_thread = thread_add_read (vty_master, vty_accept, vty, sock);
+      vty_serv_thread = NULL;
+      thread_add_read(vty_master, vty_accept, vty, sock, &vty_serv_thread);
       vector_set_index (Vvty_serv_thread, sock, vty_serv_thread);
       break;
 #ifdef VTYSH
     case VTYSH_SERV:
-      vty_serv_thread = thread_add_read (vty_master, vtysh_accept, vty, sock);
+      vty_serv_thread = NULL;
+      thread_add_read(vty_master, vtysh_accept, vty, sock, &vty_serv_thread);
       vector_set_index (Vvty_serv_thread, sock, vty_serv_thread);
       break;
     case VTYSH_READ:
-      vty->t_read = thread_add_read (vty_master, vtysh_read, vty, sock);
+      vty->t_read = NULL;
+      thread_add_read(vty_master, vtysh_read, vty, sock, &vty->t_read);
       break;
     case VTYSH_WRITE:
-      vty->t_write = thread_add_write (vty_master, vtysh_write, vty, sock);
+      vty->t_write = NULL;
+      thread_add_write(vty_master, vtysh_write, vty, sock, &vty->t_write);
       break;
 #endif /* VTYSH */
     case VTY_READ:
-      vty->t_read = thread_add_read (vty_master, vty_read, vty, sock);
+      vty->t_read = NULL;
+      thread_add_read(vty_master, vty_read, vty, sock, &vty->t_read);
 
       /* Time out treatment. */
       if (vty->v_timeout)
         {
           if (vty->t_timeout)
             thread_cancel (vty->t_timeout);
-          vty->t_timeout =
-            thread_add_timer (vty_master, vty_timeout, vty, vty->v_timeout);
+          vty->t_timeout = NULL;
+          thread_add_timer(vty_master, vty_timeout, vty, vty->v_timeout,
+                           &vty->t_timeout);
         }
       break;
     case VTY_WRITE:
-      if (! vty->t_write)
-        vty->t_write = thread_add_write (vty_master, vty_flush, vty, sock);
+      thread_add_write(vty_master, vty_flush, vty, sock, &vty->t_write);
       break;
     case VTY_TIMEOUT_RESET:
       if (vty->t_timeout)
@@ -2655,8 +2662,9 @@ vty_event (enum event event, int sock, struct vty *vty)
         }
       if (vty->v_timeout)
         {
-          vty->t_timeout =
-            thread_add_timer (vty_master, vty_timeout, vty, vty->v_timeout);
+          vty->t_timeout = NULL;
+          thread_add_timer(vty_master, vty_timeout, vty, vty->v_timeout,
+                           &vty->t_timeout);
         }
       break;
     }

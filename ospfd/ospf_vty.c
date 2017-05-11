@@ -1539,7 +1539,7 @@ ospf_area_nssa_cmd_handler (struct vty *vty, int argc, struct cmd_token **argv,
       return CMD_WARNING;
     }
 
-  if (argc > 1)
+  if (argc > 3)
     {
       if (strncmp (argv[3]->text, "translate-c", 11) == 0)
         ospf_area_nssa_translator_role_set (ospf, area_id,
@@ -7161,7 +7161,7 @@ DEFUN (no_ospf_redistribute_source,
 
 DEFUN (ospf_redistribute_instance_source,
        ospf_redistribute_instance_source_cmd,
-       "redistribute <ospf|table> (1-65535) {<metric (0-16777214)|metric-type (1-2)|route-map WORD>}",
+       "redistribute <ospf|table> (1-65535) {metric (0-16777214)|metric-type (1-2)|route-map WORD}",
        REDIST_STR
        "Open Shortest Path First\n"
        "Non-main Kernel Routing Table\n"
@@ -7232,7 +7232,7 @@ DEFUN (ospf_redistribute_instance_source,
 
 DEFUN (no_ospf_redistribute_instance_source,
        no_ospf_redistribute_instance_source_cmd,
-       "no redistribute <ospf|table> (1-65535) {<metric (0-16777214)|metric-type (1-2)|route-map WORD>}",
+       "no redistribute <ospf|table> (1-65535) {metric (0-16777214)|metric-type (1-2)|route-map WORD}",
        NO_STR
        REDIST_STR
        "Open Shortest Path First\n"

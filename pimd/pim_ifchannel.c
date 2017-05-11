@@ -145,6 +145,9 @@ void pim_ifchannel_delete(struct pim_ifchannel *ch)
       if (ch->upstream->flags & PIM_UPSTREAM_FLAG_MASK_SRC_IGMP)
         mask = PIM_OIF_FLAG_PROTO_IGMP;
 
+      /* SGRpt entry could have empty oil */
+      if (ch->upstream->channel_oil)
+        pim_channel_del_oif (ch->upstream->channel_oil, ch->interface, mask);
       pim_channel_del_oif (ch->upstream->channel_oil, ch->interface, mask);
       /*
        * Do we have any S,G's that are inheriting?
@@ -610,6 +613,7 @@ static int on_ifjoin_prune_pending_timer(struct thread *t)
       pim_ifp = ifp->info;
       send_prune_echo = (listcount(pim_ifp->pim_neighbor_list) > 1);
 
+      //ch->ifjoin_state transition to NOINFO
       ifjoin_to_noinfo(ch);
       /* from here ch may have been deleted */
 
@@ -790,6 +794,16 @@ void pim_ifchannel_join_add(struct interface *ifp,
       pim_upstream_inherited_olist (ch->upstream);
       pim_forward_start(ch);
     }
+    /*
+     * If we are going to be a LHR, we need to note it
+     */
+    if (ch->upstream->parent &&
+        (ch->upstream->parent->flags & PIM_UPSTREAM_FLAG_MASK_SRC_IGMP) &&
+        !(ch->upstream->flags & PIM_UPSTREAM_FLAG_MASK_SRC_LHR))
+      {
+        pim_upstream_ref (ch->upstream, PIM_UPSTREAM_FLAG_MASK_SRC_LHR);
+        pim_upstream_keep_alive_timer_start (ch->upstream, qpim_keep_alive_time);
+      }
     break;
   case PIM_IFJOIN_JOIN:
     zassert(!ch->t_ifjoin_prune_pending_timer);
@@ -841,9 +855,8 @@ void pim_ifchannel_join_add(struct interface *ifp,
   }
 
   if (holdtime != 0xFFFF) {
-    THREAD_TIMER_ON(master, ch->t_ifjoin_expiry_timer,
-		    on_ifjoin_expiry_timer,
-		    ch, holdtime);
+    thread_add_timer(master, on_ifjoin_expiry_timer, ch, holdtime,
+                     &ch->t_ifjoin_expiry_timer);
   }
 }
 
@@ -893,12 +906,11 @@ void pim_ifchannel_prune(struct interface *ifp,
 
 	THREAD_OFF(ch->t_ifjoin_prune_pending_timer);
 	THREAD_OFF(ch->t_ifjoin_expiry_timer);
-	THREAD_TIMER_MSEC_ON(master, ch->t_ifjoin_prune_pending_timer,
-			     on_ifjoin_prune_pending_timer,
-			     ch, jp_override_interval_msec);
-	THREAD_TIMER_ON(master, ch->t_ifjoin_expiry_timer,
-			on_ifjoin_expiry_timer,
-			ch, holdtime);
+	thread_add_timer_msec(master, on_ifjoin_prune_pending_timer, ch,
+                              jp_override_interval_msec,
+                              &ch->t_ifjoin_prune_pending_timer);
+	thread_add_timer(master, on_ifjoin_expiry_timer, ch, holdtime,
+                         &ch->t_ifjoin_expiry_timer);
         pim_upstream_update_join_desired(ch->upstream);
       }
     break;
@@ -918,17 +930,16 @@ void pim_ifchannel_prune(struct interface *ifp,
 	 be taken not to use "ch" afterwards since it would be
 	 deleted. */
     THREAD_OFF(ch->t_ifjoin_prune_pending_timer);
-    THREAD_TIMER_MSEC_ON(master, ch->t_ifjoin_prune_pending_timer,
-			 on_ifjoin_prune_pending_timer,
-			 ch, jp_override_interval_msec);
+    thread_add_timer_msec(master, on_ifjoin_prune_pending_timer, ch,
+                          jp_override_interval_msec,
+                          &ch->t_ifjoin_prune_pending_timer);
     break;
   case PIM_IFJOIN_PRUNE:
     if (source_flags & PIM_ENCODE_RPT_BIT)
       {
 	THREAD_OFF(ch->t_ifjoin_prune_pending_timer);
-	THREAD_TIMER_ON(master, ch->t_ifjoin_expiry_timer,
-			on_ifjoin_expiry_timer,
-			ch, holdtime);
+	thread_add_timer(master, on_ifjoin_expiry_timer, ch, holdtime,
+                         &ch->t_ifjoin_expiry_timer);
       }
     break;
   case PIM_IFJOIN_PRUNE_TMP:
@@ -936,9 +947,8 @@ void pim_ifchannel_prune(struct interface *ifp,
       {
 	ch->ifjoin_state = PIM_IFJOIN_PRUNE;
 	THREAD_OFF(ch->t_ifjoin_expiry_timer);
-	THREAD_TIMER_ON(master, ch->t_ifjoin_expiry_timer,
-			on_ifjoin_expiry_timer,
-			ch, holdtime);
+	thread_add_timer(master, on_ifjoin_expiry_timer, ch, holdtime,
+                         &ch->t_ifjoin_expiry_timer);
       }
     break;
   case PIM_IFJOIN_PRUNE_PENDING_TMP:
@@ -946,9 +956,8 @@ void pim_ifchannel_prune(struct interface *ifp,
       {
 	ch->ifjoin_state = PIM_IFJOIN_PRUNE_PENDING;
 	THREAD_OFF(ch->t_ifjoin_expiry_timer);
-	THREAD_TIMER_ON(master, ch->t_ifjoin_expiry_timer,
-			on_ifjoin_expiry_timer,
-			ch, holdtime);
+	thread_add_timer(master, on_ifjoin_expiry_timer, ch, holdtime,
+                         &ch->t_ifjoin_expiry_timer);
       }
     break;
   }
@@ -1083,8 +1092,7 @@ void pim_ifchannel_local_membership_del(struct interface *ifp,
 	  if (!chchannel && c_oil && c_oil->oil.mfcc_ttls[pim_ifp->mroute_vif_index])
             pim_channel_del_oif (c_oil, ifp, PIM_OIF_FLAG_PROTO_STAR);
 
-          if (c_oil->oil_size == 0)
-            pim_upstream_del (child, __PRETTY_FUNCTION__);
+          /* Child node removal/ref count-- will happen as part of parent' delete_no_info */
         }
     }
   delete_on_noinfo(orig);
@@ -1278,7 +1286,7 @@ pim_ifchannel_set_star_g_join_state (struct pim_ifchannel *ch, int eom, uint8_t 
               if (up)
                 {
                   if (PIM_DEBUG_TRACE)
-                    zlog_debug ("%s: add inherit oif to up %s ", __PRETTY_FUNCTION__, up->sg_str);
+                    zlog_debug ("%s: clearing SGRpt flag, add inherit oif to up %s ", __PRETTY_FUNCTION__, up->sg_str);
                   pim_channel_add_oif (up->channel_oil, ch->interface, PIM_OIF_FLAG_PROTO_STAR);
                 }
             }

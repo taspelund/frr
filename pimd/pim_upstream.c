@@ -162,8 +162,9 @@ pim_upstream_del(struct pim_upstream *up, const char *name)
   struct prefix nht_p;
 
   if (PIM_DEBUG_TRACE)
-    zlog_debug ("%s(%s): Delete %s ref count: %d, flags: %d (Pre decrement)",
-		__PRETTY_FUNCTION__, name, up->sg_str, up->ref_count, up->flags);
+    zlog_debug ("%s(%s): Delete %s ref count: %d , flags: %d c_oil ref count %d (Pre decrement)",
+		__PRETTY_FUNCTION__, name, up->sg_str, up->ref_count, up->flags,
+                up->channel_oil->oil_ref_count);
 
   --up->ref_count;
 
@@ -215,6 +216,7 @@ pim_upstream_del(struct pim_upstream *up, const char *name)
   up->sources = NULL;
 
   list_delete (up->ifchannels);
+  up->ifchannels = NULL;
 
   /*
     notice that listnode_delete() can't be moved
@@ -242,7 +244,7 @@ pim_upstream_del(struct pim_upstream *up, const char *name)
     {
       char buf[PREFIX2STR_BUFFER];
       prefix2str (&nht_p, buf, sizeof (buf));
-      zlog_debug ("%s: Deregister upstream %s addr %s with Zebra",
+      zlog_debug ("%s: Deregister upstream %s addr %s with Zebra NHT",
                   __PRETTY_FUNCTION__, up->sg_str, buf);
     }
   pim_delete_tracked_nexthop (&nht_p, up, NULL);
@@ -338,9 +340,8 @@ join_timer_start(struct pim_upstream *up)
   else
     {
       THREAD_OFF (up->t_join_timer);
-      THREAD_TIMER_ON(master, up->t_join_timer,
-                      on_join_timer,
-                      up, qpim_t_periodic);
+      thread_add_timer(master, on_join_timer, up, qpim_t_periodic,
+                       &up->t_join_timer);
     }
   pim_jp_agg_upstream_verification (up, true);
 }
@@ -369,9 +370,8 @@ static void pim_upstream_join_timer_restart_msec(struct pim_upstream *up,
   }
 
   THREAD_OFF(up->t_join_timer);
-  THREAD_TIMER_MSEC_ON(master, up->t_join_timer,
-		       on_join_timer,
-		       up, interval_msec);
+  thread_add_timer_msec(master, on_join_timer, up, interval_msec,
+                        &up->t_join_timer);
 }
 
 void pim_upstream_join_suppress(struct pim_upstream *up,
@@ -1016,14 +1016,17 @@ static void pim_upstream_update_assert_tracking_desired(struct pim_upstream *up)
   struct pim_ifchannel *ch;
 
   /* scan per-interface (S,G) state */
-  for (ALL_LIST_ELEMENTS(up->ifchannels, chnode, chnextnode, ch)) {
-    pim_ifp = ch->interface->info;
-    if (!pim_ifp)
-      continue;
+  for (ALL_LIST_ELEMENTS(up->ifchannels, chnode, chnextnode, ch))
+    {
+      if (!ch->interface)
+        continue;
+      pim_ifp = ch->interface->info;
+      if (!pim_ifp)
+        continue;
 
-    pim_ifchannel_update_assert_tracking_desired(ch);
+      pim_ifchannel_update_assert_tracking_desired(ch);
 
-  } /* scan iface channel list */
+    } /* scan iface channel list */
 }
 
 /* When kat is stopped CouldRegister goes to false so we need to
@@ -1114,10 +1117,8 @@ pim_upstream_keep_alive_timer_start (struct pim_upstream *up,
       zlog_debug ("kat start on %s with no stream reference", up->sg_str);
   }
   THREAD_OFF (up->t_ka_timer);
-  THREAD_TIMER_ON (master,
-		   up->t_ka_timer,
-		   pim_upstream_keep_alive_timer,
-		   up, time);
+  thread_add_timer(master, pim_upstream_keep_alive_timer, up, time,
+                   &up->t_ka_timer);
 
   /* any time keepalive is started against a SG we will have to
    * re-evaluate our active source database */
@@ -1141,8 +1142,8 @@ void
 pim_upstream_msdp_reg_timer_start(struct pim_upstream *up)
 {
   THREAD_OFF(up->t_msdp_reg_timer);
-  THREAD_TIMER_ON(master, up->t_msdp_reg_timer,
-      pim_upstream_msdp_reg_timer, up, PIM_MSDP_REG_RXED_PERIOD);
+  thread_add_timer(master, pim_upstream_msdp_reg_timer, up,
+                   PIM_MSDP_REG_RXED_PERIOD, &up->t_msdp_reg_timer);
 
   pim_msdp_sa_local_update(up);
 }
@@ -1217,7 +1218,7 @@ pim_upstream_is_sg_rpt (struct pim_upstream *up)
 void
 pim_upstream_set_sptbit (struct pim_upstream *up, struct interface *incoming)
 {
-  struct pim_rpf *grpf = NULL;
+  struct pim_upstream *starup = up->parent;
 
   // iif == RPF_interfvace(S)
   if (up->rpf.source_nexthop.interface != incoming)
@@ -1242,8 +1243,7 @@ pim_upstream_set_sptbit (struct pim_upstream *up, struct interface *incoming)
      }
 
   // OR RPF_interface(S) != RPF_interface(RP(G))
-  grpf = RP(up->sg.grp);
-  if (!grpf || up->rpf.source_nexthop.interface != grpf->source_nexthop.interface)
+  if (!starup || up->rpf.source_nexthop.interface != starup->rpf.source_nexthop.interface)
     {
       if (PIM_DEBUG_TRACE)
 	zlog_debug ("%s: %s RPF_interface(S) != RPF_interface(RP(G))",
@@ -1404,9 +1404,8 @@ pim_upstream_start_register_stop_timer (struct pim_upstream *up, int null_regist
       zlog_debug ("%s: (S,G)=%s Starting upstream register stop timer %d",
 		  __PRETTY_FUNCTION__, up->sg_str, time);
     }
-  THREAD_TIMER_ON (master, up->t_rs_timer,
-		   pim_upstream_register_stop_timer,
-		   up, time);
+  thread_add_timer(master, pim_upstream_register_stop_timer, up, time,
+                   &up->t_rs_timer);
 }
 
 int

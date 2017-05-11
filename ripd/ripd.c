@@ -2398,7 +2398,6 @@ rip_output_process (struct connected *ifc, struct sockaddr_in *to,
       if (ret >= 0 && IS_RIP_DEBUG_SEND)
 	rip_packet_dump ((struct rip_packet *)STREAM_DATA (s),
 			 stream_get_endp (s), "SEND");
-      num = 0;
       stream_reset (s);
     }
 
@@ -2625,8 +2624,9 @@ rip_triggered_update (struct thread *t)
    update is triggered when the timer expires. */
   interval = (random () % 5) + 1;
 
-  rip->t_triggered_interval = 
-    thread_add_timer (master, rip_triggered_interval, NULL, interval);
+  rip->t_triggered_interval = NULL;
+  thread_add_timer(master, rip_triggered_interval, NULL, interval,
+                   &rip->t_triggered_interval);
 
   return 0;
 }
@@ -2781,21 +2781,20 @@ rip_event (enum rip_event event, int sock)
   switch (event)
     {
     case RIP_READ:
-      rip->t_read = thread_add_read (master, rip_read, NULL, sock);
+      rip->t_read = NULL;
+      thread_add_read(master, rip_read, NULL, sock, &rip->t_read);
       break;
     case RIP_UPDATE_EVENT:
       RIP_TIMER_OFF (rip->t_update);
       jitter = rip_update_jitter (rip->update_time);
-      rip->t_update = 
-	thread_add_timer (master, rip_update, NULL, 
-			  sock ? 2 : rip->update_time + jitter);
+      thread_add_timer(master, rip_update, NULL, sock ? 2 : rip->update_time + jitter,
+                       &rip->t_update);
       break;
     case RIP_TRIGGERED_UPDATE:
       if (rip->t_triggered_interval)
-	rip->trigger = 1;
-      else if (! rip->t_triggered_update)
-	rip->t_triggered_update = 
-	  thread_add_event (master, rip_triggered_update, NULL, 0);
+        rip->trigger = 1;
+      else thread_add_event(master, rip_triggered_update, NULL, 0,
+                            &rip->t_triggered_update);
       break;
     default:
       break;

@@ -940,7 +940,9 @@ isis_spf_preload_tent (struct isis_spftree *spftree,
 	      switch (adj->sys_type)
 		{
 		case ISIS_SYSTYPE_ES:
-		  isis_spf_add_local (spftree, VTYPE_ES, adj->sysid, adj,
+		  memcpy(lsp_id, adj->sysid, ISIS_SYS_ID_LEN);
+		  LSP_PSEUDO_ID (lsp_id) = 0;
+		  isis_spf_add_local (spftree, VTYPE_ES, lsp_id, adj,
 				      circuit->te_metric[spftree->level - 1],
 				      parent);
 		  break;
@@ -1017,7 +1019,9 @@ isis_spf_preload_tent (struct isis_spftree *spftree,
 	  switch (adj->sys_type)
 	    {
 	    case ISIS_SYSTYPE_ES:
-	      isis_spf_add_local (spftree, VTYPE_ES, adj->sysid, adj,
+	      memcpy (lsp_id, adj->sysid, ISIS_SYS_ID_LEN);
+	      LSP_PSEUDO_ID (lsp_id) = 0;
+	      isis_spf_add_local (spftree, VTYPE_ES, lsp_id, adj,
 				  circuit->te_metric[spftree->level - 1],
 				  parent);
 	      break;
@@ -1275,9 +1279,9 @@ isis_spf_schedule (struct isis_area *area, int level)
       if (area->spf_timer[level - 1])
         return ISIS_OK;
 
-      THREAD_TIMER_MSEC_ON(master, area->spf_timer[level-1],
-                           isis_run_spf_cb, isis_run_spf_arg(area, level),
-                           delay);
+      thread_add_timer_msec (master, isis_run_spf_cb,
+                             isis_run_spf_arg(area, level),
+                             delay, &area->spf_timer[level-1]);
       return ISIS_OK;
     }
 
@@ -1297,9 +1301,9 @@ isis_spf_schedule (struct isis_area *area, int level)
       return retval;
     }
 
-  THREAD_TIMER_ON (master, area->spf_timer[level-1],
-                   isis_run_spf_cb, isis_run_spf_arg(area, level),
-                   area->min_spf_interval[level-1] - diff);
+  thread_add_timer (master, isis_run_spf_cb, isis_run_spf_arg(area, level),
+                    area->min_spf_interval[level-1] - diff,
+                    &area->spf_timer[level-1]);
 
   if (isis->debugs & DEBUG_SPF_EVENTS)
     zlog_debug ("ISIS-Spf (%s) L%d SPF scheduled %d sec from now",

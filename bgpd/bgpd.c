@@ -2955,9 +2955,12 @@ bgp_create (as_t *as, const char *name, enum bgp_instance_type inst_type)
   bgp->as = *as;
 
 #if ENABLE_BGP_VNC
-  bgp->rfapi = bgp_rfapi_new(bgp);
-  assert(bgp->rfapi);
-  assert(bgp->rfapi_cfg);
+  if (inst_type != BGP_INSTANCE_TYPE_VRF)
+    {
+      bgp->rfapi = bgp_rfapi_new(bgp);
+      assert(bgp->rfapi);
+      assert(bgp->rfapi_cfg);
+    }
 #endif /* ENABLE_BGP_VNC */
 
   if (name)
@@ -2967,8 +2970,8 @@ bgp_create (as_t *as, const char *name, enum bgp_instance_type inst_type)
   else
     {
       /* TODO - The startup timer needs to be run for the whole of BGP */
-      THREAD_TIMER_ON (bm->master, bgp->t_startup, bgp_startup_timer_expire,
-                       bgp, bgp->restart_time);
+      thread_add_timer(bm->master, bgp_startup_timer_expire, bgp,
+                       bgp->restart_time, &bgp->t_startup);
     }
 
   bgp->wpkt_quanta = BGP_WRITE_PACKET_MAX;
@@ -6126,7 +6129,7 @@ peer_ttl_security_hops_set (struct peer *peer, int gtsm_hops)
 	       * min & max ttls on the socket. The return value is
 	       * irrelevant.
 	       */
-	      ret = peer_ebgp_multihop_set (peer, MAXTTL);
+	      peer_ebgp_multihop_set (peer, MAXTTL);
 	    }
 	}
     }

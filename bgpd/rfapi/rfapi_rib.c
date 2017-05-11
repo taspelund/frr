@@ -400,8 +400,9 @@ rfapiRibStartTimer (
   prefix2str (&rn->p, buf_prefix, BUFSIZ);
   vnc_zlog_debug_verbose ("%s: rfd %p pfx %s life %u", __func__, rfd, buf_prefix,
               ri->lifetime);
-  ri->timer = thread_add_timer (bm->master, rfapiRibExpireTimer,
-                                tcb, ri->lifetime);
+  ri->timer = NULL;
+  thread_add_timer(bm->master, rfapiRibExpireTimer, tcb, ri->lifetime,
+                   &ri->timer);
   assert (ri->timer);
 }
 
@@ -1306,7 +1307,6 @@ callback:
       if (!printedprefix)
         {
           vnc_zlog_debug_verbose ("%s: For prefix %s (d)", __func__, buf_prefix);
-          printedprefix = 1;
         }
       vnc_zlog_debug_verbose ("%s: delete_list has %d elements",
                   __func__, delete_list->count);

@@ -228,6 +228,9 @@ AC_ARG_WITH(pkg-extra-version,
 AC_ARG_WITH(pkg-git-version,
 	AS_HELP_STRING([--with-pkg-git-version], [add git information to MOTD and build version string]),
 	[ test "x$withval" != "xno" && with_pkg_git_version="yes" ])
+AC_ARG_WITH(vtysh_pager,
+	AS_HELP_STRING([--with-vtysh-pager=PAGER], [control what pager is compiled in as default]),
+	VTYSH_PAGER=$withval, VTYSH_PAGER="more")
 AC_ARG_ENABLE(vtysh,
   AS_HELP_STRING([--disable-vtysh], [do not build integrated vty shell for Quagga]))
 AC_ARG_ENABLE(doc,
@@ -248,6 +251,8 @@ AC_ARG_ENABLE(ldpd,
   AS_HELP_STRING([--enable-ldpd], [build ldpd]))
 AC_ARG_ENABLE(nhrpd,
   AS_HELP_STRING([--disable-nhrpd], [do not build nhrpd]))
+AC_ARG_ENABLE(eigrpd,
+  AS_HELP_STRING([--disable-eigrpd], [do not build eigrpd]))
 AC_ARG_ENABLE(watchfrr,
   AS_HELP_STRING([--disable-watchfrr], [do not build watchfrr]))
 AC_ARG_ENABLE(isisd,
@@ -313,6 +318,8 @@ AC_ARG_ENABLE(werror,
   AS_HELP_STRING([--enable-werror], [enable -Werror (recommended for developers only)]))
 AC_ARG_ENABLE(cumulus,
   AS_HELP_STRING([--enable-cumulus], [enable Cumulus Switch Special Extensions]))
+AC_ARG_ENABLE(datacenter,
+  AS_HELP_STRING([--enable-datacenter], [enable Compilation for Data Center Extensions]))
 AC_ARG_ENABLE(rr-semantics,
   AS_HELP_STRING([--disable-rr-semantics], [disable the v6 Route Replace semantics]))
 AC_ARG_ENABLE([protobuf],
@@ -358,7 +365,7 @@ if test "${enable_rr_semantics}" != "no" ; then
 fi
 
 if test "${enable_poll}" = "yes" ; then
-  AC_DEFINE(HAVE_POLL,,Compile systemd support in)
+  AC_DEFINE(HAVE_POLL_CALL,,Compile systemd support in)
 fi
 
 dnl ----------
@@ -381,12 +388,17 @@ case "$host" in
 esac
 AC_SUBST(MPLS_METHOD)
 
-if test "${enable_cumulus}" = "yes" ; then
-  AC_DEFINE(HAVE_CUMULUS,,Compile Special Cumulus Code in)
+if test "${enable_datacenter}" = "yes" ; then
+  AC_DEFINE(HAVE_DATACENTER,,Compile extensions for a DataCenter)
   DFLT_NAME="datacenter"
 else
   DFLT_NAME="traditional"
 fi
+
+if test "${enable_cumulus}" = "yes" ; then
+  AC_DEFINE(HAVE_CUMULUS,,Compile Special Cumulus Code in)
+fi
+
 AC_SUBST(DFLT_NAME)
 AC_DEFINE_UNQUOTED(DFLT_NAME,["$DFLT_NAME"], Name of the configuration default set)
 
@@ -522,6 +534,8 @@ case "${enable_multipath}" in
 esac
 
 AC_DEFINE_UNQUOTED(MULTIPATH_NUM, $MPATH_NUM, Maximum number of paths for a route)
+
+AC_DEFINE_UNQUOTED(VTYSH_PAGER, "$VTYSH_PAGER", [What pager to use])
 
 dnl -----------------------------------
 dnl Add extra version string to package
@@ -1300,6 +1314,13 @@ else
 fi
 AM_CONDITIONAL(NHRPD, test "x$NHRPD" = "xnhrpd")
 
+if test "${enable_eigrpd}" = "no";then
+  EIGRPD=""
+else
+  EIGRPD="eigrpd"
+fi
+AM_CONDITIONAL(EIGRPD, test "x$EIGRPD" = "xeigrpd")
+
 if test "${enable_watchfrr}" = "no";then
   WATCHFRR=""
 else
@@ -1381,6 +1402,7 @@ AC_SUBST(OSPFD)
 AC_SUBST(OSPF6D)
 AC_SUBST(LDPD)
 AC_SUBST(NHRPD)
+AC_SUBST(EIGRPD)
 AC_SUBST(WATCHFRR)
 AC_SUBST(ISISD)
 AC_SUBST(PIMD)
@@ -1493,6 +1515,8 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM([[
 ])
 
 
+AM_CONDITIONAL(SNMP, test "x$SNMP_METHOD" = "xagentx")
+
 dnl ---------------------------
 dnl sockaddr and netinet checks
 dnl ---------------------------
@@ -1591,6 +1615,12 @@ AC_TRY_COMPILE([#include <netinet/in.h>], [
 ], [
   AC_MSG_RESULT(no)
 ])
+
+dnl --------------------------------------
+dnl checking for be32dec existence or not
+dnl --------------------------------------
+AC_CHECK_DECLS([be32enc, be32dec], [], [],
+	       [#include <sys/endian.h>])
 
 dnl --------------------------------------
 dnl checking for clock_time monotonic struct and call
@@ -1821,10 +1851,10 @@ AC_CONFIG_FILES([Makefile lib/Makefile qpb/Makefile zebra/Makefile ripd/Makefile
 	  ospf6d/Makefile ldpd/Makefile isisd/Makefile vtysh/Makefile
 	  doc/Makefile ospfclient/Makefile tests/Makefile m4/Makefile
 	  pimd/Makefile
+	  eigrpd/Makefile
 	  nhrpd/Makefile
 	  redhat/Makefile
 	  tools/Makefile
-	  cumulus/Makefile
 	  pkgsrc/Makefile
 	  fpm/Makefile
 	  redhat/frr.spec 
@@ -1840,6 +1870,7 @@ AC_CONFIG_FILES([Makefile lib/Makefile qpb/Makefile zebra/Makefile ripd/Makefile
 	  doc/ospfd.8
 	  doc/ldpd.8
 	  doc/ripd.8
+	  doc/eigrpd.8
 	  doc/ripngd.8
 	  doc/pimd.8
 	  doc/nhrpd.8
@@ -1848,7 +1879,8 @@ AC_CONFIG_FILES([Makefile lib/Makefile qpb/Makefile zebra/Makefile ripd/Makefile
 	  doc/zebra.8
 	  doc/frr.1
 	  pkgsrc/bgpd.sh pkgsrc/ospf6d.sh pkgsrc/ospfd.sh
-	  pkgsrc/ripd.sh pkgsrc/ripngd.sh pkgsrc/zebra.sh])
+	  pkgsrc/ripd.sh pkgsrc/ripngd.sh pkgsrc/zebra.sh
+	  pkgsrc/eigrpd.sh])
 
 if test "${enable_bgp_vnc}" != "no"; then
    if test "${with_rfp_path}" = "bgpd/rfp-example" ; then 

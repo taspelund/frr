@@ -1401,6 +1401,7 @@ cmd_exit (struct vty *vty)
     case ZEBRA_NODE:
     case BGP_NODE:
     case RIP_NODE:
+    case EIGRP_NODE:
     case RIPNG_NODE:
     case OSPF_NODE:
     case OSPF6_NODE:
@@ -1484,6 +1485,7 @@ DEFUN (config_end,
     case ZEBRA_NODE:
     case RIP_NODE:
     case RIPNG_NODE:
+    case EIGRP_NODE:
     case BGP_NODE:
     case BGP_ENCAP_NODE:
     case BGP_ENCAPV6_NODE:
@@ -1590,6 +1592,10 @@ permute (struct graph_node *start, struct vty *vty)
   static struct list *position = NULL;
   if (!position) position = list_new ();
 
+  struct cmd_token *stok = start->data;
+  struct graph_node *gnn;
+  struct listnode *ln;
+
   // recursive dfs
   listnode_add (position, start);
   for (unsigned int i = 0; i < vector_active (start->to); i++)
@@ -1601,8 +1607,6 @@ permute (struct graph_node *start, struct vty *vty)
       continue;
     else if (tok->type == END_TKN || gn == start)
     {
-      struct graph_node *gnn;
-      struct listnode *ln;
       vty_out (vty, " ");
       for (ALL_LIST_ELEMENTS_RO (position,ln,gnn))
       {
@@ -1615,7 +1619,18 @@ permute (struct graph_node *start, struct vty *vty)
       vty_out (vty, VTY_NEWLINE);
     }
     else
-      permute (gn, vty);
+    {
+      bool skip = false;
+      if (stok->type == FORK_TKN && tok->type != FORK_TKN)
+        for (ALL_LIST_ELEMENTS_RO (position, ln, gnn))
+           if (gnn == gn)
+           {
+             skip = true;
+             break;
+           }
+      if (!skip)
+        permute (gn, vty);
+    }
   }
   list_delete_node (position, listtail(position));
 }
