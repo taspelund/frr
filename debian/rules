@@ -3,6 +3,7 @@
 export DH_VERBOSE=1
 export DEB_BUILD_HARDENING=1
 export DH_OPTIONS=-v
+export WANT_SMP=1
 
 ifeq ($(WANT_SNMP), 1)
   USE_SNMP=--enable-snmp
@@ -40,7 +41,6 @@ override_dh_auto_configure:
 		$(USE_SNMP) \
 		--enable-ospfapi=yes \
 		--enable-vtysh=yes \
-		--enable-isisd=yes \
 		--enable-multipath=256 \
 		--enable-user=frr \
 		--enable-group=frr \
@@ -53,8 +53,9 @@ override_dh_auto_configure:
 		--enable-systemd=yes \
 		--enable-poll=yes \
 		--enable-cumulus=yes \
-		--enable-pimd=yes \
 		--enable-dependency-tracking \
+		--enable-oldvpn-commands=yes \
+		--with-vtysh-pager=cat \
 		--enable-bgp-vnc=no; \
 	fi
 
