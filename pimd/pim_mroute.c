@@ -601,15 +601,15 @@ static int mroute_read(struct thread *t)
   while (cont)
     {
       rd = read(fd, buf, sizeof(buf));
-      if (rd < 0) {
+      if (rd <= 0) {
 	if (errno == EINTR)
 	  continue;
 	if (errno == EWOULDBLOCK || errno == EAGAIN)
           break;
 
 	if (PIM_DEBUG_MROUTE)
-	  zlog_warn("%s: failure reading fd=%d: errno=%d: %s",
-		    __PRETTY_FUNCTION__, fd, errno, safe_strerror(errno));
+	  zlog_warn("%s: failure reading rd=%d: fd=%d: errno=%d: %s",
+		    __PRETTY_FUNCTION__, rd, fd, errno, safe_strerror(errno));
 	goto done;
       }
 
