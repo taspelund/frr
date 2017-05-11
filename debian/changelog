@@ -1,8 +1,8 @@
-frr (3.1-dev) Released; urgency=medium
+frr (3.1+cl3u1) Released; urgency=medium
 
-  * New Enabled: PIM draft Unnumbered
+  * New Enabled: FRR Uplift
 
- -- frr <frog@lists.frrouting.org> Wed, 5 Apr 2017 22:29:42 -0500
+ -- dev-support <dev-support@cumulusnetworks.com> Thu, 11 May 13:27:10 -0500
 
 frr (3.0) Released; urgency=medium
 
