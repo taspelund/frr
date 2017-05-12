@@ -5,14 +5,14 @@
 #
 #TIMEOUT=90
 #DEFAULT
-#ONCORE=bgpd,isisd,ospf6d,ospfclient,ospfd,pimd,ripd,ripngd,ssd,watchquagga,zebra,pimd
+#ONCORE=bgpd,eigrpd,isisd,ldpd,nhrpd,ospf6d,ospfclient,ospfd,pimd,ripd,ripngd,ssd,watchfrr,zebra,pimd
 
 module=${0##*/}
-funcs=(quagga)
+funcs=(frr)
 json=
 jexec=
 
-func_quagga()
+func_frr()
 {
     exec_cmd $jexec ospf vtysh -c "show ip ospf $json"
     exec_cmd $jexec ospf.neighbor vtysh -c "show ip ospf neighbor $json"
@@ -42,7 +42,7 @@ func_quagga()
     exec_cmd bgp.ipv6_update_group vtysh -c "show bgp vrf all update-group"
     exec_cmd $jexec bgp.ipv6_route vtysh -c "show bgp vrf all $json"
 
-    exec_cmd quagga.show_running vtysh -c "show running-config"
+    exec_cmd frr.show_running vtysh -c "show running-config"
 
     exec_cmd zebra.vrf vtysh -c "show vrf"
     exec_cmd zebra.intf vtysh -c "show interface vrf all"
@@ -79,8 +79,8 @@ func_quagga()
         [ $SUP_VERBOSE -eq 1 ] &&
             date +"%F_%T: ${FUNCNAME[0]}: copy.vtysh.history files to archive" 1>&2
         for f in /home/* /root; do
-            [ -e ${f}/.history_quagga ] &&
-                cp -a ${f}/.history_quagga ${f##*/}.vtysh.history
+            [ -e ${f}/.history_frr ] &&
+                cp -a ${f}/.history_frr ${f##*/}.vtysh.history
         done
      }
 }
