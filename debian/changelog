@@ -1,8 +1,8 @@
-frr (3.1+cl3u1) Released; urgency=medium
+frr (3.1+cl3u1) RELEASED; urgency=medium
 
   * New Enabled: FRR Uplift
 
- -- dev-support <dev-support@cumulusnetworks.com> Thu, 11 May 2017 13:27:10 -0500
+ -- dev-support <dev-support@cumulusnetworks.com>  Fri, 12 May 2017 08:37:53 -0400
 
 frr (3.0) Released; urgency=medium
 
