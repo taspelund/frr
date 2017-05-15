@@ -10912,9 +10912,62 @@ static struct cmd_node bgp_evpn_node =
 
 static void community_list_vty (void);
 
+static void
+bgp_ac_neighbor (vector comps, struct cmd_token *token)
+{
+  struct bgp *bgp;
+  struct peer *peer;
+  struct peer_group *group;
+  struct listnode *lnbgp, *lnpeer;
+
+  for (ALL_LIST_ELEMENTS_RO (bm->bgp, lnbgp, bgp))
+    {
+      for (ALL_LIST_ELEMENTS_RO (bgp->peer, lnpeer, peer))
+        {
+          /* only provide suggestions on the appropriate input token type,
+           * they'll otherwise show up multiple times */
+          enum cmd_token_type match_type;
+          char *name = peer->host;
+
+          if (peer->conf_if)
+            {
+              match_type = VARIABLE_TKN;
+              name = peer->conf_if;
+            }
+          else if (strchr(peer->host, ':'))
+            match_type = IPV6_TKN;
+          else
+            match_type = IPV4_TKN;
+
+          if (token->type != match_type)
+            continue;
+
+          vector_set(comps, XSTRDUP(MTYPE_COMPLETION, name));
+        }
+
+      if (token->type == VARIABLE_TKN)
+        for (ALL_LIST_ELEMENTS_RO (bgp->group, lnpeer, group))
+          vector_set(comps, XSTRDUP(MTYPE_COMPLETION, group->name));
+    }
+}
+
+static const struct cmd_variable_handler bgp_var_neighbor[] = {
+    {
+        .varname = "neighbor",
+        .completions = bgp_ac_neighbor
+    }, {
+        .varname = "neighbors",
+        .completions = bgp_ac_neighbor
+    }, {
+        .completions = NULL
+    }
+};
+
 void
 bgp_vty_init (void)
 {
+  cmd_variable_handler_register(bgp_var_neighbor);
+
   /* Install bgp top node. */
   install_node (&bgp_node, bgp_config_write);
   install_node (&bgp_ipv4_unicast_node, NULL);
