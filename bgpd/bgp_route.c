@@ -1270,7 +1270,7 @@ subgroup_announce_check (struct bgp_node *rn, struct bgp_info *ri,
       }
 
   /* If it's labeled safi, make sure the route has a valid label. */
-  if (bgp_labeled_safi(safi))
+  if (safi == SAFI_LABELED_UNICAST)
     {
       u_char *tag = bgp_adv_label(rn, ri, peer, afi, safi);
       if (!bgp_is_valid_label(tag))
@@ -1456,7 +1456,7 @@ subgroup_announce_check (struct bgp_node *rn, struct bgp_info *ri,
 
 #define NEXTHOP_IS_V6 (\
     (safi != SAFI_ENCAP && safi != SAFI_MPLS_VPN &&\
-     (p->family == AF_INET6 || peer_cap_enhe(peer))) || \
+     (p->family == AF_INET6 || peer_cap_enhe(peer, AFI_IP6, safi))) || \
     ((safi == SAFI_ENCAP || safi == SAFI_MPLS_VPN) &&\
      attr->extra->mp_nexthop_len >= IPV6_MAX_BYTELEN))
 
@@ -1558,7 +1558,7 @@ subgroup_announce_check (struct bgp_node *rn, struct bgp_info *ri,
           if (!reflect ||
               CHECK_FLAG (peer->af_flags[afi][safi],
                           PEER_FLAG_FORCE_NEXTHOP_SELF))
-            subgroup_announce_reset_nhop ((peer_cap_enhe(peer) ?
+            subgroup_announce_reset_nhop ((peer_cap_enhe(peer, afi, safi) ?
                           AF_INET6 : p->family), attr);
         }
       else if (peer->sort == BGP_PEER_EBGP)
@@ -1573,14 +1573,14 @@ subgroup_announce_check (struct bgp_node *rn, struct bgp_info *ri,
                 break;
             }
           if (!paf)
-            subgroup_announce_reset_nhop ((peer_cap_enhe(peer) ? AF_INET6 : p->family), attr);
+            subgroup_announce_reset_nhop ((peer_cap_enhe(peer, afi, safi) ? AF_INET6 : p->family), attr);
         }
       /* If IPv6/MP and nexthop does not have any override and happens to
        * be a link-local address, reset it so that we don't pass along the
        * source's link-local IPv6 address to recipients who may not be on
        * the same interface.
        */
-      if (p->family == AF_INET6 || peer_cap_enhe(peer))
+      if (p->family == AF_INET6 || peer_cap_enhe(peer, afi, safi))
         {
           if (IN6_IS_ADDR_LINKLOCAL (&attr->extra->mp_nexthop_global))
             subgroup_announce_reset_nhop (AF_INET6, attr);
@@ -1941,9 +1941,9 @@ bgp_process_main (struct work_queue *wq, void *data)
    * Right now, since we only deal with per-prefix labels, it is not necessary
    * to do this upon changes to best path except of the label index changes.
    */
-  bgp_table_lock (bgp_node_table (rn));
-  if (bgp_labeled_safi (safi))
+  if (safi == SAFI_LABELED_UNICAST)
     {
+      bgp_table_lock (bgp_node_table (rn));
       if (new_select)
         {
           if (!old_select ||
@@ -2848,7 +2848,7 @@ bgp_update (struct peer *peer, struct prefix *p, u_int32_t addpath_id,
   new = info_make(type, sub_type, 0, peer, attr_new, rn);
 
   /* Update MPLS tag. */
-  if (bgp_labeled_safi(safi) || safi == SAFI_EVPN)
+  if (bgp_labeled_safi(safi))
     memcpy ((bgp_info_extra_get (new))->tag, tag, 3);
 
   /* Update Overlay Index */
@@ -4401,7 +4401,7 @@ bgp_static_add (struct bgp *bgp)
 
 		for (rm = bgp_table_top (table); rm; rm = bgp_route_next (rm))
 		  {
-		    bgp_static = rn->info;
+		    bgp_static = rm->info;
                     bgp_static_update_safi (bgp, &rm->p, bgp_static, afi, safi);
 		  }
 	      }
@@ -4435,7 +4435,7 @@ bgp_static_delete (struct bgp *bgp)
 
 		for (rm = bgp_table_top (table); rm; rm = bgp_route_next (rm))
 		  {
-		    bgp_static = rn->info;
+		    bgp_static = rm->info;
 		    bgp_static_withdraw_safi (bgp, &rm->p,
 					       AFI_IP, safi,
 					       (struct prefix_rd *)&rn->p,
@@ -4462,6 +4462,8 @@ bgp_static_redo_import_check (struct bgp *bgp)
   afi_t afi;
   safi_t safi;
   struct bgp_node *rn;
+  struct bgp_node *rm;
+  struct bgp_table *table;
   struct bgp_static *bgp_static;
 
   /* Use this flag to force reprocessing of the route */
@@ -4471,8 +4473,21 @@ bgp_static_redo_import_check (struct bgp *bgp)
       for (rn = bgp_table_top (bgp->route[afi][safi]); rn; rn = bgp_route_next (rn))
 	if (rn->info != NULL)
 	  {
-	    bgp_static = rn->info;
-	    bgp_static_update (bgp, &rn->p, bgp_static, afi, safi);
+	    if ((safi == SAFI_MPLS_VPN) || (safi == SAFI_ENCAP) || (safi == SAFI_EVPN))
+	      {
+		table = rn->info;
+
+		for (rm = bgp_table_top (table); rm; rm = bgp_route_next (rm))
+		  {
+		    bgp_static = rm->info;
+		    bgp_static_update_safi (bgp, &rm->p, bgp_static, afi, safi);
+		  }
+	      }
+	    else
+	      {
+		bgp_static = rn->info;
+		bgp_static_update (bgp, &rn->p, bgp_static, afi, safi);
+	      }
 	  }
   bgp_flag_unset(bgp, BGP_FLAG_FORCE_STATIC_PROCESS);
 }
@@ -8654,7 +8669,7 @@ DEFUN (show_ip_bgp,
     }
   /* prefix-longer */
   if (argv_find(argv, argc, "A.B.C.D/M", &idx) || argv_find(argv, argc, "X:X::X:X/M", &idx))
-    return bgp_show_prefix_longer (vty, bgp, argv[idx + 1]->arg, afi, safi, bgp_show_type_prefix_longer);
+    return bgp_show_prefix_longer (vty, bgp, argv[idx]->arg, afi, safi, bgp_show_type_prefix_longer);
 
   if (safi == SAFI_MPLS_VPN)
     return bgp_show_mpls_vpn (vty, afi, NULL, bgp_show_type_normal, NULL, 0, uj);
