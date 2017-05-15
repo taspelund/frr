@@ -178,9 +178,20 @@ pim_rp_list_hash_clean (void *data)
 void
 pim_prefix_list_update (struct prefix_list *plist)
 {
-    pim_rp_prefix_list_update (plist);
-    pim_ssm_prefix_list_update (plist);
-    pim_upstream_spt_prefix_list_update (plist);
+  pim_rp_prefix_list_update (plist);
+  pim_ssm_prefix_list_update (plist);
+  pim_upstream_spt_prefix_list_update (plist);
+}
+
+struct pim_instance *
+pim_get_pim_instance (vrf_id_t vrf_id)
+{
+  struct vrf *vrf = vrf_lookup_by_id (vrf_id);
+
+  if (vrf)
+    return vrf->info;
+
+  return NULL;
 }
 
 static void
