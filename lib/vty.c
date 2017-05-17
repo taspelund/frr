@@ -14,10 +14,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with GNU Zebra; see the file COPYING.  If not, write to the Free
- * Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
- * 02111-1307, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; see the file COPYING; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include <zebra.h>
@@ -2633,18 +2632,18 @@ static struct thread_master *vty_master;
 static void
 vty_event (enum event event, int sock, struct vty *vty)
 {
+  struct thread *vty_serv_thread = NULL;
+
   switch (event)
     {
     case VTY_SERV:
-      vector_set_index (Vvty_serv_thread, sock, NULL);
-      thread_add_read(vty_master, vty_accept, vty, sock,
-                      (struct thread **) &Vvty_serv_thread->index[sock]);
+      vty_serv_thread = thread_add_read(vty_master, vty_accept, vty, sock, NULL);
+      vector_set_index (Vvty_serv_thread, sock, vty_serv_thread);
       break;
 #ifdef VTYSH
     case VTYSH_SERV:
-      vector_set_index (Vvty_serv_thread, sock, NULL);
-      thread_add_read(vty_master, vtysh_accept, vty, sock,
-                      (struct thread **) &Vvty_serv_thread->index[sock]);
+      vty_serv_thread = thread_add_read(vty_master, vtysh_accept, vty, sock, NULL);
+      vector_set_index (Vvty_serv_thread, sock, vty_serv_thread);
       break;
     case VTYSH_READ:
       vty->t_read = NULL;

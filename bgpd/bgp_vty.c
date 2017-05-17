@@ -1,22 +1,22 @@
 /* BGP VTY interface.
-   Copyright (C) 1996, 97, 98, 99, 2000 Kunihiro Ishiguro
-
-This file is part of GNU Zebra.
-
-GNU Zebra is free software; you can redistribute it and/or modify it
-under the terms of the GNU General Public License as published by the
-Free Software Foundation; either version 2, or (at your option) any
-later version.
-
-GNU Zebra is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with GNU Zebra; see the file COPYING.  If not, write to the Free
-Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
-02111-1307, USA.  */
+ * Copyright (C) 1996, 97, 98, 99, 2000 Kunihiro Ishiguro
+ *
+ * This file is part of GNU Zebra.
+ *
+ * GNU Zebra is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2, or (at your option) any
+ * later version.
+ *
+ * GNU Zebra is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; see the file COPYING; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
+ */
 
 #include <zebra.h>
 
@@ -2822,7 +2822,10 @@ peer_conf_interface_get (struct vty *vty, const char *conf_if, afi_t afi,
         peer = peer_create (NULL, conf_if, bgp, bgp->as, as, as_type, afi, safi,
                             NULL);
 
-      if (peer && v6only)
+      if (!peer)
+	return CMD_WARNING;
+
+      if (v6only)
         SET_FLAG(peer->flags, PEER_FLAG_IFPEER_V6ONLY);
 
       /* Request zebra to initiate IPv6 RAs on this interface. We do this
@@ -2831,10 +2834,7 @@ peer_conf_interface_get (struct vty *vty, const char *conf_if, afi_t afi,
        * gets deleted later etc.)
        */
       if (peer->ifp)
-        {
-          bgp_zebra_initiate_radv (bgp, peer);
-        }
-      peer_flag_set (peer, PEER_FLAG_CAPABILITY_ENHE);
+        bgp_zebra_initiate_radv (bgp, peer);
     }
   else if ((v6only && !CHECK_FLAG(peer->flags, PEER_FLAG_IFPEER_V6ONLY)) ||
            (!v6only && CHECK_FLAG(peer->flags, PEER_FLAG_IFPEER_V6ONLY)))
@@ -2855,8 +2855,8 @@ peer_conf_interface_get (struct vty *vty, const char *conf_if, afi_t afi,
         bgp_session_reset(peer);
     }
 
-  if (!peer)
-    return CMD_WARNING;
+  if (!CHECK_FLAG (peer->flags, PEER_FLAG_CAPABILITY_ENHE))
+      peer_flag_set (peer, PEER_FLAG_CAPABILITY_ENHE);
 
   if (peer_group_name)
     {
