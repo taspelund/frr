@@ -3303,6 +3303,8 @@ static void show_mroute(struct vty *vty, u_char uj)
   int oif_vif_index;
   struct interface *ifp_in;
   char proto[100];
+  struct vrf *vrf;
+  struct pim_instance *pim;
 
   if (uj) {
     json = json_object_new_object();
@@ -3453,112 +3455,121 @@ static void show_mroute(struct vty *vty, u_char uj)
   }
 
   /* Print list of static routes */
-  for (ALL_LIST_ELEMENTS_RO(qpim_static_route_list, node, s_route)) {
-    first = 1;
+  RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
+    {
+      pim = vrf->info;
+      if (!pim)
+        continue;
 
-    if (!s_route->c_oil.installed)
-      continue;
+      for (ALL_LIST_ELEMENTS_RO(pim->static_routes, node, s_route)) {
+        first = 1;
 
-    pim_inet4_dump("<group?>", s_route->group, grp_str, sizeof(grp_str));
-    pim_inet4_dump("<source?>", s_route->source, src_str, sizeof(src_str));
-    ifp_in  = pim_if_find_by_vif_index(s_route->iif);
-    found_oif = 0;
+        if (!s_route->c_oil.installed)
+          continue;
 
-    if (ifp_in)
-      strcpy(in_ifname, ifp_in->name);
-    else
-      strcpy(in_ifname, "<iif?>");
+        pim_inet4_dump("<group?>", s_route->group, grp_str, sizeof(grp_str));
+        pim_inet4_dump("<source?>", s_route->source, src_str, sizeof(src_str));
+        ifp_in  = pim_if_find_by_vif_index(s_route->iif);
+        found_oif = 0;
 
-    if (uj) {
+        if (ifp_in)
+          strcpy(in_ifname, ifp_in->name);
+        else
+          strcpy(in_ifname, "<iif?>");
 
-      /* Find the group, create it if it doesn't exist */
-      json_object_object_get_ex(json, grp_str, &json_group);
+        if (uj) {
 
-      if (!json_group) {
-        json_group = json_object_new_object();
-        json_object_object_add(json, grp_str, json_group);
-      }
+          /* Find the group, create it if it doesn't exist */
+          json_object_object_get_ex(json, grp_str, &json_group);
 
-      /* Find the source nested under the group, create it if it doesn't exist */
-      json_object_object_get_ex(json_group, src_str, &json_source);
+          if (!json_group) {
+            json_group = json_object_new_object();
+            json_object_object_add(json, grp_str, json_group);
+          }
 
-      if (!json_source) {
-        json_source = json_object_new_object();
-        json_object_object_add(json_group, src_str, json_source);
-      }
+          /* Find the source nested under the group, create it if it doesn't exist */
+          json_object_object_get_ex(json_group, src_str, &json_source);
 
-      json_object_string_add(json_source, "iif", in_ifname);
-      json_oil = NULL;
-    } else {
-      strcpy(proto, "STATIC");
-    }
+          if (!json_source) {
+            json_source = json_object_new_object();
+            json_object_object_add(json_group, src_str, json_source);
+          }
 
-    for (oif_vif_index = 0; oif_vif_index < MAXVIFS; ++oif_vif_index) {
-      struct interface *ifp_out;
-      char oif_uptime[10];
-      int ttl;
-
-      ttl = s_route->oif_ttls[oif_vif_index];
-      if (ttl < 1)
-         continue;
-
-      ifp_out = pim_if_find_by_vif_index(oif_vif_index);
-      pim_time_uptime(oif_uptime, sizeof(oif_uptime), now - s_route->c_oil.oif_creation[oif_vif_index]);
-      found_oif = 1;
-
-      if (ifp_out)
-        strcpy(out_ifname, ifp_out->name);
-      else
-        strcpy(out_ifname, "<oif?>");
-
-      if (uj) {
-        json_ifp_out = json_object_new_object();
-        json_object_string_add(json_ifp_out, "source", src_str);
-        json_object_string_add(json_ifp_out, "group", grp_str);
-        json_object_boolean_true_add(json_ifp_out, "protocolStatic");
-        json_object_string_add(json_ifp_out, "inboundInterface", in_ifname);
-        json_object_int_add(json_ifp_out, "iVifI", s_route->c_oil.oil.mfcc_parent);
-        json_object_string_add(json_ifp_out, "outboundInterface", out_ifname);
-        json_object_int_add(json_ifp_out, "oVifI", oif_vif_index);
-        json_object_int_add(json_ifp_out, "ttl", ttl);
-        json_object_string_add(json_ifp_out, "upTime", oif_uptime);
-        if (!json_oil) {
-          json_oil = json_object_new_object();
-          json_object_object_add(json_source, "oil", json_oil);
+          json_object_string_add(json_source, "iif", in_ifname);
+          json_oil = NULL;
+        } else {
+          strcpy(proto, "STATIC");
         }
-        json_object_object_add(json_oil, out_ifname, json_ifp_out);
-      } else {
-        vty_out(vty, "%-15s %-15s %-6s %-10s %-10s %-3d  %8s%s",
-                src_str,
-                grp_str,
-                proto,
-                in_ifname,
-                out_ifname,
-                ttl,
-                oif_uptime,
-                VTY_NEWLINE);
-	if (first)
-          {
-	    src_str[0] = '\0';
-	    grp_str[0] = '\0';
-	    in_ifname[0] = '\0';
-	    first = 0;
-	  }
+
+        for (oif_vif_index = 0; oif_vif_index < MAXVIFS; ++oif_vif_index) {
+          struct interface *ifp_out;
+          char oif_uptime[10];
+          int ttl;
+
+          ttl = s_route->oif_ttls[oif_vif_index];
+          if (ttl < 1)
+            continue;
+
+          ifp_out = pim_if_find_by_vif_index(oif_vif_index);
+          pim_time_uptime(oif_uptime, sizeof(oif_uptime), now - s_route->c_oil.oif_creation[oif_vif_index]);
+          found_oif = 1;
+
+          if (ifp_out)
+            strcpy(out_ifname, ifp_out->name);
+          else
+            strcpy(out_ifname, "<oif?>");
+
+          if (uj) {
+            json_ifp_out = json_object_new_object();
+            json_object_string_add(json_ifp_out, "source", src_str);
+            json_object_string_add(json_ifp_out, "group", grp_str);
+            json_object_boolean_true_add(json_ifp_out, "protocolStatic");
+            json_object_string_add(json_ifp_out, "inboundInterface", in_ifname);
+            json_object_int_add(json_ifp_out, "iVifI", s_route->c_oil.oil.mfcc_parent);
+            json_object_string_add(json_ifp_out, "outboundInterface", out_ifname);
+            json_object_int_add(json_ifp_out, "oVifI", oif_vif_index);
+            json_object_int_add(json_ifp_out, "ttl", ttl);
+            json_object_string_add(json_ifp_out, "upTime", oif_uptime);
+            if (!json_oil) {
+              json_oil = json_object_new_object();
+              json_object_object_add(json_source, "oil", json_oil);
+            }
+            json_object_object_add(json_oil, out_ifname, json_ifp_out);
+          } else {
+            vty_out(vty, "%-15s %-15s %-6s %-10s %-10s %-3d  %8s %s%s",
+                    src_str,
+                    grp_str,
+                    proto,
+                    in_ifname,
+                    out_ifname,
+                    ttl,
+                    oif_uptime,
+                    vrf->name,
+                    VTY_NEWLINE);
+            if (first)
+              {
+                src_str[0] = '\0';
+                grp_str[0] = '\0';
+                in_ifname[0] = '\0';
+                first = 0;
+              }
+          }
+        }
+
+        if (!uj && !found_oif) {
+          vty_out(vty, "%-15s %-15s %-6s %-10s %-10s %-3d  %8s %s%s",
+                  src_str,
+                  grp_str,
+                  proto,
+                  in_ifname,
+                  "none",
+                  0,
+                  "--:--:--",
+                  vrf->name,
+                  VTY_NEWLINE);
+        }
       }
     }
-
-    if (!uj && !found_oif) {
-        vty_out(vty, "%-15s %-15s %-6s %-10s %-10s %-3d  %8s%s",
-                src_str,
-                grp_str,
-                proto,
-                in_ifname,
-                "none",
-                0,
-                "--:--:--",
-                VTY_NEWLINE);
-    }
-  }
 
   if (uj) {
     vty_out (vty, "%s%s", json_object_to_json_string_ext(json, JSON_C_TO_STRING_PRETTY), VTY_NEWLINE);
@@ -3584,6 +3595,8 @@ static void show_mroute_count(struct vty *vty)
   struct listnode    *node;
   struct channel_oil *c_oil;
   struct static_route *s_route;
+  struct pim_instance *pim;
+  struct vrf *vrf;
 
   vty_out(vty, "%s", VTY_NEWLINE);
   
@@ -3614,27 +3627,35 @@ static void show_mroute_count(struct vty *vty)
   }
 
    /* Print static route counts */
-  for (ALL_LIST_ELEMENTS_RO(qpim_static_route_list, node, s_route)) {
-    char group_str[INET_ADDRSTRLEN];
-    char source_str[INET_ADDRSTRLEN];
+  RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
+    {
+      pim = vrf->info;
+      if (!pim)
+        continue;
 
-    if (!s_route->c_oil.installed)
-      continue;
+      for (ALL_LIST_ELEMENTS_RO(pim->static_routes, node, s_route)) {
+        char group_str[INET_ADDRSTRLEN];
+        char source_str[INET_ADDRSTRLEN];
 
-    pim_mroute_update_counters (&s_route->c_oil);
+        if (!s_route->c_oil.installed)
+          continue;
 
-    pim_inet4_dump("<group?>", s_route->c_oil.oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-    pim_inet4_dump("<source?>", s_route->c_oil.oil.mfcc_origin, source_str, sizeof(source_str));
+        pim_mroute_update_counters (&s_route->c_oil);
 
-    vty_out(vty, "%-15s %-15s %-8llu %-7ld %-10ld %-7ld%s",
-       source_str,
-       group_str,
-       s_route->c_oil.cc.lastused,
-       s_route->c_oil.cc.pktcnt,
-       s_route->c_oil.cc.bytecnt,
-       s_route->c_oil.cc.wrong_if,
-       VTY_NEWLINE);
-  }
+        pim_inet4_dump("<group?>", s_route->c_oil.oil.mfcc_mcastgrp, group_str, sizeof(group_str));
+        pim_inet4_dump("<source?>", s_route->c_oil.oil.mfcc_origin, source_str, sizeof(source_str));
+
+        vty_out(vty, "%-15s %-15s %-8llu %-7ld %-10ld %-7ld %s%s",
+                source_str,
+                group_str,
+                s_route->c_oil.cc.lastused,
+                s_route->c_oil.cc.pktcnt,
+                s_route->c_oil.cc.bytecnt,
+                s_route->c_oil.cc.wrong_if,
+                vrf->name,
+                VTY_NEWLINE);
+      }
+    }
 }
 
 DEFUN (show_ip_mroute_count,
@@ -5144,39 +5165,44 @@ DEFUN (interface_ip_mroute,
        "Group address\n")
 {
   VTY_DECLVAR_CONTEXT(interface, iif);
+  struct pim_interface *pim_ifp;
+  struct pim_instance *pim;
   int idx_interface = 2;
   int idx_ipv4 = 3;
-   struct interface *oif;
-   const char       *oifname;
-   const char       *grp_str;
-   struct in_addr    grp_addr;
-   struct in_addr    src_addr;
-   int               result;
+  struct interface *oif;
+  const char       *oifname;
+  const char       *grp_str;
+  struct in_addr    grp_addr;
+  struct in_addr    src_addr;
+  int               result;
 
-   oifname = argv[idx_interface]->arg;
-   oif = if_lookup_by_name(oifname, pimg->vrf_id);
-   if (!oif) {
-     vty_out(vty, "No such interface name %s%s",
-        oifname, VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  pim_ifp = iif->info;
+  pim = pim_ifp->pim;
 
-   grp_str = argv[idx_ipv4]->arg;
-   result = inet_pton(AF_INET, grp_str, &grp_addr);
-   if (result <= 0) {
-     vty_out(vty, "Bad group address %s: errno=%d: %s%s",
-        grp_str, errno, safe_strerror(errno), VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  oifname = argv[idx_interface]->arg;
+  oif = if_lookup_by_name(oifname, pim->vrf_id);
+  if (!oif) {
+    vty_out(vty, "No such interface name %s%s",
+            oifname, VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   src_addr.s_addr = INADDR_ANY;
+  grp_str = argv[idx_ipv4]->arg;
+  result = inet_pton(AF_INET, grp_str, &grp_addr);
+  if (result <= 0) {
+    vty_out(vty, "Bad group address %s: errno=%d: %s%s",
+            grp_str, errno, safe_strerror(errno), VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   if (pim_static_add(iif, oif, grp_addr, src_addr)) {
-      vty_out(vty, "Failed to add route%s", VTY_NEWLINE);
-      return CMD_WARNING;
-   }
+  src_addr.s_addr = INADDR_ANY;
 
-   return CMD_SUCCESS;
+  if (pim_static_add(pim, iif, oif, grp_addr, src_addr)) {
+    vty_out(vty, "Failed to add route%s", VTY_NEWLINE);
+    return CMD_WARNING;
+  }
+
+  return CMD_SUCCESS;
 }
 
 DEFUN (interface_ip_mroute_source,
@@ -5189,47 +5215,52 @@ DEFUN (interface_ip_mroute_source,
        "Source address\n")
 {
   VTY_DECLVAR_CONTEXT(interface, iif);
+  struct pim_interface *pim_ifp;
+  struct pim_instance *pim;
   int idx_interface = 2;
   int idx_ipv4 = 3;
   int idx_ipv4_2 = 4;
-   struct interface *oif;
-   const char       *oifname;
-   const char       *grp_str;
-   struct in_addr    grp_addr;
-   const char       *src_str;
-   struct in_addr    src_addr;
-   int               result;
+  struct interface *oif;
+  const char       *oifname;
+  const char       *grp_str;
+  struct in_addr    grp_addr;
+  const char       *src_str;
+  struct in_addr    src_addr;
+  int               result;
 
-   oifname = argv[idx_interface]->arg;
-   oif = if_lookup_by_name(oifname, pimg->vrf_id);
-   if (!oif) {
-     vty_out(vty, "No such interface name %s%s",
-        oifname, VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  pim_ifp = iif->info;
+  pim = pim_ifp->pim;
 
-   grp_str = argv[idx_ipv4]->arg;
-   result = inet_pton(AF_INET, grp_str, &grp_addr);
-   if (result <= 0) {
-     vty_out(vty, "Bad group address %s: errno=%d: %s%s",
-        grp_str, errno, safe_strerror(errno), VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  oifname = argv[idx_interface]->arg;
+  oif = if_lookup_by_name(oifname, pim->vrf_id);
+  if (!oif) {
+    vty_out(vty, "No such interface name %s%s",
+            oifname, VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   src_str = argv[idx_ipv4_2]->arg;
-   result = inet_pton(AF_INET, src_str, &src_addr);
-   if (result <= 0) {
-     vty_out(vty, "Bad source address %s: errno=%d: %s%s",
-        src_str, errno, safe_strerror(errno), VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  grp_str = argv[idx_ipv4]->arg;
+  result = inet_pton(AF_INET, grp_str, &grp_addr);
+  if (result <= 0) {
+    vty_out(vty, "Bad group address %s: errno=%d: %s%s",
+            grp_str, errno, safe_strerror(errno), VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   if (pim_static_add(iif, oif, grp_addr, src_addr)) {
-      vty_out(vty, "Failed to add route%s", VTY_NEWLINE);
-      return CMD_WARNING;
-   }
+  src_str = argv[idx_ipv4_2]->arg;
+  result = inet_pton(AF_INET, src_str, &src_addr);
+  if (result <= 0) {
+    vty_out(vty, "Bad source address %s: errno=%d: %s%s",
+            src_str, errno, safe_strerror(errno), VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   return CMD_SUCCESS;
+  if (pim_static_add(pim, iif, oif, grp_addr, src_addr)) {
+    vty_out(vty, "Failed to add route%s", VTY_NEWLINE);
+    return CMD_WARNING;
+  }
+
+  return CMD_SUCCESS;
 }
 
 DEFUN (interface_no_ip_mroute,
@@ -5242,39 +5273,44 @@ DEFUN (interface_no_ip_mroute,
        "Group Address\n")
 {
   VTY_DECLVAR_CONTEXT(interface, iif);
+  struct pim_interface *pim_ifp;
+  struct pim_instance *pim;
   int idx_interface = 3;
   int idx_ipv4 = 4;
-   struct interface *oif;
-   const char       *oifname;
-   const char       *grp_str;
-   struct in_addr    grp_addr;
-   struct in_addr    src_addr;
-   int               result;
+  struct interface *oif;
+  const char       *oifname;
+  const char       *grp_str;
+  struct in_addr    grp_addr;
+  struct in_addr    src_addr;
+  int               result;
 
-   oifname = argv[idx_interface]->arg;
-   oif = if_lookup_by_name(oifname, pimg->vrf_id);
-   if (!oif) {
-     vty_out(vty, "No such interface name %s%s",
-        oifname, VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  pim_ifp = iif->info;
+  pim = pim_ifp->pim;
 
-   grp_str = argv[idx_ipv4]->arg;
-   result = inet_pton(AF_INET, grp_str, &grp_addr);
-   if (result <= 0) {
-     vty_out(vty, "Bad group address %s: errno=%d: %s%s",
-        grp_str, errno, safe_strerror(errno), VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  oifname = argv[idx_interface]->arg;
+  oif = if_lookup_by_name(oifname, pim->vrf_id);
+  if (!oif) {
+    vty_out(vty, "No such interface name %s%s",
+            oifname, VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   src_addr.s_addr = INADDR_ANY;
+  grp_str = argv[idx_ipv4]->arg;
+  result = inet_pton(AF_INET, grp_str, &grp_addr);
+  if (result <= 0) {
+    vty_out(vty, "Bad group address %s: errno=%d: %s%s",
+            grp_str, errno, safe_strerror(errno), VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   if (pim_static_del(iif, oif, grp_addr, src_addr)) {
-      vty_out(vty, "Failed to remove route%s", VTY_NEWLINE);
-      return CMD_WARNING;
-   }
+  src_addr.s_addr = INADDR_ANY;
 
-   return CMD_SUCCESS;
+  if (pim_static_del(pim, iif, oif, grp_addr, src_addr)) {
+    vty_out(vty, "Failed to remove route%s", VTY_NEWLINE);
+    return CMD_WARNING;
+  }
+
+  return CMD_SUCCESS;
 }
 
 DEFUN (interface_no_ip_mroute_source,
@@ -5288,47 +5324,52 @@ DEFUN (interface_no_ip_mroute_source,
        "Source Address\n")
 {
   VTY_DECLVAR_CONTEXT(interface, iif);
+  struct pim_interface *pim_ifp;
+  struct pim_instance *pim;
   int idx_interface = 3;
   int idx_ipv4 = 4;
   int idx_ipv4_2 = 5;
-   struct interface *oif;
-   const char       *oifname;
-   const char       *grp_str;
-   struct in_addr    grp_addr;
-   const char       *src_str;
-   struct in_addr    src_addr;
-   int               result;
+  struct interface *oif;
+  const char       *oifname;
+  const char       *grp_str;
+  struct in_addr    grp_addr;
+  const char       *src_str;
+  struct in_addr    src_addr;
+  int               result;
 
-   oifname = argv[idx_interface]->arg;
-   oif = if_lookup_by_name(oifname, pimg->vrf_id);
-   if (!oif) {
-     vty_out(vty, "No such interface name %s%s",
-        oifname, VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  pim_ifp = iif->info;
+  pim = pim_ifp->pim;
 
-   grp_str = argv[idx_ipv4]->arg;
-   result = inet_pton(AF_INET, grp_str, &grp_addr);
-   if (result <= 0) {
-     vty_out(vty, "Bad group address %s: errno=%d: %s%s",
-        grp_str, errno, safe_strerror(errno), VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  oifname = argv[idx_interface]->arg;
+  oif = if_lookup_by_name(oifname, pim->vrf_id);
+  if (!oif) {
+    vty_out(vty, "No such interface name %s%s",
+            oifname, VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   src_str = argv[idx_ipv4_2]->arg;
-   result = inet_pton(AF_INET, src_str, &src_addr);
-   if (result <= 0) {
-     vty_out(vty, "Bad source address %s: errno=%d: %s%s",
-        src_str, errno, safe_strerror(errno), VTY_NEWLINE);
-     return CMD_WARNING;
-   }
+  grp_str = argv[idx_ipv4]->arg;
+  result = inet_pton(AF_INET, grp_str, &grp_addr);
+  if (result <= 0) {
+    vty_out(vty, "Bad group address %s: errno=%d: %s%s",
+            grp_str, errno, safe_strerror(errno), VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   if (pim_static_del(iif, oif, grp_addr, src_addr)) {
-      vty_out(vty, "Failed to remove route%s", VTY_NEWLINE);
-      return CMD_WARNING;
-   }
+  src_str = argv[idx_ipv4_2]->arg;
+  result = inet_pton(AF_INET, src_str, &src_addr);
+  if (result <= 0) {
+    vty_out(vty, "Bad source address %s: errno=%d: %s%s",
+            src_str, errno, safe_strerror(errno), VTY_NEWLINE);
+    return CMD_WARNING;
+  }
 
-   return CMD_SUCCESS;
+  if (pim_static_del(pim, iif, oif, grp_addr, src_addr)) {
+    vty_out(vty, "Failed to remove route%s", VTY_NEWLINE);
+    return CMD_WARNING;
+  }
+
+  return CMD_SUCCESS;
 }
 
 DEFUN (interface_ip_pim_hello,

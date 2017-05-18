@@ -75,10 +75,10 @@ static struct static_route *static_route_new(unsigned int   iif,
 }
 
 
-int pim_static_add(struct interface *iif, struct interface *oif, struct in_addr group, struct in_addr source)
+int
+pim_static_add(struct pim_instance *pim, struct interface *iif,
+               struct interface *oif, struct in_addr group, struct in_addr source)
 {
-   struct pim_instance *pim;
-   struct pim_interface *pim_ifp;
    struct listnode *node = NULL;
    struct static_route *s_route = NULL;
    struct static_route *original_s_route = NULL;
@@ -109,10 +109,7 @@ int pim_static_add(struct interface *iif, struct interface *oif, struct in_addr 
      return -3;
    }
 
-   pim_ifp = iif->info;
-   pim = pim_ifp->pim;
-
-   for (ALL_LIST_ELEMENTS_RO(qpim_static_route_list, node, s_route)) {
+   for (ALL_LIST_ELEMENTS_RO(pim->static_routes, node, s_route)) {
       if (s_route->group.s_addr == group.s_addr &&
           s_route->source.s_addr == source.s_addr) {
          if (s_route->iif == iif_index &&
@@ -178,7 +175,7 @@ int pim_static_add(struct interface *iif, struct interface *oif, struct in_addr 
    /* If node is null then we reached the end of the list without finding a match */
    if (!node) {
       s_route = static_route_new(iif_index, oif_index, group, source);
-      listnode_add(qpim_static_route_list, s_route);
+      listnode_add(pim->static_routes, s_route);
    }
 
    s_route->c_oil.pim = pim;
@@ -201,7 +198,7 @@ int pim_static_add(struct interface *iif, struct interface *oif, struct in_addr 
          memcpy(s_route, original_s_route, sizeof(struct static_route));
       } else {
          /* we never stored off a copy, so it must have been a fresh new route */
-         listnode_delete(qpim_static_route_list, s_route);
+         listnode_delete(pim->static_routes, s_route);
          pim_static_route_free(s_route);
       }
 
@@ -233,7 +230,9 @@ int pim_static_add(struct interface *iif, struct interface *oif, struct in_addr 
    return 0;
 }
 
-int pim_static_del(struct interface *iif, struct interface *oif, struct in_addr group, struct in_addr source)
+int
+pim_static_del(struct pim_instance *pim, struct interface *iif,
+               struct interface *oif, struct in_addr group, struct in_addr source)
 {
    struct listnode *node = NULL;
    struct listnode *nextnode = NULL;
@@ -251,7 +250,7 @@ int pim_static_del(struct interface *iif, struct interface *oif, struct in_addr 
       return -2;
    }
 
-   for (ALL_LIST_ELEMENTS(qpim_static_route_list, node, nextnode, s_route)) {
+   for (ALL_LIST_ELEMENTS(pim->static_routes, node, nextnode, s_route)) {
       if (s_route->iif == iif_index &&
           s_route->group.s_addr == group.s_addr &&
           s_route->source.s_addr == source.s_addr &&
@@ -284,7 +283,7 @@ int pim_static_del(struct interface *iif, struct interface *oif, struct in_addr 
          s_route->c_oil.oif_creation[oif_index] = 0;
 
          if (s_route->c_oil.oil_ref_count <= 0) {
-            listnode_delete(qpim_static_route_list, s_route);
+            listnode_delete(pim->static_routes, s_route);
             pim_static_route_free(s_route);
          }
 
@@ -323,7 +322,8 @@ int pim_static_del(struct interface *iif, struct interface *oif, struct in_addr 
 }
 
 int
-pim_static_write_mroute (struct vty *vty, struct interface *ifp)
+pim_static_write_mroute (struct vty *vty, struct pim_instance *pim,
+                         struct interface *ifp)
 {
   struct pim_interface *pim_ifp = ifp->info;
   struct listnode *node;
@@ -335,7 +335,7 @@ pim_static_write_mroute (struct vty *vty, struct interface *ifp)
   if (!pim_ifp)
     return 0;
 
-  for (ALL_LIST_ELEMENTS_RO (qpim_static_route_list, node, sroute))
+  for (ALL_LIST_ELEMENTS_RO (pim->static_routes, node, sroute))
     {
       pim_inet4_dump ("<ifaddr?>", sroute->group, gbuf, sizeof (gbuf));
       pim_inet4_dump ("<ifaddr?>", sroute->source, sbuf, sizeof (sbuf));
