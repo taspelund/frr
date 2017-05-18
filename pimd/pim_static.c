@@ -111,7 +111,6 @@ int pim_static_add(struct interface *iif, struct interface *oif, struct in_addr 
 
    pim_ifp = iif->info;
    pim = pim_ifp->pim;
-   s_route->c_oil.pim = pim;
 
    for (ALL_LIST_ELEMENTS_RO(qpim_static_route_list, node, s_route)) {
       if (s_route->group.s_addr == group.s_addr &&
@@ -181,6 +180,8 @@ int pim_static_add(struct interface *iif, struct interface *oif, struct in_addr 
       s_route = static_route_new(iif_index, oif_index, group, source);
       listnode_add(qpim_static_route_list, s_route);
    }
+
+   s_route->c_oil.pim = pim;
 
    if (pim_mroute_add(&s_route->c_oil, __PRETTY_FUNCTION__))
    {
