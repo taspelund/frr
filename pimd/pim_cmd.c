@@ -3171,7 +3171,7 @@ static void show_multicast_interfaces(struct vty *vty)
 
   vty_out(vty, "%s", VTY_NEWLINE);
 
-  vty_out(vty, "Interface Address            ifi Vif  PktsIn PktsOut    BytesIn   BytesOut%s VRF",
+  vty_out(vty, "Interface Address            ifi Vif  PktsIn PktsOut    BytesIn   BytesOut VRF%s",
 	  VTY_NEWLINE);
 
   RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
@@ -3205,7 +3205,7 @@ static void show_multicast_interfaces(struct vty *vty)
 
         ifaddr = pim_ifp->primary_address;
 
-        vty_out(vty, "%-12s %-15s %3d %3d %7lu %7lu %10lu %10lu%s",
+        vty_out(vty, "%-12s %-15s %3d %3d %7lu %7lu %10lu %10lu %s%s",
                 ifp->name,
                 inet_ntoa(ifaddr),
                 ifp->ifindex,
@@ -3214,6 +3214,7 @@ static void show_multicast_interfaces(struct vty *vty)
                 (unsigned long) vreq.ocount,
                 (unsigned long) vreq.ibytes,
                 (unsigned long) vreq.obytes,
+		vrf->name,
                 VTY_NEWLINE);
       }
     }
@@ -5069,7 +5070,6 @@ DEFUN (interface_ip_pim_sm,
 
   pim_ifp = ifp->info;
 
-  vty_out (vty, "PIM vrf: %s", pim_ifp->pim->vrf->name);
   pim_if_create_pimreg(pim_ifp->pim);
 
   return CMD_SUCCESS;
