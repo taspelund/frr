@@ -146,13 +146,17 @@ pim_nexthop_cache_add (struct pim_rpf *rpf_addr)
   return pnc;
 }
 
-/* This API is used to Register an address with Zebra
-   ret 1 means nexthop cache is found.
-*/
+/*
+ * pim_find_or_track_nexthop
+ *
+ * This API is used to Register an address with Zebra
+ *
+ * 1 -> Success
+ * 0 -> Failure
+ */
 int
 pim_find_or_track_nexthop (struct prefix *addr, struct pim_upstream *up,
-                           struct rp_info *rp,
-                           struct pim_nexthop_cache *out_pnc)
+                           struct rp_info *rp, struct pim_nexthop_cache *out_pnc)
 {
   struct pim_nexthop_cache *pnc = NULL;
   struct pim_rpf rpf;
@@ -177,7 +181,7 @@ pim_find_or_track_nexthop (struct prefix *addr, struct pim_upstream *up,
           pim_addr_dump ("<nht-pnc?>", addr, rpf_str, sizeof (rpf_str));
           zlog_warn ("%s: pnc node allocation failed. addr %s ",
                      __PRETTY_FUNCTION__, rpf_str);
-          return -1;
+          return 0;
         }
     }
 
@@ -208,7 +212,7 @@ pim_find_or_track_nexthop (struct prefix *addr, struct pim_upstream *up,
               char buf[PREFIX2STR_BUFFER];
               prefix2str (addr, buf, sizeof (buf));
               zlog_debug ("%s: Add upstream %s node to pnc cached list, rpf %s",
-                 __PRETTY_FUNCTION__, up->sg_str, buf);
+                          __PRETTY_FUNCTION__, up->sg_str, buf);
             }
           listnode_add_sort (pnc->upstream_list, up);
         }
@@ -311,29 +315,29 @@ pim_resolve_upstream_nh (struct prefix *nht_p)
   struct pim_neighbor *nbr = NULL;
 
   memset (&pnc, 0, sizeof (struct pim_nexthop_cache));
-  if ((pim_find_or_track_nexthop (nht_p, NULL, NULL, &pnc)) == 1)
+  if (!pim_find_or_track_nexthop (nht_p, NULL, NULL, &pnc))
+    return;
+
+  for (nh_node = pnc.nexthop; nh_node; nh_node = nh_node->next)
     {
-      for (nh_node = pnc.nexthop; nh_node; nh_node = nh_node->next)
+      if (nh_node->gate.ipv4.s_addr != 0)
+        continue;
+
+      struct interface *ifp1 = if_lookup_by_index (nh_node->ifindex, pimg->vrf_id);
+      nbr = pim_neighbor_find_if (ifp1);
+      if (!nbr)
+        continue;
+
+      nh_node->gate.ipv4 = nbr->source_addr;
+      if (PIM_DEBUG_TRACE)
         {
-          if (nh_node->gate.ipv4.s_addr == 0)
-            {
-              struct interface *ifp1 = if_lookup_by_index(nh_node->ifindex, pimg->vrf_id);
-              nbr = pim_neighbor_find_if (ifp1);
-              if (nbr)
-                {
-                  nh_node->gate.ipv4 = nbr->source_addr;
-                  if (PIM_DEBUG_TRACE)
-                    {
-                      char str[PREFIX_STRLEN];
-                      char str1[INET_ADDRSTRLEN];
-                      pim_inet4_dump ("<nht_nbr?>", nbr->source_addr, str1,
-                                      sizeof (str1));
-                      pim_addr_dump ("<nht_addr?>", nht_p, str, sizeof (str));
-                      zlog_debug ("%s: addr %s new nexthop addr %s interface %s",
-                              __PRETTY_FUNCTION__, str, str1, ifp1->name);
-                    }
-                }
-            }
+          char str[PREFIX_STRLEN];
+          char str1[INET_ADDRSTRLEN];
+          pim_inet4_dump ("<nht_nbr?>", nbr->source_addr, str1,
+                          sizeof (str1));
+          pim_addr_dump ("<nht_addr?>", nht_p, str, sizeof (str));
+          zlog_debug ("%s: addr %s new nexthop addr %s interface %s",
+                      __PRETTY_FUNCTION__, str, str1, ifp1->name);
         }
     }
 }
@@ -509,7 +513,7 @@ pim_ecmp_nexthop_search (struct pim_nexthop_cache *pnc,
   uint8_t nh_iter = 0, found = 0;
 
   if (!pnc || !pnc->nexthop_num || !nexthop)
-    return -1;
+    return 0;
 
   //Current Nexthop is VALID, check to stay on the current path.
   if (nexthop->interface && nexthop->interface->info &&
@@ -655,9 +659,9 @@ pim_ecmp_nexthop_search (struct pim_nexthop_cache *pnc,
     }
 
   if (found)
-    return 0;
+    return 1;
   else
-    return -1;
+    return 0;
 }
 
 /* This API is used to parse Registered address nexthop update coming from Zebra */
@@ -904,7 +908,7 @@ pim_ecmp_nexthop_lookup (struct pim_nexthop *nexthop, struct in_addr addr,
       pim_inet4_dump ("<addr?>", addr, addr_str, sizeof (addr_str));
       zlog_warn ("%s %s: could not find nexthop ifindex for address %s",
                  __FILE__, __PRETTY_FUNCTION__, addr_str);
-      return -1;
+      return 0;
     }
 
   //If PIM ECMP enable then choose ECMP path.
@@ -967,7 +971,7 @@ pim_ecmp_nexthop_lookup (struct pim_nexthop *nexthop, struct in_addr addr,
                   pim_inet4_dump ("<addr?>", addr, addr_str,
                                   sizeof (addr_str));
                   zlog_debug ("%s: NBR not found on input interface %s (RPF for source %s)",
-                     __PRETTY_FUNCTION__, ifp->name, addr_str);
+                              __PRETTY_FUNCTION__, ifp->name, addr_str);
                 }
               continue;
             }
@@ -999,10 +1003,11 @@ pim_ecmp_nexthop_lookup (struct pim_nexthop *nexthop, struct in_addr addr,
         }
       i++;
     }
+
   if (found)
-    return 0;
+    return 1;
   else
-    return -1;
+    return 0;
 }
 
 int pim_ecmp_fib_lookup_if_vif_index(struct in_addr addr,

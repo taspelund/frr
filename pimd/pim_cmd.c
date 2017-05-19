@@ -3123,11 +3123,8 @@ DEFUN (show_ip_pim_nexthop_lookup,
   grp.u.prefix4 = grp_addr;
   memset (&nexthop, 0, sizeof (nexthop));
 
-  if ((pim_find_or_track_nexthop (&nht_p, NULL, NULL, &pnc)) == 1)
-    {
-      //Compute PIM RPF using Cached nexthop
-      pim_ecmp_nexthop_search (&pnc, &nexthop, &nht_p, &grp, 0);
-    }
+  if (pim_find_or_track_nexthop (&nht_p, NULL, NULL, &pnc))
+    pim_ecmp_nexthop_search (&pnc, &nexthop, &nht_p, &grp, 0);
   else
     pim_ecmp_nexthop_lookup (&nexthop, vif_source, &nht_p, &grp, 0);
 
