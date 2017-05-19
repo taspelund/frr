@@ -269,7 +269,7 @@ pim_delete_tracked_nexthop (struct pim_instance *pim, struct prefix *addr,
 
 /* Update RP nexthop info based on Nexthop update received from Zebra.*/
 int
-pim_update_rp_nh (struct pim_nexthop_cache *pnc)
+pim_update_rp_nh (struct pim_instance *pim, struct pim_nexthop_cache *pnc)
 {
   struct listnode *node = NULL;
   struct rp_info *rp_info = NULL;
@@ -282,7 +282,7 @@ pim_update_rp_nh (struct pim_nexthop_cache *pnc)
         continue;
 
       //Compute PIM RPF using cached nexthop
-      ret = pim_ecmp_nexthop_search (pnc, &rp_info->rp.source_nexthop,
+      ret = pim_ecmp_nexthop_search (pim, pnc, &rp_info->rp.source_nexthop,
                            &rp_info->rp.rpf_addr, &rp_info->group, 1);
 
       if (PIM_DEBUG_TRACE)
@@ -308,14 +308,14 @@ pim_update_rp_nh (struct pim_nexthop_cache *pnc)
    UP event if it can be resolved.
 */
 void
-pim_resolve_upstream_nh (struct prefix *nht_p)
+pim_resolve_upstream_nh (struct pim_instance *pim, struct prefix *nht_p)
 {
   struct nexthop *nh_node = NULL;
   struct pim_nexthop_cache pnc;
   struct pim_neighbor *nbr = NULL;
 
   memset (&pnc, 0, sizeof (struct pim_nexthop_cache));
-  if (!pim_find_or_track_nexthop (pimg, nht_p, NULL, NULL, &pnc))
+  if (!pim_find_or_track_nexthop (pim, nht_p, NULL, NULL, &pnc))
     return;
 
   for (nh_node = pnc.nexthop; nh_node; nh_node = nh_node->next)
@@ -323,7 +323,7 @@ pim_resolve_upstream_nh (struct prefix *nht_p)
       if (nh_node->gate.ipv4.s_addr != 0)
         continue;
 
-      struct interface *ifp1 = if_lookup_by_index (nh_node->ifindex, pimg->vrf_id);
+      struct interface *ifp1 = if_lookup_by_index (nh_node->ifindex, pim->vrf_id);
       nbr = pim_neighbor_find_if (ifp1);
       if (!nbr)
         continue;
@@ -443,7 +443,7 @@ pim_update_upstream_nh (struct pim_instance *pim, struct pim_nexthop_cache *pnc)
         }
     }                           /* for (pnc->upstream_list) */
 
-  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (pimg->vrf_id), ifnode, ifp))
+  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (pim->vrf_id), ifnode, ifp))
     if (ifp->info)
       {
         struct pim_interface *pim_ifp = ifp->info;
@@ -501,7 +501,7 @@ pim_compute_ecmp_hash (struct prefix * src, struct prefix * grp)
 }
 
 int
-pim_ecmp_nexthop_search (struct pim_nexthop_cache *pnc,
+pim_ecmp_nexthop_search (struct pim_instance *pim, struct pim_nexthop_cache *pnc,
                          struct pim_nexthop *nexthop, struct prefix *src,
                          struct prefix *grp, int neighbor_needed)
 {
@@ -578,7 +578,7 @@ pim_ecmp_nexthop_search (struct pim_nexthop_cache *pnc,
        nh_node = nh_node->next)
     {
       first_ifindex = nh_node->ifindex;
-      ifp = if_lookup_by_index (first_ifindex, pimg->vrf_id);
+      ifp = if_lookup_by_index (first_ifindex, pim->vrf_id);
       if (!ifp)
         {
           if (PIM_DEBUG_ZEBRA)
@@ -705,7 +705,7 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
       rpf.rpf_addr.family = p.family;
       rpf.rpf_addr.prefixlen = p.prefixlen;
       rpf.rpf_addr.u.prefix4.s_addr = p.u.prefix4.s_addr;
-      pnc = pim_nexthop_cache_find (pimg, &rpf);
+      pnc = pim_nexthop_cache_find (pim, &rpf);
       if (!pnc)
         {
           if (PIM_DEBUG_TRACE)
@@ -758,7 +758,7 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
             case NEXTHOP_TYPE_IPV6_IFINDEX:
               stream_get (&nexthop->gate.ipv6, s, 16);
               nexthop->ifindex = stream_getl (s);
-              struct interface *ifp1 = if_lookup_by_index (nexthop->ifindex, pimg->vrf_id);
+              struct interface *ifp1 = if_lookup_by_index (nexthop->ifindex, pim->vrf_id);
               nbr = pim_neighbor_find_if (ifp1);
               /* Overwrite with Nbr address as NH addr */
               if (nbr)
@@ -802,7 +802,7 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
                  metric);
             }
 
-          ifp = if_lookup_by_index (nexthop->ifindex, pimg->vrf_id);
+          ifp = if_lookup_by_index (nexthop->ifindex, pim->vrf_id);
           if (!ifp)
             {
               if (PIM_DEBUG_ZEBRA)
@@ -872,7 +872,7 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
   pim_rpf_set_refresh_time ();
 
   if (listcount (pnc->rp_list))
-    pim_update_rp_nh (pnc);
+    pim_update_rp_nh (pim, pnc);
   if (listcount (pnc->upstream_list))
     pim_update_upstream_nh (pim, pnc);
 
@@ -880,9 +880,9 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
 }
 
 int
-pim_ecmp_nexthop_lookup (struct pim_nexthop *nexthop, struct in_addr addr,
-                         struct prefix *src, struct prefix *grp,
-                         int neighbor_needed)
+pim_ecmp_nexthop_lookup (struct pim_instance *pim, struct pim_nexthop *nexthop,
+                         struct in_addr addr, struct prefix *src,
+                         struct prefix *grp, int neighbor_needed)
 {
   struct pim_zlookup_nexthop nexthop_tab[MULTIPATH_NUM];
   struct pim_neighbor *nbr = NULL;
@@ -927,7 +927,7 @@ pim_ecmp_nexthop_lookup (struct pim_nexthop *nexthop, struct in_addr addr,
     {
       first_ifindex = nexthop_tab[i].ifindex;
 
-      ifp = if_lookup_by_index (first_ifindex, pimg->vrf_id);
+      ifp = if_lookup_by_index (first_ifindex, pim->vrf_id);
       if (!ifp)
         {
           if (PIM_DEBUG_ZEBRA)
@@ -1012,7 +1012,7 @@ pim_ecmp_nexthop_lookup (struct pim_nexthop *nexthop, struct in_addr addr,
     return 0;
 }
 
-int pim_ecmp_fib_lookup_if_vif_index(struct in_addr addr,
+int pim_ecmp_fib_lookup_if_vif_index(struct pim_instance *pim, struct in_addr addr,
                                      struct prefix *src, struct prefix *grp)
 {
   struct pim_zlookup_nexthop nexthop_tab[MULTIPATH_NUM];
@@ -1055,7 +1055,7 @@ int pim_ecmp_fib_lookup_if_vif_index(struct in_addr addr,
       pim_inet4_dump("<ifaddr?>", addr, addr_str, sizeof(addr_str));
       zlog_debug("%s %s: found nexthop ifindex=%d (interface %s) for address %s",
                 __FILE__, __PRETTY_FUNCTION__,
-                first_ifindex, ifindex2ifname(first_ifindex, pimg->vrf_id), addr_str);
+                first_ifindex, ifindex2ifname(first_ifindex, pim->vrf_id), addr_str);
     }
 
   vif_index = pim_if_find_vifindex_by_ifindex(first_ifindex);

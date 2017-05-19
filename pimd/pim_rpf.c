@@ -223,7 +223,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_upstream *up, struct pim_rpf *old,
     {
       if (pnc.nexthop_num)
         {
-          if (!pim_ecmp_nexthop_search (&pnc, &up->rpf.source_nexthop,
+          if (!pim_ecmp_nexthop_search (pimg, &pnc, &up->rpf.source_nexthop,
 					&src, &grp,
 					!PIM_UPSTREAM_FLAG_TEST_FHR (up->flags) &&
 					!PIM_UPSTREAM_FLAG_TEST_SRC_IGMP (up->flags)))
@@ -232,7 +232,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_upstream *up, struct pim_rpf *old,
     }
   else
     {
-      if (!pim_ecmp_nexthop_lookup (&rpf->source_nexthop,
+      if (!pim_ecmp_nexthop_lookup (pimg, &rpf->source_nexthop,
 				    up->upstream_addr, &src, &grp,
 				    !PIM_UPSTREAM_FLAG_TEST_FHR (up->flags) &&
 				    !PIM_UPSTREAM_FLAG_TEST_SRC_IGMP (up->flags)))

@@ -424,7 +424,7 @@ pim_rp_new (const char *rp, const char *group_range, const char *plist)
           memset (&pnc, 0, sizeof (struct pim_nexthop_cache));
           if (pim_find_or_track_nexthop (pimg, &nht_p, NULL, rp_all, &pnc))
             {
-              if (!pim_ecmp_nexthop_search (&pnc, &rp_all->rp.source_nexthop,
+              if (!pim_ecmp_nexthop_search (pimg, &pnc, &rp_all->rp.source_nexthop,
 					    &nht_p, &rp_all->group, 1))
                 return PIM_RP_NO_PATH;
             }
@@ -494,7 +494,7 @@ pim_rp_new (const char *rp, const char *group_range, const char *plist)
   memset (&pnc, 0, sizeof (struct pim_nexthop_cache));
   if (pim_find_or_track_nexthop (pimg, &nht_p, NULL, rp_info, &pnc))
     {
-      if (!pim_ecmp_nexthop_search (&pnc, &rp_info->rp.source_nexthop,
+      if (!pim_ecmp_nexthop_search (pimg, &pnc, &rp_info->rp.source_nexthop,
 				    &nht_p, &rp_info->group, 1))
         return PIM_RP_NO_PATH;
     }
@@ -593,7 +593,7 @@ pim_rp_setup (void)
       nht_p.u.prefix4 = rp_info->rp.rpf_addr.u.prefix4;
       memset (&pnc, 0, sizeof (struct pim_nexthop_cache));
       if (pim_find_or_track_nexthop (pimg, &nht_p, NULL, rp_info, &pnc))
-	pim_ecmp_nexthop_search (&pnc, &rp_info->rp.source_nexthop,
+	pim_ecmp_nexthop_search (pimg, &pnc, &rp_info->rp.source_nexthop,
 				 &nht_p, &rp_info->group, 1);
       else
         {
@@ -753,7 +753,7 @@ pim_rp_g (struct in_addr group)
         }
       memset (&pnc, 0, sizeof (struct pim_nexthop_cache));
       if (pim_find_or_track_nexthop (pimg, &nht_p, NULL, rp_info, &pnc))
-	pim_ecmp_nexthop_search (&pnc, &rp_info->rp.source_nexthop,
+	pim_ecmp_nexthop_search (pimg, &pnc, &rp_info->rp.source_nexthop,
 				 &nht_p, &rp_info->group, 1);
       else
         {
