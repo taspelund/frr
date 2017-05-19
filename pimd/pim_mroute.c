@@ -652,7 +652,7 @@ static int mroute_read(struct thread *t)
 static void
 mroute_read_on(struct pim_instance *pim)
 {
-  thread_add_read(master, mroute_read, 0, pimg->mroute_socket,
+  thread_add_read(master, mroute_read, pim, pim->mroute_socket,
                   &pim->thread);
 }
 
