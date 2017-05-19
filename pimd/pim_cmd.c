@@ -3772,7 +3772,7 @@ pim_rp_cmd_worker (struct vty *vty, const char *rp, const char *group, const cha
 {
   int result;
 
-  result = pim_rp_new (rp, group, plist);
+  result = pim_rp_new (pimg, rp, group, plist);
 
   if (result == PIM_MALLOC_FAIL)
     {
@@ -4056,7 +4056,7 @@ static int
 pim_no_rp_cmd_worker (struct vty *vty, const char *rp, const char *group,
                       const char *plist)
 {
-  int result = pim_rp_del (rp, group, plist);
+  int result = pim_rp_del (pimg, rp, group, plist);
 
   if (result == PIM_GROUP_BAD_ADDRESS)
     {
