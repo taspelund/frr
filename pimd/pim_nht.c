@@ -45,8 +45,8 @@
  *   command to Zebra.
  */
 void
-pim_sendmsg_zebra_rnh (struct zclient *zclient, struct pim_nexthop_cache *pnc,
-                       int command)
+pim_sendmsg_zebra_rnh (struct zclient *zclient, struct pim_instance *pim,
+                       struct pim_nexthop_cache *pnc, int command)
 {
   struct stream *s;
   struct prefix *p;
@@ -59,7 +59,7 @@ pim_sendmsg_zebra_rnh (struct zclient *zclient, struct pim_nexthop_cache *pnc,
   p = &(pnc->rpf.rpf_addr);
   s = zclient->obuf;
   stream_reset (s);
-  zclient_create_header (s, command, pimg->vrf_id);
+  zclient_create_header (s, command, pim->vrf_id);
   /* get update for all routes for a prefix */
   stream_putc (s, 0);
 
@@ -174,7 +174,7 @@ pim_find_or_track_nexthop (struct pim_instance *pim, struct prefix *addr, struct
     {
       pnc = pim_nexthop_cache_add (pim, &rpf);
       if (pnc)
-        pim_sendmsg_zebra_rnh (zclient, pnc, ZEBRA_NEXTHOP_REGISTER);
+        pim_sendmsg_zebra_rnh (zclient, pim, pnc, ZEBRA_NEXTHOP_REGISTER);
       else
         {
           char rpf_str[PREFIX_STRLEN];
@@ -254,7 +254,7 @@ pim_delete_tracked_nexthop (struct pim_instance *pim, struct prefix *addr,
 
       if (pnc->rp_list->count == 0 && pnc->upstream_list->count == 0)
         {
-          pim_sendmsg_zebra_rnh (zclient, pnc, ZEBRA_NEXTHOP_UNREGISTER);
+          pim_sendmsg_zebra_rnh (zclient, pim, pnc, ZEBRA_NEXTHOP_UNREGISTER);
 
           list_delete (pnc->rp_list);
           list_delete (pnc->upstream_list);
@@ -344,7 +344,7 @@ pim_resolve_upstream_nh (struct prefix *nht_p)
 
 /* Update Upstream nexthop info based on Nexthop update received from Zebra.*/
 static int
-pim_update_upstream_nh (struct pim_nexthop_cache *pnc)
+pim_update_upstream_nh (struct pim_instance *pim, struct pim_nexthop_cache *pnc)
 {
   struct listnode     *up_node;
   struct listnode     *ifnode;
@@ -681,6 +681,8 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
   struct pim_nexthop_cache *pnc = NULL;
   struct pim_neighbor *nbr = NULL;
   struct interface *ifp = NULL;
+  struct vrf *vrf = vrf_lookup_by_id (vrf_id);
+  struct pim_instance *pim = vrf->info;
 
   s = zclient->ibuf;
   memset (&p, 0, sizeof (struct prefix));
@@ -872,7 +874,7 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
   if (listcount (pnc->rp_list))
     pim_update_rp_nh (pnc);
   if (listcount (pnc->upstream_list))
-    pim_update_upstream_nh (pnc);
+    pim_update_upstream_nh (pim, pnc);
 
   return 0;
 }
