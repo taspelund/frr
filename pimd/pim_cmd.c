@@ -868,7 +868,7 @@ static void pim_show_interfaces_single(struct vty *vty, const char *ifname, u_ch
       json_object_int_add(json_row, "drChanges", pim_ifp->pim_dr_election_changes);
 
       // FHR
-      for (ALL_LIST_ELEMENTS_RO(pim_upstream_list, upnode, up)) {
+      for (ALL_LIST_ELEMENTS_RO(pimg->upstream_list, upnode, up)) {
         if (ifp ==  up->rpf.source_nexthop.interface) {
           if (up->flags & PIM_UPSTREAM_FLAG_MASK_FHR) {
             if (!json_fhr_sources) {
@@ -975,7 +975,7 @@ static void pim_show_interfaces_single(struct vty *vty, const char *ifname, u_ch
 
       // FHR
       print_header = 1;
-      for (ALL_LIST_ELEMENTS_RO(pim_upstream_list, upnode, up)) {
+      for (ALL_LIST_ELEMENTS_RO(pimg->upstream_list, upnode, up)) {
         if (strcmp(ifp->name, up->rpf.source_nexthop.interface->name) == 0) {
           if (up->flags & PIM_UPSTREAM_FLAG_MASK_FHR) {
 
@@ -1071,7 +1071,7 @@ static void pim_show_interfaces(struct vty *vty, u_char uj)
     pim_ifchannels = pim_ifp->pim_ifchannel_list->count;
     fhr = 0;
 
-    for (ALL_LIST_ELEMENTS_RO(pim_upstream_list, upnode, up))
+    for (ALL_LIST_ELEMENTS_RO(pimg->upstream_list, upnode, up))
       if (ifp ==  up->rpf.source_nexthop.interface)
         if (up->flags & PIM_UPSTREAM_FLAG_MASK_FHR)
           fhr++;
@@ -1878,7 +1878,7 @@ static void pim_show_upstream(struct vty *vty, u_char uj)
   else
     vty_out(vty, "Iif       Source          Group           State       Uptime   JoinTimer RSTimer   KATimer   RefCnt%s", VTY_NEWLINE);
 
-  for (ALL_LIST_ELEMENTS_RO(pim_upstream_list, upnode, up)) {
+  for (ALL_LIST_ELEMENTS_RO(pimg->upstream_list, upnode, up)) {
     char src_str[INET_ADDRSTRLEN];
     char grp_str[INET_ADDRSTRLEN];
     char uptime[10];
@@ -2016,7 +2016,7 @@ static void pim_show_join_desired(struct vty *vty, u_char uj)
       if (pim_macro_chisin_pim_include(ch))
 	json_object_boolean_true_add(json_row, "pimInclude");
 
-      if (pim_upstream_evaluate_join_desired(up))
+      if (pim_upstream_evaluate_join_desired(pimg, up))
 	json_object_boolean_true_add(json_row, "evaluateJoinDesired");
 
       json_object_object_add(json_group, src_str, json_row);
@@ -2030,7 +2030,7 @@ static void pim_show_join_desired(struct vty *vty, u_char uj)
 	      pim_macro_chisin_joins(ch) ? "yes" : "no",
 	      pim_macro_chisin_pim_include(ch) ? "yes" : "no",
 	      PIM_UPSTREAM_FLAG_TEST_DR_JOIN_DESIRED(up->flags) ? "yes" : "no",
-	      pim_upstream_evaluate_join_desired(up) ? "yes" : "no",
+	      pim_upstream_evaluate_join_desired(pimg, up) ? "yes" : "no",
 	      VTY_NEWLINE);
     }
   }
@@ -2056,7 +2056,7 @@ static void pim_show_upstream_rpf(struct vty *vty, u_char uj)
             "Source          Group           RpfIface RibNextHop      RpfAddress     %s",
             VTY_NEWLINE);
 
-  for (ALL_LIST_ELEMENTS_RO(pim_upstream_list, upnode, up)) {
+  for (ALL_LIST_ELEMENTS_RO(pimg->upstream_list, upnode, up)) {
     char src_str[INET_ADDRSTRLEN];
     char grp_str[INET_ADDRSTRLEN];
     char rpf_nexthop_str[PREFIX_STRLEN];
@@ -2178,7 +2178,7 @@ static void pim_show_rpf(struct vty *vty, u_char uj)
             VTY_NEWLINE);
   }
 
-  for (ALL_LIST_ELEMENTS_RO(pim_upstream_list, up_node, up)) {
+  for (ALL_LIST_ELEMENTS_RO(pimg->upstream_list, up_node, up)) {
     char src_str[INET_ADDRSTRLEN];
     char grp_str[INET_ADDRSTRLEN];
     char rpf_addr_str[PREFIX_STRLEN];
@@ -3830,10 +3830,10 @@ pim_cmd_spt_switchover (enum pim_spt_switchover spt, const char *plist)
       if (pimg->spt.plist)
         XFREE (MTYPE_PIM_SPT_PLIST_NAME, pimg->spt.plist);
 
-      pim_upstream_add_lhr_star_pimreg ();
+      pim_upstream_add_lhr_star_pimreg (pimg);
       break;
     case PIM_SPT_INFINITY:
-      pim_upstream_remove_lhr_star_pimreg (plist);
+      pim_upstream_remove_lhr_star_pimreg (pimg, plist);
 
       if (pimg->spt.plist)
         XFREE (MTYPE_PIM_SPT_PLIST_NAME, pimg->spt.plist);

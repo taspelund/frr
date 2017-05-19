@@ -47,6 +47,7 @@ void pim_ifassert_winner_set(struct pim_ifchannel     *ch,
 			     struct in_addr            winner,
 			     struct pim_assert_metric  winner_metric)
 {
+  struct pim_interface *pim_ifp = ch->interface->info;
   int winner_changed = (ch->ifassert_winner.s_addr != winner.s_addr);
   int metric_changed = !pim_assert_metric_match(&ch->ifassert_winner_metric,
 						&winner_metric);
@@ -79,7 +80,7 @@ void pim_ifassert_winner_set(struct pim_ifchannel     *ch,
   ch->ifassert_creation      = pim_time_monotonic_sec();
 
   if (winner_changed || metric_changed) {
-    pim_upstream_update_join_desired(ch->upstream);
+    pim_upstream_update_join_desired(pim_ifp->pim, ch->upstream);
     pim_ifchannel_update_could_assert(ch);
     pim_ifchannel_update_assert_tracking_desired(ch);
   }

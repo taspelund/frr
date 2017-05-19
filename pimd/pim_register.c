@@ -127,7 +127,7 @@ pim_register_stop_recv (uint8_t *buf, int buf_size)
   pim_parse_addr_ucast (&source, buf, buf_size);
   sg.src = source.u.prefix4;
 
-  upstream = pim_upstream_find (&sg);
+  upstream = pim_upstream_find (pimg, &sg);
   if (!upstream)
     {
       return 0;
@@ -357,7 +357,7 @@ pim_register_recv (struct interface *ifp,
       }
     }
 
-    struct pim_upstream *upstream = pim_upstream_find (&sg);
+    struct pim_upstream *upstream = pim_upstream_find (pim_ifp->pim, &sg);
     /*
      * If we don't have a place to send ignore the packet
      */
@@ -377,7 +377,7 @@ pim_register_recv (struct interface *ifp,
 
     if ((upstream->sptbit == PIM_UPSTREAM_SPTBIT_TRUE) ||
 	((SwitchToSptDesired(&sg)) &&
-	 pim_upstream_inherited_olist (upstream) == 0)) {
+	 pim_upstream_inherited_olist (pim_ifp->pim, upstream) == 0)) {
       //pim_scan_individual_oil (upstream->channel_oil);
       pim_register_stop_send (ifp, &sg, dest_addr, src_addr);
       sentRegisterStop = 1;

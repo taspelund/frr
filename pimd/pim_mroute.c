@@ -169,7 +169,8 @@ pim_mroute_msg_nocache (int fd, struct interface *ifp, const struct igmpmsg *msg
   sg.src = msg->im_src;
   sg.grp = msg->im_dst;
 
-  up = pim_upstream_find_or_add (&sg, ifp, PIM_UPSTREAM_FLAG_MASK_FHR, __PRETTY_FUNCTION__);
+  up = pim_upstream_find_or_add (&sg, ifp,
+				 PIM_UPSTREAM_FLAG_MASK_FHR, __PRETTY_FUNCTION__);
   if (!up)
     {
       if (PIM_DEBUG_MROUTE)
@@ -218,18 +219,20 @@ pim_mroute_msg_wholepkt (int fd, struct interface *ifp, const char *buf)
   const struct ip *ip_hdr;
   struct pim_upstream *up;
 
+  pim_ifp = ifp->info;
+
   ip_hdr = (const struct ip *)buf;
 
   memset (&sg, 0, sizeof (struct prefix_sg));
   sg.src = ip_hdr->ip_src;
   sg.grp = ip_hdr->ip_dst;
 
-  up = pim_upstream_find(&sg);
+  up = pim_upstream_find(pim_ifp->pim, &sg);
   if (!up) {
     struct prefix_sg star = sg;
     star.src.s_addr = INADDR_ANY;
 
-    up = pim_upstream_find(&star);
+    up = pim_upstream_find(pim_ifp->pim, &star);
 
     if (up && PIM_UPSTREAM_FLAG_TEST_SRC_IGMP(up->flags))
       {
@@ -242,7 +245,7 @@ pim_mroute_msg_wholepkt (int fd, struct interface *ifp, const char *buf)
             return 0;
           }
 	pim_upstream_keep_alive_timer_start (up, qpim_keep_alive_time);
-	pim_upstream_inherited_olist (up);
+	pim_upstream_inherited_olist (pim_ifp->pim, up);
 	pim_upstream_switch(up, PIM_UPSTREAM_JOINED);
 
 	if (PIM_DEBUG_MROUTE)
@@ -430,7 +433,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
     }
 #endif
 
-  up = pim_upstream_find (&sg);
+  up = pim_upstream_find (pim_ifp->pim, &sg);
   if (up)
     {
       struct pim_upstream *parent;
@@ -445,7 +448,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
        * tree, let's check and if so we can safely drop
        * it.
        */
-      parent = pim_upstream_find (&star_g);
+      parent = pim_upstream_find (pim_ifp->pim, &star_g);
       if (parent && parent->rpf.source_nexthop.interface == ifp)
         return 0;
 
@@ -463,7 +466,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
 	    pim_register_stop_send(source.interface, &sg, pim_ifp->primary_address, up->upstream_register);
           if (!up->channel_oil)
             up->channel_oil = pim_channel_oil_add (&sg, pim_ifp->mroute_vif_index);
-          pim_upstream_inherited_olist (up);
+          pim_upstream_inherited_olist (pim_ifp->pim, up);
           if (!up->channel_oil->installed)
             pim_mroute_add (up->channel_oil, __PRETTY_FUNCTION__);
 	  pim_upstream_set_sptbit (up, ifp);
@@ -477,7 +480,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
 	      up->sptbit = PIM_UPSTREAM_SPTBIT_TRUE;
 	    }
 	  pim_upstream_keep_alive_timer_start (up, qpim_keep_alive_time);
-	  pim_upstream_inherited_olist (up);
+	  pim_upstream_inherited_olist (pim_ifp->pim, up);
 	  pim_mroute_msg_wholepkt (fd, ifp, buf);
 	}
       return 0;
@@ -502,7 +505,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
       up->channel_oil = oil;
       up->channel_oil->cc.pktcnt++;
       pim_register_join (up);
-      pim_upstream_inherited_olist (up);
+      pim_upstream_inherited_olist (pim_ifp->pim, up);
 
       // Send the packet to the RP
       pim_mroute_msg_wholepkt (fd, ifp, buf);

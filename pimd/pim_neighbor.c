@@ -561,7 +561,7 @@ struct pim_neighbor *pim_neighbor_add(struct interface *ifp,
   else
     pim_hello_restart_triggered(neigh->interface);
 
-  pim_upstream_find_new_rpf();
+  pim_upstream_find_new_rpf(pim_ifp->pim);
 
   /* RNH can send nexthop update prior to PIM neibhor UP
      in that case nexthop cache would not consider this neighbor

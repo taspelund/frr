@@ -44,7 +44,7 @@ pim_ssm_range_reevaluate (void)
    * out gracefully. As long as the FHR and LHR do the right thing RPTs will
    * disappear in time for SSM groups.
    */
-  pim_upstream_register_reevaluate ();
+  pim_upstream_register_reevaluate (pimg);
   igmp_source_forward_reevaluate_all ();
 }
 
