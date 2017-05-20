@@ -45,30 +45,27 @@
 #include "pim_rp.h"
 #include "pim_nht.h"
 
-struct list *pim_ifchannel_list = NULL;
-static int pim_iface_vif_index[MAXVIFS];
-
 static void pim_if_igmp_join_del_all(struct interface *ifp);
 static int igmp_join_sock(const char *ifname, ifindex_t ifindex,
 			  struct in_addr group_addr, struct in_addr source_addr);
 
 void
-pim_if_init (void)
+pim_if_init (struct pim_instance *pim)
 {
   int i;
 
   for (i = 0; i < MAXVIFS; i++)
-    pim_iface_vif_index[i] = 0;
+    pim->iface_vif_index[i] = 0;
 
-  pim_ifchannel_list = list_new();
-  pim_ifchannel_list->cmp = (int (*)(void *, void *))pim_ifchannel_compare;
+  pim->ifchannel_list = list_new();
+  pim->ifchannel_list->cmp = (int (*)(void *, void *))pim_ifchannel_compare;
 }
 
 void
-pim_if_terminate (void)
+pim_if_terminate (struct pim_instance *pim)
 {
-  if (pim_ifchannel_list)
-    list_free (pim_ifchannel_list);
+  if (pim->ifchannel_list)
+    list_free (pim->ifchannel_list);
 }
 
 static void *if_list_clean(struct pim_interface *pim_ifp)
@@ -941,7 +938,10 @@ pim_find_primary_addr (struct interface *ifp)
 static int
 pim_iface_next_vif_index (struct interface *ifp)
 {
+  struct pim_interface *pim_ifp = ifp->info;
+  struct pim_instance *pim = pim_ifp->pim;
   int i;
+
   /*
    * The pimreg vif is always going to be in index 0
    * of the table.
@@ -951,7 +951,7 @@ pim_iface_next_vif_index (struct interface *ifp)
 
   for (i = 1 ; i < MAXVIFS; i++)
     {
-      if (pim_iface_vif_index[i] == 0)
+      if (pim->iface_vif_index[i] == 0)
         return i;
     }
   return MAXVIFS;
@@ -1014,7 +1014,7 @@ int pim_if_add_vif(struct interface *ifp)
     return -5;
   }
 
-  pim_iface_vif_index[pim_ifp->mroute_vif_index] = 1;
+  pim_ifp->pim->iface_vif_index[pim_ifp->mroute_vif_index] = 1;
   return 0;
 }
 
@@ -1034,39 +1034,11 @@ int pim_if_del_vif(struct interface *ifp)
   /*
     Update vif_index
    */
-  pim_iface_vif_index[pim_ifp->mroute_vif_index] = 0;
+  pim_ifp->pim->iface_vif_index[pim_ifp->mroute_vif_index] = 0;
 
   pim_ifp->mroute_vif_index = -1;
 
   return 0;
-}
-
-void pim_if_add_vif_all()
-{
-  struct listnode  *ifnode;
-  struct listnode  *ifnextnode;
-  struct interface *ifp;
-
-  for (ALL_LIST_ELEMENTS (vrf_iflist (pimg->vrf_id), ifnode, ifnextnode, ifp)) {
-    if (!ifp->info)
-      continue;
-
-    pim_if_add_vif(ifp);
-  }
-}
-
-void pim_if_del_vif_all()
-{
-  struct listnode  *ifnode;
-  struct listnode  *ifnextnode;
-  struct interface *ifp;
-
-  for (ALL_LIST_ELEMENTS (vrf_iflist (pimg->vrf_id), ifnode, ifnextnode, ifp)) {
-    if (!ifp->info)
-      continue;
-
-    pim_if_del_vif(ifp);
-  }
 }
 
 // DBS - VRF Revist

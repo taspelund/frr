@@ -163,7 +163,7 @@ static void pim_if_membership_refresh(struct interface *ifp)
 
 }
 
-static void pim_show_assert(struct vty *vty)
+static void pim_show_assert(struct pim_instance *pim, struct vty *vty)
 {
   struct pim_interface *pim_ifp;
   struct pim_ifchannel *ch;
@@ -177,7 +177,7 @@ static void pim_show_assert(struct vty *vty)
 	  "Interface Address         Source          Group           State  Winner          Uptime   Timer%s",
 	  VTY_NEWLINE);
 
-  for (ALL_LIST_ELEMENTS_RO(pim_ifchannel_list, ch_node, ch)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->ifchannel_list, ch_node, ch)) {
     char ch_src_str[INET_ADDRSTRLEN];
     char ch_grp_str[INET_ADDRSTRLEN];
     char winner_str[INET_ADDRSTRLEN];
@@ -215,7 +215,7 @@ static void pim_show_assert(struct vty *vty)
   } /* scan interface channels */
 }
 
-static void pim_show_assert_internal(struct vty *vty)
+static void pim_show_assert_internal(struct pim_instance *pim, struct vty *vty)
 {
   struct pim_interface *pim_ifp;
   struct listnode *ch_node;
@@ -233,7 +233,7 @@ static void pim_show_assert_internal(struct vty *vty)
 	  "Interface Address         Source          Group           CA  eCA ATD eATD%s",
 	  VTY_NEWLINE);
 
-  for (ALL_LIST_ELEMENTS_RO(pim_ifchannel_list, ch_node, ch)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->ifchannel_list, ch_node, ch)) {
     pim_ifp = ch->interface->info;
     
     if (!pim_ifp)
@@ -261,7 +261,7 @@ static void pim_show_assert_internal(struct vty *vty)
   } /* scan interface channels */
 }
 
-static void pim_show_assert_metric(struct vty *vty)
+static void pim_show_assert_metric(struct pim_instance *pim, struct vty *vty)
 {
   struct pim_interface *pim_ifp;
   struct listnode *ch_node;
@@ -272,7 +272,7 @@ static void pim_show_assert_metric(struct vty *vty)
 	  "Interface Address         Source          Group           RPT Pref Metric Address        %s",
 	  VTY_NEWLINE);
 
-  for (ALL_LIST_ELEMENTS_RO(pim_ifchannel_list, ch_node, ch)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->ifchannel_list, ch_node, ch)) {
     pim_ifp = ch->interface->info;
 
     if (!pim_ifp)
@@ -307,7 +307,8 @@ static void pim_show_assert_metric(struct vty *vty)
     } /* scan interface channels */
 }
 
-static void pim_show_assert_winner_metric(struct vty *vty)
+static void pim_show_assert_winner_metric(struct pim_instance *pim,
+					  struct vty *vty)
 {
   struct pim_interface *pim_ifp;
   struct listnode *ch_node;
@@ -318,7 +319,7 @@ static void pim_show_assert_winner_metric(struct vty *vty)
 	  "Interface Address         Source          Group           RPT Pref Metric Address        %s",
 	  VTY_NEWLINE);
 
-  for (ALL_LIST_ELEMENTS_RO(pim_ifchannel_list, ch_node, ch)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->ifchannel_list, ch_node, ch)) {
     pim_ifp = ch->interface->info;
     
     if (!pim_ifp)
@@ -394,7 +395,8 @@ static void json_object_pim_ifp_add(struct json_object *json, struct interface *
     json_object_boolean_true_add(json, "lanDelayEnabled");
 }
 
-static void pim_show_membership(struct vty *vty, u_char uj)
+static void pim_show_membership(struct pim_instance *pim, struct vty *vty,
+				u_char uj)
 {
   struct pim_interface *pim_ifp;
   struct listnode *ch_node;
@@ -407,7 +409,7 @@ static void pim_show_membership(struct vty *vty, u_char uj)
 
   json = json_object_new_object();
 
-  for (ALL_LIST_ELEMENTS_RO(pim_ifchannel_list, ch_node, ch)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->ifchannel_list, ch_node, ch)) {
 
     pim_ifp = ch->interface->info;
 
@@ -1281,7 +1283,7 @@ static void pim_show_interface_traffic_single (struct vty *vty, const char *ifna
     }
 }
 
-static void pim_show_join(struct vty *vty, u_char uj)
+static void pim_show_join(struct pim_instance *pim, struct vty *vty, u_char uj)
 {
   struct pim_interface *pim_ifp;
   struct in_addr ifaddr;
@@ -1302,7 +1304,7 @@ static void pim_show_join(struct vty *vty, u_char uj)
             "Interface Address         Source          Group           State  Uptime   Expire Prune%s",
             VTY_NEWLINE);
 
-  for (ALL_LIST_ELEMENTS_RO(pim_ifchannel_list, ch_node, ch)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->ifchannel_list, ch_node, ch)) {
 
     pim_ifp = ch->interface->info;
     
@@ -1963,7 +1965,8 @@ static void pim_show_upstream(struct vty *vty, u_char uj)
   }
 }
 
-static void pim_show_join_desired(struct vty *vty, u_char uj)
+static void pim_show_join_desired(struct pim_instance *pim, struct vty *vty,
+				  u_char uj)
 {
   struct listnode      *chnode;
   struct pim_interface *pim_ifp;
@@ -1982,7 +1985,7 @@ static void pim_show_join_desired(struct vty *vty, u_char uj)
             VTY_NEWLINE);
 
   /* scan per-interface (S,G) state */
-  for (ALL_LIST_ELEMENTS_RO(pim_ifchannel_list, chnode, ch)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->ifchannel_list, chnode, ch)) {
     /* scan all interfaces */
     pim_ifp = ch->interface->info;
     if (!pim_ifp)
@@ -2808,7 +2811,7 @@ DEFUN (show_ip_pim_assert,
        PIM_STR
        "PIM interface assert\n")
 {
-  pim_show_assert(vty);
+  pim_show_assert(pimg, vty);
 
   return CMD_SUCCESS;
 }
@@ -2821,7 +2824,7 @@ DEFUN (show_ip_pim_assert_internal,
        PIM_STR
        "PIM interface internal assert state\n")
 {
-  pim_show_assert_internal(vty);
+  pim_show_assert_internal(pimg, vty);
 
   return CMD_SUCCESS;
 }
@@ -2834,7 +2837,7 @@ DEFUN (show_ip_pim_assert_metric,
        PIM_STR
        "PIM interface assert metric\n")
 {
-  pim_show_assert_metric(vty);
+  pim_show_assert_metric(pimg, vty);
 
   return CMD_SUCCESS;
 }
@@ -2847,7 +2850,7 @@ DEFUN (show_ip_pim_assert_winner_metric,
        PIM_STR
        "PIM interface assert winner metric\n")
 {
-  pim_show_assert_winner_metric(vty);
+  pim_show_assert_winner_metric(pimg, vty);
 
   return CMD_SUCCESS;
 }
@@ -2886,7 +2889,7 @@ DEFUN (show_ip_pim_join,
        JSON_STR)
 {
   u_char uj = use_json(argc, argv);
-  pim_show_join(vty, uj);
+  pim_show_join(pimg, vty, uj);
 
   return CMD_SUCCESS;
 }
@@ -2901,7 +2904,7 @@ DEFUN (show_ip_pim_local_membership,
        JSON_STR)
 {
   u_char uj = use_json(argc, argv);
-  pim_show_membership(vty, uj);
+  pim_show_membership(pimg, vty, uj);
 
   return CMD_SUCCESS;
 }
@@ -2997,7 +3000,7 @@ DEFUN (show_ip_pim_upstream_join_desired,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-  pim_show_join_desired(vty, uj);
+  pim_show_join_desired(pimg, vty, uj);
 
   return CMD_SUCCESS;
 }
