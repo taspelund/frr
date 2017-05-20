@@ -113,8 +113,10 @@ pim_register_stop_send (struct interface *ifp, struct prefix_sg *sg,
 }
 
 int
-pim_register_stop_recv (uint8_t *buf, int buf_size)
+pim_register_stop_recv (struct interface *ifp, uint8_t *buf, int buf_size)
 {
+  struct pim_interface *pim_ifp = ifp->info;
+  struct pim_instance *pim = pim_ifp->pim;
   struct pim_upstream *upstream = NULL;
   struct prefix source;
   struct prefix_sg sg;
@@ -127,7 +129,7 @@ pim_register_stop_recv (uint8_t *buf, int buf_size)
   pim_parse_addr_ucast (&source, buf, buf_size);
   sg.src = source.u.prefix4;
 
-  upstream = pim_upstream_find (pimg, &sg);
+  upstream = pim_upstream_find (pim, &sg);
   if (!upstream)
     {
       return 0;
@@ -145,7 +147,7 @@ pim_register_stop_recv (uint8_t *buf, int buf_size)
       break;
     case PIM_REG_JOIN:
       upstream->reg_state = PIM_REG_PRUNE;
-      pim_channel_del_oif (upstream->channel_oil, pimg->regiface, PIM_OIF_FLAG_PROTO_PIM);
+      pim_channel_del_oif (upstream->channel_oil, pim->regiface, PIM_OIF_FLAG_PROTO_PIM);
       pim_upstream_start_register_stop_timer (upstream, 0);
       break;
     case PIM_REG_JOIN_PENDING:
