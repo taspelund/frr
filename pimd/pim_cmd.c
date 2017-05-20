@@ -3027,7 +3027,7 @@ DEFUN (show_ip_pim_rp,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-  pim_rp_show_information (vty, uj);
+  pim_rp_show_information (pimg, vty, uj);
 
   return CMD_SUCCESS;
 }
@@ -3111,7 +3111,7 @@ DEFUN (show_ip_pim_nexthop_lookup,
       return CMD_WARNING;
     }
 
-  if (!pim_rp_set_upstream_addr (&vif_source, src_addr, grp_addr))
+  if (!pim_rp_set_upstream_addr (pimg, &vif_source, src_addr, grp_addr))
     return CMD_SUCCESS;
 
   memset (&pnc, 0, sizeof (struct pim_nexthop_cache));
@@ -3691,7 +3691,7 @@ DEFUN (show_ip_rib,
     return CMD_WARNING;
   }
 
-  if (pim_nexthop_lookup(&nexthop, addr, 0)) {
+  if (pim_nexthop_lookup(pimg, &nexthop, addr, 0)) {
     vty_out(vty, "Failure querying RIB nexthop for unicast address %s%s",
 	    addr_str, VTY_NEWLINE);
     return CMD_WARNING;

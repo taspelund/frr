@@ -139,7 +139,7 @@ pim_msdp_sa_upstream_add_ok(struct pim_msdp_sa *sa, struct pim_upstream *xg_up)
     return false;
   }
   /* check if we are RP */
-  if (!I_am_RP(sa->sg.grp)) {
+  if (!I_am_RP(pimg, sa->sg.grp)) {
     return false;
   }
 
@@ -443,7 +443,7 @@ pim_msdp_sa_local_add_ok(struct pim_upstream *up)
     return false;
   }
 
-  if (!I_am_RP(up->sg.grp)) {
+  if (!I_am_RP(pimg, up->sg.grp)) {
     /* we are not RP for the group */
     return false;
   }
