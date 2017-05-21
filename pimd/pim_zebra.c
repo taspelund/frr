@@ -710,7 +710,7 @@ void pim_zebra_init(void)
   zclient_lookup_new();
 }
 
-void igmp_anysource_forward_start(struct igmp_group *group)
+void igmp_anysource_forward_start(struct pim_instance *pim, struct igmp_group *group)
 {
   struct igmp_source *source;
   struct in_addr src_addr = { .s_addr = 0 };
@@ -725,7 +725,7 @@ void igmp_anysource_forward_start(struct igmp_group *group)
       return;
     }
 
-  igmp_source_forward_start (source);
+  igmp_source_forward_start (pim, source);
 }
 
 void igmp_anysource_forward_stop(struct igmp_group *group)
@@ -783,40 +783,49 @@ igmp_source_forward_reevaluate_all(void)
 {
   struct listnode *ifnode;
   struct interface *ifp;
+  struct vrf *vrf;
+  struct pim_instance *pim;
 
-  for (ALL_LIST_ELEMENTS_RO (vrf_iflist (pimg->vrf_id), ifnode, ifp))
+  RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
     {
-      struct pim_interface *pim_ifp = ifp->info;
-      struct listnode  *sock_node;
-      struct igmp_sock *igmp;
+      pim = vrf->info;
+      if (!pim)
+	continue;
 
-      if (!pim_ifp)
-        continue;
+      for (ALL_LIST_ELEMENTS_RO (vrf_iflist (pim->vrf_id), ifnode, ifp))
+	{
+	  struct pim_interface *pim_ifp = ifp->info;
+	  struct listnode  *sock_node;
+	  struct igmp_sock *igmp;
 
-      /* scan igmp sockets */
-      for (ALL_LIST_ELEMENTS_RO (pim_ifp->igmp_socket_list, sock_node, igmp))
-        {
-          struct listnode *grpnode;
-          struct igmp_group *grp;
+	  if (!pim_ifp)
+	    continue;
 
-          /* scan igmp groups */
-          for (ALL_LIST_ELEMENTS_RO (igmp->igmp_group_list, grpnode, grp))
-            {
-              struct listnode    *srcnode;
-              struct igmp_source *src;
+	  /* scan igmp sockets */
+	  for (ALL_LIST_ELEMENTS_RO (pim_ifp->igmp_socket_list, sock_node, igmp))
+	    {
+	      struct listnode *grpnode;
+	      struct igmp_group *grp;
 
-              /* scan group sources */
-              for (ALL_LIST_ELEMENTS_RO (grp->group_source_list,
-                                        srcnode, src))
-                {
-                  igmp_source_forward_reevaluate_one (src);
-                } /* scan group sources */
-            } /* scan igmp groups */
-        } /* scan igmp sockets */
-    } /* scan interfaces */
+	      /* scan igmp groups */
+	      for (ALL_LIST_ELEMENTS_RO (igmp->igmp_group_list, grpnode, grp))
+		{
+		  struct listnode    *srcnode;
+		  struct igmp_source *src;
+
+		  /* scan group sources */
+		  for (ALL_LIST_ELEMENTS_RO (grp->group_source_list,
+					     srcnode, src))
+		    {
+		      igmp_source_forward_reevaluate_one (src);
+		    } /* scan group sources */
+		} /* scan igmp groups */
+	    } /* scan igmp sockets */
+	} /* scan interfaces */
+    }
 }
 
-void igmp_source_forward_start(struct igmp_source *source)
+void igmp_source_forward_start(struct pim_instance *pim, struct igmp_source *source)
 {
   struct igmp_group *group;
   struct prefix_sg sg;
@@ -852,7 +861,7 @@ void igmp_source_forward_start(struct igmp_source *source)
     struct pim_nexthop nexthop;
     struct pim_upstream *up = NULL;
 
-    if (!pim_rp_set_upstream_addr (pimg, &vif_source, source->source_addr, sg.grp))
+    if (!pim_rp_set_upstream_addr (pim, &vif_source, source->source_addr, sg.grp))
       return;
 
     /* Register addr with Zebra NHT */
@@ -868,17 +877,17 @@ void igmp_source_forward_start(struct igmp_source *source)
     grp.prefixlen = IPV4_MAX_BITLEN;
     grp.u.prefix4 = sg.grp;
 
-    if (pim_find_or_track_nexthop (pimg, &nht_p, NULL, NULL, &out_pnc))
+    if (pim_find_or_track_nexthop (pim, &nht_p, NULL, NULL, &out_pnc))
       {
         if (out_pnc.nexthop_num)
           {
-            up = pim_upstream_find (pimg, &sg);
+            up = pim_upstream_find (pim, &sg);
             memset (&nexthop, 0, sizeof (nexthop));
             if (up)
               memcpy (&nexthop, &up->rpf.source_nexthop, sizeof (struct pim_nexthop));
-            pim_ecmp_nexthop_search (pimg, &out_pnc, &nexthop, &src, &grp, 0);
+            pim_ecmp_nexthop_search (pim, &out_pnc, &nexthop, &src, &grp, 0);
             if (nexthop.interface)
-              input_iface_vif_index = pim_if_find_vifindex_by_ifindex (pimg, nexthop.interface->ifindex);
+              input_iface_vif_index = pim_if_find_vifindex_by_ifindex (pim, nexthop.interface->ifindex);
           }
         else
           {
@@ -894,7 +903,7 @@ void igmp_source_forward_start(struct igmp_source *source)
           }
       }
     else
-      input_iface_vif_index = pim_ecmp_fib_lookup_if_vif_index(pimg, vif_source, &src, &grp);
+      input_iface_vif_index = pim_ecmp_fib_lookup_if_vif_index(pim, vif_source, &src, &grp);
 
     if (PIM_DEBUG_ZEBRA)
       {
@@ -945,7 +954,7 @@ void igmp_source_forward_start(struct igmp_source *source)
       return;
     }
 
-    source->source_channel_oil = pim_channel_oil_add(pimg, &sg,
+    source->source_channel_oil = pim_channel_oil_add(pim, &sg,
 						     input_iface_vif_index);
     if (!source->source_channel_oil) {
       if (PIM_DEBUG_IGMP_TRACE)
@@ -1052,6 +1061,11 @@ void pim_forward_start(struct pim_ifchannel *ch)
   struct pim_upstream *up = ch->upstream;
   uint32_t mask = PIM_OIF_FLAG_PROTO_PIM;
   int input_iface_vif_index =  0;
+  struct pim_instance *pim;
+  struct pim_interface *pim_ifp;
+
+  pim_ifp = ch->interface->info;
+  pim = pim_ifp->pim;
 
   if (PIM_DEBUG_PIM_TRACE) {
     char source_str[INET_ADDRSTRLEN];
@@ -1084,7 +1098,7 @@ void pim_forward_start(struct pim_ifchannel *ch)
       grp.u.prefix4 = up->sg.grp;
       memset (&out_pnc, 0, sizeof (struct pim_nexthop_cache));
 
-      if (pim_find_or_track_nexthop (pimg, &nht_p, NULL, NULL, &out_pnc))
+      if (pim_find_or_track_nexthop (pim, &nht_p, NULL, NULL, &out_pnc))
         {
           if (out_pnc.nexthop_num)
             {
@@ -1095,8 +1109,8 @@ void pim_forward_start(struct pim_ifchannel *ch)
               grp.prefixlen = IPV4_MAX_BITLEN;
               grp.u.prefix4 = up->sg.grp;
               //Compute PIM RPF using Cached nexthop
-              if (pim_ecmp_nexthop_search (pimg, &out_pnc, &up->rpf.source_nexthop, &src, &grp, 0))
-                input_iface_vif_index = pim_if_find_vifindex_by_ifindex (pimg, up->rpf.source_nexthop.interface->ifindex);
+              if (pim_ecmp_nexthop_search (pim, &out_pnc, &up->rpf.source_nexthop, &src, &grp, 0))
+                input_iface_vif_index = pim_if_find_vifindex_by_ifindex (pim, up->rpf.source_nexthop.interface->ifindex);
               else
                 {
                   if (PIM_DEBUG_TRACE)
@@ -1117,7 +1131,7 @@ void pim_forward_start(struct pim_ifchannel *ch)
             }
         }
       else
-        input_iface_vif_index = pim_ecmp_fib_lookup_if_vif_index(pimg, up->upstream_addr, &src, &grp);
+        input_iface_vif_index = pim_ecmp_fib_lookup_if_vif_index(pim, up->upstream_addr, &src, &grp);
 
       if (input_iface_vif_index < 1)
         {
@@ -1133,12 +1147,12 @@ void pim_forward_start(struct pim_ifchannel *ch)
         }
       if (PIM_DEBUG_TRACE)
         {
-          struct interface *in_intf = pim_if_find_by_vif_index (pimg, input_iface_vif_index);
+          struct interface *in_intf = pim_if_find_by_vif_index (pim, input_iface_vif_index);
           zlog_debug ("%s: Update channel_oil IIF %s VIFI %d entry %s ",
                       __PRETTY_FUNCTION__, in_intf ? in_intf->name : "NIL",
                       input_iface_vif_index, up->sg_str);
         }
-      up->channel_oil = pim_channel_oil_add (pimg, &up->sg, input_iface_vif_index);
+      up->channel_oil = pim_channel_oil_add (pim, &up->sg, input_iface_vif_index);
       if (!up->channel_oil)
         {
           if (PIM_DEBUG_PIM_TRACE)
