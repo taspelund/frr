@@ -201,7 +201,7 @@ pim_mroute_msg_nocache (int fd, struct interface *ifp, const struct igmpmsg *msg
     {
       int vif_index = 0;
       vif_index =
-        pim_if_find_vifindex_by_ifindex (up->rpf.source_nexthop.
+        pim_if_find_vifindex_by_ifindex (pim_ifp->pim, up->rpf.source_nexthop.
                                          interface->ifindex);
       up->channel_oil->oil.mfcc_parent = vif_index;
     }
@@ -575,7 +575,7 @@ pim_mroute_msg (struct pim_instance *pim, const char *buf, int buf_size)
   } else {
     msg = (const struct igmpmsg *) buf;
 
-    ifp = pim_if_find_by_vif_index(msg->im_vif);
+    ifp = pim_if_find_by_vif_index(pim, msg->im_vif);
 
     if (!ifp)
       return 0;

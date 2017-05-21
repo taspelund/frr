@@ -515,8 +515,8 @@ pim_scan_individual_oil (struct channel_oil *c_oil, int in_vif_index)
 
   if (PIM_DEBUG_ZEBRA)
     {
-      struct interface *old_iif = pim_if_find_by_vif_index(c_oil->oil.mfcc_parent);
-      struct interface *new_iif = pim_if_find_by_vif_index(input_iface_vif_index);
+      struct interface *old_iif = pim_if_find_by_vif_index(c_oil->pim, c_oil->oil.mfcc_parent);
+      struct interface *new_iif = pim_if_find_by_vif_index(c_oil->pim, input_iface_vif_index);
       char source_str[INET_ADDRSTRLEN];
       char group_str[INET_ADDRSTRLEN];
       pim_inet4_dump("<source?>", c_oil->oil.mfcc_origin, source_str, sizeof(source_str));
@@ -531,7 +531,7 @@ pim_scan_individual_oil (struct channel_oil *c_oil, int in_vif_index)
   /* new iif loops to existing oif ? */
   if (c_oil->oil.mfcc_ttls[input_iface_vif_index])
     {
-      struct interface *new_iif = pim_if_find_by_vif_index(input_iface_vif_index);
+      struct interface *new_iif = pim_if_find_by_vif_index(c_oil->pim, input_iface_vif_index);
 
       if (PIM_DEBUG_ZEBRA) {
 	char source_str[INET_ADDRSTRLEN];
@@ -555,8 +555,8 @@ pim_scan_individual_oil (struct channel_oil *c_oil, int in_vif_index)
 	if (PIM_DEBUG_MROUTE)
 	  {
 	    /* just log warning */
-	    struct interface *old_iif = pim_if_find_by_vif_index(old_vif_index);
-	    struct interface *new_iif = pim_if_find_by_vif_index(input_iface_vif_index);
+	    struct interface *old_iif = pim_if_find_by_vif_index(c_oil->pim, old_vif_index);
+	    struct interface *new_iif = pim_if_find_by_vif_index(c_oil->pim, input_iface_vif_index);
 	    char source_str[INET_ADDRSTRLEN];
 	    char group_str[INET_ADDRSTRLEN];
 	    pim_inet4_dump("<source?>", c_oil->oil.mfcc_origin, source_str, sizeof(source_str));
@@ -586,7 +586,7 @@ void pim_scan_oil()
       if (c_oil->up && c_oil->up->rpf.source_nexthop.interface)
         {
           ifindex = c_oil->up->rpf.source_nexthop.interface->ifindex;
-          vif_index = pim_if_find_vifindex_by_ifindex (ifindex);
+          vif_index = pim_if_find_vifindex_by_ifindex (c_oil->pim, ifindex);
           /* Pass Current selected NH vif index to mroute download */
           if (vif_index)
             pim_scan_individual_oil (c_oil, vif_index);
@@ -869,7 +869,7 @@ void igmp_source_forward_start(struct igmp_source *source)
               memcpy (&nexthop, &up->rpf.source_nexthop, sizeof (struct pim_nexthop));
             pim_ecmp_nexthop_search (pimg, &out_pnc, &nexthop, &src, &grp, 0);
             if (nexthop.interface)
-              input_iface_vif_index = pim_if_find_vifindex_by_ifindex (nexthop.interface->ifindex);
+              input_iface_vif_index = pim_if_find_vifindex_by_ifindex (pimg, nexthop.interface->ifindex);
           }
         else
           {
@@ -1087,7 +1087,7 @@ void pim_forward_start(struct pim_ifchannel *ch)
               grp.u.prefix4 = up->sg.grp;
               //Compute PIM RPF using Cached nexthop
               if (pim_ecmp_nexthop_search (pimg, &out_pnc, &up->rpf.source_nexthop, &src, &grp, 0))
-                input_iface_vif_index = pim_if_find_vifindex_by_ifindex (up->rpf.source_nexthop.interface->ifindex);
+                input_iface_vif_index = pim_if_find_vifindex_by_ifindex (pimg, up->rpf.source_nexthop.interface->ifindex);
               else
                 {
                   if (PIM_DEBUG_TRACE)
@@ -1124,7 +1124,7 @@ void pim_forward_start(struct pim_ifchannel *ch)
         }
       if (PIM_DEBUG_TRACE)
         {
-          struct interface *in_intf = pim_if_find_by_vif_index (input_iface_vif_index);
+          struct interface *in_intf = pim_if_find_by_vif_index (pimg, input_iface_vif_index);
           zlog_debug ("%s: Update channel_oil IIF %s VIFI %d entry %s ",
                       __PRETTY_FUNCTION__, in_intf ? in_intf->name : "NIL",
                       input_iface_vif_index, up->sg_str);
