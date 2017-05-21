@@ -577,22 +577,31 @@ void pim_scan_oil()
   struct channel_oil *c_oil;
   ifindex_t          ifindex;
   int                vif_index = 0;
+  struct vrf         *vrf;
+  struct pim_instance *pim;
 
   qpim_scan_oil_last = pim_time_monotonic_sec();
   ++qpim_scan_oil_events;
 
-  for (ALL_LIST_ELEMENTS(pim_channel_oil_list, node, nextnode, c_oil))
+  RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
     {
-      if (c_oil->up && c_oil->up->rpf.source_nexthop.interface)
-        {
-          ifindex = c_oil->up->rpf.source_nexthop.interface->ifindex;
-          vif_index = pim_if_find_vifindex_by_ifindex (c_oil->pim, ifindex);
-          /* Pass Current selected NH vif index to mroute download */
-          if (vif_index)
-            pim_scan_individual_oil (c_oil, vif_index);
-        }
-      else
-        pim_scan_individual_oil (c_oil, 0);
+      pim = vrf->info;
+      if (!pim)
+	continue;
+
+      for (ALL_LIST_ELEMENTS(pim->channel_oil_list, node, nextnode, c_oil))
+	{
+	  if (c_oil->up && c_oil->up->rpf.source_nexthop.interface)
+	    {
+	      ifindex = c_oil->up->rpf.source_nexthop.interface->ifindex;
+	      vif_index = pim_if_find_vifindex_by_ifindex (pim, ifindex);
+	      /* Pass Current selected NH vif index to mroute download */
+	      if (vif_index)
+		pim_scan_individual_oil (c_oil, vif_index);
+	    }
+	  else
+	    pim_scan_individual_oil (c_oil, 0);
+	}
     }
 }
 
@@ -936,7 +945,7 @@ void igmp_source_forward_start(struct igmp_source *source)
       return;
     }
 
-    source->source_channel_oil = pim_channel_oil_add(&sg,
+    source->source_channel_oil = pim_channel_oil_add(pimg, &sg,
 						     input_iface_vif_index);
     if (!source->source_channel_oil) {
       if (PIM_DEBUG_IGMP_TRACE)
@@ -1129,7 +1138,7 @@ void pim_forward_start(struct pim_ifchannel *ch)
                       __PRETTY_FUNCTION__, in_intf ? in_intf->name : "NIL",
                       input_iface_vif_index, up->sg_str);
         }
-      up->channel_oil = pim_channel_oil_add (&up->sg, input_iface_vif_index);
+      up->channel_oil = pim_channel_oil_add (pimg, &up->sg, input_iface_vif_index);
       if (!up->channel_oil)
         {
           if (PIM_DEBUG_PIM_TRACE)

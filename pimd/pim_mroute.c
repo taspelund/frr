@@ -465,7 +465,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
 	  if (pim_nexthop_lookup (pim_ifp->pim, &source, up->upstream_register, 0) == 0)
 	    pim_register_stop_send(source.interface, &sg, pim_ifp->primary_address, up->upstream_register);
           if (!up->channel_oil)
-            up->channel_oil = pim_channel_oil_add (&sg, pim_ifp->mroute_vif_index);
+            up->channel_oil = pim_channel_oil_add (pim_ifp->pim, &sg, pim_ifp->mroute_vif_index);
           pim_upstream_inherited_olist (pim_ifp->pim, up);
           if (!up->channel_oil->installed)
             pim_mroute_add (up->channel_oil, __PRETTY_FUNCTION__);
@@ -487,7 +487,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
     }
 
   pim_ifp = ifp->info;
-  oil = pim_channel_oil_add (&sg, pim_ifp->mroute_vif_index);
+  oil = pim_channel_oil_add (pim_ifp->pim, &sg, pim_ifp->mroute_vif_index);
   if (!oil->installed)
     pim_mroute_add (oil, __PRETTY_FUNCTION__);
   if (pim_if_connected_to_source (ifp, sg.src))
