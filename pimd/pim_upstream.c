@@ -1092,10 +1092,12 @@ static int
 pim_upstream_keep_alive_timer (struct thread *t)
 {
   struct pim_upstream *up;
+  struct pim_instance *pim;
 
   up = THREAD_ARG(t);
+  pim = up->channel_oil->pim;
 
-  if (I_am_RP (pimg, up->sg.grp))
+  if (I_am_RP (pim, up->sg.grp))
     {
       pim_br_clear_pmbr (&up->sg);
       /*
@@ -1110,16 +1112,16 @@ pim_upstream_keep_alive_timer (struct thread *t)
   /* if entry was created because of activity we need to deref it */
   if (PIM_UPSTREAM_FLAG_TEST_SRC_STREAM(up->flags))
     {
-      pim_upstream_fhr_kat_expiry(pimg, up);
+      pim_upstream_fhr_kat_expiry(pim, up);
       if (PIM_DEBUG_TRACE)
 	zlog_debug ("kat expired on %s; remove stream reference", up->sg_str);
       PIM_UPSTREAM_FLAG_UNSET_SRC_STREAM(up->flags);
-      pim_upstream_del(pimg, up, __PRETTY_FUNCTION__);
+      pim_upstream_del(pim, up, __PRETTY_FUNCTION__);
     }
   else if (PIM_UPSTREAM_FLAG_TEST_SRC_LHR(up->flags))
     {
       PIM_UPSTREAM_FLAG_UNSET_SRC_LHR(up->flags);
-      pim_upstream_del(pimg, up, __PRETTY_FUNCTION__);
+      pim_upstream_del(pim, up, __PRETTY_FUNCTION__);
     }
 
   return 0;
@@ -1193,9 +1195,9 @@ pim_upstream_msdp_reg_timer_start(struct pim_upstream *up)
  *  received for the source and group.
  */
 int
-pim_upstream_switch_to_spt_desired (struct prefix_sg *sg)
+pim_upstream_switch_to_spt_desired (struct pim_instance *pim, struct prefix_sg *sg)
 {
-  if (I_am_RP (pimg, sg->grp))
+  if (I_am_RP (pim, sg->grp))
     return 1;
 
   return 0;
@@ -1334,10 +1336,12 @@ static int
 pim_upstream_register_stop_timer (struct thread *t)
 {
   struct pim_interface *pim_ifp;
+  struct pim_instance *pim;
   struct pim_upstream *up;
   struct pim_rpf *rpg;
   struct ip ip_hdr;
   up = THREAD_ARG (t);
+  pim = up->channel_oil->pim;
 
   if (PIM_DEBUG_TRACE)
     {
@@ -1351,7 +1355,7 @@ pim_upstream_register_stop_timer (struct thread *t)
     {
     case PIM_REG_JOIN_PENDING:
       up->reg_state = PIM_REG_JOIN;
-      pim_channel_add_oif (up->channel_oil, pimg->regiface, PIM_OIF_FLAG_PROTO_PIM);
+      pim_channel_add_oif (up->channel_oil, pim->regiface, PIM_OIF_FLAG_PROTO_PIM);
       break;
     case PIM_REG_JOIN:
       break;
@@ -1585,6 +1589,8 @@ pim_upstream_equal (const void *arg1, const void *arg2)
  */
 static bool pim_upstream_kat_start_ok(struct pim_upstream *up)
 {
+  struct pim_instance *pim = up->channel_oil->pim;
+
   /* "iif == RPF_interface(S)" check has to be done by the kernel or hw
    * so we will skip that here */
   if (pim_if_connected_to_source(up->rpf.source_nexthop.interface,
@@ -1599,7 +1605,7 @@ static bool pim_upstream_kat_start_ok(struct pim_upstream *up)
      * there is some angst around making the change to run it all routers that
      * maintain the (S, G) state. This is tracked via CM-13601 and MUST be
      * removed to handle spt turn-arounds correctly in a 3-tier clos */
-    if (I_am_RP (pimg, up->sg.grp))
+    if (I_am_RP (pim, up->sg.grp))
       return true;
   }
 
@@ -1614,9 +1620,10 @@ static void
 pim_upstream_sg_running (void *arg)
 {
   struct pim_upstream *up = (struct pim_upstream *)arg;
+  struct pim_instance *pim = up->channel_oil->pim;
 
   // No packet can have arrived here if this is the case
-  if (!up->channel_oil || !up->channel_oil->installed)
+  if (!up->channel_oil->installed)
     {
       if (PIM_DEBUG_TRACE)
 	zlog_debug ("%s: %s is not installed in mroute",
@@ -1636,7 +1643,7 @@ pim_upstream_sg_running (void *arg)
     {
       if (PIM_DEBUG_TRACE)
         zlog_debug ("%s: Handling unscanned inherited_olist for %s", __PRETTY_FUNCTION__, up->sg_str);
-      pim_upstream_inherited_olist_decide (pimg, up);
+      pim_upstream_inherited_olist_decide (pim, up);
       up->channel_oil->oil_inherited_rescan = 0;
     }
   pim_mroute_update_counters (up->channel_oil);
