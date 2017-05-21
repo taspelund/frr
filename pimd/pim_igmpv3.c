@@ -195,6 +195,7 @@ static void igmp_source_timer_on(struct igmp_group *group,
 				 long interval_msec)
 {
   source_timer_off(group, source);
+  struct pim_interface *pim_ifp = group->group_igmp_sock->interface->info;
 
   if (PIM_DEBUG_IGMP_EVENTS) {
     char group_str[INET_ADDRSTRLEN];
@@ -216,7 +217,7 @@ static void igmp_source_timer_on(struct igmp_group *group,
     
     Source timer switched from (T == 0) to (T > 0): enable forwarding.
   */
-  igmp_source_forward_start(pimg, source);
+  igmp_source_forward_start(pim_ifp->pim, source);
 }
 
 void igmp_source_reset_gmi(struct igmp_sock *igmp,
@@ -309,10 +310,12 @@ static void source_clear_send_flag(struct list *source_list)
 */
 static void group_exclude_fwd_anysrc_ifempty(struct igmp_group *group)
 {
+  struct pim_interface *pim_ifp = group->group_igmp_sock->interface->info;
+
   zassert(group->group_filtermode_isexcl);
 
   if (listcount(group->group_source_list) < 1) {
-    igmp_anysource_forward_start(pimg, group);
+    igmp_anysource_forward_start(pim_ifp->pim, group);
   }
 }
 
