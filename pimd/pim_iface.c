@@ -887,6 +887,7 @@ pim_find_primary_addr (struct interface *ifp)
   int v4_addrs = 0;
   int v6_addrs = 0;
   struct pim_interface *pim_ifp = ifp->info;
+  struct vrf *vrf = vrf_lookup_by_id(ifp->vrf_id);
 
   if (pim_ifp && PIM_INADDR_ISNOT_ANY(pim_ifp->update_source)) {
     return pim_ifp->update_source;
@@ -925,7 +926,11 @@ pim_find_primary_addr (struct interface *ifp)
     {
       struct interface *lo_ifp;
       // DBS - Come back and check here
-      lo_ifp = if_lookup_by_name ("lo", pimg->vrf_id);
+      if (ifp->vrf_id == VRF_DEFAULT)
+        lo_ifp = if_lookup_by_name ("lo", vrf->vrf_id);
+      else
+        lo_ifp = if_lookup_by_name (vrf->name, vrf->vrf_id);
+
       if (lo_ifp)
 	return pim_find_primary_addr (lo_ifp);
     }
