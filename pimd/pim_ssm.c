@@ -30,7 +30,7 @@
 #include "pim_zebra.h"
 
 static void
-pim_ssm_range_reevaluate (void)
+pim_ssm_range_reevaluate (struct pim_instance *pim)
 {
   /* 1. Setup register state for (S,G) entries if G has changed from SSM to
    *    ASM.
@@ -44,14 +44,14 @@ pim_ssm_range_reevaluate (void)
    * out gracefully. As long as the FHR and LHR do the right thing RPTs will
    * disappear in time for SSM groups.
    */
-  pim_upstream_register_reevaluate (pimg);
+  pim_upstream_register_reevaluate (pim);
   igmp_source_forward_reevaluate_all ();
 }
 
 void
-pim_ssm_prefix_list_update (struct prefix_list *plist)
+pim_ssm_prefix_list_update (struct pim_instance *pim, struct prefix_list *plist)
 {
-  struct pim_ssm *ssm = pimg->ssm_info;
+  struct pim_ssm *ssm = pim->ssm_info;
 
   if (!ssm->plist_name || strcmp (ssm->plist_name, prefix_list_name (plist)))
     {
@@ -59,7 +59,7 @@ pim_ssm_prefix_list_update (struct prefix_list *plist)
       return;
     }
 
-  pim_ssm_range_reevaluate ();
+  pim_ssm_range_reevaluate (pim);
 }
 
 static int
@@ -78,7 +78,7 @@ pim_is_grp_standard_ssm (struct prefix *group)
 }
 
 int
-pim_is_grp_ssm (struct in_addr group_addr)
+pim_is_grp_ssm (struct pim_instance *pim, struct in_addr group_addr)
 {
   struct pim_ssm *ssm;
   struct prefix group;
@@ -89,7 +89,7 @@ pim_is_grp_ssm (struct in_addr group_addr)
   group.u.prefix4 = group_addr;
   group.prefixlen = 32;
 
-  ssm = pimg->ssm_info;
+  ssm = pim->ssm_info;
   if (!ssm->plist_name)
     {
       return pim_is_grp_standard_ssm (&group);
@@ -103,15 +103,15 @@ pim_is_grp_ssm (struct in_addr group_addr)
 }
 
 int
-pim_ssm_range_set (vrf_id_t vrf_id, const char *plist_name)
+pim_ssm_range_set (struct pim_instance *pim, vrf_id_t vrf_id, const char *plist_name)
 {
   struct pim_ssm *ssm;
   int change = 0;
 
-  if (vrf_id != pimg->vrf_id)
+  if (vrf_id != pim->vrf_id)
     return PIM_SSM_ERR_NO_VRF;
 
-  ssm = pimg->ssm_info;
+  ssm = pim->ssm_info;
   if (plist_name)
     {
       if (ssm->plist_name)
@@ -133,7 +133,7 @@ pim_ssm_range_set (vrf_id_t vrf_id, const char *plist_name)
     }
 
   if (change)
-    pim_ssm_range_reevaluate ();
+    pim_ssm_range_reevaluate (pim);
 
   return PIM_SSM_ERR_NONE;
 }
