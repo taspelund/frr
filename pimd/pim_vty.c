@@ -143,20 +143,21 @@ pim_debug_config_write (struct vty *vty)
   return writes;
 }
 
-int pim_global_config_write(struct vty *vty)
+static int
+pim_global_config_write_worker (struct pim_instance *pim, struct vty *vty)
 {
   int writes = 0;
-  struct pim_ssm *ssm = pimg->ssm_info;
+  struct pim_ssm *ssm = pim->ssm_info;
 
   writes += pim_msdp_config_write (vty);
 
-  if (!pimg->send_v6_secondary)
+  if (!pim->send_v6_secondary)
     {
       vty_out (vty, "no ip pim send-v6-secondary%s", VTY_NEWLINE);
       ++writes;
     }
 
-  writes += pim_rp_config_write (pimg, vty);
+  writes += pim_rp_config_write (pim, vty);
 
   if (qpim_register_suppress_time != PIM_REGISTER_SUPPRESSION_TIME_DEFAULT)
     {
@@ -188,11 +189,11 @@ int pim_global_config_write(struct vty *vty)
                ssm->plist_name, VTY_NEWLINE);
       ++writes;
     }
-  if (pimg->spt.switchover == PIM_SPT_INFINITY)
+  if (pim->spt.switchover == PIM_SPT_INFINITY)
     {
-      if (pimg->spt.plist)
+      if (pim->spt.plist)
         vty_out (vty, "ip pim spt-switchover infinity-and-beyond prefix-list %s%s",
-                 pimg->spt.plist, VTY_NEWLINE);
+                 pim->spt.plist, VTY_NEWLINE);
       else
         vty_out (vty, "ip pim spt-switchover infinity-and-beyond%s",
                  VTY_NEWLINE);
@@ -222,6 +223,12 @@ int pim_global_config_write(struct vty *vty)
   }
 
   return writes;
+}
+
+int
+pim_global_config_write (struct vty *vty)
+{
+  return pim_global_config_write_worker (pimg, vty);
 }
 
 int pim_interface_config_write(struct vty *vty)
