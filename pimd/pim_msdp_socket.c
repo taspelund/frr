@@ -55,7 +55,7 @@ static int
 pim_msdp_sock_accept(struct thread *thread)
 {
   union sockunion su;
-  struct pim_msdp_listener *listener = THREAD_ARG(thread);
+  struct pim_instance *pim = THREAD_ARG(thread);
   int accept_sock;
   int msdp_sock;
   struct pim_msdp_peer *mp;
@@ -69,9 +69,9 @@ pim_msdp_sock_accept(struct thread *thread)
     zlog_err ("accept_sock is negative value %d", accept_sock);
     return -1;
   }
-  listener->thread = NULL;
-  thread_add_read(master, pim_msdp_sock_accept, listener, accept_sock,
-                  &listener->thread);
+  pim->msdp.listener.thread = NULL;
+  thread_add_read(master, pim_msdp_sock_accept, pim, accept_sock,
+                  &pim->msdp.listener.thread);
 
   /* accept client connection. */
   msdp_sock = sockunion_accept(accept_sock, &su);
@@ -81,9 +81,9 @@ pim_msdp_sock_accept(struct thread *thread)
   }
 
   /* see if have peer config for this */
-  mp = pim_msdp_peer_find(su.sin.sin_addr);
+  mp = pim_msdp_peer_find(pim, su.sin.sin_addr);
   if (!mp || !PIM_MSDP_PEER_IS_LISTENER(mp)) {
-    ++pimg->msdp.rejected_accepts;
+    ++pim->msdp.rejected_accepts;
     if (PIM_DEBUG_MSDP_EVENTS) {
       zlog_err("msdp peer connection refused from %s",
           sockunion2str(&su, buf, SU_ADDRSTRLEN));
@@ -114,15 +114,15 @@ pim_msdp_sock_accept(struct thread *thread)
 
 /* global listener for the MSDP well know TCP port */
 int
-pim_msdp_sock_listen(void)
+pim_msdp_sock_listen(struct pim_instance *pim)
 {
   int sock;
   int socklen;
   struct sockaddr_in sin;
   int rc;
-  struct pim_msdp_listener *listener = &pimg->msdp.listener;
+  struct pim_msdp_listener *listener = &pim->msdp.listener;
 
-  if (pimg->msdp.flags & PIM_MSDPF_LISTENER) {
+  if (pim->msdp.flags & PIM_MSDPF_LISTENER) {
     /* listener already setup */
     return 0;
   }
@@ -174,10 +174,10 @@ pim_msdp_sock_listen(void)
   listener->fd = sock;
   memcpy(&listener->su, &sin, socklen);
   listener->thread = NULL;
-  thread_add_read(pimg->msdp.master, pim_msdp_sock_accept, listener, sock,
+  thread_add_read(pim->msdp.master, pim_msdp_sock_accept, pim, sock,
                   &listener->thread);
 
-  pimg->msdp.flags |= PIM_MSDPF_LISTENER;
+  pim->msdp.flags |= PIM_MSDPF_LISTENER;
   return 0;
 }
 

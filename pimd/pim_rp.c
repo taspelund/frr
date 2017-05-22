@@ -223,9 +223,9 @@ pim_rp_find_match_group (struct pim_instance *pim, struct prefix *group)
  * This is a placeholder function for now.
  */
 static void
-pim_rp_refresh_group_to_rp_mapping()
+pim_rp_refresh_group_to_rp_mapping(struct pim_instance *pim)
 {
-  pim_msdp_i_am_rp_changed();
+  pim_msdp_i_am_rp_changed(pim);
 }
 
 void
@@ -245,7 +245,7 @@ pim_rp_prefix_list_update (struct pim_instance *pim, struct prefix_list *plist)
     }
 
   if (refresh_needed)
-    pim_rp_refresh_group_to_rp_mapping();
+    pim_rp_refresh_group_to_rp_mapping(pim);
 }
 
 static int
@@ -430,7 +430,7 @@ pim_rp_new (struct pim_instance *pim, const char *rp, const char *group_range, c
                 return PIM_RP_NO_PATH;
             }
           pim_rp_check_interfaces (pim, rp_all);
-          pim_rp_refresh_group_to_rp_mapping ();
+          pim_rp_refresh_group_to_rp_mapping (pim);
           return PIM_SUCCESS;
         }
 
@@ -502,7 +502,7 @@ pim_rp_new (struct pim_instance *pim, const char *rp, const char *group_range, c
     }
 
   pim_rp_check_interfaces (pim, rp_info);
-  pim_rp_refresh_group_to_rp_mapping ();
+  pim_rp_refresh_group_to_rp_mapping (pim);
   return PIM_SUCCESS;
 }
 
@@ -568,7 +568,7 @@ pim_rp_del (struct pim_instance *pim, const char *rp, const char *group_range, c
     }
 
   listnode_delete (pim->rp_list, rp_info);
-  pim_rp_refresh_group_to_rp_mapping ();
+  pim_rp_refresh_group_to_rp_mapping (pim);
   return PIM_SUCCESS;
 }
 
@@ -646,7 +646,7 @@ pim_rp_check_on_if_add(struct pim_interface *pim_ifp)
   }
 
   if (i_am_rp_changed) {
-    pim_msdp_i_am_rp_changed();
+    pim_msdp_i_am_rp_changed(pim);
   }
 }
 
@@ -686,7 +686,7 @@ pim_i_am_rp_re_evaluate(struct pim_instance *pim)
   }
 
   if (i_am_rp_changed) {
-    pim_msdp_i_am_rp_changed();
+    pim_msdp_i_am_rp_changed(pim);
   }
 }
 

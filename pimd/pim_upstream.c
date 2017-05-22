@@ -225,7 +225,7 @@ pim_upstream_del(struct pim_instance *pim, struct pim_upstream *up, const char *
 
   if (notify_msdp)
     {
-      pim_msdp_up_del (&up->sg);
+      pim_msdp_up_del (pim, &up->sg);
     }
 
   /* Deregister addr with Zebra NHT */
@@ -1107,7 +1107,7 @@ pim_upstream_keep_alive_timer (struct thread *t)
     }
 
   /* source is no longer active - pull the SA from MSDP's cache */
-  pim_msdp_sa_local_del(&up->sg);
+  pim_msdp_sa_local_del(pim, &up->sg);
 
   /* if entry was created because of activity we need to deref it */
   if (PIM_UPSTREAM_FLAG_TEST_SRC_STREAM(up->flags))
@@ -1148,12 +1148,11 @@ pim_upstream_keep_alive_timer_start (struct pim_upstream *up,
 static int
 pim_upstream_msdp_reg_timer(struct thread *t)
 {
-  struct pim_upstream *up;
-
-  up = THREAD_ARG(t);
+  struct pim_upstream *up = THREAD_ARG(t);
+  struct pim_instance *pim = up->channel_oil->pim;
 
   /* source is no longer active - pull the SA from MSDP's cache */
-  pim_msdp_sa_local_del(&up->sg);
+  pim_msdp_sa_local_del(pim, &up->sg);
   return 1;
 }
 void
