@@ -1529,7 +1529,7 @@ pim_msdp_mg_src_add(struct pim_instance *pim, const char *mesh_group_name, struc
 }
 
 /*********************** MSDP feature APIs *********************************/
-static int
+int
 pim_msdp_config_write_helper(struct pim_instance *pim, struct vty *vty)
 {
   struct listnode *mbrnode;

@@ -143,13 +143,13 @@ pim_debug_config_write (struct vty *vty)
   return writes;
 }
 
-static int
+int
 pim_global_config_write_worker (struct pim_instance *pim, struct vty *vty)
 {
   int writes = 0;
   struct pim_ssm *ssm = pim->ssm_info;
 
-  writes += pim_msdp_config_write (vty);
+  writes += pim_msdp_config_write_helper (pim, vty);
 
   if (!pim->send_v6_secondary)
     {

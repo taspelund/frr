@@ -31,6 +31,7 @@
 #include "pim_oil.h"
 #include "pim_static.h"
 #include "pim_ssmpingd.h"
+#include "pim_vty.h"
 
 static void
 pim_instance_terminate (struct pim_instance *pim)
@@ -200,9 +201,10 @@ pim_vrf_config_write (struct vty *vty)
   RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
     {
       pim = vrf->info;
-      if (!pim || !vrf->vrf_id != VRF_DEFAULT)
+      if (!pim || vrf->vrf_id != VRF_DEFAULT)
         {
           vty_out (vty, "vrf %s%s", vrf->name, VTY_NEWLINE);
+          pim_global_config_write_worker (pim, vty);
           vty_out (vty, "!%s", VTY_NEWLINE);
         }
     }

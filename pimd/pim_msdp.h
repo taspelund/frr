@@ -225,6 +225,7 @@ void pim_msdp_peer_reset_tcp_conn(struct pim_msdp_peer *mp, const char *rc_str);
 int pim_msdp_write(struct thread *thread);
 char *pim_msdp_peer_key_dump(struct pim_msdp_peer *mp, char *buf, int buf_size, bool long_format);
 int pim_msdp_config_write(struct vty *vty);
+int pim_msdp_config_write_helper(struct pim_instance *pim, struct vty *vty);
 void pim_msdp_peer_pkt_txed(struct pim_msdp_peer *mp);
 void pim_msdp_sa_ref(struct pim_instance *pim, struct pim_msdp_peer *mp, struct prefix_sg *sg, struct in_addr rp);
 void pim_msdp_sa_local_update(struct pim_upstream *up);
