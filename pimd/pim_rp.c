@@ -810,7 +810,7 @@ pim_rp_set_upstream_addr (struct pim_instance *pim, struct in_addr *up, struct i
 }
 
 int
-pim_rp_config_write (struct pim_instance *pim, struct vty *vty)
+pim_rp_config_write (struct pim_instance *pim, struct vty *vty, const char *spaces)
 {
   struct listnode *node;
   struct rp_info *rp_info;
@@ -824,12 +824,12 @@ pim_rp_config_write (struct pim_instance *pim, struct vty *vty)
         continue;
 
       if (rp_info->plist)
-        vty_out(vty, "ip pim rp %s prefix-list %s%s",
-                inet_ntop(AF_INET, &rp_info->rp.rpf_addr.u.prefix4, rp_buffer, 32),
+        vty_out(vty, "%sip pim rp %s prefix-list %s%s",
+                spaces, inet_ntop(AF_INET, &rp_info->rp.rpf_addr.u.prefix4, rp_buffer, 32),
                 rp_info->plist, VTY_NEWLINE);
       else
-        vty_out(vty, "ip pim rp %s %s%s",
-                inet_ntop(AF_INET, &rp_info->rp.rpf_addr.u.prefix4, rp_buffer, 32),
+        vty_out(vty, "%sip pim rp %s %s%s",
+                spaces, inet_ntop(AF_INET, &rp_info->rp.rpf_addr.u.prefix4, rp_buffer, 32),
                 prefix2str(&rp_info->group, group_buffer, 32), VTY_NEWLINE);
       count++;
     }

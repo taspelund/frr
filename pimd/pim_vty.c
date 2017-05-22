@@ -148,6 +148,12 @@ pim_global_config_write_worker (struct pim_instance *pim, struct vty *vty)
 {
   int writes = 0;
   struct pim_ssm *ssm = pim->ssm_info;
+  char spaces[10];
+
+  if (pim->vrf_id == VRF_DEFAULT)
+    sprintf(spaces, "%s", "");
+  else
+    sprintf(spaces, "%s", " ");
 
   writes += pim_msdp_config_write_helper (pim, vty);
 
@@ -157,7 +163,7 @@ pim_global_config_write_worker (struct pim_instance *pim, struct vty *vty)
       ++writes;
     }
 
-  writes += pim_rp_config_write (pim, vty);
+  writes += pim_rp_config_write (pim, vty, spaces);
 
   if (qpim_register_suppress_time != PIM_REGISTER_SUPPRESSION_TIME_DEFAULT)
     {

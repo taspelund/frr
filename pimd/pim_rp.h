@@ -44,7 +44,7 @@ int pim_rp_new (struct pim_instance *pim, const char *rp, const char *group, con
 int pim_rp_del (struct pim_instance *pim, const char *rp, const char *group, const char *plist);
 void pim_rp_prefix_list_update (struct pim_instance *pim, struct prefix_list *plist);
 
-int pim_rp_config_write (struct pim_instance *pim, struct vty *vty);
+int pim_rp_config_write (struct pim_instance *pim, struct vty *vty, const char *spaces);
 
 void pim_rp_setup (struct pim_instance *pim);
 
