@@ -27,6 +27,7 @@
 #include "plist.h"
 #include "hash.h"
 #include "nexthop.h"
+#include "vrf.h"
 
 #include "pimd.h"
 #include "pim_mroute.h"
@@ -78,6 +79,22 @@ static struct cmd_node debug_node =
   "",
   1
 };
+
+static struct vrf *
+pim_cmd_lookup_vrf (struct vty *vty, struct cmd_token *argv[], const int argc, int *idx)
+{
+  struct vrf *vrf;
+
+  if (argv_find (argv, argc, "NAME", idx))
+    vrf = vrf_lookup_by_name (argv[*idx]->arg);
+  else
+    vrf = vrf_lookup_by_id (VRF_DEFAULT);
+
+  if (!vrf)
+    vty_out (vty, "Specified VRF: %s does not exist%s", argv[*idx]->arg, VTY_NEWLINE);
+
+  return vrf;
+}
 
 static void pim_if_membership_clear(struct interface *ifp)
 {
@@ -6209,7 +6226,7 @@ DEFUN_HIDDEN (no_ip_msdp_peer,
 }
 
 static int
-ip_msdp_mesh_group_member_cmd_worker(struct vty *vty, const char *mg, const char *mbr)
+ip_msdp_mesh_group_member_cmd_worker(struct vty *vty, struct pim_instance *pim, const char *mg, const char *mbr)
 {
   enum pim_msdp_err result;
   struct in_addr mbr_ip;
@@ -6221,7 +6238,7 @@ ip_msdp_mesh_group_member_cmd_worker(struct vty *vty, const char *mg, const char
     return CMD_WARNING;
   }
 
-  result = pim_msdp_mg_mbr_add(pimg, mg, mbr_ip);
+  result = pim_msdp_mg_mbr_add(pim, mg, mbr_ip);
   switch (result) {
     case PIM_MSDP_ERR_NONE:
       break;
@@ -6251,11 +6268,13 @@ DEFUN (ip_msdp_mesh_group_member,
        "mesh group member\n"
        "peer ip address\n")
 {
-  return ip_msdp_mesh_group_member_cmd_worker(vty, argv[3]->arg, argv[5]->arg);
+  PIM_DECLVAR_CONTEXT(vrf, pim);
+  return ip_msdp_mesh_group_member_cmd_worker(vty, pim, argv[3]->arg, argv[5]->arg);
 }
 
 static int
-ip_no_msdp_mesh_group_member_cmd_worker(struct vty *vty, const char *mg, const char *mbr)
+ip_no_msdp_mesh_group_member_cmd_worker(struct vty *vty, struct pim_instance *pim,
+					const char *mg, const char *mbr)
 {
   enum pim_msdp_err result;
   struct in_addr mbr_ip;
@@ -6267,7 +6286,7 @@ ip_no_msdp_mesh_group_member_cmd_worker(struct vty *vty, const char *mg, const c
     return CMD_WARNING;
   }
 
-  result = pim_msdp_mg_mbr_del(pimg, mg, mbr_ip);
+  result = pim_msdp_mg_mbr_del(pim, mg, mbr_ip);
   switch (result) {
     case PIM_MSDP_ERR_NONE:
       break;
@@ -6294,11 +6313,13 @@ DEFUN (no_ip_msdp_mesh_group_member,
        "mesh group member\n"
        "peer ip address\n")
 {
-  return ip_no_msdp_mesh_group_member_cmd_worker(vty, argv[4]->arg, argv[6]->arg);
+  PIM_DECLVAR_CONTEXT(vrf, pim);
+  return ip_no_msdp_mesh_group_member_cmd_worker(vty, pim, argv[4]->arg, argv[6]->arg);
 }
 
 static int
-ip_msdp_mesh_group_source_cmd_worker(struct vty *vty, const char *mg, const char *src)
+ip_msdp_mesh_group_source_cmd_worker(struct vty *vty, struct pim_instance *pim,
+				     const char *mg, const char *src)
 {
   enum pim_msdp_err result;
   struct in_addr src_ip;
@@ -6310,7 +6331,7 @@ ip_msdp_mesh_group_source_cmd_worker(struct vty *vty, const char *mg, const char
     return CMD_WARNING;
   }
 
-  result = pim_msdp_mg_src_add(pimg, mg, src_ip);
+  result = pim_msdp_mg_src_add(pim, mg, src_ip);
   switch (result) {
     case PIM_MSDP_ERR_NONE:
       break;
@@ -6338,15 +6359,16 @@ DEFUN (ip_msdp_mesh_group_source,
        "mesh group local address\n"
        "source ip address for the TCP connection\n")
 {
-  return ip_msdp_mesh_group_source_cmd_worker(vty, argv[3]->arg, argv[5]->arg);
+  PIM_DECLVAR_CONTEXT(vrf, pim);
+  return ip_msdp_mesh_group_source_cmd_worker(vty, pim, argv[3]->arg, argv[5]->arg);
 }
 
 static int
-ip_no_msdp_mesh_group_source_cmd_worker(struct vty *vty, const char *mg)
+ip_no_msdp_mesh_group_source_cmd_worker(struct vty *vty, struct pim_instance *pim, const char *mg)
 {
   enum pim_msdp_err result;
 
-  result = pim_msdp_mg_src_del(pimg, mg);
+  result = pim_msdp_mg_src_del(pim, mg);
   switch (result) {
     case PIM_MSDP_ERR_NONE:
       break;
@@ -6361,11 +6383,11 @@ ip_no_msdp_mesh_group_source_cmd_worker(struct vty *vty, const char *mg)
 }
 
 static int
-ip_no_msdp_mesh_group_cmd_worker(struct vty *vty, const char *mg)
+ip_no_msdp_mesh_group_cmd_worker(struct vty *vty, struct pim_instance *pim, const char *mg)
 {
   enum pim_msdp_err result;
 
-  result = pim_msdp_mg_del(pimg, mg);
+  result = pim_msdp_mg_del(pim, mg);
   switch (result) {
     case PIM_MSDP_ERR_NONE:
       break;
@@ -6390,10 +6412,11 @@ DEFUN (no_ip_msdp_mesh_group_source,
        "mesh group source\n"
        "mesh group local address\n")
 {
+  PIM_DECLVAR_CONTEXT(vrf, pim);
   if (argc == 7)
-    return ip_no_msdp_mesh_group_cmd_worker(vty, argv[6]->arg);
+    return ip_no_msdp_mesh_group_cmd_worker(vty, pim, argv[6]->arg);
   else
-    return ip_no_msdp_mesh_group_source_cmd_worker(vty, argv[4]->arg);
+    return ip_no_msdp_mesh_group_source_cmd_worker(vty, pim, argv[4]->arg);
 }
 
 static void
@@ -6406,11 +6429,11 @@ print_empty_json_obj(struct vty *vty)
 }
 
 static void
-ip_msdp_show_mesh_group(struct vty *vty, u_char uj)
+ip_msdp_show_mesh_group(struct vty *vty, struct pim_instance *pim, u_char uj)
 {
   struct listnode *mbrnode;
   struct pim_msdp_mg_mbr *mbr;
-  struct pim_msdp_mg *mg = pimg->msdp.mg;
+  struct pim_msdp_mg *mg = pim->msdp.mg;
   char mbr_str[INET_ADDRSTRLEN];
   char src_str[INET_ADDRSTRLEN];
   char state_str[PIM_MSDP_STATE_STRLEN];
@@ -6472,7 +6495,7 @@ ip_msdp_show_mesh_group(struct vty *vty, u_char uj)
 
 DEFUN (show_ip_msdp_mesh_group,
        show_ip_msdp_mesh_group_cmd,
-       "show ip msdp mesh-group [json]",
+       "show ip msdp mesh-group [vrf NAME] [json]",
        SHOW_STR
        IP_STR
        MSDP_STR
@@ -6480,13 +6503,19 @@ DEFUN (show_ip_msdp_mesh_group,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-  ip_msdp_show_mesh_group(vty, uj);
+  int idx = 3;
+  struct vrf *vrf = pim_cmd_lookup_vrf (vty, argv, argc, &idx);
+
+  if (!vrf)
+    return CMD_WARNING;
+
+  ip_msdp_show_mesh_group(vty, vrf->info, uj);
 
   return CMD_SUCCESS;
 }
 
 static void
-ip_msdp_show_peers(struct vty *vty, u_char uj)
+ip_msdp_show_peers(struct vty *vty, struct pim_instance *pim,  u_char uj)
 {
   struct listnode *mpnode;
   struct pim_msdp_peer *mp;
@@ -6505,7 +6534,7 @@ ip_msdp_show_peers(struct vty *vty, u_char uj)
     vty_out(vty, "Peer                       Local        State    Uptime   SaCnt%s", VTY_NEWLINE);
   }
 
-  for (ALL_LIST_ELEMENTS_RO(pimg->msdp.peer_list, mpnode, mp)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->msdp.peer_list, mpnode, mp)) {
     if (mp->state == PIM_MSDP_ESTABLISHED) {
       now = pim_time_monotonic_sec();
       pim_time_uptime(timebuf, sizeof(timebuf), now - mp->uptime);
@@ -6537,7 +6566,7 @@ ip_msdp_show_peers(struct vty *vty, u_char uj)
 }
 
 static void
-ip_msdp_show_peers_detail(struct vty *vty, const char *peer, u_char uj)
+ip_msdp_show_peers_detail(struct vty *vty, struct pim_instance *pim, const char *peer, u_char uj)
 {
   struct listnode *mpnode;
   struct pim_msdp_peer *mp;
@@ -6556,7 +6585,7 @@ ip_msdp_show_peers_detail(struct vty *vty, const char *peer, u_char uj)
     json = json_object_new_object();
   }
 
-  for (ALL_LIST_ELEMENTS_RO(pimg->msdp.peer_list, mpnode, mp)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->msdp.peer_list, mpnode, mp)) {
     pim_inet4_dump("<peer?>", mp->peer, peer_str, sizeof(peer_str));
     if (strcmp(peer, "detail") &&
         strcmp(peer, peer_str))
@@ -6625,7 +6654,7 @@ ip_msdp_show_peers_detail(struct vty *vty, const char *peer, u_char uj)
 
 DEFUN (show_ip_msdp_peer_detail,
        show_ip_msdp_peer_detail_cmd,
-       "show ip msdp peer [detail|A.B.C.D] [json]",
+       "show ip msdp peer [vrf NAME] [detail|A.B.C.D] [json]",
        SHOW_STR
        IP_STR
        MSDP_STR
@@ -6635,19 +6664,21 @@ DEFUN (show_ip_msdp_peer_detail,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
+  int idx = 3;
+  struct vrf *vrf = pim_cmd_lookup_vrf (vty, argv, argc, &idx);
   if (uj)
     argc--;
 
   if (argc > 4)
-    ip_msdp_show_peers_detail(vty, argv[4]->arg, uj);
+    ip_msdp_show_peers_detail(vty, vrf->info, argv[4]->arg, uj);
   else
-    ip_msdp_show_peers(vty, uj);
+    ip_msdp_show_peers(vty, vrf->info, uj);
 
   return CMD_SUCCESS;
 }
 
 static void
-ip_msdp_show_sa(struct vty *vty, u_char uj)
+ip_msdp_show_sa(struct vty *vty, struct pim_instance *pim, u_char uj)
 {
   struct listnode *sanode;
   struct pim_msdp_sa *sa;
@@ -6668,7 +6699,7 @@ ip_msdp_show_sa(struct vty *vty, u_char uj)
     vty_out(vty, "Source                     Group               RP  Local  SPT    Uptime%s", VTY_NEWLINE);
   }
 
-  for (ALL_LIST_ELEMENTS_RO(pimg->msdp.sa_list, sanode, sa)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->msdp.sa_list, sanode, sa)) {
     now = pim_time_monotonic_sec();
     pim_time_uptime(timebuf, sizeof(timebuf), now - sa->uptime);
     pim_inet4_dump("<src?>", sa->sg.src, src_str, sizeof(src_str));
@@ -6784,7 +6815,7 @@ ip_msdp_show_sa_entry_detail(struct pim_msdp_sa *sa, const char *src_str,
 }
 
 static void
-ip_msdp_show_sa_detail(struct vty *vty, u_char uj)
+ip_msdp_show_sa_detail(struct vty *vty, struct pim_instance *pim, u_char uj)
 {
   struct listnode *sanode;
   struct pim_msdp_sa *sa;
@@ -6796,7 +6827,7 @@ ip_msdp_show_sa_detail(struct vty *vty, u_char uj)
     json = json_object_new_object();
   }
 
-  for (ALL_LIST_ELEMENTS_RO(pimg->msdp.sa_list, sanode, sa)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->msdp.sa_list, sanode, sa)) {
     pim_inet4_dump("<src?>", sa->sg.src, src_str, sizeof(src_str));
     pim_inet4_dump("<grp?>", sa->sg.grp, grp_str, sizeof(grp_str));
     ip_msdp_show_sa_entry_detail(sa, src_str, grp_str, vty, uj, json);
@@ -6810,7 +6841,7 @@ ip_msdp_show_sa_detail(struct vty *vty, u_char uj)
 
 DEFUN (show_ip_msdp_sa_detail,
        show_ip_msdp_sa_detail_cmd,
-       "show ip msdp sa detail [json]",
+       "show ip msdp sa [vrf NAME] detail [json]",
        SHOW_STR
        IP_STR
        MSDP_STR
@@ -6819,13 +6850,19 @@ DEFUN (show_ip_msdp_sa_detail,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-  ip_msdp_show_sa_detail(vty, uj);
+  int idx = 3;
+  struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
+
+  if (!vrf)
+    return CMD_WARNING;
+
+  ip_msdp_show_sa_detail(vty, vrf->info, uj);
 
   return CMD_SUCCESS;
 }
 
 static void
-ip_msdp_show_sa_addr(struct vty *vty, const char *addr, u_char uj)
+ip_msdp_show_sa_addr(struct vty *vty, struct pim_instance *pim, const char *addr, u_char uj)
 {
   struct listnode *sanode;
   struct pim_msdp_sa *sa;
@@ -6837,7 +6874,7 @@ ip_msdp_show_sa_addr(struct vty *vty, const char *addr, u_char uj)
     json = json_object_new_object();
   }
 
-  for (ALL_LIST_ELEMENTS_RO(pimg->msdp.sa_list, sanode, sa)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->msdp.sa_list, sanode, sa)) {
     pim_inet4_dump("<src?>", sa->sg.src, src_str, sizeof(src_str));
     pim_inet4_dump("<grp?>", sa->sg.grp, grp_str, sizeof(grp_str));
     if (!strcmp(addr, src_str) || !strcmp(addr, grp_str)) {
@@ -6852,7 +6889,7 @@ ip_msdp_show_sa_addr(struct vty *vty, const char *addr, u_char uj)
 }
 
 static void
-ip_msdp_show_sa_sg(struct vty *vty, const char *src, const char *grp, u_char uj)
+ip_msdp_show_sa_sg(struct vty *vty, struct pim_instance *pim, const char *src, const char *grp, u_char uj)
 {
   struct listnode *sanode;
   struct pim_msdp_sa *sa;
@@ -6864,7 +6901,7 @@ ip_msdp_show_sa_sg(struct vty *vty, const char *src, const char *grp, u_char uj)
     json = json_object_new_object();
   }
 
-  for (ALL_LIST_ELEMENTS_RO(pimg->msdp.sa_list, sanode, sa)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->msdp.sa_list, sanode, sa)) {
     pim_inet4_dump("<src?>", sa->sg.src, src_str, sizeof(src_str));
     pim_inet4_dump("<grp?>", sa->sg.grp, grp_str, sizeof(grp_str));
     if (!strcmp(src, src_str) && !strcmp(grp, grp_str)) {
@@ -6880,7 +6917,7 @@ ip_msdp_show_sa_sg(struct vty *vty, const char *src, const char *grp, u_char uj)
 
 DEFUN (show_ip_msdp_sa_sg,
        show_ip_msdp_sa_sg_cmd,
-       "show ip msdp sa [A.B.C.D [A.B.C.D]] [json]",
+       "show ip msdp sa [vrf NAME] [A.B.C.D [A.B.C.D]] [json]",
        SHOW_STR
        IP_STR
        MSDP_STR
@@ -6890,18 +6927,24 @@ DEFUN (show_ip_msdp_sa_sg,
        "JavaScript Object Notation\n")
 {
   u_char uj = use_json(argc, argv);
-
+  struct vrf *vrf;
   int idx = 0;
+
+  vrf = pim_cmd_lookup_vrf (vty, argv, argc, &idx);
+
+  if (!vrf)
+    return CMD_WARNING;
+
   char *src_ip = argv_find (argv, argc, "A.B.C.D", &idx) ? argv[idx++]->arg : NULL;
   char *grp_ip = idx < argc && argv_find (argv, argc, "A.B.C.D", &idx) ?
                  argv[idx]->arg : NULL;
 
   if (src_ip && grp_ip)
-    ip_msdp_show_sa_sg(vty, src_ip, grp_ip, uj);
+    ip_msdp_show_sa_sg(vty, vrf->info, src_ip, grp_ip, uj);
   else if (src_ip)
-    ip_msdp_show_sa_addr(vty, src_ip, uj);
+    ip_msdp_show_sa_addr(vty, vrf->info, src_ip, uj);
   else
-    ip_msdp_show_sa(vty, uj);
+    ip_msdp_show_sa(vty, vrf->info, uj);
 
   return CMD_SUCCESS;
 }
@@ -7115,10 +7158,15 @@ void pim_cmd_init()
   install_element (CONFIG_NODE, &debug_msdp_packets_cmd);
   install_element (CONFIG_NODE, &no_debug_msdp_packets_cmd);
   install_element (CONFIG_NODE, &undebug_msdp_packets_cmd);
+
   install_element (CONFIG_NODE, &ip_msdp_mesh_group_member_cmd);
+  install_element (VRF_NODE, &ip_msdp_mesh_group_member_cmd);
   install_element (CONFIG_NODE, &no_ip_msdp_mesh_group_member_cmd);
+  install_element (VRF_NODE, &ip_msdp_mesh_group_member_cmd);
   install_element (CONFIG_NODE, &ip_msdp_mesh_group_source_cmd);
+  install_element (VRF_NODE, &ip_msdp_mesh_group_source_cmd);
   install_element (CONFIG_NODE, &no_ip_msdp_mesh_group_source_cmd);
+  install_element (VRF_NODE, &no_ip_msdp_mesh_group_source_cmd);
   install_element (VIEW_NODE, &show_ip_msdp_peer_detail_cmd);
   install_element (VIEW_NODE, &show_ip_msdp_sa_detail_cmd);
   install_element (VIEW_NODE, &show_ip_msdp_sa_sg_cmd);
