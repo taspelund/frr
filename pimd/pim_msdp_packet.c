@@ -375,21 +375,21 @@ pim_msdp_pkt_sa_fill_one(struct pim_msdp_sa *sa)
 }
 
 static void
-pim_msdp_pkt_sa_gen(struct pim_msdp_peer *mp)
+pim_msdp_pkt_sa_gen(struct pim_instance *pim, struct pim_msdp_peer *mp)
 {
   struct listnode *sanode;
   struct pim_msdp_sa *sa;
   int sa_count;
-  int local_cnt = mp->pim->msdp.local_cnt;
+  int local_cnt = pim->msdp.local_cnt;
 
   sa_count = 0;
   if (PIM_DEBUG_MSDP_INTERNAL) {
     zlog_debug("  sa gen  %d", local_cnt);
   }
 
-  local_cnt = pim_msdp_pkt_sa_fill_hdr(mp->pim, local_cnt);
+  local_cnt = pim_msdp_pkt_sa_fill_hdr(pim, local_cnt);
 
-  for (ALL_LIST_ELEMENTS_RO(mp->pim->msdp.sa_list, sanode, sa)) {
+  for (ALL_LIST_ELEMENTS_RO(pim->msdp.sa_list, sanode, sa)) {
     if (!(sa->flags & PIM_MSDP_SAF_LOCAL)) {
       /* current implementation of MSDP is for anycast i.e. full mesh. so
        * no re-forwarding of SAs that we learnt from other peers */
@@ -405,7 +405,7 @@ pim_msdp_pkt_sa_gen(struct pim_msdp_peer *mp)
       if (PIM_DEBUG_MSDP_INTERNAL) {
           zlog_debug("  sa gen for remainder %d", local_cnt);
       }
-      local_cnt = pim_msdp_pkt_sa_fill_hdr(mp->pim, local_cnt);
+      local_cnt = pim_msdp_pkt_sa_fill_hdr(pim, local_cnt);
     }
   }
 
@@ -434,7 +434,7 @@ pim_msdp_pkt_sa_tx_done(struct pim_instance *pim)
 void
 pim_msdp_pkt_sa_tx(struct pim_instance *pim)
 {
-  pim_msdp_pkt_sa_gen(NULL /* mp */);
+  pim_msdp_pkt_sa_gen(pim, NULL /* mp */);
   pim_msdp_pkt_sa_tx_done(pim);
 }
 
@@ -451,7 +451,7 @@ pim_msdp_pkt_sa_tx_one(struct pim_msdp_sa *sa)
 void
 pim_msdp_pkt_sa_tx_to_one_peer(struct pim_msdp_peer *mp)
 {
-  pim_msdp_pkt_sa_gen(mp);
+  pim_msdp_pkt_sa_gen(mp->pim, mp);
   pim_msdp_pkt_sa_tx_done(mp->pim);
 }
 
