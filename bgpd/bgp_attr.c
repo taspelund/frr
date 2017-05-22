@@ -2842,6 +2842,7 @@ bgp_packet_mpattr_start (struct stream *s, struct peer *peer,
   }
 
   /* Nexthop */
+  bpacket_attr_vec_arr_set_vec (vecarr, BGP_ATTR_VEC_NH, s, attr);
   switch (nh_afi)
     {
     case AFI_IP:
@@ -2850,12 +2851,10 @@ bgp_packet_mpattr_start (struct stream *s, struct peer *peer,
 	case SAFI_UNICAST:
 	case SAFI_MULTICAST:
 	case SAFI_LABELED_UNICAST:
-	  bpacket_attr_vec_arr_set_vec (vecarr, BGP_ATTR_VEC_NH, s, attr);
 	  stream_putc (s, 4);
 	  stream_put_ipv4 (s, attr->nexthop.s_addr);
 	  break;
 	case SAFI_MPLS_VPN:
-	  bpacket_attr_vec_arr_set_vec (vecarr, BGP_ATTR_VEC_NH, s, attr);
 	  stream_putc (s, 12);
 	  stream_putl (s, 0);   /* RD = 0, per RFC */
 	  stream_putl (s, 0);
@@ -2879,7 +2878,6 @@ bgp_packet_mpattr_start (struct stream *s, struct peer *peer,
 	  struct attr_extra *attre = attr->extra;
 
 	  assert (attr->extra);
-	  bpacket_attr_vec_arr_set_vec (vecarr, BGP_ATTR_VEC_NH, s, attr);
 
 	  if (attre->mp_nexthop_len == BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL) {
 	    stream_putc (s, BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL);
@@ -3030,7 +3028,8 @@ bgp_packet_mpattr_tea(
 	case BGP_ATTR_ENCAP:
 	    attrname = "Tunnel Encap";
 	    subtlvs = attr->extra->encap_subtlvs;
-
+            if (subtlvs == NULL) /* nothing to do */
+              return;
 	    /*
 	     * The tunnel encap attr has an "outer" tlv.
 	     * T = tunneltype,
@@ -3045,6 +3044,8 @@ bgp_packet_mpattr_tea(
 	case BGP_ATTR_VNC:
 	    attrname = "VNC";
 	    subtlvs = attr->extra->vnc_subtlvs;
+            if (subtlvs == NULL) /* nothing to do */
+              return;
 	    attrlenfield = 0;     /* no outer T + L */
             attrhdrlen   = 2 + 2; /* subTLV T + L */
 	    break;
