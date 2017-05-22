@@ -174,6 +174,25 @@ pim_vrf_disable (struct vrf *vrf)
   return 0;
 }
 
+static int
+pim_vrf_config_write (struct vty *vty)
+{
+  struct vrf *vrf;
+  struct pim_instance *pim;
+
+  RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
+    {
+      pim = vrf->info;
+      if (!pim || !vrf->vrf_id != VRF_DEFAULT)
+        {
+          vty_out (vty, "vrf %s%s", vrf->name, VTY_NEWLINE);
+          vty_out (vty, "!%s", VTY_NEWLINE);
+        }
+    }
+
+  return 0;
+}
+
 void
 pim_vrf_init (void)
 {
@@ -181,6 +200,8 @@ pim_vrf_init (void)
             pim_vrf_enable,
             pim_vrf_disable,
             pim_vrf_delete);
+
+  vrf_cmd_init (pim_vrf_config_write);
 }
 
 void
