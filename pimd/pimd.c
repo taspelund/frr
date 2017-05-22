@@ -54,8 +54,6 @@ struct thread            *qpim_rpf_cache_refresher = NULL;
 int64_t                   qpim_rpf_cache_refresh_requests = 0;
 int64_t                   qpim_rpf_cache_refresh_events = 0;
 int64_t                   qpim_rpf_cache_refresh_last =  0;
-struct list              *qpim_ssmpingd_list = NULL;
-struct in_addr            qpim_ssmpingd_group_addr;
 int64_t                   qpim_scan_oil_events = 0;
 int64_t                   qpim_scan_oil_last = 0;
 unsigned int              qpim_keep_alive_time = PIM_KEEPALIVE_PERIOD;
@@ -89,8 +87,6 @@ pim_prefix_list_update (struct prefix_list *plist)
 
 static void pim_free()
 {
-  pim_ssmpingd_destroy();
-
   pim_route_map_terminate();
 
   zclient_lookup_free ();
@@ -125,7 +121,6 @@ void pim_init()
   qpim_infinite_assert_metric.ip_address.s_addr = INADDR_ANY;
 
   pim_cmd_init();
-  pim_ssmpingd_init();
 }
 
 void pim_terminate()
