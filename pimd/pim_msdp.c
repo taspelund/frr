@@ -1530,7 +1530,7 @@ pim_msdp_mg_src_add(struct pim_instance *pim, const char *mesh_group_name, struc
 
 /*********************** MSDP feature APIs *********************************/
 int
-pim_msdp_config_write_helper(struct pim_instance *pim, struct vty *vty)
+pim_msdp_config_write_helper(struct pim_instance *pim, struct vty *vty, const char *spaces)
 {
   struct listnode *mbrnode;
   struct pim_msdp_mg_mbr *mbr;
@@ -1545,15 +1545,15 @@ pim_msdp_config_write_helper(struct pim_instance *pim, struct vty *vty)
 
   if (mg->src_ip.s_addr != INADDR_ANY) {
     pim_inet4_dump("<src?>", mg->src_ip, src_str, sizeof(src_str));
-    vty_out(vty, "ip msdp mesh-group %s source %s%s",
-        mg->mesh_group_name, src_str, VTY_NEWLINE);
+    vty_out(vty, "%sip msdp mesh-group %s source %s%s",
+            spaces, mg->mesh_group_name, src_str, VTY_NEWLINE);
     ++count;
   }
 
   for (ALL_LIST_ELEMENTS_RO(mg->mbr_list, mbrnode, mbr)) {
     pim_inet4_dump("<mbr?>", mbr->mbr_ip, mbr_str, sizeof(mbr_str));
-    vty_out(vty, "ip msdp mesh-group %s member %s%s",
-        mg->mesh_group_name, mbr_str, VTY_NEWLINE);
+    vty_out(vty, "%sip msdp mesh-group %s member %s%s",
+            spaces, mg->mesh_group_name, mbr_str, VTY_NEWLINE);
     ++count;
   }
   return count;
@@ -1562,7 +1562,7 @@ pim_msdp_config_write_helper(struct pim_instance *pim, struct vty *vty)
 int
 pim_msdp_config_write(struct vty *vty)
 {
-  return pim_msdp_config_write_helper(pimg, vty);
+  return pim_msdp_config_write_helper(pimg, vty, "");
 }
 
 /* Enable feature including active/periodic timers etc. on the first peer
