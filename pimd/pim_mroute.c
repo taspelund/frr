@@ -543,8 +543,9 @@ pim_mroute_msg (struct pim_instance *pim, const char *buf, int buf_size)
         pim_inet4_dump("<src?>", ip_hdr->ip_src, ip_src_str, sizeof(ip_src_str));
         pim_inet4_dump("<dst?>", ip_hdr->ip_dst, ip_dst_str, sizeof(ip_dst_str));
 
-        zlog_warn("%s: igmp kernel upcall could not find usable interface for %s -> %s",
+        zlog_warn("%s(%s): igmp kernel upcall could not find usable interface for %s -> %s",
                 __PRETTY_FUNCTION__,
+		pim->vrf->name,
                 ip_src_str,
                 ip_dst_str);
       }
@@ -558,8 +559,8 @@ pim_mroute_msg (struct pim_instance *pim, const char *buf, int buf_size)
       pim_inet4_dump("<src?>", ip_hdr->ip_src, ip_src_str, sizeof(ip_src_str));
       pim_inet4_dump("<dst?>", ip_hdr->ip_dst, ip_dst_str, sizeof(ip_dst_str));
 
-      zlog_warn("%s: igmp kernel upcall on %s(%p) for %s -> %s",
-                __PRETTY_FUNCTION__, ifp->name, igmp, ip_src_str, ip_dst_str);
+      zlog_warn("%s(%s): igmp kernel upcall on %s(%p) for %s -> %s",
+                __PRETTY_FUNCTION__, pim->vrf->name, ifp->name, igmp, ip_src_str, ip_dst_str);
     }
     if (igmp)
       pim_igmp_packet(igmp, (char *)buf, buf_size);
