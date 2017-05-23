@@ -570,7 +570,8 @@ pim_scan_individual_oil (struct channel_oil *c_oil, int in_vif_index)
     }
 }
 
-void pim_scan_oil()
+void
+pim_scan_oil(struct pim_instance *pim_matcher)
 {
   struct listnode    *node;
   struct listnode    *nextnode;
@@ -588,6 +589,9 @@ void pim_scan_oil()
       pim = vrf->info;
       if (!pim)
 	continue;
+
+      if (pim_matcher && pim != pim_matcher)
+        continue;
 
       for (ALL_LIST_ELEMENTS(pim->channel_oil_list, node, nextnode, c_oil))
 	{
@@ -611,7 +615,7 @@ static int on_rpf_cache_refresh(struct thread *t)
   scan_upstream_rpf_cache();
 
   /* update kernel multicast forwarding cache (MFC) */
-  pim_scan_oil();
+  pim_scan_oil(NULL);
 
   qpim_rpf_cache_refresh_last = pim_time_monotonic_sec();
   ++qpim_rpf_cache_refresh_events;
