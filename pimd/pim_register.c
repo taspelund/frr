@@ -367,7 +367,7 @@ pim_register_recv (struct interface *ifp,
      */
     if (!upstream)
       {
-        upstream = pim_upstream_add (&sg, ifp,
+        upstream = pim_upstream_add (pim_ifp->pim, &sg, ifp,
                                      PIM_UPSTREAM_FLAG_MASK_SRC_STREAM,
                                      __PRETTY_FUNCTION__);
         if (!upstream)

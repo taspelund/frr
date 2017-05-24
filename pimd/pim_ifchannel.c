@@ -514,7 +514,7 @@ pim_ifchannel_add(struct interface *ifp,
 
   pim_ifp = ifp->info;
 
-  up = pim_upstream_add(sg, NULL, flags, __PRETTY_FUNCTION__);
+  up = pim_upstream_add(pim_ifp->pim, sg, NULL, flags, __PRETTY_FUNCTION__);
   if (!up) {
     zlog_err("%s: could not attach upstream (S,G)=%s on interface %s",
 	     __PRETTY_FUNCTION__,

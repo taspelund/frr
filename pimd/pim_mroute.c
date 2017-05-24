@@ -40,6 +40,7 @@
 #include "pim_ifchannel.h"
 #include "pim_zlookup.h"
 #include "pim_ssm.h"
+#include "pim_sock.h"
 
 static void mroute_read_on(struct pim_instance *pim);
 
@@ -236,7 +237,7 @@ pim_mroute_msg_wholepkt (int fd, struct interface *ifp, const char *buf)
 
     if (up && PIM_UPSTREAM_FLAG_TEST_SRC_IGMP(up->flags))
       {
-	up = pim_upstream_add (&sg, ifp, PIM_UPSTREAM_FLAG_MASK_SRC_LHR, __PRETTY_FUNCTION__);
+	up = pim_upstream_add (pim_ifp->pim, &sg, ifp, PIM_UPSTREAM_FLAG_MASK_SRC_LHR, __PRETTY_FUNCTION__);
         if (!up)
           {
             if (PIM_DEBUG_MROUTE)
@@ -492,7 +493,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
     pim_mroute_add (oil, __PRETTY_FUNCTION__);
   if (pim_if_connected_to_source (ifp, sg.src))
     {
-      up = pim_upstream_add (&sg, ifp, PIM_UPSTREAM_FLAG_MASK_FHR, __PRETTY_FUNCTION__);
+      up = pim_upstream_add (pim_ifp->pim, &sg, ifp, PIM_UPSTREAM_FLAG_MASK_FHR, __PRETTY_FUNCTION__);
       if (!up)
 	{
 	  if (PIM_DEBUG_MROUTE)

@@ -360,7 +360,7 @@ pim_update_upstream_nh (struct pim_instance *pim, struct pim_nexthop_cache *pnc)
       struct pim_rpf old;
 
       old.source_nexthop.interface = up->rpf.source_nexthop.interface;
-      rpf_result = pim_rpf_update (up, &old, 0);
+      rpf_result = pim_rpf_update (pim, up, &old, 0);
       if (rpf_result == PIM_RPF_FAILURE)
         continue;
 
