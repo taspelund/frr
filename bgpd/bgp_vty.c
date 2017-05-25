@@ -6389,13 +6389,24 @@ DEFUN_NOSH (address_family_evpn,
        address_family_evpn_cmd,
        "address-family <l2vpn evpn>",
        "Enter Address Family command mode\n"
-       "EVPN Address family\n"
        "Layer2 VPN Address family\n"
        "Ethernet Virtual Private Network Subsequent Address Family\n")
 {
   vty->node = BGP_EVPN_NODE;
   return CMD_SUCCESS;
 }
+
+#if defined(HAVE_CUMULUS)
+DEFUN_NOSH (address_family_evpn2,
+       address_family_evpn2_cmd,
+       "address-family evpn",
+       "Enter Address Family command mode\n"
+       "EVPN Address family\n")
+{
+  vty->node = BGP_EVPN_NODE;
+  return CMD_SUCCESS;
+}
+#endif
 
 DEFUN_NOSH (exit_address_family,
        exit_address_family_cmd,
@@ -11843,6 +11854,9 @@ bgp_vty_init (void)
 #endif /* KEEP_OLD_VPN_COMMANDS */
 
   install_element (BGP_NODE, &address_family_evpn_cmd);
+#if defined(HAVE_CUMULUS)
+  install_element (BGP_NODE, &address_family_evpn2_cmd);
+#endif
 
   /* "exit-address-family" command. */
   install_element (BGP_IPV4_NODE, &exit_address_family_cmd);
