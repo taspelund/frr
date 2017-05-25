@@ -320,6 +320,17 @@ end
  exit-address-family
 !
 end
+ address-family evpn
+  neighbor LEAF activate
+  advertise-all-vni
+  vni 10100
+   rd 65000:10100
+   route-target import 10.1.1.1:10100
+   route-target export 10.1.1.1:10100
+  exit-vni
+ exit-address-family
+!
+end
 router ospf
  ospf router-id 10.0.0.1
  log-adjacency-changes detail
@@ -398,7 +409,7 @@ end
                 ctx_keys = []
                 current_context_lines = []
 
-            elif line == "exit-address-family" or line == "exit":
+            elif line == "exit-address-family" or line == "exit" or line == "exit-vni":
                 # if this exit is for address-family ipv4 unicast, ignore the pop
                 if main_ctx_key:
                     self.save_contexts(ctx_keys, current_context_lines)
@@ -418,6 +429,17 @@ end
                 current_context_lines = []
                 new_ctx = False
                 log.debug('LINE %-50s: entering new context, %-50s', line, ctx_keys)
+
+            elif "vni " in line:
+                main_ctx_key = []
+
+                # Save old context first
+                self.save_contexts(ctx_keys, current_context_lines)
+                current_context_lines = []
+                main_ctx_key = copy.deepcopy(ctx_keys)
+                log.debug('LINE %-50s: entering sub-context, append to ctx_keys', line)
+
+                ctx_keys.append(line)
 
             elif "address-family " in line:
                 main_ctx_key = []
@@ -745,6 +767,37 @@ def ignore_delete_re_add_lines(lines_to_add, lines_to_del):
                     lines_to_del_to_del.append((ctx_keys, None))
                     lines_to_add_to_del.append(((tmpline,), None))
 
+        if (len(ctx_keys) == 3 and
+            ctx_keys[0].startswith('router bgp') and
+            ctx_keys[1] == 'address-family evpn' and
+            ctx_keys[2].startswith('vni')):
+
+            re_route_target = re.search('^route-target import (.*)$', line) if line is not None else False
+
+            if re_route_target:
+                rt = re_route_target.group(1).strip()
+                route_target_import_line = line
+                route_target_export_line = "route-target export %s" % rt
+                route_target_both_line = "route-target both %s" % rt
+
+                found_route_target_export_line = line_exist(lines_to_del, ctx_keys, route_target_export_line)
+                found_route_target_both_line = line_exist(lines_to_add, ctx_keys, route_target_both_line)
+
+                '''
+                If the running configs has
+                    route-target import 1:1
+                    route-target export 1:1
+
+                and the config we are reloading against has
+                    route-target both 1:1
+
+                then we can ignore deleting the import/export and ignore adding the 'both'
+                '''
+                if found_route_target_export_line and found_route_target_both_line:
+                    lines_to_del_to_del.append((ctx_keys, route_target_import_line))
+                    lines_to_del_to_del.append((ctx_keys, route_target_export_line))
+                    lines_to_add_to_del.append((ctx_keys, route_target_both_line))
+
         if not deleted:
             found_add_line = line_exist(lines_to_add, ctx_keys, line)
 
@@ -822,6 +875,13 @@ def compare_context_objects(newconf, running):
             elif "router bgp" in running_ctx_keys[0] and len(running_ctx_keys) > 1 and delete_bgpd:
                 continue
 
+            # Delete an entire vni sub-context under "address-family evpn"
+            elif ("router bgp" in running_ctx_keys[0] and
+                  len(running_ctx_keys) > 2 and
+                  running_ctx_keys[1].startswith('address-family evpn') and
+                  running_ctx_keys[2].startswith('vni ')):
+                lines_to_del.append((running_ctx_keys, None))
+
             elif ("router bgp" in running_ctx_keys[0] and
                   len(running_ctx_keys) > 1 and
                   running_ctx_keys[1].startswith('address-family')):
@@ -832,6 +892,9 @@ def compare_context_objects(newconf, running):
 
             # Non-global context
             elif running_ctx_keys and not any("address-family" in key for key in running_ctx_keys):
+                lines_to_del.append((running_ctx_keys, None))
+
+            elif running_ctx_keys and not any("vni" in key for key in running_ctx_keys):
                 lines_to_del.append((running_ctx_keys, None))
 
             # Global context
