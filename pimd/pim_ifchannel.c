@@ -1043,7 +1043,7 @@ pim_ifchannel_local_membership_add(struct interface *ifp,
           if (pim_upstream_evaluate_join_desired_interface (child, ch, starch))
             {
               pim_channel_add_oif (child->channel_oil, ifp, PIM_OIF_FLAG_PROTO_STAR);
-              pim_upstream_switch (child, PIM_UPSTREAM_JOINED);
+              pim_upstream_switch (pim, child, PIM_UPSTREAM_JOINED);
             }
         }
 

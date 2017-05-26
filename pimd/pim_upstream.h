@@ -181,7 +181,7 @@ void pim_upstream_start_register_stop_timer (struct pim_upstream *up, int null_r
 
 void pim_upstream_send_join (struct pim_upstream *up);
 
-void pim_upstream_switch (struct pim_upstream *up, enum pim_upstream_state new_state);
+void pim_upstream_switch (struct pim_instance *pim, struct pim_upstream *up, enum pim_upstream_state new_state);
 
 const char *pim_upstream_state2str (enum pim_upstream_state join_state);
 #define PIM_REG_STATE_STR_LEN 12
