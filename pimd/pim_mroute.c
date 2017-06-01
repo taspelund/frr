@@ -516,7 +516,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
 }
 
 static int
-pim_mroute_msg (struct pim_instance *pim, const char *buf, int buf_size)
+pim_mroute_msg (struct pim_instance *pim, const char *buf, int buf_size, ifindex_t ifindex)
 {
   struct interface     *ifp;
   struct pim_interface *pim_ifp;
@@ -537,21 +537,11 @@ pim_mroute_msg (struct pim_instance *pim, const char *buf, int buf_size)
      * received on. Find the interface that is on the same subnet as the source
      * of the IP packet.
      */
-    ifp = pim_if_lookup_address_vrf (ip_hdr->ip_src, pim->vrf_id);
+    ifp = if_lookup_by_index (ifindex, pim->vrf_id);
 
-    if (!ifp) {
-      if (PIM_DEBUG_MROUTE_DETAIL) {
-        pim_inet4_dump("<src?>", ip_hdr->ip_src, ip_src_str, sizeof(ip_src_str));
-        pim_inet4_dump("<dst?>", ip_hdr->ip_dst, ip_dst_str, sizeof(ip_dst_str));
-
-        zlog_warn("%s(%s): igmp kernel upcall could not find usable interface for %s -> %s",
-                __PRETTY_FUNCTION__,
-		pim->vrf->name,
-                ip_src_str,
-                ip_dst_str);
-      }
+    if (!ifp)
       return 0;
-    }
+
     pim_ifp = ifp->info;
     ifaddr = pim_find_primary_addr(ifp);
     igmp = pim_igmp_sock_lookup_ifaddr(pim_ifp->igmp_socket_list, ifaddr);
@@ -625,12 +615,13 @@ static int mroute_read(struct thread *t)
   int result = 0;
   int cont = 1;
   int rd;
-
+  ifindex_t ifindex;
   pim = THREAD_ARG(t);
 
   while (cont)
     {
-      rd = read(pim->mroute_socket, buf, sizeof(buf));
+      rd = pim_socket_recvfromto(pim->mroute_socket, (uint8_t *)buf, sizeof(buf),
+                                 NULL, NULL, NULL, NULL, &ifindex);
       if (rd <= 0) {
 	if (errno == EINTR)
 	  continue;
@@ -643,7 +634,7 @@ static int mroute_read(struct thread *t)
 	goto done;
       }
 
-      result = pim_mroute_msg(pim, buf, rd);
+      result = pim_mroute_msg(pim, buf, rd, ifindex);
 
       count++;
       if (count % qpim_packet_process == 0)
@@ -679,6 +670,9 @@ pim_mroute_socket_enable (struct pim_instance *pim)
               safe_strerror (errno) );
 
   fd = socket(AF_INET, SOCK_RAW, IPPROTO_IGMP);
+
+  setsockopt (fd, SOL_SOCKET, SO_BINDTODEVICE,
+	      pim->vrf->name, strlen(pim->vrf->name));
 
   if ( pimd_privs.change (ZPRIVS_LOWER) )
     zlog_err ("pim_mroute_socket_enable: could not lower privs, %s",
