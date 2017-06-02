@@ -84,6 +84,18 @@ static int pim_mroute_set(struct pim_instance *pim, int enable)
     return -1;
   }
 
+#if defined(HAVE_IP_PKTINFO)
+  if (enable)
+    {
+      /* Linux and Solaris IP_PKTINFO */
+      opt = 1;
+      if (setsockopt(pim->mroute_socket, IPPROTO_IP, IP_PKTINFO, &opt, sizeof(opt))) {
+        zlog_warn("Could not set IP_PKTINFO on socket fd=%d: errno=%d: %s",
+                  pim->mroute_socket, errno, safe_strerror(errno));
+      }
+    }
+#endif
+
   setsockopt_so_recvbuf(pim->mroute_socket, 1024 * 1024 * 8);
 
   flags = fcntl(pim->mroute_socket, F_GETFL, 0);
@@ -671,8 +683,10 @@ pim_mroute_socket_enable (struct pim_instance *pim)
 
   fd = socket(AF_INET, SOCK_RAW, IPPROTO_IGMP);
 
+#ifdef SO_BINDTODEVICE
   setsockopt (fd, SOL_SOCKET, SO_BINDTODEVICE,
 	      pim->vrf->name, strlen(pim->vrf->name));
+#endif
 
   if ( pimd_privs.change (ZPRIVS_LOWER) )
     zlog_err ("pim_mroute_socket_enable: could not lower privs, %s",
