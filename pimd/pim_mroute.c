@@ -551,7 +551,7 @@ pim_mroute_msg (struct pim_instance *pim, const char *buf, int buf_size, ifindex
      */
     ifp = if_lookup_by_index (ifindex, pim->vrf_id);
 
-    if (!ifp)
+    if (!ifp || !ifp->info)
       return 0;
 
     pim_ifp = ifp->info;
