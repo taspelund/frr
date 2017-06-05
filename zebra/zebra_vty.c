@@ -131,10 +131,24 @@ zebra_static_ipv4 (struct vty *vty, safi_t safi, int add_cmd,
 		   VTY_NEWLINE);
 	  return CMD_WARNING;
 	}
-      if (mpls_str2label (label_str, &snh_label.num_labels,
-                          snh_label.label))
+      int rc = mpls_str2label (label_str, &snh_label.num_labels,
+                               snh_label.label);
+      if (rc < 0)
         {
-          vty_out (vty, "%% Malformed label(s)%s", VTY_NEWLINE);
+          switch (rc) {
+          case -1:
+            vty_out (vty, "%% Malformed label(s)%s", VTY_NEWLINE);
+            break;
+          case -2:
+            vty_out (vty, "%% Cannot use reserved label(s) (%d-%d)%s",
+                     MPLS_MIN_RESERVED_LABEL, MPLS_MAX_RESERVED_LABEL,
+                     VTY_NEWLINE);
+            break;
+          case -3:
+            vty_out (vty, "%% Too many labels. Enter %d or fewer%s",
+                     MPLS_MAX_LABELS, VTY_NEWLINE);
+            break;
+          }
           return CMD_WARNING;
         }
     }
@@ -326,7 +340,7 @@ DEFUN (show_ip_rpf_addr,
   int idx_ipv4 = 3;
   struct in_addr addr;
   struct route_node *rn;
-  struct rib *rib;
+  struct route_entry *re;
   int ret;
 
   ret = inet_aton (argv[idx_ipv4]->arg, &addr);
@@ -336,9 +350,9 @@ DEFUN (show_ip_rpf_addr,
       return CMD_WARNING;
     }
 
-  rib = rib_match_ipv4_multicast (VRF_DEFAULT, addr, &rn);
+  re = rib_match_ipv4_multicast (VRF_DEFAULT, addr, &rn);
 
-  if (rib)
+  if (re)
     vty_show_ip_route_detail (vty, rn, 1);
   else
     vty_out (vty, "%% No match for RPF lookup%s", VTY_NEWLINE);
@@ -426,8 +440,7 @@ DEFUN (ip_route_flags,
        "Tag value\n"
        "Distance value for this route\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv4_prefixlen = 2;
   int idx_reject_blackhole = 3;
@@ -460,8 +473,7 @@ DEFUN (ip_route_mask,
        "Tag value\n"
        "Distance value for this route\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv4 = 2;
   int idx_ipv4_2 = 3;
@@ -492,8 +504,7 @@ DEFUN (ip_route_mask_flags,
        "Tag value\n"
        "Distance value for this route\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv4 = 2;
   int idx_ipv4_2 = 3;
@@ -526,8 +537,7 @@ DEFUN (no_ip_route,
        "Tag value\n"
        "Distance value for this route\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv4_prefixlen = 3;
   int idx_ipv4_ifname_null = 4;
@@ -558,8 +568,7 @@ DEFUN (no_ip_route_flags,
        "Tag value\n"
        "Distance value for this route\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv4_prefixlen = 3;
   int idx_curr = 5;
@@ -589,8 +598,7 @@ DEFUN (no_ip_route_mask,
        "Tag value\n"
        "Distance value for this route\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv4 = 3;
   int idx_ipv4_2 = 4;
@@ -623,8 +631,7 @@ DEFUN (no_ip_route_mask_flags,
        "Tag value\n"
        "Distance value for this route\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv4 = 3;
   int idx_ipv4_2 = 4;
@@ -645,13 +652,13 @@ DEFUN (no_ip_route_mask_flags,
 static void
 vty_show_ip_route_detail (struct vty *vty, struct route_node *rn, int mcast)
 {
-  struct rib *rib;
+  struct route_entry *re;
   struct nexthop *nexthop, *tnexthop;
   int recursing;
   char buf[SRCDEST2STR_BUFFER];
   struct zebra_vrf *zvrf;
 
-  RNODE_FOREACH_RIB (rn, rib)
+  RNODE_FOREACH_RE (rn, re)
     {
       const char *mcast_info = "";
       if (mcast)
@@ -665,42 +672,42 @@ vty_show_ip_route_detail (struct vty *vty, struct route_node *rn, int mcast)
       vty_out (vty, "Routing entry for %s%s%s",
 	       srcdest_rnode2str(rn, buf, sizeof(buf)), mcast_info,
 	       VTY_NEWLINE);
-      vty_out (vty, "  Known via \"%s", zebra_route_string (rib->type));
-      if (rib->instance)
-        vty_out (vty, "[%d]", rib->instance);
+      vty_out (vty, "  Known via \"%s", zebra_route_string (re->type));
+      if (re->instance)
+        vty_out (vty, "[%d]", re->instance);
       vty_out (vty, "\"");
-      vty_out (vty, ", distance %u, metric %u", rib->distance, rib->metric);
-      if (rib->tag)
-	vty_out (vty, ", tag %d", rib->tag);
-       if (rib->mtu)
-        vty_out (vty, ", mtu %u", rib->mtu);
-      if (rib->vrf_id != VRF_DEFAULT)
+      vty_out (vty, ", distance %u, metric %u", re->distance, re->metric);
+      if (re->tag)
+	vty_out (vty, ", tag %d", re->tag);
+       if (re->mtu)
+        vty_out (vty, ", mtu %u", re->mtu);
+      if (re->vrf_id != VRF_DEFAULT)
         {
-          zvrf = vrf_info_lookup(rib->vrf_id);
+          zvrf = vrf_info_lookup(re->vrf_id);
           vty_out (vty, ", vrf %s", zvrf_name (zvrf));
         }
-      if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_SELECTED))
+      if (CHECK_FLAG (re->flags, ZEBRA_FLAG_SELECTED))
 	vty_out (vty, ", best");
-      if (rib->refcnt)
-	vty_out (vty, ", refcnt %ld", rib->refcnt);
-      if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_BLACKHOLE))
+      if (re->refcnt)
+	vty_out (vty, ", refcnt %ld", re->refcnt);
+      if (CHECK_FLAG (re->flags, ZEBRA_FLAG_BLACKHOLE))
        vty_out (vty, ", blackhole");
-      if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_REJECT))
+      if (CHECK_FLAG (re->flags, ZEBRA_FLAG_REJECT))
        vty_out (vty, ", reject");
       vty_out (vty, "%s", VTY_NEWLINE);
 
-      if (rib->type == ZEBRA_ROUTE_RIP
-	  || rib->type == ZEBRA_ROUTE_OSPF
-	  || rib->type == ZEBRA_ROUTE_ISIS
-	  || rib->type == ZEBRA_ROUTE_NHRP
-	  || rib->type == ZEBRA_ROUTE_TABLE
-	  || rib->type == ZEBRA_ROUTE_BGP)
+      if (re->type == ZEBRA_ROUTE_RIP
+	  || re->type == ZEBRA_ROUTE_OSPF
+	  || re->type == ZEBRA_ROUTE_ISIS
+	  || re->type == ZEBRA_ROUTE_NHRP
+	  || re->type == ZEBRA_ROUTE_TABLE
+	  || re->type == ZEBRA_ROUTE_BGP)
 	{
 	  time_t uptime;
 	  struct tm *tm;
 
 	  uptime = time (NULL);
-	  uptime -= rib->uptime;
+	  uptime -= re->uptime;
 	  tm = gmtime (&uptime);
 
 	  vty_out (vty, "  Last update ");
@@ -718,7 +725,7 @@ vty_show_ip_route_detail (struct vty *vty, struct route_node *rn, int mcast)
 	  vty_out (vty, " ago%s", VTY_NEWLINE);
 	}
 
-      for (ALL_NEXTHOPS_RO(rib->nexthop, nexthop, tnexthop, recursing))
+      for (ALL_NEXTHOPS_RO(re->nexthop, nexthop, tnexthop, recursing))
 	{
           char addrstr[32];
 
@@ -733,7 +740,7 @@ vty_show_ip_route_detail (struct vty *vty, struct route_node *rn, int mcast)
 	      vty_out (vty, " %s", inet_ntoa (nexthop->gate.ipv4));
 	      if (nexthop->ifindex)
 		vty_out (vty, ", via %s",
-                         ifindex2ifname (nexthop->ifindex, rib->vrf_id));
+                         ifindex2ifname (nexthop->ifindex, re->vrf_id));
 	      break;
 	    case NEXTHOP_TYPE_IPV6:
 	    case NEXTHOP_TYPE_IPV6_IFINDEX:
@@ -741,11 +748,11 @@ vty_show_ip_route_detail (struct vty *vty, struct route_node *rn, int mcast)
 		       inet_ntop (AF_INET6, &nexthop->gate.ipv6, buf, BUFSIZ));
 	      if (nexthop->ifindex)
 		vty_out (vty, ", via %s",
-                         ifindex2ifname (nexthop->ifindex, rib->vrf_id));
+                         ifindex2ifname (nexthop->ifindex, re->vrf_id));
 	      break;
 	    case NEXTHOP_TYPE_IFINDEX:
 	      vty_out (vty, " directly connected, %s",
-		       ifindex2ifname (nexthop->ifindex, rib->vrf_id));
+		       ifindex2ifname (nexthop->ifindex, re->vrf_id));
 	      break;
 	    case NEXTHOP_TYPE_BLACKHOLE:
 	      vty_out (vty, " directly connected, Null0");
@@ -801,7 +808,7 @@ vty_show_ip_route_detail (struct vty *vty, struct route_node *rn, int mcast)
 }
 
 static void
-vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib,
+vty_show_ip_route (struct vty *vty, struct route_node *rn, struct route_entry *re,
                    json_object *json)
 {
   struct nexthop *nexthop, *tnexthop;
@@ -819,41 +826,41 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib,
       json_nexthops = json_object_new_array();
 
       json_object_string_add(json_route, "prefix", srcdest_rnode2str (rn, buf, sizeof buf));
-      json_object_string_add(json_route, "protocol", zebra_route_string(rib->type));
+      json_object_string_add(json_route, "protocol", zebra_route_string(re->type));
 
-      if (rib->instance)
-        json_object_int_add(json_route, "instance", rib->instance);
+      if (re->instance)
+        json_object_int_add(json_route, "instance", re->instance);
 
-      if (rib->vrf_id)
-        json_object_int_add(json_route, "vrfId", rib->vrf_id);
+      if (re->vrf_id)
+        json_object_int_add(json_route, "vrfId", re->vrf_id);
 
-      if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_SELECTED))
+      if (CHECK_FLAG (re->flags, ZEBRA_FLAG_SELECTED))
         json_object_boolean_true_add(json_route, "selected");
 
-      if (rib->type != ZEBRA_ROUTE_CONNECT && rib->type != ZEBRA_ROUTE_KERNEL)
+      if (re->type != ZEBRA_ROUTE_CONNECT && re->type != ZEBRA_ROUTE_KERNEL)
         {
-          json_object_int_add(json_route, "distance", rib->distance);
-          json_object_int_add(json_route, "metric", rib->metric);
+          json_object_int_add(json_route, "distance", re->distance);
+          json_object_int_add(json_route, "metric", re->metric);
         }
 
-      if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_BLACKHOLE))
+      if (CHECK_FLAG (re->flags, ZEBRA_FLAG_BLACKHOLE))
         json_object_boolean_true_add(json_route, "blackhole");
 
-      if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_REJECT))
+      if (CHECK_FLAG (re->flags, ZEBRA_FLAG_REJECT))
         json_object_boolean_true_add(json_route, "reject");
 
-      if (rib->type == ZEBRA_ROUTE_RIP
-          || rib->type == ZEBRA_ROUTE_OSPF
-          || rib->type == ZEBRA_ROUTE_ISIS
-	  || rib->type == ZEBRA_ROUTE_NHRP
-          || rib->type == ZEBRA_ROUTE_TABLE
-          || rib->type == ZEBRA_ROUTE_BGP)
+      if (re->type == ZEBRA_ROUTE_RIP
+          || re->type == ZEBRA_ROUTE_OSPF
+          || re->type == ZEBRA_ROUTE_ISIS
+	  || re->type == ZEBRA_ROUTE_NHRP
+          || re->type == ZEBRA_ROUTE_TABLE
+          || re->type == ZEBRA_ROUTE_BGP)
         {
           time_t uptime;
           struct tm *tm;
 
           uptime = time (NULL);
-          uptime -= rib->uptime;
+          uptime -= re->uptime;
           tm = gmtime (&uptime);
 
           if (uptime < ONE_DAY_SECOND)
@@ -866,7 +873,7 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib,
           json_object_string_add(json_route, "uptime", buf);
         }
 
-      for (ALL_NEXTHOPS_RO(rib->nexthop, nexthop, tnexthop, recursing))
+      for (ALL_NEXTHOPS_RO(re->nexthop, nexthop, tnexthop, recursing))
         {
           json_nexthop = json_object_new_object();
 
@@ -883,7 +890,7 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib,
               if (nexthop->ifindex)
                 {
                   json_object_int_add(json_nexthop, "interfaceIndex", nexthop->ifindex);
-                  json_object_string_add(json_nexthop, "interfaceName", ifindex2ifname (nexthop->ifindex, rib->vrf_id));
+                  json_object_string_add(json_nexthop, "interfaceName", ifindex2ifname (nexthop->ifindex, re->vrf_id));
                 }
               break;
             case NEXTHOP_TYPE_IPV6:
@@ -894,14 +901,14 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib,
               if (nexthop->ifindex)
                 {
                   json_object_int_add(json_nexthop, "interfaceIndex", nexthop->ifindex);
-                  json_object_string_add(json_nexthop, "interfaceName", ifindex2ifname (nexthop->ifindex, rib->vrf_id));
+                  json_object_string_add(json_nexthop, "interfaceName", ifindex2ifname (nexthop->ifindex, re->vrf_id));
                 }
               break;
 
             case NEXTHOP_TYPE_IFINDEX:
               json_object_boolean_true_add(json_nexthop, "directlyConnected");
               json_object_int_add(json_nexthop, "interfaceIndex", nexthop->ifindex);
-              json_object_string_add(json_nexthop, "interfaceName", ifindex2ifname (nexthop->ifindex, rib->vrf_id));
+              json_object_string_add(json_nexthop, "interfaceName", ifindex2ifname (nexthop->ifindex, re->vrf_id));
               break;
             case NEXTHOP_TYPE_BLACKHOLE:
               json_object_boolean_true_add(json_nexthop, "blackhole");
@@ -960,26 +967,26 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib,
     }
 
   /* Nexthop information. */
-  for (ALL_NEXTHOPS_RO(rib->nexthop, nexthop, tnexthop, recursing))
+  for (ALL_NEXTHOPS_RO(re->nexthop, nexthop, tnexthop, recursing))
     {
-      if (nexthop == rib->nexthop)
+      if (nexthop == re->nexthop)
 	{
 	  /* Prefix information. */
-	  len = vty_out (vty, "%c", zebra_route_char (rib->type));
-          if (rib->instance)
-	    len += vty_out (vty, "[%d]", rib->instance);
+	  len = vty_out (vty, "%c", zebra_route_char (re->type));
+          if (re->instance)
+	    len += vty_out (vty, "[%d]", re->instance);
           len += vty_out (vty, "%c%c %s",
-			  CHECK_FLAG (rib->flags, ZEBRA_FLAG_SELECTED)
+			  CHECK_FLAG (re->flags, ZEBRA_FLAG_SELECTED)
 			  ? '>' : ' ',
 			  CHECK_FLAG (nexthop->flags, NEXTHOP_FLAG_FIB)
 			  ? '*' : ' ',
 			  srcdest_rnode2str (rn, buf, sizeof buf));
 
 	  /* Distance and metric display. */
-	  if (rib->type != ZEBRA_ROUTE_CONNECT
-	      && rib->type != ZEBRA_ROUTE_KERNEL)
-	    len += vty_out (vty, " [%d/%d]", rib->distance,
-			    rib->metric);
+	  if (re->type != ZEBRA_ROUTE_CONNECT
+	      && re->type != ZEBRA_ROUTE_KERNEL)
+	    len += vty_out (vty, " [%d/%d]", re->distance,
+			    re->metric);
 	}
       else
 	vty_out (vty, "  %c%*c",
@@ -994,7 +1001,7 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib,
 	  vty_out (vty, " via %s", inet_ntoa (nexthop->gate.ipv4));
 	  if (nexthop->ifindex)
 	    vty_out (vty, ", %s",
-                     ifindex2ifname (nexthop->ifindex, rib->vrf_id));
+                     ifindex2ifname (nexthop->ifindex, re->vrf_id));
 	  break;
         case NEXTHOP_TYPE_IPV6:
 	case NEXTHOP_TYPE_IPV6_IFINDEX:
@@ -1002,12 +1009,12 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib,
 		   inet_ntop (AF_INET6, &nexthop->gate.ipv6, buf, BUFSIZ));
 	  if (nexthop->ifindex)
 	    vty_out (vty, ", %s",
-                     ifindex2ifname (nexthop->ifindex, rib->vrf_id));
+                     ifindex2ifname (nexthop->ifindex, re->vrf_id));
 	  break;
 
 	case NEXTHOP_TYPE_IFINDEX:
 	  vty_out (vty, " is directly connected, %s",
-		   ifindex2ifname (nexthop->ifindex, rib->vrf_id));
+		   ifindex2ifname (nexthop->ifindex, re->vrf_id));
 	  break;
 	case NEXTHOP_TYPE_BLACKHOLE:
 	  vty_out (vty, " is directly connected, Null0");
@@ -1054,23 +1061,23 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib,
                                   nexthop->nh_label->label, buf, BUFSIZ, 1));
        }
 
-      if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_BLACKHOLE))
+      if (CHECK_FLAG (re->flags, ZEBRA_FLAG_BLACKHOLE))
                vty_out (vty, ", bh");
-      if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_REJECT))
+      if (CHECK_FLAG (re->flags, ZEBRA_FLAG_REJECT))
                vty_out (vty, ", rej");
 
-      if (rib->type == ZEBRA_ROUTE_RIP
-	  || rib->type == ZEBRA_ROUTE_OSPF
-	  || rib->type == ZEBRA_ROUTE_ISIS
-	  || rib->type == ZEBRA_ROUTE_NHRP
-	  || rib->type == ZEBRA_ROUTE_TABLE
-	  || rib->type == ZEBRA_ROUTE_BGP)
+      if (re->type == ZEBRA_ROUTE_RIP
+	  || re->type == ZEBRA_ROUTE_OSPF
+	  || re->type == ZEBRA_ROUTE_ISIS
+	  || re->type == ZEBRA_ROUTE_NHRP
+	  || re->type == ZEBRA_ROUTE_TABLE
+	  || re->type == ZEBRA_ROUTE_BGP)
 	{
 	  time_t uptime;
 	  struct tm *tm;
 
 	  uptime = time (NULL);
-	  uptime -= rib->uptime;
+	  uptime -= re->uptime;
 	  tm = gmtime (&uptime);
 
 	  if (uptime < ONE_DAY_SECOND)
@@ -1102,7 +1109,7 @@ do_show_ip_route (struct vty *vty, const char *vrf_name, afi_t afi, safi_t safi,
 {
   struct route_table *table;
   struct route_node *rn;
-  struct rib *rib;
+  struct route_entry *re;
   int first = 1;
   struct zebra_vrf *zvrf = NULL;
   char buf[BUFSIZ];
@@ -1142,12 +1149,12 @@ do_show_ip_route (struct vty *vty, const char *vrf_name, afi_t afi, safi_t safi,
   /* Show all routes. */
   for (rn = route_top (table); rn; rn = route_next (rn))
     {
-      RNODE_FOREACH_RIB (rn, rib)
+      RNODE_FOREACH_RE (rn, re)
         {
-          if (use_fib && !CHECK_FLAG(rib->status, RIB_ENTRY_SELECTED_FIB))
+          if (use_fib && !CHECK_FLAG(re->status, ROUTE_ENTRY_SELECTED_FIB))
             continue;
 
-          if (tag && rib->tag != tag)
+          if (tag && re->tag != tag)
             continue;
 
           if (longer_prefix_p && ! prefix_match (longer_prefix_p, &rn->p))
@@ -1168,10 +1175,10 @@ do_show_ip_route (struct vty *vty, const char *vrf_name, afi_t afi, safi_t safi,
                 continue;
             }
 
-          if (type && rib->type != type)
+          if (type && re->type != type)
             continue;
 
-          if (ospf_instance_id && (rib->type != ZEBRA_ROUTE_OSPF || rib->instance != ospf_instance_id))
+          if (ospf_instance_id && (re->type != ZEBRA_ROUTE_OSPF || re->instance != ospf_instance_id))
             continue;
 
           if (use_json)
@@ -1195,7 +1202,7 @@ do_show_ip_route (struct vty *vty, const char *vrf_name, afi_t afi, safi_t safi,
                 }
             }
 
-          vty_show_ip_route (vty, rn, rib, json_prefix);
+          vty_show_ip_route (vty, rn, re, json_prefix);
         }
 
       if (json_prefix)
@@ -1572,7 +1579,7 @@ static void
 vty_show_ip_route_summary (struct vty *vty, struct route_table *table)
 {
   struct route_node *rn;
-  struct rib *rib;
+  struct route_entry *re;
 #define ZEBRA_ROUTE_IBGP  ZEBRA_ROUTE_MAX
 #define ZEBRA_ROUTE_TOTAL (ZEBRA_ROUTE_IBGP + 1)
   u_int32_t rib_cnt[ZEBRA_ROUTE_TOTAL + 1];
@@ -1583,25 +1590,25 @@ vty_show_ip_route_summary (struct vty *vty, struct route_table *table)
   memset (&rib_cnt, 0, sizeof(rib_cnt));
   memset (&fib_cnt, 0, sizeof(fib_cnt));
   for (rn = route_top (table); rn; rn = srcdest_route_next (rn))
-    RNODE_FOREACH_RIB (rn, rib)
+    RNODE_FOREACH_RE (rn, re)
       {
-        is_ibgp = (rib->type == ZEBRA_ROUTE_BGP &&
-                   CHECK_FLAG (rib->flags, ZEBRA_FLAG_IBGP));
+        is_ibgp = (re->type == ZEBRA_ROUTE_BGP &&
+                   CHECK_FLAG (re->flags, ZEBRA_FLAG_IBGP));
 
         rib_cnt[ZEBRA_ROUTE_TOTAL]++;
         if (is_ibgp)
           rib_cnt[ZEBRA_ROUTE_IBGP]++;
         else
-          rib_cnt[rib->type]++;
+          rib_cnt[re->type]++;
 
-        if (CHECK_FLAG (rib->flags, ZEBRA_FLAG_SELECTED))
+        if (CHECK_FLAG (re->flags, ZEBRA_FLAG_SELECTED))
           {
             fib_cnt[ZEBRA_ROUTE_TOTAL]++;
 
             if (is_ibgp)
               fib_cnt[ZEBRA_ROUTE_IBGP]++;
             else
-              fib_cnt[rib->type]++;
+              fib_cnt[re->type]++;
           }
       }
 
@@ -1647,7 +1654,7 @@ static void
 vty_show_ip_route_summary_prefix (struct vty *vty, struct route_table *table)
 {
   struct route_node *rn;
-  struct rib *rib;
+  struct route_entry *re;
   struct nexthop *nexthop;
 #define ZEBRA_ROUTE_IBGP  ZEBRA_ROUTE_MAX
 #define ZEBRA_ROUTE_TOTAL (ZEBRA_ROUTE_IBGP + 1)
@@ -1659,25 +1666,25 @@ vty_show_ip_route_summary_prefix (struct vty *vty, struct route_table *table)
   memset (&rib_cnt, 0, sizeof(rib_cnt));
   memset (&fib_cnt, 0, sizeof(fib_cnt));
   for (rn = route_top (table); rn; rn = srcdest_route_next (rn))
-    RNODE_FOREACH_RIB (rn, rib)
+    RNODE_FOREACH_RE (rn, re)
       {
 
        /*
         * In case of ECMP, count only once.
         */
        cnt = 0;
-       for (nexthop = rib->nexthop; (!cnt && nexthop); nexthop = nexthop->next)
+       for (nexthop = re->nexthop; (!cnt && nexthop); nexthop = nexthop->next)
          {
           cnt++;
           rib_cnt[ZEBRA_ROUTE_TOTAL]++;
-          rib_cnt[rib->type]++;
+          rib_cnt[re->type]++;
           if (CHECK_FLAG (nexthop->flags, NEXTHOP_FLAG_FIB))
 	        {
 	         fib_cnt[ZEBRA_ROUTE_TOTAL]++;
-             fib_cnt[rib->type]++;
+             fib_cnt[re->type]++;
             }
-	      if (rib->type == ZEBRA_ROUTE_BGP &&
-	          CHECK_FLAG (rib->flags, ZEBRA_FLAG_IBGP))
+	      if (re->type == ZEBRA_ROUTE_BGP &&
+	          CHECK_FLAG (re->flags, ZEBRA_FLAG_IBGP))
             {
 	         rib_cnt[ZEBRA_ROUTE_IBGP]++;
 		     if (CHECK_FLAG (nexthop->flags, NEXTHOP_FLAG_FIB))
@@ -2052,10 +2059,24 @@ static_ipv6_func (struct vty *vty, int add_cmd, const char *dest_str,
                    VTY_NEWLINE);
           return CMD_WARNING;
         }
-      if (mpls_str2label (label_str, &snh_label.num_labels,
-                          snh_label.label))
+      int rc = mpls_str2label (label_str, &snh_label.num_labels,
+                               snh_label.label);
+      if (rc < 0)
         {
-          vty_out (vty, "%% Malformed label(s)%s", VTY_NEWLINE);
+          switch (rc) {
+          case -1:
+            vty_out (vty, "%% Malformed label(s)%s", VTY_NEWLINE);
+            break;
+          case -2:
+            vty_out (vty, "%% Cannot use reserved label(s) (%d-%d)%s",
+                     MPLS_MIN_RESERVED_LABEL, MPLS_MAX_RESERVED_LABEL,
+                     VTY_NEWLINE);
+            break;
+          case -3:
+            vty_out (vty, "%% Too many labels. Enter %d or fewer%s",
+                     MPLS_MAX_LABELS, VTY_NEWLINE);
+            break;
+          }
           return CMD_WARNING;
         }
     }
@@ -2161,8 +2182,7 @@ DEFUN (ipv6_route,
        "Tag value\n"
        "Distance value for this prefix\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv6_prefixlen = 2;
   int idx_ipv6_ifname;
@@ -2210,8 +2230,7 @@ DEFUN (ipv6_route_flags,
        "Tag value\n"
        "Distance value for this prefix\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv6_prefixlen = 2;
   int idx_ipv6_ifname;
@@ -2260,8 +2279,7 @@ DEFUN (ipv6_route_ifname,
        "Tag value\n"
        "Distance value for this prefix\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv6_prefixlen = 2;
   int idx_ipv6 = 3;
@@ -2312,8 +2330,7 @@ DEFUN (ipv6_route_ifname_flags,
        "Tag value\n"
        "Distance value for this prefix\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv6_prefixlen = 2;
   int idx_ipv6;
@@ -2367,8 +2384,7 @@ DEFUN (no_ipv6_route,
        "Tag value\n"
        "Distance value for this prefix\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv6_prefixlen = 3;
   int idx_ipv6_ifname;
@@ -2416,8 +2432,7 @@ DEFUN (no_ipv6_route_flags,
        "Tag value\n"
        "Distance value for this prefix\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv6_prefixlen = 3;
   int idx_ipv6_ifname;
@@ -2467,8 +2482,7 @@ DEFUN (no_ipv6_route_ifname,
        "Tag value\n"
        "Distance value for this prefix\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv6_prefixlen = 3;
   int idx_ipv6;
@@ -2520,8 +2534,7 @@ DEFUN (no_ipv6_route_ifname_flags,
        "Tag value\n"
        "Distance value for this prefix\n"
        VRF_CMD_HELP_STR
-       "Specify labels for this route\n"
-       "One or more labels separated by '/'\n")
+       MPLS_LABEL_HELPSTR)
 {
   int idx_ipv6_prefixlen = 3;
   int idx_ipv6;
@@ -2821,7 +2834,7 @@ DEFUN (show_ipv6_mroute,
 {
   struct route_table *table;
   struct route_node *rn;
-  struct rib *rib;
+  struct route_entry *re;
   int first = 1;
   vrf_id_t vrf_id = VRF_DEFAULT;
 
@@ -2834,14 +2847,14 @@ DEFUN (show_ipv6_mroute,
 
   /* Show all IPv6 route. */
   for (rn = route_top (table); rn; rn = srcdest_route_next (rn))
-    RNODE_FOREACH_RIB (rn, rib)
+    RNODE_FOREACH_RE (rn, re)
       {
        if (first)
          {
 	   vty_out (vty, SHOW_ROUTE_V6_HEADER);
            first = 0;
          }
-       vty_show_ip_route (vty, rn, rib, NULL);
+       vty_show_ip_route (vty, rn, re, NULL);
       }
   return CMD_SUCCESS;
 }
@@ -2964,7 +2977,7 @@ DEFUN (show_ipv6_mroute_vrf_all,
 {
   struct route_table *table;
   struct route_node *rn;
-  struct rib *rib;
+  struct route_entry *re;
   struct vrf *vrf;
   struct zebra_vrf *zvrf;
   int first = 1;
@@ -2977,14 +2990,14 @@ DEFUN (show_ipv6_mroute_vrf_all,
 
       /* Show all IPv6 route. */
       for (rn = route_top (table); rn; rn = srcdest_route_next (rn))
-        RNODE_FOREACH_RIB (rn, rib)
+        RNODE_FOREACH_RE (rn, re)
           {
            if (first)
              {
                vty_out (vty, SHOW_ROUTE_V6_HEADER);
                first = 0;
              }
-           vty_show_ip_route (vty, rn, rib, NULL);
+           vty_show_ip_route (vty, rn, re, NULL);
           }
     }
   return CMD_SUCCESS;
