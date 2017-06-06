@@ -61,7 +61,7 @@ void kernel_init (struct zebra_ns *zns) { return; }
 void kernel_terminate (struct zebra_ns *zns) { return; }
 void route_read (struct zebra_ns *zns) { return; }
 
-int kernel_get_ipmr_sg_stats (void *m) { return 0; }
+int kernel_get_ipmr_sg_stats (struct zebra_vrf *zvrf, void *m) { return 0; }
 
 int
 kernel_add_vtep (vni_t vni, struct interface *ifp, struct in_addr *vtep_ip)
