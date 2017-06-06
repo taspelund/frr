@@ -515,10 +515,17 @@ pim_zlookup_sg_statistics (struct channel_oil *c_oil)
   if (sg.src.s_addr != c_oil->oil.mfcc_origin.s_addr ||
       sg.grp.s_addr != c_oil->oil.mfcc_mcastgrp.s_addr)
     {
-       zlog_err ("%s: Received wrong %s information",
-		 __PRETTY_FUNCTION__, pim_str_sg_dump (&sg));
-       zclient_lookup_failed (zlookup);
-       return -3;
+      if (PIM_DEBUG_ZEBRA)
+        {
+          struct prefix_sg more;
+
+          more.src = c_oil->oil.mfcc_origin;
+          more.grp = c_oil->oil.mfcc_mcastgrp;
+          zlog_err ("%s: Received wrong %s information requested",
+		    __PRETTY_FUNCTION__, pim_str_sg_dump (&more));
+        }
+      zclient_lookup_failed (zlookup);
+      return -3;
     }
 
   stream_get (&lastused, s, sizeof (lastused));
