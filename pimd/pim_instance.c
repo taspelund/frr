@@ -63,7 +63,7 @@ pim_instance_terminate (struct pim_instance *pim)
 
   pim_msdp_exit (pim);
 
-  XFREE (MTYPE_PIM_PIM_INSTANCE, pimg);
+  XFREE (MTYPE_PIM_PIM_INSTANCE, pim);
 }
 
 static struct pim_instance *
@@ -163,6 +163,7 @@ pim_vrf_delete (struct vrf *vrf)
   zlog_debug ("VRF Deletion: %s(%d)", vrf->name, vrf->vrf_id);
 
   pim_ssmpingd_destroy (pim);
+  pim_instance_terminate (pim);
   return 0;
 }
 
@@ -185,8 +186,6 @@ pim_vrf_enable (struct vrf *vrf)
 static int
 pim_vrf_disable (struct vrf *vrf)
 {
-  pim_instance_terminate ((struct pim_instance *)vrf->info);
-
   /* Note: This is a callback, the VRF will be deleted by the caller. */
   return 0;
 }
