@@ -118,3 +118,5 @@ int kernel_del_neigh (struct interface *ifp, struct ipaddr *ip)
 {
   return 0;
 }
+
+int kernel_interface_set_master (struct interface *master, struct interface *slave) { return 0; }
