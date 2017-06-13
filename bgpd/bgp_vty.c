@@ -9386,9 +9386,6 @@ bgp_show_neighbor_vty (struct vty *vty, const char *name,
   union sockunion su;
   json_object *json = NULL;
 
-  if (use_json)
-    json = json_object_new_object();
-
   if (name)
     {
       if (strmatch(name, "all"))
@@ -9403,6 +9400,7 @@ bgp_show_neighbor_vty (struct vty *vty, const char *name,
             {
               if (use_json)
                 {
+                  json = json_object_new_object();
                   json_object_boolean_true_add(json, "bgpNoSuchInstance");
                   vty_out (vty, "%s%s", json_object_to_json_string_ext(json, JSON_C_TO_STRING_PRETTY), VTY_NEWLINE);
                   json_object_free(json);
@@ -9421,6 +9419,7 @@ bgp_show_neighbor_vty (struct vty *vty, const char *name,
 
   if (bgp)
     {
+      json = json_object_new_object();
       if (ip_str)
         {
           ret = str2sockunion (ip_str, &su);
@@ -9433,6 +9432,7 @@ bgp_show_neighbor_vty (struct vty *vty, const char *name,
         {
           bgp_show_neighbor (vty, bgp, type, NULL, NULL, use_json, json);
         }
+      json_object_free (json);
     }
 
   return CMD_SUCCESS;
