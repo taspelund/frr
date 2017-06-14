@@ -474,18 +474,14 @@ DEFUN (ip_irdp_minadvertinterval,
   zi=ifp->info;
   irdp=&zi->irdp;
 
-  if( (unsigned) atoi(argv[idx_number]->arg) <= irdp->MaxAdvertInterval) {
+  if((unsigned) atoi(argv[idx_number]->arg) < irdp->MaxAdvertInterval) {
       irdp->MinAdvertInterval = atoi(argv[idx_number]->arg);
-
       return CMD_SUCCESS;
   }
-
-  vty_out (vty, "ICMP warning maxadvertinterval is greater or equal than minadvertinterval%s",
-	     VTY_NEWLINE);
-
-  vty_out (vty, "Please correct!%s",
-	     VTY_NEWLINE);
-  return CMD_WARNING;
+  else {
+      vty_out (vty, "%% MinAdvertInterval must be less than MaxAdvertInterval");
+      return CMD_WARNING;
+  }
 }
 
 DEFUN (ip_irdp_maxadvertinterval,
@@ -504,19 +500,14 @@ DEFUN (ip_irdp_maxadvertinterval,
   zi=ifp->info;
   irdp=&zi->irdp;
 
-
-  if( irdp->MinAdvertInterval <= (unsigned) atoi(argv[idx_number]->arg) ) {
-    irdp->MaxAdvertInterval = atoi(argv[idx_number]->arg);
-
+  if(irdp->MinAdvertInterval < (unsigned) atoi(argv[idx_number]->arg)) {
+      irdp->MaxAdvertInterval = atoi(argv[idx_number]->arg);
       return CMD_SUCCESS;
   }
-
-  vty_out (vty, "ICMP warning maxadvertinterval is greater or equal than minadvertinterval%s",
-	     VTY_NEWLINE);
-
-  vty_out (vty, "Please correct!%s",
-	     VTY_NEWLINE);
-  return CMD_WARNING;
+  else {
+      vty_out (vty, "%% MaxAdvertInterval must be greater than MinAdvertInterval");
+      return CMD_WARNING;
+  }
 }
 
 /* DEFUN needs to be fixed for negative ranages...
