@@ -1812,6 +1812,7 @@ AC_CONFIG_FILES([Makefile
 	  bgpd/rfp-example/rfptest/Makefile bgpd/rfp-example/librfp/Makefile
 	  debianpkg/Makefile
 	  redhat/frr.spec
+	  debianpkg/changelog
 	  snapcraft/snapcraft.yaml
 	  lib/version.h
 	  tests/lib/cli/test_cli.refout

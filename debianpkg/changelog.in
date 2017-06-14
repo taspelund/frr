@@ -1,4 +1,4 @@
-frr (3.1+cl3u3) RELEASED; urgency=medium
+frr (@VERSION@) RELEASED; urgency=medium
 
   * New Enabled: FRR Uplift part 3
 
