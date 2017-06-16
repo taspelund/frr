@@ -2,7 +2,6 @@ etc/frr/
 usr/bin/vtysh
 usr/include/frr/
 usr/lib/
-tools/frr-reload.py usr/lib/frr/
 tools/frr usr/lib/frr
 usr/share/doc/frr/
 tools/usr/share/cumulus/* usr/share/cumulus/
