@@ -22,7 +22,6 @@ otherobj = $(ioctl_method) $(ipforward) $(if_method) \
 AM_CFLAGS = $(WERROR)
 
 sbin_PROGRAMS = zebra
-noinst_PROGRAMS = testzebra
 module_LTLIBRARIES =
 
 zebra_SOURCES = \
@@ -38,13 +37,6 @@ zebra_SOURCES = \
 	zebra_vxlan.c \
 	# end
 
-testzebra_SOURCES = test_main.c zebra_rib.c interface.c connected.c debug.c \
-	zebra_vty.c zebra_ptm.c zebra_routemap.c zebra_ns.c zebra_vrf.c \
-	kernel_null.c  redistribute_null.c ioctl_null.c misc_null.c zebra_rnh_null.c \
-	zebra_ptm_null.c rtadv_null.c if_null.c zserv_null.c zebra_static.c \
-	zebra_memory.c zebra_mpls.c zebra_mpls_vty.c zebra_mpls_null.c \
-	zebra_l2_null.c zebra_vxlan_null.c
-
 noinst_HEADERS = \
 	zebra_memory.h \
 	connected.h ioctl.h rib.h rt.h zserv.h redistribute.h debug.h rtadv.h \
@@ -56,8 +48,6 @@ noinst_HEADERS = \
 	zebra_l2.h zebra_vxlan_private.h zebra_vxlan.h
 
 zebra_LDADD = $(otherobj) ../lib/libfrr.la $(LIBCAP)
-
-testzebra_LDADD = ../lib/libfrr.la $(LIBCAP)
 
 zebra_DEPENDENCIES = $(otherobj)
 
@@ -92,7 +82,7 @@ EXTRA_DIST = if_ioctl.c if_ioctl_solaris.c if_netlink.c \
 	rt_socket.c rtread_netlink.c rtread_sysctl.c \
 	rtread_getmsg.c kernel_socket.c kernel_netlink.c \
 	ioctl.c ioctl_solaris.c \
-	zebra_mpls_netlink.c zebra_mpls_openbsd.c \
+	zebra_mpls_netlink.c zebra_mpls_openbsd.c zebra_mpls_null.c \
 	GNOME-SMI GNOME-PRODUCT-ZEBRA-MIB
 
 client : client_main.o ../lib/libfrr.la
