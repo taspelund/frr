@@ -6298,7 +6298,15 @@ DEFUN (ip_pim_bfd,
   struct bfd_info *bfd_info = NULL;
 
   if (!pim_ifp)
-    return CMD_SUCCESS;
+    {
+      if (!pim_cmd_interface_add(ifp))
+        {
+          vty_out(vty, "Could not enable PIM SM on interface%s", VTY_NEWLINE);
+          return CMD_WARNING;
+        }
+    }
+  pim_ifp = ifp->info;
+
   bfd_info = pim_ifp->bfd_info;
 
   if (!bfd_info || !CHECK_FLAG (bfd_info->flags, BFD_FLAG_PARAM_CFG))
@@ -6320,7 +6328,10 @@ DEFUN (no_ip_pim_bfd,
   struct pim_interface *pim_ifp = ifp->info;
 
   if (!pim_ifp)
-    return CMD_SUCCESS;
+    {
+      vty_out(vty, "Pim not enabled on this interface%s", VTY_NEWLINE);
+      return CMD_WARNING;
+    }
 
   if (pim_ifp->bfd_info)
     {
@@ -6349,7 +6360,16 @@ DEFUN (ip_pim_bfd_param,
   u_int32_t tx_val;
   u_int8_t dm_val;
   int ret;
+  struct pim_interface *pim_ifp = ifp->info;
 
+  if (!pim_ifp)
+    {
+      if (!pim_cmd_interface_add(ifp))
+        {
+          vty_out(vty, "Could not enable PIM SM on interface%s", VTY_NEWLINE);
+          return CMD_WARNING;
+        }
+    }
 
   if ((ret = bfd_validate_param (vty, argv[idx_number]->arg,
                                  argv[idx_number_2]->arg,
