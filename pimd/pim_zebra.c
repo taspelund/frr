@@ -518,7 +518,7 @@ pim_scan_individual_oil (struct channel_oil *c_oil, int in_vif_index)
           char group_str[INET_ADDRSTRLEN];
           pim_inet4_dump("<source?>", c_oil->oil.mfcc_origin, source_str, sizeof(source_str));
           pim_inet4_dump("<group?>", c_oil->oil.mfcc_mcastgrp, group_str, sizeof(group_str));
-          zlog_debug ("%s: channel_oil (%s, %s) upstream info is not present.",
+          zlog_debug ("%s: channel_oil (%s,%s) upstream info is not present.",
                       __PRETTY_FUNCTION__, source_str, group_str);
         }
       input_iface_vif_index = pim_ecmp_fib_lookup_if_vif_index(c_oil->pim, vif_source, &src, &grp);

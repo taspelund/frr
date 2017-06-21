@@ -555,7 +555,7 @@ pim_ecmp_nexthop_search (struct pim_instance *pim, struct pim_nexthop_cache *pnc
                       char grp_str[INET_ADDRSTRLEN];
                       pim_inet4_dump ("<addr?>", grp->u.prefix4, grp_str,
                                       sizeof (grp_str));
-                      zlog_debug ("%s: (%s, %s) current nexthop %s is valid, skipping new path selection",
+                      zlog_debug ("%s: (%s,%s) current nexthop %s is valid, skipping new path selection",
                          __PRETTY_FUNCTION__, src_str, grp_str,
                          nexthop->interface->name);
                     }
@@ -650,7 +650,7 @@ pim_ecmp_nexthop_search (struct pim_instance *pim, struct pim_nexthop_cache *pnc
               pim_inet4_dump ("<rpf?>",
                               nexthop->mrib_nexthop_addr.u.prefix4, buf,
                               sizeof (buf));
-              zlog_debug ("%s: (%s, %s) selected nhop interface %s addr %s mod_val %u iter %d ecmp %d",
+              zlog_debug ("%s: (%s,%s) selected nhop interface %s addr %s mod_val %u iter %d ecmp %d",
                           __PRETTY_FUNCTION__, buf2, buf3, ifp->name,
                           buf, mod_val, nh_iter, qpim_ecmp_enable);
             }
