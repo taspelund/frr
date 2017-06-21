@@ -494,14 +494,14 @@ build_evpn_route_extcomm (struct bgpevpn *vpn, struct attr *attr)
 static void
 add_mac_mobility_to_attr (u_int32_t seq_num, struct attr *attr)
 {
-  struct attr_extra *attre;
-  struct ecommunity ecom_tmp;
-  struct ecommunity_val eval;
-  struct ecommunity *ecom_mm;
-  int i;
-  u_int8_t *pnt;
-  int type = 0;
-  int sub_type = 0;
+  struct attr_extra             *attre;
+  struct ecommunity             ecom_tmp;
+  struct ecommunity_val         eval;
+  u_int8_t                      *ecom_val_ptr;
+  int                           i;
+  u_int8_t                      *pnt;
+  int                           type = 0;
+  int                           sub_type = 0;
 
   attre = bgp_attr_extra_get (attr);
 
@@ -509,7 +509,7 @@ add_mac_mobility_to_attr (u_int32_t seq_num, struct attr *attr)
   encode_mac_mobility_extcomm (0, seq_num, &eval);
 
   /* Find current MM ecommunity */
-  ecom_mm = NULL;
+  ecom_val_ptr = NULL;
 
   if (attre->ecommunity)
     {
@@ -521,16 +521,16 @@ add_mac_mobility_to_attr (u_int32_t seq_num, struct attr *attr)
 
           if (type == ECOMMUNITY_ENCODE_EVPN && sub_type == ECOMMUNITY_EVPN_SUBTYPE_MACMOBILITY)
             {
-              ecom_mm = (struct ecommunity*) attre->ecommunity->val + (i * 8);
+              ecom_val_ptr = (u_int8_t*) (attre->ecommunity->val + (i * 8));
               break;
             }
         }
     }
 
   /* Update the existing MM ecommunity */
-  if (ecom_mm)
+  if (ecom_val_ptr)
     {
-      memcpy(ecom_mm->val, eval.val, sizeof(char) * ECOMMUNITY_SIZE);
+      memcpy(ecom_val_ptr, eval.val, sizeof(char) * ECOMMUNITY_SIZE);
     }
   /* Add MM to existing */
   else
