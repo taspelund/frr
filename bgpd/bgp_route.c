@@ -1588,6 +1588,7 @@ subgroup_announce_check (struct bgp_node *rn, struct bgp_info *ri,
 
       info.peer = peer;
       info.attr = attr;
+
       /* don't confuse inbound and outbound setting */
       RESET_FLAG(attr->rmap_change_flags);
 
@@ -1605,9 +1606,9 @@ subgroup_announce_check (struct bgp_node *rn, struct bgp_info *ri,
       SET_FLAG (peer->rmap_type, PEER_RMAP_TYPE_OUT);
 
       if (ri->extra && ri->extra->suppress)
-	ret = route_map_apply (UNSUPPRESS_MAP (filter), p, RMAP_BGP, &info);
+	      ret = route_map_apply (UNSUPPRESS_MAP (filter), p, RMAP_BGP, &info);
       else
-	ret = route_map_apply (ROUTE_MAP_OUT (filter), p, RMAP_BGP, &info);
+	      ret = route_map_apply (ROUTE_MAP_OUT (filter), p, RMAP_BGP, &info);
 
       peer->rmap_type = 0;
 
