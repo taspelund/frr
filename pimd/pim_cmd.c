@@ -619,7 +619,7 @@ igmp_show_interfaces_single (struct vty *vty, struct pim_instance *pim, const ch
   char other_hhmmss[10];
   int found_ifname = 0;
   int sqi;
-  int mloop;
+  int mloop = 0;
   long gmi_msec;  /* Group Membership Interval */
   long lmqt_msec;
   long ohpi_msec;
@@ -668,7 +668,10 @@ igmp_show_interfaces_single (struct vty *vty, struct pim_instance *pim, const ch
                                      pim_ifp->igmp_query_max_response_time_dsec) * 100;
 
       qri_msec = pim_ifp->igmp_query_max_response_time_dsec * 100;
-      mloop = pim_socket_mcastloop_get(pim_ifp->pim_sock_fd);
+      if (pim_ifp->pim_sock_fd >= 0)
+        mloop = pim_socket_mcastloop_get(pim_ifp->pim_sock_fd);
+      else
+        mloop = 0;
 
       if (uj) {
         json_row = json_object_new_object();
@@ -811,7 +814,7 @@ pim_show_interfaces_single (struct vty *vty, struct pim_instance *pim, const cha
   char src_str[INET_ADDRSTRLEN];
   char stat_uptime[10];
   char uptime[10];
-  int mloop;
+  int mloop = 0;
   int found_ifname = 0;
   int print_header;
   json_object *json = NULL;
@@ -835,9 +838,6 @@ pim_show_interfaces_single (struct vty *vty, struct pim_instance *pim, const cha
     if (!pim_ifp)
       continue;
 
-    if (pim_ifp->pim_sock_fd < 0)
-      continue;
-
     if (strcmp(ifname, "detail") && strcmp(ifname, ifp->name))
       continue;
 
@@ -848,7 +848,10 @@ pim_show_interfaces_single (struct vty *vty, struct pim_instance *pim, const cha
     pim_time_timer_to_hhmmss(hello_timer, sizeof(hello_timer), pim_ifp->t_pim_hello_timer);
     pim_time_mmss(hello_period, sizeof(hello_period), pim_ifp->pim_hello_period);
     pim_time_uptime(stat_uptime, sizeof(stat_uptime), now - pim_ifp->pim_ifstat_start);
-    mloop = pim_socket_mcastloop_get(pim_ifp->pim_sock_fd);
+    if (pim_ifp->pim_sock_fd >= 0)
+      mloop = pim_socket_mcastloop_get(pim_ifp->pim_sock_fd);
+    else
+      mloop = 0;
 
     if (uj) {
       char pbuf[PREFIX2STR_BUFFER];
@@ -1093,9 +1096,6 @@ pim_show_interfaces (struct vty *vty, struct pim_instance *pim, u_char uj)
     pim_ifp = ifp->info;
     
     if (!pim_ifp)
-      continue;
-
-    if (pim_ifp->pim_sock_fd < 0)
       continue;
 
     pim_nbrs = pim_ifp->pim_neighbor_list->count;
