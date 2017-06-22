@@ -476,13 +476,15 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
 	{
 	  //No if channel, but upstream we are at the RP.
 	  if (pim_nexthop_lookup (pim_ifp->pim, &source, up->upstream_register, 0) == 0)
-	    pim_register_stop_send(source.interface, &sg, pim_ifp->primary_address, up->upstream_register);
+            {
+              pim_register_stop_send(source.interface, &sg, pim_ifp->primary_address, up->upstream_register);
+              up->sptbit = PIM_UPSTREAM_SPTBIT_TRUE;
+            }
           if (!up->channel_oil)
             up->channel_oil = pim_channel_oil_add (pim_ifp->pim, &sg, pim_ifp->mroute_vif_index);
           pim_upstream_inherited_olist (pim_ifp->pim, up);
           if (!up->channel_oil->installed)
             pim_mroute_add (up->channel_oil, __PRETTY_FUNCTION__);
-	  pim_upstream_set_sptbit (up, ifp);
 	}
       else
 	{
