@@ -704,7 +704,7 @@ subgroup_update_packet (struct update_subgroup *subgrp)
   int addpath_encode = 0;
   u_int32_t addpath_tx_id = 0;
   struct prefix_rd *prd = NULL;
-  u_char *tag = NULL;
+  mpls_label_t label = MPLS_INVALID_LABEL;
 
   if (!subgrp)
     return NULL;
@@ -811,16 +811,16 @@ subgroup_update_packet (struct update_subgroup *subgrp)
 	    prd = (struct prefix_rd *) &rn->prn->p;
 
           if (safi == SAFI_LABELED_UNICAST)
-            tag = bgp_adv_label(rn, binfo, peer, afi, safi);
+            label = bgp_adv_label(rn, binfo, peer, afi, safi);
           else if (binfo && binfo->extra)
-            tag = binfo->extra->tag;
+            label = binfo->extra->label;
 
 	  if (stream_empty (snlri))
             mpattrlen_pos = bgp_packet_mpattr_start (snlri, peer, afi, safi,
                                                      &vecarr, adv->baa->attr);
 
           bgp_packet_mpattr_prefix (snlri, afi, safi, &rn->p, prd,
-                                    tag, addpath_encode, addpath_tx_id, adv->baa->attr);
+                                    &label, addpath_encode, addpath_tx_id, adv->baa->attr);
 	}
 
       num_pfx++;
@@ -847,7 +847,7 @@ subgroup_update_packet (struct update_subgroup *subgrp)
               send_attr_printed = 1;
             }
 
-          bgp_debug_rdpfxpath2str (afi, safi, prd, &rn->p, tag,
+          bgp_debug_rdpfxpath2str (afi, safi, prd, &rn->p, &label,
                                    addpath_encode, addpath_tx_id,
                                    pfx_buf, sizeof (pfx_buf));
           zlog_debug ("u%" PRIu64 ":s%" PRIu64 " send UPDATE %s",

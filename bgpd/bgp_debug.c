@@ -2143,7 +2143,7 @@ bgp_debug_zebra (struct prefix *p)
 const char *
 bgp_debug_rdpfxpath2str (afi_t afi, safi_t safi,
                          struct prefix_rd *prd, union prefixconstptr pu,
-                         u_char *tag, int addpath_valid,
+                         mpls_label_t *label, int addpath_valid,
                          u_int32_t addpath_id, char *str, int size)
 {
   char rd_buf[RD_ADDRSTRLEN];
@@ -2165,12 +2165,12 @@ bgp_debug_rdpfxpath2str (afi_t afi, safi_t safi,
     snprintf(pathid_buf, sizeof(pathid_buf), " with addpath ID %u", addpath_id);
 
   tag_buf[0] = '\0';
-  if (bgp_labeled_safi (safi) && tag)
+  if (bgp_labeled_safi (safi) && label)
     {
-      u_int32_t label;
+      u_int32_t label_value;
 
-      label = decode_label (tag);
-      sprintf (tag_buf, " label %u", label);
+      label_value = decode_label (label);
+      sprintf (tag_buf, " label %u", label_value);
     }
 
   if (prd)

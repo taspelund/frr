@@ -27,12 +27,13 @@
 #include "stream.h"
 #include "queue.h"
 #include "filter.h"
-
 #include "lib/json.h"
+
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_table.h"
 #include "bgpd/bgp_route.h"
 #include "bgpd/bgp_attr.h"
+#include "bgpd/bgp_label.h"
 #include "bgpd/bgp_mplsvpn.h"
 #include "bgpd/bgp_packet.h"
 #include "bgpd/bgp_vty.h"
@@ -62,9 +63,10 @@ argv_find_and_parse_vpnvx(struct cmd_token **argv, int argc, int *index, afi_t *
 }
 
 u_int32_t
-decode_label (u_char *pnt)
+decode_label (mpls_label_t *label_pnt)
 {
   u_int32_t l;
+  u_char *pnt = (u_char *) label_pnt;
 
   l = ((u_int32_t) *pnt++ << 12);
   l |= (u_int32_t) *pnt++ << 4;
@@ -73,9 +75,10 @@ decode_label (u_char *pnt)
 }
 
 void
-encode_label(u_int32_t label,
-             u_char *pnt)
+encode_label(mpls_label_t label,
+             mpls_label_t *label_pnt)
 {
+    u_char *pnt = (u_char *) label_pnt;
     if (pnt == NULL)
         return;
     *pnt++ = (label>>12) & 0xff;
@@ -96,7 +99,7 @@ bgp_nlri_parse_vpn (struct peer *peer, struct attr *attr,
   struct rd_as rd_as;
   struct rd_ip rd_ip;
   struct prefix_rd prd;
-  u_char *tagpnt;
+  mpls_label_t label;
   afi_t afi;
   safi_t safi;
   int addpath_encoded;
@@ -176,14 +179,15 @@ bgp_nlri_parse_vpn (struct peer *peer, struct attr *attr,
           return -1;
         }
       
-      /* Copyr label to prefix. */
-      tagpnt = pnt;
+      /* Copy label to prefix. */
+      memcpy(&label, pnt, BGP_LABEL_BYTES);
+      bgp_set_valid_label(&label);
 
       /* Copy routing distinguisher to rd. */
-      memcpy (&prd.val, pnt + 3, 8);
+      memcpy (&prd.val, pnt + BGP_LABEL_BYTES, 8);
 
       /* Decode RD type. */
-      type = decode_rd_type (pnt + 3);
+      type = decode_rd_type (pnt + BGP_LABEL_BYTES);
 
       switch (type)
         {
@@ -216,12 +220,12 @@ bgp_nlri_parse_vpn (struct peer *peer, struct attr *attr,
       if (attr)
         {
           bgp_update (peer, &p, addpath_id, attr, packet->afi, SAFI_MPLS_VPN,
-                      ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, tagpnt, 0, NULL);
+                      ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, &label, 0, NULL);
         }
       else
         {
           bgp_withdraw (peer, &p, addpath_id, attr, packet->afi, SAFI_MPLS_VPN,
-                        ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, tagpnt, NULL);
+                        ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, &label, NULL);
         }
     }
   /* Packet length consistency check. */

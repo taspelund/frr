@@ -38,6 +38,7 @@
 #include "bgpd/bgp_route.h"
 #include "bgpd/bgp_attr.h"
 #include "bgpd/bgp_mplsvpn.h"
+#include "bgpd/bgp_label.h"
 #include "bgpd/bgp_evpn.h"
 #include "bgpd/bgp_evpn_private.h"
 #include "bgpd/bgp_ecommunity.h"
@@ -741,7 +742,7 @@ update_evpn_route_entry (struct bgp *bgp, struct bgpevpn *vpn, afi_t afi,
   struct bgp_info *tmp_ri;
   struct bgp_info *local_ri, *remote_ri;
   struct attr *attr_new;
-  u_char tag[3];
+  mpls_label_t label = MPLS_INVALID_LABEL;
   int route_change = 1;
   u_char sticky = 0;
 
@@ -809,10 +810,10 @@ update_evpn_route_entry (struct bgp *bgp, struct bgpevpn *vpn, afi_t afi,
       SET_FLAG (tmp_ri->flags, BGP_INFO_VALID);
       bgp_info_extra_get(tmp_ri);
 
-      /* The VNI goes into the 'tag' field of the route */
-      vni2tag (vpn->vni, tag);
+      /* The VNI goes into the 'label' field of the route */
+      vni2label (vpn->vni, &label);
 
-      memcpy (tmp_ri->extra->tag, tag, 3);
+      memcpy (&tmp_ri->extra->label, &label, BGP_LABEL_BYTES);
       bgp_info_add (rn, tmp_ri);
     }
   else
@@ -1284,7 +1285,7 @@ install_evpn_route_entry (struct bgp *bgp, struct bgpevpn *vpn,
       bgp_info_extra_get(ri);
       ri->extra->parent = parent_ri;
       if (parent_ri->extra)
-        memcpy (ri->extra->tag, parent_ri->extra->tag, 3);
+        memcpy (&ri->extra->label, &parent_ri->extra->label, BGP_LABEL_BYTES);
       bgp_info_add (rn, ri);
     }
   else
@@ -1827,7 +1828,7 @@ process_type2_route (struct peer *peer, afi_t afi, safi_t safi,
   struct prefix_evpn p;
   u_char ipaddr_len;
   u_char macaddr_len;
-  u_char *tagpnt;
+  mpls_label_t *label_pnt;
   int ret;
 
   /* Type-2 route should be either 33, 37 or 49 bytes or an
@@ -1901,15 +1902,15 @@ process_type2_route (struct peer *peer, afi_t afi, safi_t safi,
 
   /* Get the VNI (in MPLS label field). */
   /* Note: We ignore the second VNI, if any. */
-  tagpnt = pfx;
+  label_pnt = (mpls_label_t *) pfx;
 
   /* Process the route. */
   if (attr)
     ret = bgp_update (peer, (struct prefix *)&p, addpath_id, attr, afi, safi,
-                      ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, tagpnt, 0, NULL);
+                      ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, label_pnt, 0, NULL);
   else
     ret = bgp_withdraw (peer, (struct prefix *)&p, addpath_id, attr, afi, safi,
-                        ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, tagpnt, NULL);
+                        ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, label_pnt, NULL);
   return ret;
 }
 
@@ -1988,7 +1989,7 @@ process_type5_route (struct peer *peer, afi_t afi, safi_t safi,
   struct bgp_route_evpn evpn;
   u_char ippfx_len;
   u_int32_t eth_tag;
-  u_char *tagpnt;
+  mpls_label_t *label_pnt;
   int ret;
 
   /* Type-5 route should be 34 or 58 bytes:
@@ -2059,22 +2060,22 @@ process_type5_route (struct peer *peer, afi_t afi, safi_t safi,
       p.prefixlen = PREFIX_LEN_ROUTE_TYPE_5_IPV6;
     }
 
-  tagpnt = pfx;
+  label_pnt = (mpls_label_t *) pfx;
 
   /* Process the route. */
   if (!withdraw)
     ret = bgp_update (peer, (struct prefix *)&p, addpath_id, attr, afi, safi,
-                      ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, tagpnt, 0, &evpn);
+                      ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, label_pnt, 0, &evpn);
   else
     ret = bgp_withdraw (peer, (struct prefix *)&p, addpath_id, attr, afi, safi,
-                        ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, tagpnt, &evpn);
+                        ZEBRA_ROUTE_BGP, BGP_ROUTE_NORMAL, &prd, label_pnt, &evpn);
 
   return ret;
 }
 
 static void
 evpn_mpattr_encode_type5 (struct stream *s, struct prefix *p,
-                          struct prefix_rd *prd, u_char * label,
+                          struct prefix_rd *prd, mpls_label_t *label,
                           struct attr *attr)
 {
   int len;
@@ -2226,14 +2227,14 @@ bgp_evpn_uninstall_routes (struct bgp *bgp, struct bgpevpn *vpn)
 }
 
 /*
- * Function to display "tag" in route as a VNI.
+ * Function to display "label" in route as a VNI.
  */
 char *
-bgp_evpn_tag2str (u_char *tag, char *buf, int len)
+bgp_evpn_label2str (mpls_label_t *label, char *buf, int len)
 {
   vni_t vni;
 
-  vni = tag2vni (tag);
+  vni = label2vni (label);
   snprintf (buf, len, "%u", vni);
   return buf;
 }
@@ -2288,7 +2289,7 @@ bgp_evpn_route2str (struct prefix_evpn *p, char *buf, int len)
  */
 void
 bgp_evpn_encode_prefix (struct stream *s, struct prefix *p,
-                        struct prefix_rd *prd, u_char *tag,
+                        struct prefix_rd *prd, mpls_label_t *label,
                         struct attr *attr, int addpath_encode,
                         u_int32_t addpath_tx_id)
 {
@@ -2317,7 +2318,7 @@ bgp_evpn_encode_prefix (struct stream *s, struct prefix *p,
         stream_putc (s, 8*ipa_len); /* IP address Length */
         if (ipa_len)
           stream_put (s, &evp->prefix.ip.ip.addr, ipa_len); /* IP */
-        stream_put (s, tag, 3); /* VNI is contained in 'tag' */
+        stream_put (s, label, BGP_LABEL_BYTES); /* VNI is contained in 'label' */
         break;
 
       case BGP_EVPN_IMET_ROUTE:
@@ -2331,7 +2332,7 @@ bgp_evpn_encode_prefix (struct stream *s, struct prefix *p,
 
       case BGP_EVPN_IP_PREFIX_ROUTE:
         /* TODO: AddPath support. */
-        evpn_mpattr_encode_type5 (s, p, prd, tag, attr);
+        evpn_mpattr_encode_type5 (s, p, prd, label, attr);
         break;
 
       default:

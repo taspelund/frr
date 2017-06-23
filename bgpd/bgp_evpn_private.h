@@ -143,16 +143,18 @@ is_vni_param_configured (struct bgpevpn *vpn)
 }
 
 static inline void
-vni2tag (vni_t vni, u_char *tag)
+vni2label (vni_t vni, mpls_label_t *label)
 {
+  u_char *tag = (u_char *) label;
   tag[0] = (vni >> 16) & 0xFF;
   tag[1] = (vni >> 8) & 0xFF;
   tag[2] = vni & 0xFF;
 }
 
 static inline vni_t
-tag2vni (u_char *tag)
+label2vni (mpls_label_t *label)
 {
+  u_char *tag = (u_char *) label;
   vni_t vni;
 
   vni = ((u_int32_t) *tag++ << 16);
