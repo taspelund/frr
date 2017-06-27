@@ -2794,11 +2794,13 @@ zebra_vxlan_local_mac_add_update (struct interface *ifp, struct interface *br_if
            * this is a operator error and we must log a warning
            */
           if (CHECK_FLAG (mac->flags, ZEBRA_MAC_STICKY))
-            zlog_warn ("MAC %s is already learnt as a remote sticky mac behind VTEP %s VNI %d",
-                       prefix_mac2str (macaddr, buf, sizeof (buf)),
-                       inet_ntoa (mac->fwd_info.r_vtep_ip),
-                       zvni->vni);
-            return 0;
+            {
+              zlog_warn ("MAC %s is already learnt as a remote sticky mac behind VTEP %s VNI %d",
+                         prefix_mac2str (macaddr, buf, sizeof (buf)),
+                         inet_ntoa (mac->fwd_info.r_vtep_ip),
+                         zvni->vni);
+              return 0;
+            }
         }
     }
 
