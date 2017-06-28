@@ -2235,6 +2235,30 @@ bgp_zebra_terminate_radv (struct bgp *bgp, struct peer *peer)
 }
 
 int
+bgp_zebra_advertise_gw_macip (struct bgp *bgp, int advertise, vni_t vni)
+{
+  struct stream                     *s = NULL;
+
+  /* Check socket. */
+  if (!zclient || zclient->sock < 0)
+    return 0;
+
+  /* Don't try to register if Zebra doesn't know of this instance. */
+  if (!IS_BGP_INST_KNOWN_TO_ZEBRA(bgp))
+    return 0;
+
+  s = zclient->obuf;
+  stream_reset (s);
+
+  zclient_create_header (s, ZEBRA_ADVERTISE_DEFAULT_GW, bgp->vrf_id);
+  stream_putc (s, advertise);
+  stream_put3 (s, vni);
+  stream_putw_at (s, 0, stream_get_endp (s));
+
+  return zclient_send_message(zclient);
+}
+
+int
 bgp_zebra_advertise_all_vni (struct bgp *bgp, int advertise)
 {
   struct stream *s;
@@ -2322,7 +2346,7 @@ bgp_zebra_process_local_macip (int command, struct zclient *zclient,
   int ipa_len;
   char buf[ETHER_ADDR_STRLEN];
   char buf1[INET6_ADDRSTRLEN];
-  u_char sticky;
+  u_char flags;
 
   memset (&ip, 0, sizeof (ip));
   s = zclient->ibuf;
@@ -2344,21 +2368,21 @@ bgp_zebra_process_local_macip (int command, struct zclient *zclient,
       ip.ipa_type = (ipa_len == IPV4_MAX_BYTELEN) ? IPADDR_V4: IPADDR_V6;
       stream_get (&ip.ip.addr, s, ipa_len);
     }
-  sticky = stream_getc (s);
+  flags = stream_getc (s);
 
   bgp = bgp_lookup_by_vrf_id (vrf_id);
   if (!bgp)
     return 0;
 
   if (BGP_DEBUG (zebra, ZEBRA))
-    zlog_debug ("%u:Recv MACIP %s %sMAC %s IP %s VNI %u",
+    zlog_debug ("%u:Recv MACIP %s flags 0x%x MAC %s IP %s VNI %u",
                 vrf_id, (command == ZEBRA_MACIP_ADD) ? "Add" : "Del",
-                sticky ? "sticky " : "",
+                flags,
                 prefix_mac2str (&mac, buf, sizeof (buf)),
                 ipaddr2str (&ip, buf1, sizeof(buf1)), vni);
 
   if (command == ZEBRA_MACIP_ADD)
-    return bgp_evpn_local_macip_add (bgp, vni, &mac, &ip, sticky);
+    return bgp_evpn_local_macip_add (bgp, vni, &mac, &ip, flags);
   else
     return bgp_evpn_local_macip_del (bgp, vni, &mac, &ip);
 }

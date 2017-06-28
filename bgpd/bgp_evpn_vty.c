@@ -1753,6 +1753,56 @@ evpn_show_all_vnis (struct vty *vty, struct bgp *bgp)
 }
 
 /*
+ * evpn - enable advertisement of default g/w
+ */
+static void
+evpn_set_advertise_default_gw (struct bgp *bgp, struct bgpevpn *vpn)
+{
+  if (!vpn)
+  {
+    if (bgp->advertise_gw_macip)
+      return;
+
+    bgp->advertise_gw_macip = 1;
+    bgp_zebra_advertise_gw_macip (bgp, bgp->advertise_gw_macip, 0);
+  }
+  else
+  {
+    if (vpn->advertise_gw_macip)
+      return;
+
+    vpn->advertise_gw_macip = 1;
+    bgp_zebra_advertise_gw_macip (bgp, vpn->advertise_gw_macip, vpn->vni);
+  }
+  return;
+}
+
+/*
+ * evpn - disable advertisement of default g/w
+ */
+static void
+evpn_unset_advertise_default_gw (struct bgp *bgp, struct bgpevpn *vpn)
+{
+  if (!vpn)
+  {
+    if (!bgp->advertise_gw_macip)
+      return;
+
+    bgp->advertise_gw_macip = 0;
+    bgp_zebra_advertise_gw_macip (bgp, bgp->advertise_gw_macip, 0);
+  }
+  else
+  {
+    if (!vpn->advertise_gw_macip)
+      return;
+
+    vpn->advertise_gw_macip = 0;
+    bgp_zebra_advertise_gw_macip (bgp, vpn->advertise_gw_macip, vpn->vni);
+  }
+  return;
+}
+
+/*
  * EVPN (VNI advertisement) enabled. Register with zebra.
  */
 static void
@@ -1808,10 +1858,13 @@ write_vni_config (struct vty *vty, struct bgpevpn *vpn, int *write)
           for (ALL_LIST_ELEMENTS (vpn->export_rtl, node, nnode, ecom))
             {
               ecom_str = ecommunity_ecom2str (ecom, ECOMMUNITY_FORMAT_ROUTE_MAP, 0);
-              vty_out (vty, "   route-target export %s%s", ecom_str, VTY_NEWLINE);
+              vty_out (vty, "  route-target export %s%s", ecom_str, VTY_NEWLINE);
               XFREE (MTYPE_ECOMMUNITY_STR, ecom_str);
             }
         }
+
+      if (vpn->advertise_gw_macip)
+        vty_out (vty, "   advertise-default-gw%s", VTY_NEWLINE);
 
       vty_out (vty, "  exit-vni%s", VTY_NEWLINE);
     }
@@ -1823,6 +1876,77 @@ write_vni_config_for_entry (struct hash_backet *backet,
 {
   struct bgpevpn *vpn = (struct bgpevpn *) backet->data;
   write_vni_config (cfg->vty, vpn, &cfg->write);
+}
+
+DEFUN (bgp_evpn_advertise_default_gw_vni,
+       bgp_evpn_advertise_default_gw_vni_cmd,
+       "advertise-default-gw",
+       "Advertise defualt g/w mac-ip routes in EVPN for a VNI\n")
+{
+  struct bgp                  *bgp = VTY_GET_CONTEXT(bgp);
+  VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
+
+  if (!bgp)
+    return CMD_WARNING;
+
+  if (!vpn)
+    return CMD_WARNING;
+
+  evpn_set_advertise_default_gw (bgp, vpn);
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_bgp_evpn_advertise_default_vni_gw,
+       no_bgp_evpn_advertise_default_gw_vni_cmd,
+       "no advertise-default-gw",
+       NO_STR
+       "Withdraw default g/w mac-ip routes from EVPN for a VNI\n")
+{
+  struct bgp                  *bgp = VTY_GET_CONTEXT(bgp);
+  VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
+
+  if (!bgp)
+    return CMD_WARNING;
+
+  if (!vpn)
+    return CMD_WARNING;
+
+  evpn_unset_advertise_default_gw (bgp, vpn);
+
+  return CMD_SUCCESS;
+}
+
+
+DEFUN (bgp_evpn_advertise_default_gw,
+       bgp_evpn_advertise_default_gw_cmd,
+       "advertise-default-gw",
+       "Advertise All defualt g/w mac-ip routes in EVPN\n")
+{
+  struct bgp                    *bgp = VTY_GET_CONTEXT(bgp);
+
+  if (!bgp)
+    return CMD_WARNING;
+
+  evpn_set_advertise_default_gw (bgp, NULL);
+
+  return CMD_SUCCESS;
+}
+
+DEFUN (no_bgp_evpn_advertise_default_gw,
+       no_bgp_evpn_advertise_default_gw_cmd,
+       "no advertise-default-gw",
+       NO_STR
+       "Withdraw All default g/w mac-ip routes from EVPN\n")
+{
+  struct bgp                    *bgp = VTY_GET_CONTEXT(bgp);
+
+  if (!bgp)
+    return CMD_WARNING;
+
+  evpn_unset_advertise_default_gw (bgp, NULL);
+
+  return CMD_SUCCESS;
 }
 
 DEFUN (bgp_evpn_advertise_all_vni,
@@ -1878,6 +2002,9 @@ DEFUN (show_bgp_l2vpn_evpn_vni,
 
   if (argc == ((idx + 1) + 1))
     {
+      vty_out (vty, "Advertise gateway macip flag: %s%s",
+               bgp->advertise_gw_macip ? "Enabled" : "Disabled", VTY_NEWLINE);
+
       /* Display all VNIs */
       vty_out (vty, "Advertise All VNI flag: %s%s",
                bgp->advertise_all_vni? "Enabled" : "Disabled", VTY_NEWLINE);
@@ -2835,6 +2962,12 @@ bgp_config_write_evpn_info (struct vty *vty, struct bgp *bgp, afi_t afi,
       bgp_config_write_family_header (vty, afi, safi, write);
       vty_out (vty, "  advertise-all-vni%s", VTY_NEWLINE);
     }
+
+  if (bgp->advertise_gw_macip)
+    {
+      bgp_config_write_family_header (vty, afi, safi, write);
+      vty_out (vty, "  advertise-default-gw%s", VTY_NEWLINE);
+    }
 }
 
 void bgp_ethernetvpn_init(void)
@@ -2855,6 +2988,8 @@ void bgp_ethernetvpn_init(void)
   install_element(BGP_EVPN_NODE, &evpnrt5_network_cmd);
   install_element (BGP_EVPN_NODE, &bgp_evpn_advertise_all_vni_cmd);
   install_element (BGP_EVPN_NODE, &no_bgp_evpn_advertise_all_vni_cmd);
+  install_element (BGP_EVPN_NODE, &bgp_evpn_advertise_default_gw_cmd);
+  install_element (BGP_EVPN_NODE, &no_bgp_evpn_advertise_default_gw_cmd);
 
   /* "show bgp l2vpn evpn" commands. */
   install_element (VIEW_NODE, &show_bgp_l2vpn_evpn_vni_cmd);
@@ -2891,4 +3026,6 @@ void bgp_ethernetvpn_init(void)
   install_element (BGP_EVPN_VNI_NODE, &bgp_evpn_vni_rt_cmd);
   install_element (BGP_EVPN_VNI_NODE, &no_bgp_evpn_vni_rt_cmd);
   install_element (BGP_EVPN_VNI_NODE, &no_bgp_evpn_vni_rt_without_val_cmd);
+  install_element (BGP_EVPN_VNI_NODE, &bgp_evpn_advertise_default_gw_vni_cmd);
+  install_element (BGP_EVPN_VNI_NODE, &no_bgp_evpn_advertise_default_gw_vni_cmd);
 }

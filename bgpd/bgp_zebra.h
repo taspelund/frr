@@ -21,6 +21,8 @@
 #ifndef _QUAGGA_BGP_ZEBRA_H
 #define _QUAGGA_BGP_ZEBRA_H
 
+#include "vxlan.h"
+
 #define BGP_NEXTHOP_BUF_SIZE (8 * sizeof (struct in_addr *))
 #define BGP_IFINDICES_BUF_SIZE (8 * sizeof (unsigned int))
 #define BGP_LABEL_BUF_SIZE (8 * sizeof (unsigned int))
@@ -62,7 +64,8 @@ extern struct interface *if_lookup_by_ipv4_exact (struct in_addr *, vrf_id_t);
 extern struct interface *if_lookup_by_ipv6 (struct in6_addr *, ifindex_t, vrf_id_t);
 extern struct interface *if_lookup_by_ipv6_exact (struct in6_addr *, ifindex_t, vrf_id_t);
 
-extern int bgp_zebra_advertise_all_vni (struct bgp *, int); 
+extern int bgp_zebra_advertise_gw_macip (struct bgp *, int, vni_t);
+extern int bgp_zebra_advertise_all_vni (struct bgp *, int);
 
 extern int bgp_zebra_num_connects(void);
 
