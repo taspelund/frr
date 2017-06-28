@@ -1293,7 +1293,7 @@ DEFUNSH (VTYSH_BGPD,
 }
 
 #if defined (HAVE_CUMULUS)
-DEFUNSH (VTYSH_BGPD,
+DEFUNSH_HIDDEN (VTYSH_BGPD,
 	 address_family_evpn2,
 	 address_family_evpn2_cmd,
 	 "address-family evpn",
