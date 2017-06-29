@@ -2983,6 +2983,8 @@ zebra_mpls_close_tables (struct zebra_vrf *zvrf)
   hash_free(zvrf->lsp_table);
   hash_clean(zvrf->slsp_table, NULL);
   hash_free(zvrf->slsp_table);
+  route_table_finish(zvrf->fec_table[AFI_IP]);
+  route_table_finish(zvrf->fec_table[AFI_IP6]);
 }
 
 /*

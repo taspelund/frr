@@ -3947,4 +3947,5 @@ void
 zebra_vxlan_close_tables (struct zebra_vrf *zvrf)
 {
   hash_iterate (zvrf->vni_table, zvni_cleanup_all, zvrf);
+  hash_free (zvrf->vni_table);
 }
