@@ -341,7 +341,7 @@ int pim_interface_config_write(struct vty *vty)
 	    }
 	  }
 
-	  writes += pim_static_write_mroute (vty, pim, ifp);
+	  writes += pim_static_write_mroute (pim, vty, ifp);
           pim_bfd_write_config (vty, ifp);
 	}
 	vty_out(vty, "!%s", VTY_NEWLINE);

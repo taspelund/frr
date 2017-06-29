@@ -45,7 +45,7 @@
  *   command to Zebra.
  */
 void
-pim_sendmsg_zebra_rnh (struct zclient *zclient, struct pim_instance *pim,
+pim_sendmsg_zebra_rnh (struct pim_instance *pim, struct zclient *zclient,
                        struct pim_nexthop_cache *pnc, int command)
 {
   struct stream *s;
@@ -174,7 +174,7 @@ pim_find_or_track_nexthop (struct pim_instance *pim, struct prefix *addr, struct
     {
       pnc = pim_nexthop_cache_add (pim, &rpf);
       if (pnc)
-        pim_sendmsg_zebra_rnh (zclient, pim, pnc, ZEBRA_NEXTHOP_REGISTER);
+        pim_sendmsg_zebra_rnh (pim, zclient, pnc, ZEBRA_NEXTHOP_REGISTER);
       else
         {
           char rpf_str[PREFIX_STRLEN];
@@ -254,7 +254,7 @@ pim_delete_tracked_nexthop (struct pim_instance *pim, struct prefix *addr,
 
       if (pnc->rp_list->count == 0 && pnc->upstream_list->count == 0)
         {
-          pim_sendmsg_zebra_rnh (zclient, pim, pnc, ZEBRA_NEXTHOP_UNREGISTER);
+          pim_sendmsg_zebra_rnh (pim, zclient, pnc, ZEBRA_NEXTHOP_UNREGISTER);
 
           list_delete (pnc->rp_list);
           list_delete (pnc->upstream_list);
