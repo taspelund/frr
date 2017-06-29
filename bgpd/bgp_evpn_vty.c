@@ -2742,12 +2742,12 @@ DEFUN (bgp_evpn_vni_rt,
     {
       ecomadd = ecommunity_str2com (argv[2]->arg,
                                     ECOMMUNITY_ROUTE_TARGET, 0);
-      ecommunity_str(ecomadd);
       if (!ecomadd)
         {
           vty_out (vty, "%% Malformed Route Target list%s", VTY_NEWLINE);
           return CMD_WARNING;
         }
+      ecommunity_str(ecomadd);
 
       /* Do nothing if we already have this import route-target */
       if (! bgp_evpn_rt_matches_existing (vpn->import_rtl, ecomadd))
@@ -2759,12 +2759,12 @@ DEFUN (bgp_evpn_vni_rt,
     {
       ecomadd = ecommunity_str2com (argv[2]->arg,
                                     ECOMMUNITY_ROUTE_TARGET, 0);
-      ecommunity_str(ecomadd);
       if (!ecomadd)
         {
           vty_out (vty, "%% Malformed Route Target list%s", VTY_NEWLINE);
           return CMD_WARNING;
         }
+      ecommunity_str(ecomadd);
 
       /* Do nothing if we already have this export route-target */
       if (! bgp_evpn_rt_matches_existing (vpn->export_rtl, ecomadd))
@@ -2832,12 +2832,12 @@ DEFUN (no_bgp_evpn_vni_rt,
     }
 
   ecomdel = ecommunity_str2com (argv[3]->arg, ECOMMUNITY_ROUTE_TARGET, 0);
-  ecommunity_str(ecomdel);
   if (!ecomdel)
     {
       vty_out (vty, "%% Malformed Route Target list%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
+  ecommunity_str(ecomdel);
 
   if (rt_type == RT_TYPE_IMPORT)
     {
