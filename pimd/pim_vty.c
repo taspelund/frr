@@ -140,6 +140,11 @@ pim_debug_config_write (struct vty *vty)
     ++writes;
   }
 
+  if (PIM_DEBUG_PIM_NHT) {
+    vty_out (vty, "debug pim nht%s", VTY_NEWLINE);
+    ++writes;
+  }
+
   return writes;
 }
 
