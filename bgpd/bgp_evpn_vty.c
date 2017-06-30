@@ -1858,7 +1858,7 @@ write_vni_config (struct vty *vty, struct bgpevpn *vpn, int *write)
           for (ALL_LIST_ELEMENTS (vpn->export_rtl, node, nnode, ecom))
             {
               ecom_str = ecommunity_ecom2str (ecom, ECOMMUNITY_FORMAT_ROUTE_MAP, 0);
-              vty_out (vty, "  route-target export %s%s", ecom_str, VTY_NEWLINE);
+              vty_out (vty, "   route-target export %s%s", ecom_str, VTY_NEWLINE);
               XFREE (MTYPE_ECOMMUNITY_STR, ecom_str);
             }
         }
