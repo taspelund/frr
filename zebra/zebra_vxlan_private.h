@@ -120,6 +120,9 @@ struct zebra_mac_t_
     } fwd_info;
 
   u_int32_t       neigh_refcnt;
+
+  /* List of neigh associated with this mac */
+  struct list     *neigh_list;
 };
 
 /*
@@ -146,6 +149,24 @@ struct mac_walk_ctx
   struct json_object *json;   /* Used for JSON Output */
 };
 
+enum zebra_neigh_state
+{
+  ZEBRA_NEIGH_INACTIVE = 0,
+  ZEBRA_NEIGH_ACTIVE   = 1
+};
+
+#define IS_ZEBRA_NEIGH_ACTIVE(n)    \
+        n->state == ZEBRA_NEIGH_ACTIVE
+
+#define IS_ZEBRA_NEIGH_INACTIVE(n)  \
+        n->state == ZEBRA_NEIGH_INACTIVE
+
+#define ZEBRA_NEIGH_SET_ACTIVE(n) \
+        n->state = ZEBRA_NEIGH_ACTIVE
+
+#define ZEBRA_NEIGH_SET_INACTIVE(n) \
+        n->state = ZEBRA_NEIGH_INACTIVE
+
 /*
  * Neighbor hash table.
  *
@@ -160,20 +181,22 @@ struct mac_walk_ctx
 struct zebra_neigh_t_
 {
   /* IP address. */
-  struct ipaddr   ip;
+  struct ipaddr           ip;
 
   /* MAC address. */
-  struct ethaddr  emac;
+  struct ethaddr          emac;
 
   /* Underlying interface. */
   ifindex_t ifindex;
 
-  u_int32_t       flags;
-#define ZEBRA_NEIGH_LOCAL   0x01
-#define ZEBRA_NEIGH_REMOTE  0x02
+  u_int32_t               flags;
+#define ZEBRA_NEIGH_LOCAL     0x01
+#define ZEBRA_NEIGH_REMOTE    0x02
+
+  enum zebra_neigh_state  state;
 
   /* Remote VTEP IP - applicable only for remote neighbors. */
-  struct in_addr r_vtep_ip;
+  struct in_addr          r_vtep_ip;
 };
 
 /*
