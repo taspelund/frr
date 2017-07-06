@@ -146,7 +146,6 @@ static int zclient_read_nexthop(struct pim_instance *pim, struct zclient *zlooku
 {
   int num_ifindex = 0;
   struct stream *s;
-  const uint16_t MIN_LEN = 10; /* getipv4=4 getc=1 getl=4 getc=1 */
   uint16_t length;
   u_char marker;
   u_char version;
@@ -178,13 +177,6 @@ static int zclient_read_nexthop(struct pim_instance *pim, struct zclient *zlooku
 		 __PRETTY_FUNCTION__);
 	zclient_lookup_failed(zlookup);
 	return -1;
-      }
-
-      if (length < MIN_LEN) {
-	zlog_err("%s: failure reading zclient lookup socket: len=%d < MIN_LEN=%d",
-		 __PRETTY_FUNCTION__, length, MIN_LEN);
-	zclient_lookup_failed(zlookup);
-	return -2;
       }
     }
 
