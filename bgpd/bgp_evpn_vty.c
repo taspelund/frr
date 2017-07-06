@@ -208,6 +208,7 @@ display_vni (struct vty *vty, struct bgpevpn *vpn)
            VTY_NEWLINE);
   vty_out (vty, "  Originator IP: %s%s",
            inet_ntoa(vpn->originator_ip), VTY_NEWLINE);
+  vty_out (vty, "  Advertise-gw-macip : %s%s", vpn->advertise_gw_macip ? "Yes" : "No", VTY_NEWLINE);
 
   vty_out (vty, "  Import Route Target:%s", VTY_NEWLINE);
   for (ALL_LIST_ELEMENTS (vpn->import_rtl, node, nnode, ecom))
