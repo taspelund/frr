@@ -4063,7 +4063,7 @@ zebra_vxlan_add_del_gw_macip (struct interface *ifp,
       struct zebra_if             *svi_if_zif = NULL; /* Zebra daemon specific info for SVI*/
 
       svi_if_zif = ifp->info;
-      if (svi_if_zif)
+      if (svi_if_zif && svi_if_zif->link)
         zvni = zvni_map_svi (ifp, svi_if_zif->link);
     }
   else if (IS_ZEBRA_IF_BRIDGE (ifp))

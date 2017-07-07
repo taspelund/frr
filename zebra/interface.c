@@ -1260,8 +1260,14 @@ if_dump_vty (struct vty *vty, struct interface *ifp)
     }
 
   if (zebra_if->link_ifindex != IFINDEX_INTERNAL)
-    vty_out(vty, "  Link ifindex %u%s",
-            zebra_if->link_ifindex, VTY_NEWLINE);
+    {
+      vty_out(vty, "  Link ifindex %u",
+	      zebra_if->link_ifindex);
+      if (zebra_if->link)
+        vty_out(vty, "(%s)%s", zebra_if->link->name, VTY_NEWLINE);
+      else
+        vty_out(vty, "(Unknown)%s", VTY_NEWLINE);
+    }
 
   if (HAS_LINK_PARAMS(ifp))
     {
