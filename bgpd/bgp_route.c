@@ -6616,10 +6616,10 @@ route_vty_out (struct vty *vty, struct prefix *p,
 		    {
 		      len = vty_out (vty, "%s",
 				     binfo->peer->conf_if);
-		      len = 7 - len; /* len of IPv6 addr + max len of def ifname */
+		      len = 16 - len; /* len of IPv6 addr + max len of def ifname */
 
 		      if (len < 1)
-			vty_out (vty, "%s%*s", VTY_NEWLINE, 45, " ");
+			vty_out (vty, "%s%*s", VTY_NEWLINE, 36, " ");
 		      else
 			vty_out (vty, "%*s", len, " ");
 		    }
