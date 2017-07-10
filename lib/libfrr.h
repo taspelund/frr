@@ -29,6 +29,11 @@
 #include "module.h"
 #include "hook.h"
 
+#define FRR_CONFDIR SYSCONFDIR
+#define FRR_INTCONF "frr.conf"
+#define QUAGGA_CONFDIR "/etc/quagga"
+#define QUAGGA_INTCONF "quagga.conf"
+
 #define FRR_NO_PRIVSEP		(1 << 0)
 #define FRR_NO_TCPVTY		(1 << 1)
 #define FRR_LIMITED_CLI		(1 << 2)
@@ -101,9 +106,12 @@ extern void frr_vty_serv(void);
 extern void frr_run(struct thread_master *master);
 
 extern char config_default[256];
-extern const char frr_sysconfdir[];
-extern const char frr_vtydir[];
-extern const char frr_moduledir[];
+extern char config_default_int[256];
+extern char frr_sysconfdir[];
+extern char frr_vtydir[];
+extern char frr_moduledir[];
+
+extern bool quagga_compat_mode;
 
 extern char frr_protoname[];
 extern char frr_protonameinst[];

@@ -44,10 +44,6 @@
 /* VTY shell program name. */
 char *progname;
 
-/* Configuration file name and directory. */
-static char vtysh_config_always[MAXPATHLEN] = SYSCONFDIR VTYSH_DEFAULT_CONFIG;
-static char quagga_config_default[MAXPATHLEN] = SYSCONFDIR FRR_DEFAULT_CONFIG;
-char *quagga_config = quagga_config_default;
 char history_file[MAXPATHLEN];
 
 /* Flag for indicate executing child command. */
@@ -145,6 +141,7 @@ static void usage(int status)
 		       "-m, --markfile           Mark input file with context end\n"
 		       "    --vty_socket         Override vty socket path\n"
 		       "    --config_dir         Override config directory path\n"
+		       "-q  --quagga             Use existing configs in /etc/quagga\n"
 		       "-w, --writeconfig        Write integrated config (frr.conf) and exit\n"
 		       "-h, --help               Display this help and exit\n\n"
 		       "Note that multiple commands may be executed from the command\n"
@@ -173,6 +170,7 @@ struct option longopts[] = {
 	{"help", no_argument, NULL, 'h'},
 	{"noerror", no_argument, NULL, 'n'},
 	{"mark", no_argument, NULL, 'm'},
+	{"quagga", no_argument, NULL, 'q'},
 	{"writeconfig", no_argument, NULL, 'w'},
 	{0}};
 
@@ -249,6 +247,33 @@ static void vtysh_unflock_config(void)
 	close(flock_fd);
 }
 
+/* Configuration file paths */
+static char confdir[MAXPATHLEN];
+static char vtysh_conf_name[MAXPATHLEN];
+static char frr_conf_name[MAXPATHLEN];
+static char vtysh_conf[MAXPATHLEN];
+char frr_conf[MAXPATHLEN];
+
+/**
+ * Logic for updating configuration paths and filenames.
+ *
+ * @param confdir -- the base configuration directory, without a trailing slash
+ *                      default: /etc/frr
+ * @param name_int -- the basename of the integrated config file
+ * @param name_vtysh -- the basename of the vytsh config file
+ */
+static void vtysh_update_config_paths(const char *configdir,
+				      const char *name_int,
+				      const char *name_vtysh)
+{
+	snprintf(confdir, sizeof(confdir), "%s", configdir);
+	snprintf(vtysh_conf_name, sizeof(vtysh_conf_name), "%s", name_vtysh);
+	snprintf(frr_conf_name, sizeof(frr_conf_name), "%s", name_int);
+	snprintf(vtysh_conf, sizeof(vtysh_conf), "%s/%s", confdir,
+		 vtysh_conf_name);
+	snprintf(frr_conf, sizeof(frr_conf), "%s/%s", confdir, frr_conf_name);
+}
+
 /* VTY shell main routine. */
 int main(int argc, char **argv, char **env)
 {
@@ -258,7 +283,6 @@ int main(int argc, char **argv, char **env)
 	int boot_flag = 0;
 	const char *daemon_name = NULL;
 	const char *inputfile = NULL;
-	const char *vtysh_configfile_name;
 	struct cmd_rec {
 		char *line;
 		struct cmd_rec *next;
@@ -277,13 +301,17 @@ int main(int argc, char **argv, char **env)
 	/* Preserve name of myself. */
 	progname = ((p = strrchr(argv[0], '/')) ? ++p : argv[0]);
 
+	/* Build default configuration paths */
+	vtysh_update_config_paths(SYSCONFDIR, FRR_INTCONF,
+				  VTYSH_DEFAULT_CONFIG);
+
 	/* if logging open now */
 	if ((p = getenv("VTYSH_LOG")) != NULL)
 		logfile = fopen(p, "a");
 
 	/* Option handling. */
 	while (1) {
-		opt = getopt_long(argc, argv, "be:c:d:nf:mEhCw", longopts, 0);
+		opt = getopt_long(argc, argv, "be:c:d:nf:mEhCqw", longopts, 0);
 
 		if (opt == EOF)
 			break;
@@ -318,52 +346,8 @@ int main(int argc, char **argv, char **env)
 					"Overriding of Config Directory blocked for vtysh with setuid");
 				return 1;
 			}
-			/*
-			 * Overwrite location for vtysh.conf
-			 */
-			vtysh_configfile_name =
-				strrchr(VTYSH_DEFAULT_CONFIG, '/');
-			if (vtysh_configfile_name)
-				/* skip '/' */
-				vtysh_configfile_name++;
-			else
-				/*
-				 * VTYSH_DEFAULT_CONFIG configured with relative
-				 * path
-				 * during config? Should really never happen for
-				 * sensible config
-				 */
-				vtysh_configfile_name =
-					(char *)VTYSH_DEFAULT_CONFIG;
-			strlcpy(vtysh_config_always, optarg,
-				sizeof(vtysh_config_always));
-			strlcat(vtysh_config_always, "/",
-				sizeof(vtysh_config_always));
-			strlcat(vtysh_config_always, vtysh_configfile_name,
-				sizeof(vtysh_config_always));
-			/*
-			 * Overwrite location for frr.conf
-			 */
-			vtysh_configfile_name =
-				strrchr(FRR_DEFAULT_CONFIG, '/');
-			if (vtysh_configfile_name)
-				/* skip '/' */
-				vtysh_configfile_name++;
-			else
-				/*
-				 * FRR_DEFAULT_CONFIG configured with relative
-				 * path
-				 * during config? Should really never happen for
-				 * sensible config
-				 */
-				vtysh_configfile_name =
-					(char *)FRR_DEFAULT_CONFIG;
-			strlcpy(quagga_config_default, optarg,
-				sizeof(vtysh_config_always));
-			strlcat(quagga_config_default, "/",
-				sizeof(vtysh_config_always));
-			strlcat(quagga_config_default, vtysh_configfile_name,
-				sizeof(quagga_config_default));
+			vtysh_update_config_paths(optarg, FRR_INTCONF,
+						  VTYSH_DEFAULT_CONFIG);
 			break;
 		case 'd':
 			daemon_name = optarg;
@@ -382,6 +366,11 @@ int main(int argc, char **argv, char **env)
 			break;
 		case 'C':
 			dryrun = 1;
+			break;
+		case 'q':
+			vtysh_update_config_paths(QUAGGA_CONFDIR,
+						  QUAGGA_INTCONF,
+						  VTYSH_DEFAULT_CONFIG);
 			break;
 		case 'w':
 			writeconfig = 1;
@@ -426,7 +415,7 @@ int main(int argc, char **argv, char **env)
 	vty_init_vtysh();
 
 	/* Read vtysh configuration file before connecting to daemons. */
-	vtysh_read_config(vtysh_config_always);
+	vtysh_read_config(vtysh_conf);
 
 	if (markfile) {
 		if (!inputfile) {
@@ -442,7 +431,7 @@ int main(int argc, char **argv, char **env)
 		if (inputfile) {
 			ret = vtysh_read_config(inputfile);
 		} else {
-			ret = vtysh_read_config(quagga_config_default);
+			ret = vtysh_read_config(frr_conf);
 		}
 
 		exit(ret);
@@ -592,13 +581,13 @@ int main(int argc, char **argv, char **env)
 
 	/* Boot startup configuration file. */
 	if (boot_flag) {
-		vtysh_flock_config(quagga_config);
-		int ret = vtysh_read_config(quagga_config);
+		vtysh_flock_config(frr_conf);
+		int ret = vtysh_read_config(frr_conf);
 		vtysh_unflock_config();
 		if (ret) {
 			fprintf(stderr,
 				"Configuration file[%s] processing failure: %d\n",
-				quagga_config, ret);
+				frr_conf, ret);
 			if (no_error)
 				exit(0);
 			else

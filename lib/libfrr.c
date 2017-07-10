@@ -32,14 +32,17 @@
 
 DEFINE_HOOK(frr_late_init, (struct thread_master * tm), (tm))
 
-const char frr_sysconfdir[] = SYSCONFDIR;
-const char frr_vtydir[] = DAEMON_VTY_DIR;
-const char frr_moduledir[] = MODULE_PATH;
+bool quagga_compat_mode = false;
+
+char frr_sysconfdir[] = FRR_CONFDIR;
+char frr_vtydir[] = DAEMON_VTY_DIR;
+char frr_moduledir[] = MODULE_PATH;
 
 char frr_protoname[256] = "NONE";
 char frr_protonameinst[256] = "NONE";
 
 char config_default[256];
+char config_default_int[256];
 static char pidfile_default[256];
 static char vtypath_default[256];
 
@@ -126,6 +129,11 @@ static const struct optspec os_user = {"u:g:",
 				       "  -g, --group        Group to run as\n",
 				       lo_user};
 
+static const struct option lo_quagga[] = {{"quagga", no_argument, NULL, 'q'},
+					  {NULL}};
+static const struct optspec os_quagga = {
+	"q", "  -q, --quagga       Enable Quagga compatibility mode\n",
+	lo_quagga};
 
 static struct frr_daemon_info *di = NULL;
 
@@ -140,6 +148,7 @@ void frr_preinit(struct frr_daemon_info *daemon, int argc, char **argv)
 	umask(0027);
 
 	opt_extend(&os_always);
+	opt_extend(&os_quagga);
 	if (!(di->flags & FRR_NO_CFG_PID_DRY))
 		opt_extend(&os_cfg_pid_dry);
 	if (!(di->flags & FRR_NO_PRIVSEP))
@@ -151,6 +160,9 @@ void frr_preinit(struct frr_daemon_info *daemon, int argc, char **argv)
 
 	snprintf(config_default, sizeof(config_default), "%s/%s.conf",
 		 frr_sysconfdir, di->name);
+	snprintf(config_default_int, sizeof(config_default_int), "%s/%s",
+		 frr_sysconfdir, FRR_INTCONF);
+
 	snprintf(pidfile_default, sizeof(pidfile_default), "%s/%s.pid",
 		 frr_vtydir, di->name);
 
@@ -293,6 +305,13 @@ static int frr_opt(int opt)
 		if (di->flags & FRR_NO_PRIVSEP)
 			return 1;
 		di->privs->group = optarg;
+		break;
+	case 'q':
+		quagga_compat_mode = true;
+		snprintf(config_default, sizeof(config_default), "%s/%s.conf",
+			 QUAGGA_CONFDIR, di->name);
+		snprintf(config_default_int, sizeof(config_default_int),
+			 "%s/%s", QUAGGA_CONFDIR, QUAGGA_INTCONF);
 		break;
 	default:
 		return 1;

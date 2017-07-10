@@ -25,17 +25,16 @@
 #include "log.h"
 #include "vty.h"
 #include "command.h"
+#include "libfrr.h"
 
 #include "watchfrr.h"
 
 pid_t integrated_write_pid;
 static int integrated_result_fd;
 
-DEFUN(config_write_integrated,
-      config_write_integrated_cmd,
-      "write integrated",
+DEFUN(config_write_integrated, config_write_integrated_cmd, "write integrated",
       "Write running configuration to memory, network, or terminal\n"
-      "Write integrated all-daemon frr.conf file\n")
+      "Write integrated all-daemon configuration file\n")
 {
 	pid_t child;
 	sigset_t oldmask, sigmask;
@@ -91,7 +90,8 @@ DEFUN(config_write_integrated,
 
 	/* don't allow the user to pass parameters, we're root here!
 	 * should probably harden vtysh at some point too... */
-	execl(VTYSH_BIN_PATH, "vtysh", "-w", NULL);
+	const char *flags = (quagga_compat_mode) ? "-wq" : "-w";
+	execl(VTYSH_BIN_PATH, "vtysh", flags, NULL);
 
 	/* unbuffered write; we just messed with stdout... */
 	char msg[512];

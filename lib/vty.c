@@ -86,9 +86,6 @@ static int vty_config_is_lockless = 0;
 /* Login password check. */
 static int no_password_check = 0;
 
-/* Integrated configuration file path */
-char integrate_default[] = SYSCONFDIR INTEGRATE_DEFAULT_CONFIG;
-
 static int do_log_commands = 0;
 
 /* VTY standard output function. */
@@ -2345,7 +2342,7 @@ void vty_read_config(const char *config_file, char *config_default_dir)
 		 */
 
 		if (strstr(config_default_dir, "vtysh") == NULL) {
-			ret = stat(integrate_default, &conf_stat);
+			ret = stat(config_default_int, &conf_stat);
 			if (ret >= 0)
 				goto tmp_free_and_out;
 		}

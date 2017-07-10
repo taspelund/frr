@@ -243,9 +243,6 @@ struct vty_arg {
 #define IS_DIRECTORY_SEP(c) ((c) == DIRECTORY_SEP)
 #endif
 
-/* Exported variables */
-extern char integrate_default[];
-
 /* Prototypes. */
 extern void vty_init(struct thread_master *);
 extern void vty_init_vtysh(void);
