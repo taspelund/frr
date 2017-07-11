@@ -489,12 +489,15 @@ pim_ecmp_nexthop_search (struct pim_instance *pim, struct pim_nexthop_cache *pnc
           uint8_t curr_route_valid = 0;
           //Check if current nexthop is present in new updated Nexthop list.
           //If the current nexthop is not valid, candidate to choose new Nexthop.
-          for (nh_node = pnc->nexthop; nh_node; nh_node = nh_node->next)
+          for (nh_node = pnc->nexthop; nh_node; nh_node = nh_node->next) {
             curr_route_valid = (nexthop->interface->ifindex == nh_node->ifindex);
+            if (curr_route_valid)
+             break;
+         }
 
           if (curr_route_valid &&
-               !pim_if_connected_to_source (nexthop->interface,
-                                              src->u.prefix4))
+             !pim_if_connected_to_source (nexthop->interface,
+                                          src->u.prefix4))
             {
               nbr = pim_neighbor_find (nexthop->interface,
                                        nexthop->mrib_nexthop_addr.u.prefix4);
@@ -731,16 +734,6 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
               break;
             }
 
-          if (PIM_DEBUG_PIM_NHT)
-            {
-              char p_str[PREFIX2STR_BUFFER];
-              prefix2str (&p, p_str, sizeof (p_str));
-              zlog_debug ("%s: NHT addr %s(%s) %d-nhop via %s type %d distance:%u metric:%u ",
-			  __PRETTY_FUNCTION__, p_str, pim->vrf->name, i + 1,
-			  inet_ntoa (nexthop->gate.ipv4), nexthop->type, distance,
-                 metric);
-            }
-
           ifp = if_lookup_by_index (nexthop->ifindex, pim->vrf_id);
           if (!ifp)
             {
@@ -753,6 +746,16 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
                 }
               nexthop_free (nexthop);
               continue;
+            }
+
+          if (PIM_DEBUG_PIM_NHT)
+            {
+              char p_str[PREFIX2STR_BUFFER];
+              prefix2str (&p, p_str, sizeof (p_str));
+              zlog_debug ("%s: NHT addr %s(%s) %d-nhop via %s(%s) type %d distance:%u metric:%u ",
+			  __PRETTY_FUNCTION__, p_str, pim->vrf->name, i + 1,
+			  inet_ntoa (nexthop->gate.ipv4), ifp->name, nexthop->type, distance,
+			  metric);
             }
 
           if (!ifp->info)
