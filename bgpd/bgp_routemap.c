@@ -727,7 +727,7 @@ route_match_vni_free (void *rule)
 /* Route map commands for vni matching. */
 struct route_map_rule_cmd route_match_evpn_vni_cmd =
 {
-  "vni",
+  "evpn vni",
   route_match_vni,
   route_match_vni_compile,
   route_match_vni_free
@@ -3390,16 +3390,13 @@ DEFUN (match_mac_address,
 
 DEFUN (no_match_mac_address,
        no_match_mac_address_cmd,
-       "no match mac address",
+       "no match mac address WORD",
        NO_STR
        MATCH_STR
        "mac\n"
-       "Match address of route\n")
+       "Match address of route\n"
+       "MAC acess-list name\n")
 {
-  if (argc == 0)
-    return bgp_route_match_delete (vty, "mac address", NULL,
-				                           RMAP_EVENT_FILTER_DELETED);
-
   return bgp_route_match_delete (vty, "mac address", argv[4]->arg,
 				                         RMAP_EVENT_FILTER_DELETED);
 }
@@ -3412,8 +3409,8 @@ DEFUN (match_evpn_vni,
        "Match VNI\n"
        "VNI ID\n")
 {
-  return bgp_route_match_add (vty, "evpn vni", argv[2]->arg,
-			                        RMAP_EVENT_MATCH_ADDED);
+  return bgp_route_match_add (vty, "evpn vni", argv[3]->arg,
+                              RMAP_EVENT_MATCH_ADDED);
 }
 
 DEFUN (no_match_evpn_vni,
@@ -3426,8 +3423,8 @@ DEFUN (no_match_evpn_vni,
        "VNI ID\n")
 {
   return bgp_route_match_delete (vty, "evpn vni",
-				                         argv[3]->arg,
-				                         RMAP_EVENT_MATCH_DELETED);
+                                 argv[4]->arg,
+                                 RMAP_EVENT_MATCH_DELETED);
 }
 
 DEFUN (match_peer,
