@@ -4029,6 +4029,13 @@ zebra_vxlan_add_del_gw_macip (struct interface *ifp,
   memset (&ip, 0, sizeof (struct ipaddr));
   memset (&macaddr, 0, sizeof (struct ethaddr));
 
+  zvrf = vrf_info_lookup (ifp->vrf_id);
+  if (!zvrf)
+    return -1;
+
+  if (!EVPN_ENABLED(zvrf))
+    return 0;
+
   if (IS_ZEBRA_IF_MACVLAN (ifp))
     {
       struct interface            *svi_if = NULL; /* SVI corresponding to the MACVLAN */
@@ -4081,9 +4088,6 @@ zebra_vxlan_add_del_gw_macip (struct interface *ifp,
       return -1;
     }
 
-  zvrf = vrf_info_lookup (zvni->vxlan_if->vrf_id);
-  if (!zvrf)
-    return -1;
 
   /* check if we are advertising gw macip routes */
   if (!advertise_gw_macip_enabled (zvrf, zvni))
