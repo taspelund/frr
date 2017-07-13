@@ -188,20 +188,6 @@ ospf6_nexthop_delete (struct ospf6_nexthop *nh)
   if (nh)
     XFREE (MTYPE_OSPF6_NEXTHOP, nh);
 }
-
-void
-ospf6_free_nexthops (struct list *nh_list)
-{
-  struct ospf6_nexthop *nh;
-  struct listnode *node, *nnode;
-
-  if (nh_list)
-    {
-      for (ALL_LIST_ELEMENTS (nh_list, node, nnode, nh))
-	ospf6_nexthop_delete (nh);
-    }
-}
-
 void
 ospf6_clear_nexthops (struct list *nh_list)
 {
@@ -380,12 +366,23 @@ ospf6_route_get_first_nh_index (struct ospf6_route *route)
   return (-1);
 }
 
+static int ospf6_nexthop_cmp (struct ospf6_nexthop *a, struct ospf6_nexthop *b)
+{
+  if ((a)->ifindex == (b)->ifindex &&
+      IN6_ARE_ADDR_EQUAL (&(a)->address, &(b)->address))
+    return 1;
+
+  return 0;
+}
+
 struct ospf6_route *
 ospf6_route_create (void)
 {
   struct ospf6_route *route;
   route = XCALLOC (MTYPE_OSPF6_ROUTE, sizeof (struct ospf6_route));
   route->nh_list = list_new();
+  route->nh_list->cmp = (int (*)(void *, void *)) ospf6_nexthop_cmp;
+  route->nh_list->del = (void (*) (void *)) ospf6_nexthop_delete;
   return route;
 }
 
@@ -394,8 +391,8 @@ ospf6_route_delete (struct ospf6_route *route)
 {
   if (route)
     {
-      ospf6_free_nexthops (route->nh_list);
-      list_free (route->nh_list);
+      if (route->nh_list)
+        list_delete (route->nh_list);
       XFREE (MTYPE_OSPF6_ROUTE, route);
     }
 }
@@ -1001,6 +998,7 @@ ospf6_route_table_create (int s, int t)
 void
 ospf6_route_table_delete (struct ospf6_route_table *table)
 {
+  bf_free(table->idspace);
   ospf6_route_remove_all (table);
   route_table_finish (table->table);
   XFREE (MTYPE_OSPF6_ROUTE, table);
@@ -1139,6 +1137,7 @@ ospf6_route_show_detail (struct vty *vty, struct ospf6_route *route)
   vty_out (vty, "Metric: %d (%d)%s",
            route->path.cost, route->path.u.cost_e2, VNL);
 
+  vty_out (vty, "Nexthop count: %u %s", route->nh_list->count, VNL);
   /* Nexthops */
   vty_out (vty, "Nexthop:%s", VNL);
   for (ALL_LIST_ELEMENTS_RO (route->nh_list, node, nh))
