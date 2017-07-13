@@ -658,7 +658,7 @@ ospf_external_add (u_char type, u_short instance)
     om->external[type] = list_new();
 
   ext_list = om->external[type];
-  ext = (struct ospf_external *)calloc (1, sizeof(struct ospf_external));
+  ext = (struct ospf_external *) XCALLOC (MTYPE_OSPF_EXTERNAL, sizeof(struct ospf_external));
   ext->instance = instance;
   EXTERNAL_INFO (ext) = route_table_init ();
 
@@ -685,6 +685,7 @@ ospf_external_del (u_char type, u_short instance)
           list_free(om->external[type]);
           om->external[type] = NULL;
         }
+      XFREE (MTYPE_OSPF_EXTERNAL, ext);
     }
 }
 
@@ -720,7 +721,7 @@ ospf_redist_add (struct ospf *ospf, u_char type, u_short instance)
     ospf->redist[type] = list_new();
 
   red_list = ospf->redist[type];
-  red = (struct ospf_redist *)calloc (1, sizeof(struct ospf_redist));
+  red = (struct ospf_redist *) XCALLOC(MTYPE_OSPF_REDISTRIBUTE, sizeof(struct ospf_redist));
   red->instance = instance;
   red->dmetric.type = -1;
   red->dmetric.value = -1;
@@ -745,6 +746,7 @@ ospf_redist_del (struct ospf *ospf, u_char type, u_short instance)
           list_free(ospf->redist[type]);
           ospf->redist[type] = NULL;
         }
+      XFREE (MTYPE_OSPF_REDISTRIBUTE, red);
     }
 }
 
