@@ -205,7 +205,7 @@ pim_mroute_msg_nocache (int fd, struct interface *ifp, const struct igmpmsg *msg
   }
 
   PIM_UPSTREAM_FLAG_SET_SRC_STREAM(up->flags);
-  pim_upstream_keep_alive_timer_start (up, qpim_keep_alive_time);
+  pim_upstream_keep_alive_timer_start (up, pim_ifp->pim->keep_alive_time);
 
   up->channel_oil->cc.pktcnt++;
   PIM_UPSTREAM_FLAG_SET_FHR(up->flags);
@@ -257,7 +257,7 @@ pim_mroute_msg_wholepkt (int fd, struct interface *ifp, const char *buf)
                           __PRETTY_FUNCTION__, pim_str_sg_dump (&sg));
             return 0;
           }
-	pim_upstream_keep_alive_timer_start (up, qpim_keep_alive_time);
+	pim_upstream_keep_alive_timer_start (up, pim_ifp->pim->keep_alive_time);
 	pim_upstream_inherited_olist (pim_ifp->pim, up);
 	pim_upstream_switch(pim_ifp->pim, up, PIM_UPSTREAM_JOINED);
 
@@ -494,7 +494,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
 		pim_register_stop_send(source.interface, &sg, pim_ifp->primary_address, up->upstream_register);
 	      up->sptbit = PIM_UPSTREAM_SPTBIT_TRUE;
 	    }
-	  pim_upstream_keep_alive_timer_start (up, qpim_keep_alive_time);
+	  pim_upstream_keep_alive_timer_start (up, pim_ifp->pim->keep_alive_time);
 	  pim_upstream_inherited_olist (pim_ifp->pim, up);
 	  pim_mroute_msg_wholepkt (fd, ifp, buf);
 	}
@@ -516,7 +516,7 @@ pim_mroute_msg_wrvifwhole (int fd, struct interface *ifp, const char *buf)
 	  return -2;
 	}
       PIM_UPSTREAM_FLAG_SET_SRC_STREAM(up->flags);
-      pim_upstream_keep_alive_timer_start (up, qpim_keep_alive_time);
+      pim_upstream_keep_alive_timer_start (up, pim_ifp->pim->keep_alive_time);
       up->channel_oil = oil;
       up->channel_oil->cc.pktcnt++;
       pim_register_join (up);
@@ -946,7 +946,7 @@ pim_mroute_update_counters (struct channel_oil *c_oil)
 
   if (!c_oil->installed)
     {
-      c_oil->cc.lastused = 100 * qpim_keep_alive_time;
+      c_oil->cc.lastused = 100 * pim->keep_alive_time;
       if (PIM_DEBUG_MROUTE)
 	{
 	  struct prefix_sg sg;

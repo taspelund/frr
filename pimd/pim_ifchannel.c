@@ -841,7 +841,7 @@ void pim_ifchannel_join_add(struct interface *ifp,
         !(ch->upstream->flags & PIM_UPSTREAM_FLAG_MASK_SRC_LHR))
       {
         pim_upstream_ref (ch->upstream, PIM_UPSTREAM_FLAG_MASK_SRC_LHR, __PRETTY_FUNCTION__);
-        pim_upstream_keep_alive_timer_start (ch->upstream, qpim_keep_alive_time);
+        pim_upstream_keep_alive_timer_start (ch->upstream, pim_ifp->pim->keep_alive_time);
       }
     break;
   case PIM_IFJOIN_JOIN:

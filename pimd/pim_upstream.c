@@ -552,7 +552,7 @@ pim_upstream_switch(struct pim_instance *pim, struct pim_upstream *up,
             PIM_UPSTREAM_FLAG_SET_FHR(up->flags);
             if (!old_fhr && PIM_UPSTREAM_FLAG_TEST_SRC_STREAM(up->flags))
               {
-                pim_upstream_keep_alive_timer_start (up, qpim_keep_alive_time);
+                pim_upstream_keep_alive_timer_start (up, pim->keep_alive_time);
                 pim_register_join (up);
               }
 	  }
@@ -1369,7 +1369,7 @@ pim_upstream_register_stop_timer (struct thread *t)
       up->reg_state = PIM_REG_JOIN_PENDING;
       pim_upstream_start_register_stop_timer (up, 1);
 
-      if (((up->channel_oil->cc.lastused/100) > PIM_KEEPALIVE_PERIOD) &&
+      if (((up->channel_oil->cc.lastused/100) > pim->keep_alive_time) &&
 	  (I_am_RP (pim_ifp->pim, up->sg.grp)))
 	{
 	  if (PIM_DEBUG_TRACE)
@@ -1681,10 +1681,10 @@ pim_upstream_sg_running (void *arg)
 	  PIM_UPSTREAM_FLAG_SET_SRC_STREAM(up->flags);
 	  pim_upstream_fhr_kat_start(up);
 	}
-      pim_upstream_keep_alive_timer_start(up, qpim_keep_alive_time);
+      pim_upstream_keep_alive_timer_start(up, pim->keep_alive_time);
     }
   else if (PIM_UPSTREAM_FLAG_TEST_SRC_LHR(up->flags))
-    pim_upstream_keep_alive_timer_start(up, qpim_keep_alive_time);
+    pim_upstream_keep_alive_timer_start(up, pim->keep_alive_time);
 
   if (up->sptbit != PIM_UPSTREAM_SPTBIT_TRUE)
     {

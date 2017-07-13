@@ -75,6 +75,9 @@ pim_instance_init (struct vrf *vrf)
   if (!pim)
     return NULL;
 
+  pim->keep_alive_time = PIM_KEEPALIVE_PERIOD;
+  pim->rp_keep_alive_time = PIM_RP_KEEPALIVE_PERIOD;
+
   pim_if_init (pim);
 
   pim->vrf_id = vrf->vrf_id;

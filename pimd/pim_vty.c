@@ -182,10 +182,10 @@ pim_global_config_write_worker (struct pim_instance *pim, struct vty *vty)
                spaces, qpim_t_periodic, VTY_NEWLINE);
       ++writes;
     }
-  if (qpim_keep_alive_time != PIM_KEEPALIVE_PERIOD)
+  if (pim->keep_alive_time != PIM_KEEPALIVE_PERIOD)
     {
       vty_out (vty, "%sip pim keep-alive-timer %d%s",
-               spaces, qpim_keep_alive_time, VTY_NEWLINE);
+               spaces, pim->keep_alive_time, VTY_NEWLINE);
       ++writes;
     }
   if (qpim_packet_process != PIM_DEFAULT_PACKET_PROCESS)

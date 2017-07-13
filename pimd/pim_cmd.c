@@ -4707,7 +4707,7 @@ DEFUN (ip_pim_keep_alive,
        "Seconds\n")
 {
   PIM_DECLVAR_CONTEXT(vrf, pim);
-  qpim_keep_alive_time = atoi (argv[3]->arg);
+  pim->keep_alive_time = atoi (argv[3]->arg);
   return CMD_SUCCESS;
 }
 
@@ -4721,7 +4721,7 @@ DEFUN (no_ip_pim_keep_alive,
        "Seconds\n")
 {
   PIM_DECLVAR_CONTEXT(vrf, pim);
-  qpim_keep_alive_time = PIM_KEEPALIVE_PERIOD;
+  pim->keep_alive_time = PIM_KEEPALIVE_PERIOD;
   return CMD_SUCCESS;
 }
 
