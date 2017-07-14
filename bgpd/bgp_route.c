@@ -9450,21 +9450,25 @@ bgp_table_stats (struct vty *vty, struct bgp *bgp, afi_t afi, safi_t safi)
 {
   struct bgp_table_stats ts;
   unsigned int i;
-  
+
   if (!bgp->rib[afi][safi])
     {
       vty_out (vty, "%% No RIB exist's for the AFI(%d)/SAFI(%d)%s",
 	       afi, safi, VTY_NEWLINE);
       return CMD_WARNING;
     }
-  
-  memset (&ts, 0, sizeof (ts));
-  ts.table = bgp->rib[afi][safi];
-  thread_execute (bm->master, bgp_table_stats_walker, &ts, 0);
 
   vty_out (vty, "BGP %s RIB statistics%s%s",
            afi_safi_print (afi, safi), VTY_NEWLINE, VTY_NEWLINE);
   
+  /* labeled-unicast routes live in the unicast table */
+  if (safi == SAFI_LABELED_UNICAST)
+    safi = SAFI_UNICAST;
+
+  memset (&ts, 0, sizeof (ts));
+  ts.table = bgp->rib[afi][safi];
+  thread_execute (bm->master, bgp_table_stats_walker, &ts, 0);
+
   for (i = 0; i < BGP_STATS_MAX; i++)
     {
       if (!table_stats_strs[i])
@@ -10239,10 +10243,6 @@ static int
 bgp_show_neighbor_route (struct vty *vty, struct peer *peer, afi_t afi,
 			 safi_t safi, enum bgp_show_type type, u_char use_json)
 {
-  /* labeled-unicast routes live in the unicast table */
-  if (safi == SAFI_LABELED_UNICAST)
-    safi = SAFI_UNICAST;
-
   if (! peer || ! peer->afc[afi][safi])
     {
       if (use_json)
@@ -10257,6 +10257,10 @@ bgp_show_neighbor_route (struct vty *vty, struct peer *peer, afi_t afi,
         vty_out (vty, "%% No such neighbor or address family%s", VTY_NEWLINE);
       return CMD_WARNING;
     }
+
+  /* labeled-unicast routes live in the unicast table */
+  if (safi == SAFI_LABELED_UNICAST)
+    safi = SAFI_UNICAST;
 
   return bgp_show (vty, peer->bgp, afi, safi, type, &peer->su, use_json);
 }
