@@ -392,12 +392,12 @@ bpacket_queue_show_vty (struct bpacket_queue *q, struct vty *vty)
   pkt = bpacket_queue_first (q);
   while (pkt)
     {
-      vty_out (vty, "  Packet %p ver %u buffer %p%s", pkt, pkt->ver,
-	       pkt->buffer, VTY_NEWLINE);
+      vty_out (vty, "  Packet %p ver %u buffer %p\n", pkt, pkt->ver,
+	       pkt->buffer);
 
       LIST_FOREACH (paf, &(pkt->peers), pkt_train)
       {
-	vty_out (vty, "      - %s%s", paf->peer->host, VTY_NEWLINE);
+	vty_out (vty, "      - %s\n", paf->peer->host);
       }
       pkt = bpacket_next (pkt);
     }
@@ -812,8 +812,9 @@ subgroup_update_packet (struct update_subgroup *subgrp)
 
           if (safi == SAFI_LABELED_UNICAST)
             label = bgp_adv_label(rn, binfo, peer, afi, safi);
-          else if (binfo && binfo->extra)
-            label = binfo->extra->label;
+          else
+            if (binfo && binfo->extra)
+              label = binfo->extra->label;
 
 	  if (stream_empty (snlri))
             mpattrlen_pos = bgp_packet_mpattr_start (snlri, peer, afi, safi,

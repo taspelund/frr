@@ -1544,15 +1544,15 @@ pim_msdp_config_write_helper(struct pim_instance *pim, struct vty *vty, const ch
 
   if (mg->src_ip.s_addr != INADDR_ANY) {
     pim_inet4_dump("<src?>", mg->src_ip, src_str, sizeof(src_str));
-    vty_out(vty, "%sip msdp mesh-group %s source %s%s",
-            spaces, mg->mesh_group_name, src_str, VTY_NEWLINE);
+    vty_out(vty, "%sip msdp mesh-group %s source %s\n",
+            spaces, mg->mesh_group_name, src_str);
     ++count;
   }
 
   for (ALL_LIST_ELEMENTS_RO(mg->mbr_list, mbrnode, mbr)) {
     pim_inet4_dump("<mbr?>", mbr->mbr_ip, mbr_str, sizeof(mbr_str));
-    vty_out(vty, "%sip msdp mesh-group %s member %s%s",
-            spaces, mg->mesh_group_name, mbr_str, VTY_NEWLINE);
+    vty_out(vty, "%sip msdp mesh-group %s member %s\n",
+            spaces, mg->mesh_group_name, mbr_str);
     ++count;
   }
   return count;
@@ -1587,13 +1587,13 @@ pim_msdp_init(struct pim_instance *pim, struct thread_master *master)
   pim->msdp.master = master;
 
   pim->msdp.peer_hash = hash_create(pim_msdp_peer_hash_key_make,
-                                    pim_msdp_peer_hash_eq);
+                                 pim_msdp_peer_hash_eq, NULL);
   pim->msdp.peer_list = list_new();
   pim->msdp.peer_list->del = (void (*)(void *))pim_msdp_peer_free;
   pim->msdp.peer_list->cmp = (int (*)(void *, void *))pim_msdp_peer_comp;
 
   pim->msdp.sa_hash = hash_create(pim_msdp_sa_hash_key_make,
-                                  pim_msdp_sa_hash_eq);
+                                 pim_msdp_sa_hash_eq, NULL);
   pim->msdp.sa_list = list_new();
   pim->msdp.sa_list->del = (void (*)(void *))pim_msdp_sa_free;
   pim->msdp.sa_list->cmp = (int (*)(void *, void *))pim_msdp_sa_comp;

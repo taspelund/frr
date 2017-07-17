@@ -243,8 +243,8 @@ eigrp_network_set(struct eigrp *eigrp, struct prefix_ipv4 *p)
   rn->info = (void *) pref;
 
   /* Schedule Router ID Update. */
-  //    if (eigrp->router_id == 0)
-  //      eigrp_router_id_update(eigrp);
+  if (eigrp->router_id == 0)
+    eigrp_router_id_update(eigrp);
   /* Run network config now. */
   /* Get target interface. */
   for (ALL_LIST_ELEMENTS_RO(vrf_iflist(VRF_DEFAULT), node, ifp))
@@ -262,7 +262,7 @@ static int
 eigrp_network_match_iface(const struct connected *co, const struct prefix *net)
 {
   /* new approach: more elegant and conceptually clean */
-  return prefix_match(net, CONNECTED_PREFIX (co));
+  return prefix_match_network_statement(net, CONNECTED_PREFIX (co));
 }
 
 static void

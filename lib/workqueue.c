@@ -192,22 +192,20 @@ DEFUN (show_work_queues,
   struct work_queue *wq;
   
   vty_out (vty, 
-           "%c %8s %5s %8s %8s %21s%s",
-           ' ', "List","(ms) ","Q. Runs","Yields","Cycle Counts   ",
-           VTY_NEWLINE);
+           "%c %8s %5s %8s %8s %21s\n",
+           ' ', "List","(ms) ","Q. Runs","Yields","Cycle Counts   ");
   vty_out (vty,
-           "%c %8s %5s %8s %8s %7s %6s %8s %6s %s%s",
+           "%c %8s %5s %8s %8s %7s %6s %8s %6s %s\n",
            'P',
            "Items",
            "Hold",
            "Total","Total",
            "Best","Gran.","Total","Avg.",
-           "Name", 
-           VTY_NEWLINE);
+           "Name");
  
   for (ALL_LIST_ELEMENTS_RO (work_queues, node, wq))
     {
-      vty_out (vty,"%c %8d %5d %8ld %8ld %7d %6d %8ld %6u %s%s",
+      vty_out (vty,"%c %8d %5d %8ld %8ld %7d %6d %8ld %6u %s\n",
                (CHECK_FLAG (wq->flags, WQ_UNPLUGGED) ? ' ' : 'P'),
                listcount (wq->items),
                wq->spec.hold,
@@ -215,8 +213,7 @@ DEFUN (show_work_queues,
                wq->cycles.best, wq->cycles.granularity, wq->cycles.total,
                  (wq->runs) ? 
                    (unsigned int) (wq->cycles.total / wq->runs) : 0,
-               wq->name,
-               VTY_NEWLINE);
+               wq->name);
     }
     
   return CMD_SUCCESS;
@@ -334,14 +331,14 @@ work_queue_run (struct thread *thread)
 	{
 	  item->ran--;
 	  work_queue_item_requeue (wq, node);
-      /* If a single node is being used with a meta-queue (e.g., zebra),
-       * update the next node as we don't want to exit the thread and
-       * reschedule it after every node. By definition, WQ_REQUEUE is
-       * meant to continue the processing; the yield logic will kick in
-       * to terminate the thread when time has exceeded.
-       */
-      if (nnode == NULL)
-        nnode = node;
+          /* If a single node is being used with a meta-queue (e.g., zebra),
+           * update the next node as we don't want to exit the thread and
+           * reschedule it after every node. By definition, WQ_REQUEUE is
+           * meant to continue the processing; the yield logic will kick in
+           * to terminate the thread when time has exceeded.
+           */
+          if (nnode == NULL)
+            nnode = node;
 	  break;
 	}
       case WQ_RETRY_NOW:
@@ -351,7 +348,7 @@ work_queue_run (struct thread *thread)
 	  if (wq->spec.errorfunc)
 	    wq->spec.errorfunc (wq, item);
 	}
-	/* fall through here is deliberate */
+	/* fallthru */
       case WQ_SUCCESS:
       default:
 	{

@@ -989,13 +989,11 @@ ospf6_abr_examin_brouter (u_int32_t router_id)
     return;
 
   type = htons (OSPF6_LSTYPE_INTER_ROUTER);
-  for (lsa = ospf6_lsdb_type_router_head (type, router_id, oa->lsdb); lsa;
-       lsa = ospf6_lsdb_type_router_next (type, router_id, lsa))
-      ospf6_abr_examin_summary (lsa, oa);
+  for (ALL_LSDB_TYPED_ADVRTR(oa->lsdb, type, router_id, lsa))
+    ospf6_abr_examin_summary (lsa, oa);
 
   type = htons (OSPF6_LSTYPE_INTER_PREFIX);
-  for (lsa = ospf6_lsdb_type_router_head (type, router_id, oa->lsdb); lsa;
-       lsa = ospf6_lsdb_type_router_next (type, router_id, lsa))
+  for (ALL_LSDB_TYPED_ADVRTR(oa->lsdb, type, router_id, lsa))
     ospf6_abr_examin_summary (lsa, oa);
 }
 
@@ -1006,13 +1004,11 @@ ospf6_abr_reimport (struct ospf6_area *oa)
   u_int16_t type;
 
   type = htons (OSPF6_LSTYPE_INTER_ROUTER);
-  for (lsa = ospf6_lsdb_type_head (type, oa->lsdb); lsa;
-       lsa = ospf6_lsdb_type_next (type, lsa))
+  for (ALL_LSDB_TYPED(oa->lsdb, type, lsa))
     ospf6_abr_examin_summary (lsa, oa);
 
   type = htons (OSPF6_LSTYPE_INTER_PREFIX);
-  for (lsa = ospf6_lsdb_type_head (type, oa->lsdb); lsa;
-       lsa = ospf6_lsdb_type_next (type, lsa))
+  for (ALL_LSDB_TYPED(oa->lsdb, type, lsa))
     ospf6_abr_examin_summary (lsa, oa);
 }
 
@@ -1066,16 +1062,16 @@ ospf6_inter_area_prefix_lsa_show (struct vty *vty, struct ospf6_lsa *lsa)
   prefix_lsa = (struct ospf6_inter_prefix_lsa *)
     OSPF6_LSA_HEADER_END (lsa->header);
 
-  vty_out (vty, "     Metric: %lu%s",
-           (u_long) OSPF6_ABR_SUMMARY_METRIC (prefix_lsa), VNL);
+  vty_out (vty, "     Metric: %lu\n",
+           (u_long) OSPF6_ABR_SUMMARY_METRIC (prefix_lsa));
 
   ospf6_prefix_options_printbuf (prefix_lsa->prefix.prefix_options,
                                  buf, sizeof (buf));
-  vty_out (vty, "     Prefix Options: %s%s", buf, VNL);
+  vty_out (vty, "     Prefix Options: %s\n", buf);
 
-  vty_out (vty, "     Prefix: %s%s",
+  vty_out (vty, "     Prefix: %s\n",
 	   ospf6_inter_area_prefix_lsa_get_prefix_str (lsa, buf, sizeof(buf),
-						       0), VNL);
+						       0));
 
   return 0;
 }
@@ -1109,12 +1105,12 @@ ospf6_inter_area_router_lsa_show (struct vty *vty, struct ospf6_lsa *lsa)
     OSPF6_LSA_HEADER_END (lsa->header);
 
   ospf6_options_printbuf (router_lsa->options, buf, sizeof (buf));
-  vty_out (vty, "     Options: %s%s", buf, VNL);
-  vty_out (vty, "     Metric: %lu%s",
-           (u_long) OSPF6_ABR_SUMMARY_METRIC (router_lsa), VNL);
+  vty_out (vty, "     Options: %s\n", buf);
+  vty_out (vty, "     Metric: %lu\n",
+           (u_long) OSPF6_ABR_SUMMARY_METRIC (router_lsa));
 
   inet_ntop (AF_INET, &router_lsa->router_id, buf, sizeof (buf));
-  vty_out (vty, "     Destination Router ID: %s%s", buf, VNL);
+  vty_out (vty, "     Destination Router ID: %s\n", buf);
 
   return 0;
 }
@@ -1149,7 +1145,7 @@ int
 config_write_ospf6_debug_abr (struct vty *vty)
 {
   if (IS_OSPF6_DEBUG_ABR)
-    vty_out (vty, "debug ospf6 abr%s", VNL);
+    vty_out (vty, "debug ospf6 abr\n");
   return 0;
 }
 

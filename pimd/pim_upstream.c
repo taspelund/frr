@@ -1777,10 +1777,10 @@ pim_upstream_init (struct pim_instance *pim)
 				       pim_upstream_hash_key,
 				       pim_upstream_sg_running);
   pim->upstream_hash = hash_create_size (8192, pim_upstream_hash_key,
-					 pim_upstream_equal);
+					 pim_upstream_equal,
+                                         "PIM upstream");
 
   pim->upstream_list = list_new ();
   pim->upstream_list->del = (void (*)(void *)) pim_upstream_free;
   pim->upstream_list->cmp = pim_upstream_compare;
-
 }

@@ -1764,6 +1764,7 @@ aspath_reconcile_as4 ( struct aspath *aspath, struct aspath *as4path)
 	                      " across 2/4 ASN boundary somewhere, broken..");
 	        hops = seg->length;
 	      }
+            /* fallthru */
 	  case AS_SEQUENCE:
 	    cpasns = MIN(seg->length, hops);
 	    hops -= seg->length;
@@ -2134,7 +2135,7 @@ aspath_cmp (const void *arg1, const void *arg2)
 void
 aspath_init (void)
 {
-  ashash = hash_create_size (32768, aspath_key_make, aspath_cmp);
+  ashash = hash_create_size (32768, aspath_key_make, aspath_cmp, NULL);
 }
 
 void
@@ -2176,7 +2177,7 @@ aspath_show_all_iterator (struct hash_backet *backet, struct vty *vty)
   as = (struct aspath *) backet->data;
 
   vty_out (vty, "[%p:%u] (%ld) ", (void *)backet, backet->key, as->refcnt);
-  vty_out (vty, "%s%s", as->str, VTY_NEWLINE);
+  vty_out (vty, "%s\n", as->str);
 }
 
 /* Print all aspath and hash information.  This function is used from

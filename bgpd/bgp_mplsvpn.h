@@ -1,7 +1,7 @@
 /* MPLS-VPN
  * Copyright (C) 2000 Kunihiro Ishiguro <kunihiro@zebra.org>
  *
- * This file is part of GNU Zebra.
+ * This file is part of GxNU Zebra.
  *
  * GNU Zebra is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -58,6 +58,13 @@ typedef enum {
 #define BGP_VPNVX_HELP_STR       \
   "Address Family\n"   \
   "Address Family\n"
+
+#define V4_HEADER \
+  "   Network          Next Hop            Metric LocPrf Weight Path\n"
+#define V4_HEADER_TAG \
+  "   Network          Next Hop      In tag/Out tag\n"
+#define V4_HEADER_OVERLAY \
+  "   Network          Next Hop      EthTag    Overlay Index   RouterMac\n"
 
 extern void bgp_mplsvpn_init (void);
 extern int bgp_nlri_parse_vpn (struct peer *, struct attr *, struct bgp_nlri *);

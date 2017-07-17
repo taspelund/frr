@@ -88,7 +88,7 @@ pim_instance_init (struct vrf *vrf)
 
   pim_msdp_init (pim, master);
 
-  pim->rpf_hash = hash_create_size (256, pim_rpf_hash_key, pim_rpf_equal);
+  pim->rpf_hash = hash_create_size (256, pim_rpf_hash_key, pim_rpf_equal, "PIM RPF");
 
   if (PIM_DEBUG_ZEBRA)
     zlog_debug ("%s: NHT rpf hash init ", __PRETTY_FUNCTION__);
@@ -204,9 +204,9 @@ pim_vrf_config_write (struct vty *vty)
       pim = vrf->info;
       if (!pim || vrf->vrf_id != VRF_DEFAULT)
         {
-          vty_out (vty, "vrf %s%s", vrf->name, VTY_NEWLINE);
+          vty_out (vty, "vrf %s\n", vrf->name);
           pim_global_config_write_worker (pim, vty);
-          vty_out (vty, "!%s", VTY_NEWLINE);
+          vty_out (vty, "!\n");
         }
     }
 

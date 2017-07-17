@@ -291,6 +291,7 @@ vtysh_execute_func (const char *line, int pager)
    * Changing vty->node is enough to try it just out without actual walkup in
    * the vtysh. */
   while (ret != CMD_SUCCESS && ret != CMD_SUCCESS_DAEMON && ret != CMD_WARNING
+         && ret != CMD_WARNING_CONFIG_FAILED
 	 && vty->node > CONFIG_NODE)
     {
       vty->node = node_parent(vty->node);
@@ -354,6 +355,7 @@ vtysh_execute_func (const char *line, int pager)
   switch (ret)
     {
     case CMD_WARNING:
+    case CMD_WARNING_CONFIG_FAILED:
       if (vty->type == VTY_FILE)
 	fprintf (stdout,"Warning...\n");
       break;
@@ -557,6 +559,7 @@ vtysh_mark_file (const char *filename)
        * Changing vty->node is enough to try it just out without actual walkup in
        * the vtysh. */
       while (ret != CMD_SUCCESS && ret != CMD_SUCCESS_DAEMON && ret != CMD_WARNING
+             && ret != CMD_WARNING_CONFIG_FAILED
 	     && vty->node > CONFIG_NODE)
 	{
 	  vty->node = node_parent(vty->node);
@@ -602,12 +605,13 @@ vtysh_mark_file (const char *filename)
       switch (ret)
 	{
 	case CMD_WARNING:
+	case CMD_WARNING_CONFIG_FAILED:
 	  if (vty->type == VTY_FILE)
 	    fprintf (stderr,"line %d: Warning...: %s\n", lineno, vty->buf);
 	  fclose(confp);
 	  vty_close(vty);
           XFREE(MTYPE_VTYSH_CMD, vty_buf_copy);
-	  return CMD_WARNING;
+	  return ret;
 	case CMD_ERR_AMBIGUOUS:
 	  fprintf (stderr,"line %d: %% Ambiguous command: %s\n", lineno, vty->buf);
 	  fclose(confp);
@@ -682,9 +686,10 @@ vtysh_config_from_file (struct vty *vty, FILE *fp)
       switch (ret)
 	{
 	case CMD_WARNING:
+	case CMD_WARNING_CONFIG_FAILED:
 	  if (vty->type == VTY_FILE)
 	    fprintf (stderr,"line %d: Warning[%d]...: %s\n", lineno, vty->node, vty->buf);
-	  retcode = CMD_WARNING;		/* once we have an error, we remember & return that */
+	  retcode = ret;		/* once we have an error, we remember & return that */
 	  break;
 	case CMD_ERR_AMBIGUOUS:
 	  fprintf (stderr,"line %d: %% Ambiguous command[%d]: %s\n", lineno, vty->node, vty->buf);
@@ -779,7 +784,7 @@ vtysh_rl_describe (void)
       rl_on_new_line ();
       return 0;
       break;
-    }  
+    }
 
   /* Get width of command string. */
   width = 0;
@@ -816,15 +821,14 @@ vtysh_rl_describe (void)
 
             if (vector_active (varcomps) > 0)
               {
-                fprintf(stdout, "     ");
-                for (size_t j = 0; j < vector_active (varcomps); j++)
-                  {
-                    char *item = vector_slot (varcomps, j);
-                    fprintf (stdout, " %s", item);
-                    XFREE (MTYPE_COMPLETION, item);
-                  }
-                vty_out (vty, "%s", VTY_NEWLINE);
+                int rows, cols;
+                rl_get_screen_size(&rows, &cols);
+
+                char *ac = cmd_variable_comp2str(varcomps, cols);
+                fprintf(stdout, "%s\n", ac);
+                XFREE(MTYPE_TMP, ac);
               }
+
             vector_free (varcomps);
           }
       }
@@ -1286,8 +1290,8 @@ DEFUNSH (VTYSH_BGPD,
 	 address_family_evpn_cmd,
 	 "address-family <l2vpn evpn>",
 	 "Enter Address Family command mode\n"
-	 "Address family\n"
-	 "Address Family Modifier\n")
+	 "Address Family\n"
+	 "Address Family modifier\n")
 {
   vty->node = BGP_EVPN_NODE;
   return CMD_SUCCESS;
@@ -2156,6 +2160,33 @@ DEFUN (vtysh_show_work_queues_daemon,
   return ret;
 }
 
+DEFUN (vtysh_show_hashtable,
+       vtysh_show_hashtable_cmd,
+       "show hashtable [statistics]",
+       SHOW_STR
+       "Statistics about hash tables\n"
+       "Statistics about hash tables\n")
+{
+  char cmd[] = "do show hashtable statistics";
+  unsigned long i;
+  int ret = CMD_SUCCESS;
+
+  fprintf (stdout, "\n");
+  fprintf (stdout, "Load factor (LF) - average number of elements across all buckets\n");
+  fprintf (stdout, "Full load factor (FLF) - average number of elements across full buckets\n\n");
+
+  fprintf (stdout, "Standard deviation (SD) is calculated for both the LF and FLF\n");
+  fprintf (stdout, "and indicates the typical deviation of bucket chain length\n");
+  fprintf (stdout, "from the value in the corresponding load factor.\n\n");
+
+  for (i = 0; i < array_size(vtysh_client); i++)
+    if ( vtysh_client[i].fd >= 0 ) {
+        ret = vtysh_client_execute (&vtysh_client[i], cmd, stdout);
+        fprintf (stdout, "\n");
+      }
+  return ret;
+}
+
 DEFUNSH (VTYSH_ZEBRA,
          vtysh_link_params,
          vtysh_link_params_cmd,
@@ -2471,21 +2502,10 @@ DEFUNSH (VTYSH_ALL,
 DEFUNSH (VTYSH_ALL,
 	 vtysh_config_password,
 	 vtysh_password_cmd,
-	 "password (8-8) WORD",
+	 "password [(8-8)] LINE",
 	 "Assign the terminal connection password\n"
 	 "Specifies a HIDDEN password will follow\n"
-	 "dummy string \n"
-	 "The HIDDEN line password string\n")
-{
-  return CMD_SUCCESS;
-}
-
-DEFUNSH (VTYSH_ALL,
-	 vtysh_password_text,
-	 vtysh_password_text_cmd,
-	 "password LINE",
-	 "Assign the terminal connection password\n"
-	 "The UNENCRYPTED (cleartext) line password\n")
+	 "The password string\n")
 {
   return CMD_SUCCESS;
 }
@@ -2493,22 +2513,11 @@ DEFUNSH (VTYSH_ALL,
 DEFUNSH (VTYSH_ALL,
 	 vtysh_config_enable_password,
 	 vtysh_enable_password_cmd,
-	 "enable password (8-8) WORD",
+	 "enable password [(8-8)] LINE",
 	 "Modify enable password parameters\n"
 	 "Assign the privileged level password\n"
 	 "Specifies a HIDDEN password will follow\n"
-	 "The HIDDEN 'enable' password string\n")
-{
-  return CMD_SUCCESS;
-}
-
-DEFUNSH (VTYSH_ALL,
-	 vtysh_enable_password_text,
-	 vtysh_enable_password_text_cmd,
-	 "enable password LINE",
-	 "Modify enable password parameters\n"
-	 "Assign the privileged level password\n"
-	 "The UNENCRYPTED (cleartext) 'enable' password\n")
+	 "The 'enable' password string\n")
 {
   return CMD_SUCCESS;
 }
@@ -2555,10 +2564,9 @@ DEFUN (vtysh_write_terminal,
   else
     fp = stdout;
 
-  vty_out (vty, "Building configuration...%s", VTY_NEWLINE);
-  vty_out (vty, "%sCurrent configuration:%s", VTY_NEWLINE,
-           VTY_NEWLINE);
-  vty_out (vty, "!%s", VTY_NEWLINE);
+  vty_out (vty, "Building configuration...\n");
+  vty_out (vty, "\nCurrent configuration:\n");
+  vty_out (vty, "!\n");
 
   for (i = 0; i < array_size(vtysh_client); i++)
     if ((argc < 3 ) || (strmatch (vtysh_client[i].name, argv[2]->text)))
@@ -2580,7 +2588,7 @@ DEFUN (vtysh_write_terminal,
       fp = NULL;
     }
 
-  vty_out (vty, "end%s", VTY_NEWLINE);
+  vty_out (vty, "end\n");
   return CMD_SUCCESS;
 }
 
@@ -2661,7 +2669,7 @@ vtysh_write_config_integrated(void)
     {
       fprintf (stdout,"%% Error: failed to open configuration file %s: %s\n",
 	       quagga_config, safe_strerror(errno));
-      return CMD_WARNING;
+      return CMD_WARNING_CONFIG_FAILED;
     }
   fd = fileno (fp);
 
@@ -2763,7 +2771,7 @@ DEFUN (vtysh_write_memory,
   /* If integrated frr.conf explicitely set. */
   if (want_config_integrated())
     {
-      ret = CMD_WARNING;
+      ret = CMD_WARNING_CONFIG_FAILED;
       for (i = 0; i < array_size(vtysh_client); i++)
         if (vtysh_client[i].flag == VTYSH_WATCHFRR)
           break;
@@ -2813,7 +2821,7 @@ DEFUN (vtysh_terminal_length,
   lines = strtol (argv[idx_number]->arg, &endptr, 10);
   if (lines < 0 || lines > 512 || *endptr != '\0')
     {
-      vty_out (vty, "length is malformed%s", VTY_NEWLINE);
+      vty_out (vty, "length is malformed\n");
       return CMD_WARNING;
     }
 
@@ -2860,7 +2868,7 @@ DEFUN (vtysh_show_daemons,
   for (i = 0; i < array_size(vtysh_client); i++)
     if ( vtysh_client[i].fd >= 0 )
       vty_out(vty, " %s", vtysh_client[i].name);
-  vty_out(vty, "%s", VTY_NEWLINE);
+  vty_out (vty, "\n");
 
   return CMD_SUCCESS;
 }
@@ -3065,7 +3073,7 @@ vtysh_connect (struct vtysh_client *vclient)
     {
       fprintf  (stderr, "vtysh_connect(%s): stat = %s\n", 
                 path, safe_strerror(errno));
-      exit(1);
+      exit (1);
     }
   
   if (ret >= 0)
@@ -3642,6 +3650,8 @@ vtysh_init_vty (void)
   install_element (VIEW_NODE, &vtysh_show_work_queues_cmd);
   install_element (VIEW_NODE, &vtysh_show_work_queues_daemon_cmd);
 
+  install_element (VIEW_NODE, &vtysh_show_hashtable_cmd);
+
   install_element (VIEW_NODE, &vtysh_show_thread_cmd);
 
   /* Logging */
@@ -3669,8 +3679,6 @@ vtysh_init_vty (void)
   install_element (CONFIG_NODE, &no_vtysh_service_password_encrypt_cmd);
 
   install_element (CONFIG_NODE, &vtysh_password_cmd);
-  install_element (CONFIG_NODE, &vtysh_password_text_cmd);
   install_element (CONFIG_NODE, &vtysh_enable_password_cmd);
-  install_element (CONFIG_NODE, &vtysh_enable_password_text_cmd);
   install_element (CONFIG_NODE, &no_vtysh_enable_password_cmd);
 }

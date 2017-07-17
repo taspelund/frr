@@ -2724,72 +2724,61 @@ zebra_show_client_detail (struct vty *vty, struct zserv *client)
   vty_out (vty, "Client: %s", zebra_route_string(client->proto));
   if (client->instance)
     vty_out (vty, " Instance: %d", client->instance);
-  vty_out (vty, "%s", VTY_NEWLINE);
+  vty_out (vty, "\n");
 
-  vty_out (vty, "------------------------ %s", VTY_NEWLINE);
-  vty_out (vty, "FD: %d %s", client->sock, VTY_NEWLINE);
-  vty_out (vty, "Route Table ID: %d %s", client->rtm_table, VTY_NEWLINE);
+  vty_out (vty, "------------------------ \n");
+  vty_out (vty, "FD: %d \n", client->sock);
+  vty_out (vty, "Route Table ID: %d \n", client->rtm_table);
 
-  vty_out (vty, "Connect Time: %s %s",
-	   zserv_time_buf(&client->connect_time, cbuf, ZEBRA_TIME_BUF),
-	   VTY_NEWLINE);
+  vty_out (vty, "Connect Time: %s \n",
+	   zserv_time_buf(&client->connect_time, cbuf, ZEBRA_TIME_BUF));
   if (client->nh_reg_time)
     {
-      vty_out (vty, "Nexthop Registry Time: %s %s",
-	       zserv_time_buf(&client->nh_reg_time, nhbuf, ZEBRA_TIME_BUF),
-	       VTY_NEWLINE);
+      vty_out (vty, "Nexthop Registry Time: %s \n",
+	       zserv_time_buf(&client->nh_reg_time, nhbuf, ZEBRA_TIME_BUF));
       if (client->nh_last_upd_time)
-	vty_out (vty, "Nexthop Last Update Time: %s %s",
-		 zserv_time_buf(&client->nh_last_upd_time, mbuf, ZEBRA_TIME_BUF),
-		 VTY_NEWLINE);
-      else
-	vty_out (vty, "No Nexthop Update sent%s", VTY_NEWLINE);
+	vty_out (vty, "Nexthop Last Update Time: %s \n",
+		 zserv_time_buf(&client->nh_last_upd_time, mbuf, ZEBRA_TIME_BUF));
+	else
+		vty_out (vty, "No Nexthop Update sent\n");
     }
   else
-    vty_out (vty, "Not registered for Nexthop Updates%s", VTY_NEWLINE);
+    vty_out (vty, "Not registered for Nexthop Updates\n");
 
-  vty_out (vty, "Last Msg Rx Time: %s %s",
-	   zserv_time_buf(&client->last_read_time, rbuf, ZEBRA_TIME_BUF),
-	   VTY_NEWLINE);
-  vty_out (vty, "Last Msg Tx Time: %s %s",
-	   zserv_time_buf(&client->last_write_time, wbuf, ZEBRA_TIME_BUF),
-	   VTY_NEWLINE);
+  vty_out (vty, "Last Msg Rx Time: %s \n",
+	   zserv_time_buf(&client->last_read_time, rbuf, ZEBRA_TIME_BUF));
+  vty_out (vty, "Last Msg Tx Time: %s \n",
+	   zserv_time_buf(&client->last_write_time, wbuf, ZEBRA_TIME_BUF));
   if (client->last_read_time)
-    vty_out (vty, "Last Rcvd Cmd: %s %s",
-	     zserv_command_string(client->last_read_cmd), VTY_NEWLINE);
+    vty_out (vty, "Last Rcvd Cmd: %s \n",
+	     zserv_command_string(client->last_read_cmd));
   if (client->last_write_time)
-    vty_out (vty, "Last Sent Cmd: %s %s",
-	     zserv_command_string(client->last_write_cmd), VTY_NEWLINE);
-  vty_out (vty, "%s", VTY_NEWLINE);
+    vty_out (vty, "Last Sent Cmd: %s \n",
+	     zserv_command_string(client->last_write_cmd));
+  vty_out (vty, "\n");
 
-  vty_out (vty, "Type        Add        Update     Del %s", VTY_NEWLINE);
-  vty_out (vty, "================================================== %s", VTY_NEWLINE);
-  vty_out (vty, "IPv4        %-12d%-12d%-12d%s", client->v4_route_add_cnt,
-	   client->v4_route_upd8_cnt, client->v4_route_del_cnt, VTY_NEWLINE);
-  vty_out (vty, "IPv6        %-12d%-12d%-12d%s", client->v6_route_add_cnt,
-	   client->v6_route_upd8_cnt, client->v6_route_del_cnt, VTY_NEWLINE);
-  vty_out (vty, "Redist:v4   %-12d%-12d%-12d%s", client->redist_v4_add_cnt, 0,
-	   client->redist_v4_del_cnt, VTY_NEWLINE);
-  vty_out (vty, "Redist:v6   %-12d%-12d%-12d%s", client->redist_v6_add_cnt, 0,
-	   client->redist_v6_del_cnt, VTY_NEWLINE);
-  vty_out (vty, "Connected   %-12d%-12d%-12d%s", client->ifadd_cnt, 0,
-	   client->ifdel_cnt, VTY_NEWLINE);
-  vty_out (vty, "BFD peer    %-12d%-12d%-12d%s", client->bfd_peer_add_cnt,
-       client->bfd_peer_upd8_cnt, client->bfd_peer_del_cnt, VTY_NEWLINE);
-  vty_out (vty, "Interface Up Notifications: %d%s", client->ifup_cnt,
-	   VTY_NEWLINE);
-  vty_out (vty, "Interface Down Notifications: %d%s", client->ifdown_cnt,
-	   VTY_NEWLINE);
-  vty_out (vty, "VNI add notifications: %d%s", client->vniadd_cnt,
-           VTY_NEWLINE);
-  vty_out (vty, "VNI delete notifications: %d%s", client->vnidel_cnt,
-           VTY_NEWLINE);
-  vty_out (vty, "MAC-IP add notifications: %d%s", client->macipadd_cnt,
-           VTY_NEWLINE);
-  vty_out (vty, "MAC-IP delete notifications: %d%s", client->macipdel_cnt,
-           VTY_NEWLINE);
+  vty_out (vty, "Type        Add        Update     Del \n");
+  vty_out (vty, "================================================== \n");
+  vty_out (vty, "IPv4        %-12d%-12d%-12d\n", client->v4_route_add_cnt,
+	   client->v4_route_upd8_cnt, client->v4_route_del_cnt);
+  vty_out (vty, "IPv6        %-12d%-12d%-12d\n", client->v6_route_add_cnt,
+	   client->v6_route_upd8_cnt, client->v6_route_del_cnt);
+  vty_out (vty, "Redist:v4   %-12d%-12d%-12d\n", client->redist_v4_add_cnt, 0,
+	   client->redist_v4_del_cnt);
+  vty_out (vty, "Redist:v6   %-12d%-12d%-12d\n", client->redist_v6_add_cnt, 0,
+	   client->redist_v6_del_cnt);
+  vty_out (vty, "Connected   %-12d%-12d%-12d\n", client->ifadd_cnt, 0,
+	   client->ifdel_cnt);
+  vty_out (vty, "BFD peer    %-12d%-12d%-12d\n", client->bfd_peer_add_cnt,
+       client->bfd_peer_upd8_cnt, client->bfd_peer_del_cnt);
+  vty_out (vty, "Interface Up Notifications: %d\n",client->ifup_cnt);
+  vty_out (vty, "Interface Down Notifications: %d\n",client->ifdown_cnt);
+  vty_out (vty, "VNI add notifications: %d\n", client->vniadd_cnt);
+  vty_out (vty, "VNI delete notifications: %d\n", client->vnidel_cnt);
+  vty_out (vty, "MAC-IP add notifications: %d\n", client->macipadd_cnt);
+  vty_out (vty, "MAC-IP delete notifications: %d\n", client->macipdel_cnt);
 
-  vty_out (vty, "%s", VTY_NEWLINE);
+  vty_out (vty, "\n");
   return;
 }
 
@@ -2799,7 +2788,7 @@ zebra_show_client_brief (struct vty *vty, struct zserv *client)
   char cbuf[ZEBRA_TIME_BUF], rbuf[ZEBRA_TIME_BUF];
   char wbuf[ZEBRA_TIME_BUF];
 
-  vty_out (vty, "%-8s%12s %12s%12s%8d/%-8d%8d/%-8d%s",
+  vty_out (vty, "%-8s%12s %12s%12s%8d/%-8d%8d/%-8d\n",
 	   zebra_route_string(client->proto),
 	   zserv_time_buf(&client->connect_time, cbuf, ZEBRA_TIME_BUF),
 	   zserv_time_buf(&client->last_read_time, rbuf, ZEBRA_TIME_BUF),
@@ -2807,7 +2796,7 @@ zebra_show_client_brief (struct vty *vty, struct zserv *client)
 	   client->v4_route_add_cnt+client->v4_route_upd8_cnt,
 	   client->v4_route_del_cnt,
 	   client->v6_route_add_cnt+client->v6_route_upd8_cnt,
-	   client->v6_route_del_cnt, VTY_NEWLINE);
+	   client->v6_route_del_cnt);
 
 }
 
@@ -2834,8 +2823,7 @@ DEFUN (show_table,
        SHOW_STR
        "default routing table to use for all clients\n")
 {
-  vty_out (vty, "table %d%s", zebrad.rtm_table_default,
-	   VTY_NEWLINE);
+  vty_out (vty, "table %d\n",zebrad.rtm_table_default);
   return CMD_SUCCESS;
 }
 
@@ -2875,8 +2863,8 @@ DEFUN (ip_forwarding,
 
   if (ret == 0)
     {
-      vty_out (vty, "Can't turn on IP forwarding%s", VTY_NEWLINE);
-      return CMD_WARNING;
+      vty_out (vty, "Can't turn on IP forwarding\n");
+      return CMD_WARNING_CONFIG_FAILED;
     }
 
   return CMD_SUCCESS;
@@ -2897,8 +2885,8 @@ DEFUN (no_ip_forwarding,
 
   if (ret != 0)
     {
-      vty_out (vty, "Can't turn off IP forwarding%s", VTY_NEWLINE);
-      return CMD_WARNING;
+      vty_out (vty, "Can't turn off IP forwarding\n");
+      return CMD_WARNING_CONFIG_FAILED;
     }
 
   return CMD_SUCCESS;
@@ -2912,15 +2900,16 @@ DEFUN (show_zebra,
 {
   struct vrf *vrf;
 
-  vty_out (vty, "                            Route      Route      Neighbor   LSP        LSP%s", VTY_NEWLINE);
-  vty_out (vty, "VRF                         Installs   Removals    Updates   Installs   Removals%s", VTY_NEWLINE);
+  vty_out (vty,
+             "                            Route      Route      Neighbor   LSP        LSP\n");
+  vty_out (vty,
+             "VRF                         Installs   Removals    Updates   Installs   Removals\n");
   RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
     {
       struct zebra_vrf *zvrf = vrf->info;
-      vty_out (vty,"%-25s %10" PRIu64 " %10" PRIu64 " %10" PRIu64 " %10" PRIu64 " %10" PRIu64 "%s",
+      vty_out (vty,"%-25s %10" PRIu64 " %10" PRIu64 " %10" PRIu64 " %10" PRIu64 " %10" PRIu64 "\n",
                vrf->name, zvrf->installs, zvrf->removals,
-               zvrf->neigh_updates, zvrf->lsp_installs, zvrf->lsp_removals,
-               VTY_NEWLINE);
+               zvrf->neigh_updates, zvrf->lsp_installs,zvrf->lsp_removals);
     }
 
   return CMD_SUCCESS;
@@ -2955,15 +2944,15 @@ DEFUN (show_zebra_client_summary,
   struct listnode *node;
   struct zserv *client;
 
-  vty_out (vty, "Name    Connect Time    Last Read  Last Write  IPv4 Routes       IPv6 Routes    %s",
-	   VTY_NEWLINE);
-  vty_out (vty,"--------------------------------------------------------------------------------%s",
-	   VTY_NEWLINE);
+  vty_out (vty,
+             "Name    Connect Time    Last Read  Last Write  IPv4 Routes       IPv6 Routes    \n");
+  vty_out (vty,
+             "--------------------------------------------------------------------------------\n");
 
   for (ALL_LIST_ELEMENTS_RO (zebrad.client_list, node, client))
     zebra_show_client_brief(vty, client);
 
-  vty_out (vty, "Routes column shows (added+updated)/deleted%s", VTY_NEWLINE);
+  vty_out (vty, "Routes column shows (added+updated)/deleted\n");
   return CMD_SUCCESS;
 }
 
@@ -2972,8 +2961,7 @@ static int
 config_write_table (struct vty *vty)
 {
   if (zebrad.rtm_table_default)
-    vty_out (vty, "table %d%s", zebrad.rtm_table_default,
-	     VTY_NEWLINE);
+    vty_out (vty, "table %d\n",zebrad.rtm_table_default);
   return 0;
 }
 
@@ -2998,9 +2986,9 @@ DEFUN (show_ip_forwarding,
   ret = ipforward ();
 
   if (ret == 0)
-    vty_out (vty, "IP forwarding is off%s", VTY_NEWLINE);
+    vty_out (vty, "IP forwarding is off\n");
   else
-    vty_out (vty, "IP forwarding is on%s", VTY_NEWLINE);
+    vty_out (vty, "IP forwarding is on\n");
   return CMD_SUCCESS;
 }
 
@@ -3019,16 +3007,16 @@ DEFUN (show_ipv6_forwarding,
   switch (ret)
     {
     case -1:
-      vty_out (vty, "ipv6 forwarding is unknown%s", VTY_NEWLINE);
+      vty_out (vty, "ipv6 forwarding is unknown\n");
       break;
     case 0:
-      vty_out (vty, "ipv6 forwarding is %s%s", "off", VTY_NEWLINE);
+      vty_out (vty, "ipv6 forwarding is %s\n", "off");
       break;
     case 1:
-      vty_out (vty, "ipv6 forwarding is %s%s", "on", VTY_NEWLINE);
+      vty_out (vty, "ipv6 forwarding is %s\n", "on");
       break;
     default:
-      vty_out (vty, "ipv6 forwarding is %s%s", "off", VTY_NEWLINE);
+      vty_out (vty, "ipv6 forwarding is %s\n", "off");
       break;
     }
   return CMD_SUCCESS;
@@ -3048,8 +3036,8 @@ DEFUN (ipv6_forwarding,
 
   if (ret == 0)
     {
-      vty_out (vty, "Can't turn on IPv6 forwarding%s", VTY_NEWLINE);
-      return CMD_WARNING;
+      vty_out (vty, "Can't turn on IPv6 forwarding\n");
+      return CMD_WARNING_CONFIG_FAILED;
     }
 
   return CMD_SUCCESS;
@@ -3070,8 +3058,8 @@ DEFUN (no_ipv6_forwarding,
 
   if (ret != 0)
     {
-      vty_out (vty, "Can't turn off IPv6 forwarding%s", VTY_NEWLINE);
-      return CMD_WARNING;
+      vty_out (vty, "Can't turn off IPv6 forwarding\n");
+      return CMD_WARNING_CONFIG_FAILED;
     }
 
   return CMD_SUCCESS;
@@ -3085,10 +3073,10 @@ config_write_forwarding (struct vty *vty)
   router_id_write (vty);
 
   if (!ipforward ())
-    vty_out (vty, "no ip forwarding%s", VTY_NEWLINE);
+    vty_out (vty, "no ip forwarding\n");
   if (!ipforward_ipv6 ())
-    vty_out (vty, "no ipv6 forwarding%s", VTY_NEWLINE);
-  vty_out (vty, "!%s", VTY_NEWLINE);
+    vty_out (vty, "no ipv6 forwarding\n");
+  vty_out (vty, "!\n");
   return 0;
 }
 

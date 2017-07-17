@@ -297,8 +297,7 @@ ospf6_nexthop_calc (struct ospf6_vertex *w, struct ospf6_vertex *v,
                 ROUTER_LSDESC_GET_NBR_ROUTERID (lsdesc));
 
   i = 0;
-  for (lsa = ospf6_lsdb_type_router_head (type, adv_router, oi->lsdb); lsa;
-       lsa = ospf6_lsdb_type_router_next (type, adv_router, lsa))
+  for (ALL_LSDB_TYPED_ADVRTR(oi->lsdb, type, adv_router, lsa))
     {
       if (VERTEX_IS_TYPE (ROUTER, v) &&
           htonl (ROUTER_LSDESC_GET_NBR_IFID (lsdesc)) != lsa->header->id)
@@ -743,13 +742,13 @@ ospf6_spf_display_subtree (struct vty *vty, const char *prefix, int rest,
   int restnum;
 
   /* "prefix" is the space prefix of the display line */
-  vty_out (vty, "%s+-%s [%d]%s", prefix, v->name, v->cost, VNL);
+  vty_out (vty, "%s+-%s [%d]\n", prefix, v->name, v->cost);
 
   len = strlen (prefix) + 4;
   next_prefix = (char *) malloc (len);
   if (next_prefix == NULL)
     {
-      vty_out (vty, "malloc failed%s", VNL);
+      vty_out (vty, "malloc failed\n");
       return;
     }
   snprintf (next_prefix, len, "%s%s", prefix, (rest ? "|  " : "   "));
@@ -886,9 +885,9 @@ DEFUN (ospf6_timers_throttle_spf,
   int idx_number_3 = 5;
   unsigned int delay, hold, max;
 
-  VTY_GET_INTEGER_RANGE ("SPF delay timer", delay, argv[idx_number]->arg, 0, 600000);
-  VTY_GET_INTEGER_RANGE ("SPF hold timer", hold, argv[idx_number_2]->arg, 0, 600000);
-  VTY_GET_INTEGER_RANGE ("SPF max-hold timer", max, argv[idx_number_3]->arg, 0, 600000);
+  delay = strtoul(argv[idx_number]->arg, NULL, 10);
+  hold = strtoul(argv[idx_number_2]->arg, NULL, 10);
+  max = strtoul(argv[idx_number_3]->arg, NULL, 10);
 
   return ospf6_timers_spf_set (vty, delay, hold, max);
 }
@@ -915,11 +914,11 @@ int
 config_write_ospf6_debug_spf (struct vty *vty)
 {
   if (IS_OSPF6_DEBUG_SPF (PROCESS))
-    vty_out (vty, "debug ospf6 spf process%s", VNL);
+    vty_out (vty, "debug ospf6 spf process\n");
   if (IS_OSPF6_DEBUG_SPF (TIME))
-    vty_out (vty, "debug ospf6 spf time%s", VNL);
+    vty_out (vty, "debug ospf6 spf time\n");
   if (IS_OSPF6_DEBUG_SPF (DATABASE))
-    vty_out (vty, "debug ospf6 spf database%s", VNL);
+    vty_out (vty, "debug ospf6 spf database\n");
   return 0;
 }
 
@@ -930,9 +929,9 @@ ospf6_spf_config_write (struct vty *vty)
   if (ospf6->spf_delay != OSPF_SPF_DELAY_DEFAULT ||
       ospf6->spf_holdtime != OSPF_SPF_HOLDTIME_DEFAULT ||
       ospf6->spf_max_holdtime != OSPF_SPF_MAX_HOLDTIME_DEFAULT)
-    vty_out (vty, " timers throttle spf %d %d %d%s",
+    vty_out (vty, " timers throttle spf %d %d %d\n",
 	     ospf6->spf_delay, ospf6->spf_holdtime,
-	     ospf6->spf_max_holdtime, VTY_NEWLINE);
+	     ospf6->spf_max_holdtime);
 
 }
 

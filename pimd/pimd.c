@@ -39,6 +39,7 @@
 #include "pim_rp.h"
 #include "pim_ssm.h"
 #include "pim_zlookup.h"
+#include "pim_zebra.h"
 
 const char *const PIM_ALL_SYSTEMS      = MCAST_ALL_SYSTEMS;
 const char *const PIM_ALL_ROUTERS      = MCAST_ALL_ROUTERS;
@@ -92,7 +93,6 @@ static void pim_free()
   zprivs_terminate(&pimd_privs);
 }
 
-
 void pim_init()
 {
   if (!inet_aton(PIM_ALL_PIM_ROUTERS, &qpim_all_pim_routers_addr)) {
@@ -121,6 +121,8 @@ void pim_init()
 
 void pim_terminate()
 {
+  struct zclient *zclient;
+
   pim_free();
 
   /* reverse prefix_list_init */
@@ -129,4 +131,11 @@ void pim_terminate()
   prefix_list_reset ();
 
   pim_vrf_terminate ();
+
+  zclient = pim_zebra_zclient_get ();
+  if (zclient)
+    {
+      zclient_stop (zclient);
+      zclient_free (zclient);
+    }
 }

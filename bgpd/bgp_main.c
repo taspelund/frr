@@ -40,6 +40,7 @@
 #include "vrf.h"
 #include "bfd.h"
 #include "libfrr.h"
+#include "vxlan.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_attr.h"
@@ -232,12 +233,6 @@ bgp_exit (int status)
   vnc_zebra_destroy();
 #endif
   bgp_zebra_destroy();
-  if (bgp_nexthop_buf)
-    stream_free (bgp_nexthop_buf);
-  if (bgp_ifindices_buf)
-    stream_free (bgp_ifindices_buf);
-  if (bgp_label_buf)
-    stream_free (bgp_label_buf);
 
   /* reverse bgp_master_init */
   if (bm->master)
@@ -405,6 +400,7 @@ main (int argc, char **argv)
 	case 'l':
 	  bgp_address = optarg;
 	  /* listenon implies -n */
+          /* fallthru */
 	case 'n':
           no_fib_flag = 1;
 	  break;

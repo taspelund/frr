@@ -249,8 +249,8 @@ zvni_print_neigh (zebra_neigh_t *n, void *ctxt, json_object *json)
   vty = (struct vty *) ctxt;
   if (json == NULL)
     {
-      vty_out(vty, "IP: %s%s",
-              ipaddr2str (&n->ip, buf2, sizeof(buf2)), VTY_NEWLINE);
+      vty_out(vty, "IP: %s\n",
+              ipaddr2str (&n->ip, buf2, sizeof(buf2)));
       vty_out(vty, " MAC: %s", prefix_mac2str (&n->emac, buf1, sizeof (buf1)));
     }
   else
@@ -269,7 +269,7 @@ zvni_print_neigh (zebra_neigh_t *n, void *ctxt, json_object *json)
         json_object_string_add (json, "remoteVtep", inet_ntoa (n->r_vtep_ip));
     }
   if (json == NULL)
-    vty_out(vty, "%s", VTY_NEWLINE);
+    vty_out(vty, "\n");
 }
 
 /*
@@ -301,8 +301,8 @@ zvni_print_neigh_hash (struct hash_backet *backet, void *ctxt)
     {
       if (json_vni == NULL)
         {
-          vty_out(vty, "%*s %-6s %-17s %s",
-                -wctx->addr_width, buf2, "local", buf1, VTY_NEWLINE);
+          vty_out(vty, "%*s %-6s %-17s\n",
+                -wctx->addr_width, buf2, "local", buf1);
         }
       else
         {
@@ -320,12 +320,12 @@ zvni_print_neigh_hash (struct hash_backet *backet, void *ctxt)
               if (json_vni == NULL)
                 {
                   if (wctx->count == 0)
-                    vty_out(vty, "%*s %-6s %-17s %-21s%s",
+                    vty_out(vty, "%*s %-6s %-17s %-21s\n",
                             -wctx->addr_width, "Neighbor", "Type", "MAC",
-                            "Remote VTEP", VTY_NEWLINE);
-                  vty_out(vty, "%*s %-6s %-17s %-21s%s",
+                            "Remote VTEP");
+                  vty_out(vty, "%*s %-6s %-17s %-21s\n",
                           -wctx->addr_width, buf2, "remote", buf1,
-                          inet_ntoa (n->r_vtep_ip), VTY_NEWLINE);
+                          inet_ntoa (n->r_vtep_ip));
                 }
               else
                 {
@@ -341,9 +341,9 @@ zvni_print_neigh_hash (struct hash_backet *backet, void *ctxt)
         {
           if (json_vni == NULL)
             {
-              vty_out(vty, "%*s %-6s %-17s %-21s%s",
+              vty_out(vty, "%*s %-6s %-17s %-21s\n",
                       -wctx->addr_width, buf2, "remote", buf1,
-                      inet_ntoa (n->r_vtep_ip), VTY_NEWLINE);
+                      inet_ntoa (n->r_vtep_ip));
             }
           else
             {
@@ -381,13 +381,13 @@ zvni_print_neigh_hash_all_vni (struct hash_backet *backet, void **args)
   if (!zvni)
     {
       if (json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       return;
     }
   num_neigh = hashcount(zvni->neigh_table);
   if (json == NULL)
-    vty_out(vty, "%sVNI %u #ARP (IPv4 and IPv6, local and remote) %u%s%s",
-            VTY_NEWLINE, zvni->vni, num_neigh, VTY_NEWLINE, VTY_NEWLINE);
+    vty_out(vty, "\nVNI %u #ARP (IPv4 and IPv6, local and remote) %u\n\n",
+            zvni->vni, num_neigh);
   else
     {
       json_vni = json_object_new_object ();
@@ -413,9 +413,9 @@ zvni_print_neigh_hash_all_vni (struct hash_backet *backet, void **args)
   hash_iterate(zvni->neigh_table, zvni_find_neigh_addr_width, &wctx);
 
   if (json == NULL)
-    vty_out(vty, "%*s %-6s %-17s %-21s%s",
+    vty_out(vty, "%*s %-6s %-17s %-21s\n",
             -wctx.addr_width, "IP", "Type", "MAC",
-            "Remote VTEP", VTY_NEWLINE);
+            "Remote VTEP");
   hash_iterate(zvni->neigh_table, zvni_print_neigh_hash, &wctx);
 
   if (json)
@@ -435,8 +435,8 @@ zvni_print_mac (zebra_mac_t *mac, void *ctxt)
   char                buf2[INET6_ADDRSTRLEN];
 
   vty = (struct vty *) ctxt;
-  vty_out(vty, "MAC: %s%s",
-          prefix_mac2str (&mac->macaddr, buf1, sizeof (buf1)), VTY_NEWLINE);
+  vty_out(vty, "MAC: %s\n",
+          prefix_mac2str (&mac->macaddr, buf1, sizeof (buf1)));
   if (CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
     {
       struct zebra_ns *zns;
@@ -464,21 +464,20 @@ zvni_print_mac (zebra_mac_t *mac, void *ctxt)
   vty_out(vty, " ARP ref: %u\n", mac->neigh_refcnt);
 
   /* print all the associated neigh */
-  vty_out(vty, " Neighbors:%s", VTY_NEWLINE);
+  vty_out(vty, " Neighbors:\n");
   if (!listcount (mac->neigh_list))
-    vty_out(vty, "    No Neighbors %s", VTY_NEWLINE);
+    vty_out(vty, "    No Neighbors\n");
   else
     {
       for (ALL_LIST_ELEMENTS_RO (mac->neigh_list, node, n))
         {
-          vty_out(vty, "    %s %s%s",
+          vty_out(vty, "    %s %s\n",
                   ipaddr2str (&n->ip, buf2, sizeof(buf2)),
-                  CHECK_FLAG (n->flags, ZEBRA_MAC_LOCAL) ? (IS_ZEBRA_NEIGH_ACTIVE(n) ? "Active" : "Inactive") : "",
-                  VTY_NEWLINE);
+                  CHECK_FLAG (n->flags, ZEBRA_MAC_LOCAL) ? (IS_ZEBRA_NEIGH_ACTIVE(n) ? "Active" : "Inactive") : "");
         }
     }
 
-  vty_out(vty, "%s", VTY_NEWLINE);
+  vty_out(vty, "\n");
 }
 
 /*
@@ -534,7 +533,7 @@ zvni_print_mac_hash (struct hash_backet *backet, void *ctxt)
             json_object_int_add (json_mac, "vlan", vid);
         }
       if (json_mac_hdr == NULL)
-        vty_out(vty, "%s", VTY_NEWLINE);
+        vty_out(vty, "\n");
       else
         json_object_object_add (json_mac_hdr, buf1, json_mac);
       wctx->count++;
@@ -550,17 +549,17 @@ zvni_print_mac_hash (struct hash_backet *backet, void *ctxt)
                 {
                   if (json_mac_hdr == NULL)
                     {
-                      vty_out(vty, "%sVNI %u%s%s",
-                             VTY_NEWLINE, wctx->zvni->vni,VTY_NEWLINE, VTY_NEWLINE);
-                      vty_out(vty, "%-17s %-6s %-21s %-5s%s",
+                      vty_out(vty, "\nVNI %u\n\n",
+                              wctx->zvni->vni);
+                      vty_out(vty, "%-17s %-6s %-21s %-5s\n",
                               "MAC", "Type", "Intf/Remote VTEP",
-                              "VLAN", VTY_NEWLINE);
+                              "VLAN");
                     }
                 }
               if (json_mac_hdr == NULL)
-                vty_out (vty, "%-17s %-6s %-21s%s",
+                vty_out (vty, "%-17s %-6s %-21s\n",
                          buf1, "remote",
-                         inet_ntoa (mac->fwd_info.r_vtep_ip), VTY_NEWLINE);
+                         inet_ntoa (mac->fwd_info.r_vtep_ip));
               else
                 {
                   json_object_string_add (json_mac, "type", "remote");
@@ -575,9 +574,9 @@ zvni_print_mac_hash (struct hash_backet *backet, void *ctxt)
       else
         {
           if (json_mac_hdr == NULL)
-            vty_out(vty, "%-17s %-6s %-21s%s",
+            vty_out(vty, "%-17s %-6s %-21s\n",
                     buf1, "remote",
-                    inet_ntoa (mac->fwd_info.r_vtep_ip), VTY_NEWLINE);
+                    inet_ntoa (mac->fwd_info.r_vtep_ip));
           else
             {
               json_object_string_add (json_mac, "type", "remote");
@@ -611,7 +610,7 @@ zvni_print_mac_hash_all_vni (struct hash_backet *backet, void *ctxt)
   if (!zvni)
     {
       if (json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       return;
     }
   wctx->zvni = zvni;
@@ -634,10 +633,10 @@ zvni_print_mac_hash_all_vni (struct hash_backet *backet, void *ctxt)
     {
       if (json == NULL)
         {
-          vty_out(vty, "%sVNI %u #MACs (local and remote) %u%s%s",
-                  VTY_NEWLINE, zvni->vni, num_macs, VTY_NEWLINE, VTY_NEWLINE);
-          vty_out(vty, "%-17s %-6s %-21s %-5s%s",
-                  "MAC", "Type", "Intf/Remote VTEP", "VLAN", VTY_NEWLINE);
+          vty_out(vty, "\nVNI %u #MACs (local and remote) %u\n\n",
+                  zvni->vni, num_macs);
+          vty_out(vty, "%-17s %-6s %-21s %-5s\n",
+                  "MAC", "Type", "Intf/Remote VTEP", "VLAN");
         }
       else
         json_object_int_add (json_vni, "numMacs", num_macs);
@@ -676,22 +675,22 @@ zvni_print (zebra_vni_t *zvni, void **ctxt)
   json = ctxt[1];
 
   if (json == NULL)
-    vty_out(vty, "VNI: %u%s", zvni->vni, VTY_NEWLINE);
+    vty_out(vty, "VNI: %u\n", zvni->vni);
   else
     json_object_int_add (json, "vni", zvni->vni);
 
   if (!zvni->vxlan_if)
     { // unexpected
       if (json == NULL)
-        vty_out(vty, " VxLAN interface: unknown%s", VTY_NEWLINE);
+        vty_out(vty, " VxLAN interface: unknown\n");
       return;
     }
   num_macs = hashcount(zvni->mac_table);
   num_neigh = hashcount(zvni->neigh_table);
   if (json == NULL)
-    vty_out(vty, " VxLAN interface: %s ifIndex: %u VTEP IP: %s%s",
+    vty_out(vty, " VxLAN interface: %s ifIndex: %u VTEP IP: %s\n",
             zvni->vxlan_if->name, zvni->vxlan_if->ifindex,
-            inet_ntoa(zvni->local_vtep_ip), VTY_NEWLINE);
+            inet_ntoa(zvni->local_vtep_ip));
   else
     {
       json_object_string_add (json, "vxlanInterface", zvni->vxlan_if->name);
@@ -704,19 +703,19 @@ zvni_print (zebra_vni_t *zvni, void **ctxt)
   if (!zvni->vteps)
     {
       if (json == NULL)
-        vty_out(vty, " No remote VTEPs known for this VNI%s", VTY_NEWLINE);
+        vty_out(vty, " No remote VTEPs known for this VNI\n");
     }
   else
     {
       if (json == NULL)
-        vty_out(vty, " Remote VTEPs for this VNI:%s", VTY_NEWLINE);
+        vty_out(vty, " Remote VTEPs for this VNI:\n");
       else
         json_vtep_list = json_object_new_array ();
       for (zvtep = zvni->vteps; zvtep; zvtep = zvtep->next)
         {
           if (json == NULL)
-            vty_out(vty, "  %s%s",
-                    inet_ntoa (zvtep->vtep_ip), VTY_NEWLINE);
+            vty_out(vty, "  %s\n",
+                    inet_ntoa (zvtep->vtep_ip));
           else
             {
               json_ip_str = json_object_new_string (inet_ntoa (zvtep->vtep_ip));
@@ -728,12 +727,12 @@ zvni_print (zebra_vni_t *zvni, void **ctxt)
     }
   if (json == NULL)
     {
-      vty_out(vty, " Number of MACs (local and remote) known for this VNI: %u%s",
-              num_macs, VTY_NEWLINE);
+      vty_out(vty, " Number of MACs (local and remote) known for this VNI: %u\n",
+              num_macs);
       vty_out(vty, " Number of ARPs (IPv4 and IPv6, local and remote) "
-              "known for this VNI: %u%s", num_neigh, VTY_NEWLINE);
-      vty_out(vty, " Advertise-gw-macip: %s%s ",
-              zvni->advertise_gw_macip ? "Yes" : "No", VTY_NEWLINE);
+              "known for this VNI: %u\n", num_neigh);
+      vty_out(vty, " Advertise-gw-macip: %s\n ",
+              zvni->advertise_gw_macip ? "Yes" : "No");
     }
 }
 
@@ -771,11 +770,11 @@ zvni_print_hash (struct hash_backet *backet, void *ctxt[])
   num_macs = hashcount(zvni->mac_table);
   num_neigh = hashcount(zvni->neigh_table);
   if (json == NULL)
-    vty_out(vty, "%-10u %-21s %-15s %-8u %-8u %-15u%s",
+    vty_out(vty, "%-10u %-21s %-15s %-8u %-8u %-15u\n",
             zvni->vni,
             zvni->vxlan_if ? zvni->vxlan_if->name : "unknown",
             inet_ntoa(zvni->local_vtep_ip),
-            num_macs, num_neigh, num_vteps, VTY_NEWLINE);
+            num_macs, num_neigh, num_vteps);
   else
     {
       char vni_str[VNI_STR_LEN];
@@ -1726,7 +1725,7 @@ zvni_mac_del_hash_entry (struct hash_backet *backet, void *arg)
         {
           sticky = CHECK_FLAG (mac->flags, ZEBRA_MAC_STICKY) ? 1: 0;
           zvni_mac_send_del_to_client (wctx->zvrf, wctx->zvni->vni,
-                                       &mac->macaddr, (sticky ? ZEBRA_MAC_TYPE_STICKY : 0));
+                                       &mac->macaddr, sticky);
         }
 
       if (wctx->uninstall)
@@ -2213,10 +2212,14 @@ zvni_add (struct zebra_vrf *zvrf, vni_t vni)
   assert (zvni);
 
   /* Create hash table for MAC */
-  zvni->mac_table = hash_create(mac_hash_keymake, mac_cmp);
+  zvni->mac_table = hash_create(mac_hash_keymake,
+				mac_cmp,
+				"Zebra VNI MAC Table");
 
   /* Create hash table for neighbors */
-  zvni->neigh_table = hash_create(neigh_hash_keymake, neigh_cmp);
+  zvni->neigh_table = hash_create(neigh_hash_keymake,
+				  neigh_cmp,
+				  "Zebra VNI Neighbor Table");
 
   return zvni;
 }
@@ -2534,9 +2537,9 @@ zebra_vxlan_print_neigh_vni (struct vty *vty, struct zebra_vrf *zvrf, vni_t vni,
   if (!zvni)
     {
       if (use_json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       else
-        vty_out (vty, "%% VNI %u does not exist%s", vni, VTY_NEWLINE);
+        vty_out (vty, "%% VNI %u does not exist\n", vni);
       return;
     }
   num_neigh = hashcount(zvni->neigh_table);
@@ -2559,11 +2562,11 @@ zebra_vxlan_print_neigh_vni (struct vty *vty, struct zebra_vrf *zvrf, vni_t vni,
 
   if (!use_json)
     {
-      vty_out(vty, "Number of ARPs (local and remote) known for this VNI: %u%s",
-              num_neigh, VTY_NEWLINE);
-      vty_out(vty, "%*s %-6s %-17s %-21s%s",
+      vty_out(vty, "Number of ARPs (local and remote) known for this VNI: %u\n",
+              num_neigh);
+      vty_out(vty, "%*s %-6s %-17s %-21s\n",
               -wctx.addr_width, "IP", "Type", "MAC",
-              "Remote VTEP", VTY_NEWLINE);
+              "Remote VTEP");
     }
   else
     json_object_int_add (json, "numArpNd", num_neigh);
@@ -2571,8 +2574,7 @@ zebra_vxlan_print_neigh_vni (struct vty *vty, struct zebra_vrf *zvrf, vni_t vni,
   hash_iterate(zvni->neigh_table, zvni_print_neigh_hash, &wctx);
   if (use_json)
     {
-      vty_out (vty, "%s%s", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -2600,8 +2602,7 @@ zebra_vxlan_print_neigh_all_vni (struct vty *vty, struct zebra_vrf *zvrf,
               args);
   if (use_json)
     {
-      vty_out (vty, "%s%s", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -2623,17 +2624,17 @@ zebra_vxlan_print_specific_neigh_vni (struct vty *vty, struct zebra_vrf *zvrf,
   if (!zvni)
     {
       if (use_json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       else
-        vty_out (vty, "%% VNI %u does not exist%s", vni, VTY_NEWLINE);
+        vty_out (vty, "%% VNI %u does not exist\n", vni);
       return;
     }
   n = zvni_neigh_lookup (zvni, ip);
   if (!n)
     {
       if (!use_json)
-        vty_out (vty, "%% Requested neighbor does not exist in VNI %u%s",
-                 vni, VTY_NEWLINE);
+        vty_out (vty, "%% Requested neighbor does not exist in VNI %u\n",
+                 vni);
       return;
     }
   if (use_json)
@@ -2643,8 +2644,7 @@ zebra_vxlan_print_specific_neigh_vni (struct vty *vty, struct zebra_vrf *zvrf,
 
   if (use_json)
     {
-      vty_out (vty, "%s%s", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -2668,9 +2668,9 @@ zebra_vxlan_print_neigh_vni_vtep (struct vty *vty, struct zebra_vrf *zvrf,
   if (!zvni)
     {
       if (use_json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       else
-        vty_out (vty, "%% VNI %u does not exist%s", vni, VTY_NEWLINE);
+        vty_out (vty, "%% VNI %u does not exist", vni);
       return;
     }
   num_neigh = hashcount(zvni->neigh_table);
@@ -2687,8 +2687,7 @@ zebra_vxlan_print_neigh_vni_vtep (struct vty *vty, struct zebra_vrf *zvrf,
 
   if (use_json)
     {
-      vty_out (vty, "%s%s", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -2712,9 +2711,9 @@ zebra_vxlan_print_macs_vni (struct vty *vty, struct zebra_vrf *zvrf,
   if (!zvni)
     {
       if (use_json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       else
-        vty_out (vty, "%% VNI %u does not exist%s", vni, VTY_NEWLINE);
+        vty_out (vty, "%% VNI %u does not exist\n", vni);
       return;
     }
   num_macs = hashcount(zvni->mac_table);
@@ -2734,10 +2733,10 @@ zebra_vxlan_print_macs_vni (struct vty *vty, struct zebra_vrf *zvrf,
 
   if (!use_json)
     {
-      vty_out(vty, "Number of MACs (local and remote) known for this VNI: %u%s",
-              num_macs, VTY_NEWLINE);
-      vty_out(vty, "%-17s %-6s %-21s %-5s%s",
-              "MAC", "Type", "Intf/Remote VTEP", "VLAN", VTY_NEWLINE);
+      vty_out(vty, "Number of MACs (local and remote) known for this VNI: %u\n",
+              num_macs);
+      vty_out(vty, "%-17s %-6s %-21s %-5s\n",
+              "MAC", "Type", "Intf/Remote VTEP", "VLAN");
     }
   else
     json_object_int_add (json, "numMacs", num_macs);
@@ -2747,9 +2746,8 @@ zebra_vxlan_print_macs_vni (struct vty *vty, struct zebra_vrf *zvrf,
   if (use_json)
     {
       json_object_object_add (json, "macs", json_mac);
-      vty_out (vty, "%s%s",
-               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n",
+               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -2767,7 +2765,7 @@ zebra_vxlan_print_macs_all_vni (struct vty *vty, struct zebra_vrf *zvrf,
   if (!EVPN_ENABLED(zvrf))
     {
       if (use_json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       return;
     }
   if (use_json)
@@ -2780,9 +2778,8 @@ zebra_vxlan_print_macs_all_vni (struct vty *vty, struct zebra_vrf *zvrf,
 
   if (use_json)
     {
-      vty_out (vty, "%s%s",
-               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n",
+               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -2812,9 +2809,8 @@ zebra_vxlan_print_macs_all_vni_vtep (struct vty *vty, struct zebra_vrf *zvrf,
 
   if (use_json)
     {
-      vty_out (vty, "%s%s",
-               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n",
+               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -2834,14 +2830,14 @@ zebra_vxlan_print_specific_mac_vni (struct vty *vty, struct zebra_vrf *zvrf,
   zvni = zvni_lookup (zvrf, vni);
   if (!zvni)
     {
-      vty_out (vty, "%% VNI %u does not exist%s", vni, VTY_NEWLINE);
+      vty_out (vty, "%% VNI %u does not exist\n", vni);
       return;
     }
   mac = zvni_mac_lookup (zvni, macaddr);
   if (!mac)
     {
-      vty_out (vty, "%% Requested MAC does not exist in VNI %u%s",
-               vni, VTY_NEWLINE);
+      vty_out (vty, "%% Requested MAC does not exist in VNI %u\n",
+               vni);
       return;
     }
 
@@ -2867,9 +2863,9 @@ zebra_vxlan_print_macs_vni_vtep (struct vty *vty, struct zebra_vrf *zvrf,
   if (!zvni)
     {
       if (use_json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       else
-        vty_out (vty, "%% VNI %u does not exist%s", vni, VTY_NEWLINE);
+        vty_out (vty, "%% VNI %u does not exist\n", vni);
       return;
     }
   num_macs = hashcount(zvni->mac_table);
@@ -2895,9 +2891,8 @@ zebra_vxlan_print_macs_vni_vtep (struct vty *vty, struct zebra_vrf *zvrf,
       json_object_int_add (json, "numMacs", wctx.count);
       if (wctx.count)
         json_object_object_add (json, "macs", json_mac);
-      vty_out (vty, "%s%s",
-               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n",
+               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -2920,9 +2915,9 @@ zebra_vxlan_print_vni (struct vty *vty, struct zebra_vrf *zvrf, vni_t vni,
   if (!zvni)
     {
       if (use_json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       else
-        vty_out (vty, "%% VNI %u does not exist%s", vni, VTY_NEWLINE);
+        vty_out (vty, "%% VNI %u does not exist\n", vni);
       return;
     }
   if (use_json)
@@ -2932,8 +2927,7 @@ zebra_vxlan_print_vni (struct vty *vty, struct zebra_vrf *zvrf, vni_t vni,
   zvni_print (zvni, (void *) args);
   if (use_json)
     {
-      vty_out (vty, "%s%s", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n", json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -2954,7 +2948,7 @@ zebra_vxlan_print_vnis (struct vty *vty, struct zebra_vrf *zvrf, u_char use_json
   if (!num_vnis)
     {
       if (use_json)
-        vty_out (vty, "{}%s", VTY_NEWLINE);
+        vty_out (vty, "{}\n");
       return;
     }
   if (use_json)
@@ -2965,11 +2959,11 @@ zebra_vxlan_print_vnis (struct vty *vty, struct zebra_vrf *zvrf, u_char use_json
     }
   else
     {
-      vty_out(vty, "Advertise gateway mac-ip: %s%s", zvrf->advertise_gw_macip ? "Yes" : "No", VTY_NEWLINE);
-      vty_out(vty, "Number of VNIs: %u%s", num_vnis, VTY_NEWLINE);
-      vty_out(vty, "%-10s %-21s %-15s %-8s %-8s %-15s%s",
+      vty_out(vty, "Advertise gateway mac-ip: %s\n", zvrf->advertise_gw_macip ? "Yes" : "No");
+      vty_out(vty, "Number of VNIs: %u\n", num_vnis);
+      vty_out(vty, "%-10s %-21s %-15s %-8s %-8s %-15s\n",
               "VNI", "VxLAN IF", "VTEP IP", "# MACs", "# ARPs",
-              "# Remote VTEPs", VTY_NEWLINE);
+              "# Remote VTEPs");
     }
   args[0] = vty;
   args[1] = json;
@@ -2978,9 +2972,8 @@ zebra_vxlan_print_vnis (struct vty *vty, struct zebra_vrf *zvrf, u_char use_json
 
   if (use_json)
     {
-      vty_out (vty, "%s%s",
-               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY),
-               VTY_NEWLINE);
+      vty_out (vty, "%s\n",
+               json_object_to_json_string_ext (json, JSON_C_TO_STRING_PRETTY));
       json_object_free (json);
     }
 }
@@ -3800,7 +3793,6 @@ zebra_vxlan_local_mac_add_update (struct interface *ifp, struct interface *br_if
       if (CHECK_FLAG (mac->flags, ZEBRA_MAC_LOCAL))
         {
           mac_sticky = CHECK_FLAG (mac->flags, ZEBRA_MAC_STICKY) ? 1: 0;
-
 
           /*
            * return if nothing has changed.
@@ -4630,7 +4622,9 @@ zebra_vxlan_init_tables (struct zebra_vrf *zvrf)
 {
   if (!zvrf)
     return;
-  zvrf->vni_table = hash_create(vni_hash_keymake, vni_hash_cmp);
+  zvrf->vni_table = hash_create(vni_hash_keymake,
+				vni_hash_cmp,
+				"Zebra VRF VNI Table");
 }
 
 /* Close all VNI handling */

@@ -1447,8 +1447,8 @@ ospf_distance_set (struct vty *vty, struct ospf *ospf,
   ret = str2prefix_ipv4 (ip_str, &p);
   if (ret == 0)
     {
-      vty_out (vty, "Malformed prefix%s", VTY_NEWLINE);
-      return CMD_WARNING;
+      vty_out (vty, "Malformed prefix\n");
+      return CMD_WARNING_CONFIG_FAILED;
     }
 
   distance = atoi (distance_str);
@@ -1495,15 +1495,15 @@ ospf_distance_unset (struct vty *vty, struct ospf *ospf,
   ret = str2prefix_ipv4 (ip_str, &p);
   if (ret == 0)
     {
-      vty_out (vty, "Malformed prefix%s", VTY_NEWLINE);
-      return CMD_WARNING;
+      vty_out (vty, "Malformed prefix\n");
+      return CMD_WARNING_CONFIG_FAILED;
     }
 
   rn = route_node_lookup (ospf->distance_table, (struct prefix *) &p);
   if (!rn)
     {
-      vty_out (vty, "Can't find specified prefix%s", VTY_NEWLINE);
-      return CMD_WARNING;
+      vty_out (vty, "Can't find specified prefix\n");
+      return CMD_WARNING_CONFIG_FAILED;
     }
 
   odistance = rn->info;

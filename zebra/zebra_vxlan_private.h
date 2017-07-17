@@ -181,10 +181,10 @@ enum zebra_neigh_state
 struct zebra_neigh_t_
 {
   /* IP address. */
-  struct ipaddr           ip;
+  struct ipaddr   ip;
 
   /* MAC address. */
-  struct ethaddr          emac;
+  struct ethaddr  emac;
 
   /* Underlying interface. */
   ifindex_t ifindex;

@@ -496,8 +496,8 @@ pim_ecmp_nexthop_search (struct pim_instance *pim, struct pim_nexthop_cache *pnc
          }
 
           if (curr_route_valid &&
-             !pim_if_connected_to_source (nexthop->interface,
-                                          src->u.prefix4))
+              !pim_if_connected_to_source (nexthop->interface,
+                                           src->u.prefix4))
             {
               nbr = pim_neighbor_find (nexthop->interface,
                                        nexthop->mrib_nexthop_addr.u.prefix4);
@@ -642,6 +642,9 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
   struct interface *ifp = NULL;
   struct vrf *vrf = vrf_lookup_by_id (vrf_id);
   struct pim_instance *pim = vrf->info;
+  struct interface *ifp1 = NULL;
+  struct pim_interface *pim_ifp = NULL;
+  char str[INET_ADDRSTRLEN];
 
   s = zclient->ibuf;
   memset (&p, 0, sizeof (struct prefix));
@@ -717,13 +720,29 @@ pim_parse_nexthop_update (int command, struct zclient *zclient,
             case NEXTHOP_TYPE_IPV6_IFINDEX:
               stream_get (&nexthop->gate.ipv6, s, 16);
               nexthop->ifindex = stream_getl (s);
-              struct interface *ifp1 = if_lookup_by_index (nexthop->ifindex, pim->vrf_id);
+              ifp1 = if_lookup_by_index (nexthop->ifindex, pim->vrf_id);
               nbr = pim_neighbor_find_if (ifp1);
               /* Overwrite with Nbr address as NH addr */
               if (nbr)
-		nexthop->gate.ipv4 = nbr->source_addr;
+                {
+                  nexthop->gate.ipv4 = nbr->source_addr;
+                  if (PIM_DEBUG_TRACE)
+                    {
+                      pim_inet4_dump ("<nht_nbr?>", nbr->source_addr, str,
+                                      sizeof (str));
+                      zlog_debug ("%s: NHT using pim nbr addr %s interface %s as rpf",
+                                  __PRETTY_FUNCTION__, str, ifp1->name);
+                    }
+                }
               else
                 {
+                  if (PIM_DEBUG_TRACE)
+                    {
+                      pim_ifp = ifp1->info;
+                      zlog_debug ("%s: NHT pim nbr not found on interface %s nbr count:%d ",
+                                  __PRETTY_FUNCTION__, ifp1->name,
+                                  pim_ifp->pim_neighbor_list->count);
+                    }
                   //Mark nexthop address to 0 until PIM Nbr is resolved.
                   nexthop->gate.ipv4.s_addr = PIM_NET_INADDR_ANY;
                 }

@@ -53,10 +53,10 @@ enum bgp_show_type
 
 
 #define BGP_SHOW_SCODE_HEADER "Status codes: s suppressed, d damped, "\
-                              "h history, * valid, > best, = multipath,%s"\
-                "              i internal, r RIB-failure, S Stale, R Removed%s"
-#define BGP_SHOW_OCODE_HEADER "Origin codes: i - IGP, e - EGP, ? - incomplete%s%s"
-#define BGP_SHOW_HEADER "   Network          Next Hop            Metric LocPrf Weight Path%s"
+                              "h history, * valid, > best, = multipath,\n"\
+                "              i internal, r RIB-failure, S Stale, R Removed\n"
+#define BGP_SHOW_OCODE_HEADER "Origin codes: i - IGP, e - EGP, ? - incomplete\n\n"
+#define BGP_SHOW_HEADER "   Network          Next Hop            Metric LocPrf Weight Path\n"
 
 /* Ancillary information to struct bgp_info, 
  * used for uncommonly used data (aggregation, MPLS, etc.)
@@ -232,8 +232,8 @@ struct bgp_static
 
 #define BGP_ATTR_NEXTHOP_AFI_IP6(attr) \
   (! CHECK_FLAG (attr->flag, ATTR_FLAG_BIT (BGP_ATTR_NEXT_HOP)) && \
-   (attr)->extra && ((attr)->extra->mp_nexthop_len == 16 || \
-    (attr)->extra->mp_nexthop_len == 32))
+    ((attr)->mp_nexthop_len == 16 || \
+    (attr)->mp_nexthop_len == 32))
 #define BGP_INFO_COUNTABLE(BI) \
   (! CHECK_FLAG ((BI)->flags, BGP_INFO_HISTORY) \
    && ! CHECK_FLAG ((BI)->flags, BGP_INFO_REMOVED))

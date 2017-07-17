@@ -667,8 +667,8 @@ bgp_dump_set (struct vty *vty, struct bgp_dump *bgp_dump,
       interval = bgp_dump_parse_time (interval_str);
       if (interval == 0)
 	{
-	  vty_out (vty, "Malformed interval string%s", VTY_NEWLINE);
-	  return CMD_WARNING;
+	  vty_out (vty, "Malformed interval string\n");
+          return CMD_WARNING_CONFIG_FAILED;
 	}
 
       /* Setting interval string */
@@ -866,12 +866,11 @@ config_write_bgp_dump (struct vty *vty)
           type_str = "all-et";
 
       if (bgp_dump_all.interval_str)
-	vty_out (vty, "dump bgp %s %s %s%s", type_str,
-		 bgp_dump_all.filename, bgp_dump_all.interval_str,
-		 VTY_NEWLINE);
+	vty_out (vty, "dump bgp %s %s %s\n", type_str,
+		 bgp_dump_all.filename,bgp_dump_all.interval_str);
       else
-	vty_out (vty, "dump bgp %s %s%s", type_str,
-		 bgp_dump_all.filename, VTY_NEWLINE);
+	vty_out (vty, "dump bgp %s %s\n", type_str,
+		 bgp_dump_all.filename);
     }
   if (bgp_dump_updates.filename)
     {
@@ -880,22 +879,20 @@ config_write_bgp_dump (struct vty *vty)
         type_str = "updates-et";
 
       if (bgp_dump_updates.interval_str)
-	vty_out (vty, "dump bgp %s %s %s%s", type_str,
-		 bgp_dump_updates.filename, bgp_dump_updates.interval_str,
-		 VTY_NEWLINE);
+	vty_out (vty, "dump bgp %s %s %s\n", type_str,
+		 bgp_dump_updates.filename,bgp_dump_updates.interval_str);
       else
-	vty_out (vty, "dump bgp %s %s%s", type_str,
-		 bgp_dump_updates.filename, VTY_NEWLINE);
+	vty_out (vty, "dump bgp %s %s\n", type_str,
+		 bgp_dump_updates.filename);
     }
   if (bgp_dump_routes.filename)
     {
       if (bgp_dump_routes.interval_str)
-	vty_out (vty, "dump bgp routes-mrt %s %s%s", 
-		 bgp_dump_routes.filename, bgp_dump_routes.interval_str,
-		 VTY_NEWLINE);
+	vty_out (vty, "dump bgp routes-mrt %s %s\n",
+		 bgp_dump_routes.filename,bgp_dump_routes.interval_str);
       else
-        vty_out (vty, "dump bgp routes-mrt %s%s",
-                 bgp_dump_routes.filename, VTY_NEWLINE);
+        vty_out (vty, "dump bgp routes-mrt %s\n",
+                 bgp_dump_routes.filename);
 
     }
   return 0;
