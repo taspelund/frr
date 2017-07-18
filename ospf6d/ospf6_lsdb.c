@@ -427,7 +427,9 @@ ospf6_lsdb_show (struct vty *vty, enum ospf_lsdb_show_level level,
     ospf6_lsa_show_summary_header (vty);
 
   end = ospf6_lsdb_head(lsdb, !!type + !!(type && adv_router),
-                        *type, *adv_router, &lsa);
+                        type ? *type : 0,
+                        adv_router ? *adv_router : 0,
+                        &lsa);
   while (lsa)
     {
       if ((! adv_router || lsa->header->adv_router == *adv_router) &&
