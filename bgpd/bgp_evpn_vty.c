@@ -1301,9 +1301,10 @@ static void evpn_show_routes_vni_all(struct vty *vty, struct bgp *bgp,
 	wctx.bgp = bgp;
 	wctx.vty = vty;
 	wctx.vtep_ip = vtep_ip;
-	hash_iterate(bgp->vnihash, (void (*)(struct hash_backet *,
-					     void *))show_vni_routes_hash,
-		     &wctx);
+	hash_iterate(
+		bgp->vnihash,
+		(void (*)(struct hash_backet *, void *))show_vni_routes_hash,
+		&wctx);
 }
 
 /*
@@ -2266,12 +2267,14 @@ DEFUN (show_bgp_l2vpn_evpn_import_rt,
 
 #if defined(HAVE_CUMULUS)
 ALIAS_HIDDEN(show_bgp_l2vpn_evpn_vni, show_bgp_evpn_vni_cmd,
-	     "show bgp evpn vni [(1-16777215)]", SHOW_STR BGP_STR EVPN_HELP_STR
+	     "show bgp evpn vni [(1-16777215)]",
+	     SHOW_STR BGP_STR EVPN_HELP_STR
 	     "Show VNI\n"
 	     "VNI number\n")
 
 ALIAS_HIDDEN(show_bgp_l2vpn_evpn_summary, show_bgp_evpn_summary_cmd,
-	     "show bgp evpn summary [json]", SHOW_STR BGP_STR EVPN_HELP_STR
+	     "show bgp evpn summary [json]",
+	     SHOW_STR BGP_STR EVPN_HELP_STR
 	     "Summary of BGP neighbor status\n"
 	     "JavaScript Object Notation\n")
 

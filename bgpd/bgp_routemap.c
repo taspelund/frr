@@ -752,7 +752,10 @@ static route_map_result_t route_match_metric(void *rule, struct prefix *prefix,
 
 /* Route map commands for metric matching. */
 struct route_map_rule_cmd route_match_metric_cmd = {
-	"metric", route_match_metric, route_value_compile, route_value_free,
+	"metric",
+	route_match_metric,
+	route_value_compile,
+	route_value_free,
 };
 
 /* `match as-path ASPATH' */
@@ -1147,7 +1150,9 @@ static route_map_result_t route_match_tag(void *rule, struct prefix *prefix,
 
 /* Route map commands for tag matching. */
 static struct route_map_rule_cmd route_match_tag_cmd = {
-	"tag", route_match_tag, route_map_rule_tag_compile,
+	"tag",
+	route_match_tag,
+	route_map_rule_tag_compile,
 	route_map_rule_tag_free,
 };
 
@@ -1292,7 +1297,9 @@ static route_map_result_t route_set_local_pref(void *rule,
 
 /* Set local preference rule structure. */
 struct route_map_rule_cmd route_set_local_pref_cmd = {
-	"local-preference", route_set_local_pref, route_value_compile,
+	"local-preference",
+	route_set_local_pref,
+	route_value_compile,
 	route_value_free,
 };
 
@@ -1321,7 +1328,10 @@ static route_map_result_t route_set_weight(void *rule, struct prefix *prefix,
 
 /* Set local preference rule structure. */
 struct route_map_rule_cmd route_set_weight_cmd = {
-	"weight", route_set_weight, route_value_compile, route_value_free,
+	"weight",
+	route_set_weight,
+	route_value_compile,
+	route_value_free,
 };
 
 /* `set metric METRIC' */
@@ -1353,7 +1363,10 @@ static route_map_result_t route_set_metric(void *rule, struct prefix *prefix,
 
 /* Set metric rule structure. */
 struct route_map_rule_cmd route_set_metric_cmd = {
-	"metric", route_set_metric, route_value_compile, route_value_free,
+	"metric",
+	route_set_metric,
+	route_value_compile,
+	route_value_free,
 };
 
 /* `set as-path prepend ASPATH' */
@@ -1411,8 +1424,10 @@ static void route_set_aspath_prepend_free(void *rule)
 
 /* Set as-path prepend rule structure. */
 struct route_map_rule_cmd route_set_aspath_prepend_cmd = {
-	"as-path prepend", route_set_aspath_prepend,
-	route_set_aspath_prepend_compile, route_set_aspath_prepend_free,
+	"as-path prepend",
+	route_set_aspath_prepend,
+	route_set_aspath_prepend_compile,
+	route_set_aspath_prepend_free,
 };
 
 /* `set as-path exclude ASn' */
@@ -1445,7 +1460,9 @@ static route_map_result_t route_set_aspath_exclude(void *rule,
 
 /* Set ASn exlude rule structure. */
 struct route_map_rule_cmd route_set_aspath_exclude_cmd = {
-	"as-path exclude", route_set_aspath_exclude, route_aspath_compile,
+	"as-path exclude",
+	route_set_aspath_exclude,
+	route_aspath_compile,
 	route_aspath_free,
 };
 
@@ -1558,7 +1575,9 @@ static void route_set_community_free(void *rule)
 
 /* Set community rule structure. */
 struct route_map_rule_cmd route_set_community_cmd = {
-	"community", route_set_community, route_set_community_compile,
+	"community",
+	route_set_community,
+	route_set_community_compile,
 	route_set_community_free,
 };
 
@@ -1676,7 +1695,9 @@ static void route_set_lcommunity_free(void *rule)
 
 /* Set community rule structure. */
 struct route_map_rule_cmd route_set_lcommunity_cmd = {
-	"large-community", route_set_lcommunity, route_set_lcommunity_compile,
+	"large-community",
+	route_set_lcommunity,
+	route_set_lcommunity_compile,
 	route_set_lcommunity_free,
 };
 
@@ -1759,8 +1780,10 @@ static void route_set_lcommunity_delete_free(void *rule)
 
 /* Set lcommunity rule structure. */
 struct route_map_rule_cmd route_set_lcommunity_delete_cmd = {
-	"large-comm-list", route_set_lcommunity_delete,
-	route_set_lcommunity_delete_compile, route_set_lcommunity_delete_free,
+	"large-comm-list",
+	route_set_lcommunity_delete,
+	route_set_lcommunity_delete_compile,
+	route_set_lcommunity_delete_free,
 };
 
 
@@ -1843,8 +1866,10 @@ static void route_set_community_delete_free(void *rule)
 
 /* Set community rule structure. */
 struct route_map_rule_cmd route_set_community_delete_cmd = {
-	"comm-list", route_set_community_delete,
-	route_set_community_delete_compile, route_set_community_delete_free,
+	"comm-list",
+	route_set_community_delete,
+	route_set_community_delete_compile,
+	route_set_community_delete_free,
 };
 
 /* `set extcommunity rt COMMUNITY' */
@@ -1911,8 +1936,10 @@ static void route_set_ecommunity_free(void *rule)
 
 /* Set community rule structure. */
 struct route_map_rule_cmd route_set_ecommunity_rt_cmd = {
-	"extcommunity rt", route_set_ecommunity,
-	route_set_ecommunity_rt_compile, route_set_ecommunity_free,
+	"extcommunity rt",
+	route_set_ecommunity,
+	route_set_ecommunity_rt_compile,
+	route_set_ecommunity_free,
 };
 
 /* `set extcommunity soo COMMUNITY' */
@@ -1931,8 +1958,10 @@ static void *route_set_ecommunity_soo_compile(const char *arg)
 
 /* Set community rule structure. */
 struct route_map_rule_cmd route_set_ecommunity_soo_cmd = {
-	"extcommunity soo", route_set_ecommunity,
-	route_set_ecommunity_soo_compile, route_set_ecommunity_free,
+	"extcommunity soo",
+	route_set_ecommunity,
+	route_set_ecommunity_soo_compile,
+	route_set_ecommunity_free,
 };
 
 /* `set origin ORIGIN' */
@@ -1980,7 +2009,9 @@ static void route_set_origin_free(void *rule)
 
 /* Set origin rule structure. */
 struct route_map_rule_cmd route_set_origin_cmd = {
-	"origin", route_set_origin, route_set_origin_compile,
+	"origin",
+	route_set_origin,
+	route_set_origin_compile,
 	route_set_origin_free,
 };
 
@@ -2017,8 +2048,10 @@ static void route_set_atomic_aggregate_free(void *rule)
 
 /* Set atomic aggregate rule structure. */
 struct route_map_rule_cmd route_set_atomic_aggregate_cmd = {
-	"atomic-aggregate", route_set_atomic_aggregate,
-	route_set_atomic_aggregate_compile, route_set_atomic_aggregate_free,
+	"atomic-aggregate",
+	route_set_atomic_aggregate,
+	route_set_atomic_aggregate_compile,
+	route_set_atomic_aggregate_free,
 };
 
 /* `set aggregator as AS A.B.C.D' */
@@ -2073,8 +2106,10 @@ static void route_set_aggregator_as_free(void *rule)
 }
 
 struct route_map_rule_cmd route_set_aggregator_as_cmd = {
-	"aggregator as", route_set_aggregator_as,
-	route_set_aggregator_as_compile, route_set_aggregator_as_free,
+	"aggregator as",
+	route_set_aggregator_as,
+	route_set_aggregator_as_compile,
+	route_set_aggregator_as_free,
 };
 
 /* Set tag to object. object must be pointer to struct bgp_info */
@@ -2097,7 +2132,9 @@ static route_map_result_t route_set_tag(void *rule, struct prefix *prefix,
 
 /* Route map commands for tag set. */
 static struct route_map_rule_cmd route_set_tag_cmd = {
-	"tag", route_set_tag, route_map_rule_tag_compile,
+	"tag",
+	route_set_tag,
+	route_map_rule_tag_compile,
 	route_map_rule_tag_free,
 };
 
@@ -2130,7 +2167,9 @@ static route_map_result_t route_set_label_index(void *rule,
 
 /* Route map commands for label-index set. */
 static struct route_map_rule_cmd route_set_label_index_cmd = {
-	"label-index", route_set_label_index, route_value_compile,
+	"label-index",
+	route_set_label_index,
+	route_value_compile,
 	route_value_free,
 };
 
@@ -2657,8 +2696,10 @@ static void route_set_originator_id_free(void *rule)
 
 /* Set originator-id rule structure. */
 struct route_map_rule_cmd route_set_originator_id_cmd = {
-	"originator-id", route_set_originator_id,
-	route_set_originator_id_compile, route_set_originator_id_free,
+	"originator-id",
+	route_set_originator_id,
+	route_set_originator_id_compile,
+	route_set_originator_id_free,
 };
 
 /* Add bgp route map rule. */

@@ -2735,9 +2735,10 @@ int bgp_evpn_local_vni_add(struct bgp *bgp, vni_t vni,
  */
 void bgp_evpn_cleanup_on_disable(struct bgp *bgp)
 {
-	hash_iterate(bgp->vnihash, (void (*)(struct hash_backet *,
-					     void *))cleanup_vni_on_disable,
-		     bgp);
+	hash_iterate(
+		bgp->vnihash,
+		(void (*)(struct hash_backet *, void *))cleanup_vni_on_disable,
+		bgp);
 }
 
 /*
@@ -2747,9 +2748,10 @@ void bgp_evpn_cleanup_on_disable(struct bgp *bgp)
 void bgp_evpn_cleanup(struct bgp *bgp)
 {
 	if (bgp->vnihash)
-		hash_iterate(bgp->vnihash, (void (*)(struct hash_backet *,
-						     void *))free_vni_entry,
-			     bgp);
+		hash_iterate(
+			bgp->vnihash,
+			(void (*)(struct hash_backet *, void *))free_vni_entry,
+			bgp);
 	if (bgp->import_rt_hash)
 		hash_free(bgp->import_rt_hash);
 	bgp->import_rt_hash = NULL;
