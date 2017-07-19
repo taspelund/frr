@@ -66,10 +66,9 @@
  * |   Number of Joined Sources    |   Number of Pruned Sources    |
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  */
-#define PIM_JP_GROUP_HEADER_SIZE     (PIM_ENCODED_IPV4_UCAST_SIZE + \
-                                      1 + 1 + 2 +                   \
-                                      PIM_ENCODED_IPV4_GROUP_SIZE + \
-                                      2 + 2)
+#define PIM_JP_GROUP_HEADER_SIZE                                               \
+	(PIM_ENCODED_IPV4_UCAST_SIZE + 1 + 1 + 2 + PIM_ENCODED_IPV4_GROUP_SIZE \
+	 + 2 + 2)
 
 #define PIM_PROTO_VERSION             (2)
 
@@ -129,23 +128,23 @@ const char *const PIM_ALL_ROUTERS;
 const char *const PIM_ALL_PIM_ROUTERS;
 const char *const PIM_ALL_IGMP_ROUTERS;
 
-extern struct thread_master     *master;
+extern struct thread_master *master;
 extern struct zebra_privs_t pimd_privs;
-uint32_t                  qpim_debugs;
-struct in_addr            qpim_all_pim_routers_addr;
-int                       qpim_t_periodic; /* Period between Join/Prune Messages */
-struct pim_assert_metric  qpim_infinite_assert_metric;
-long                      qpim_rpf_cache_refresh_delay_msec;
-struct thread            *qpim_rpf_cache_refresher;
-int64_t                   qpim_rpf_cache_refresh_requests;
-int64_t                   qpim_rpf_cache_refresh_events;
-int64_t                   qpim_rpf_cache_refresh_last;
-int64_t                   qpim_scan_oil_events;
-int64_t                   qpim_scan_oil_last;
-int64_t                   qpim_nexthop_lookups;
-extern int                qpim_packet_process;
-extern uint8_t            qpim_ecmp_enable;
-extern uint8_t            qpim_ecmp_rebalance_enable;
+uint32_t qpim_debugs;
+struct in_addr qpim_all_pim_routers_addr;
+int qpim_t_periodic; /* Period between Join/Prune Messages */
+struct pim_assert_metric qpim_infinite_assert_metric;
+long qpim_rpf_cache_refresh_delay_msec;
+struct thread *qpim_rpf_cache_refresher;
+int64_t qpim_rpf_cache_refresh_requests;
+int64_t qpim_rpf_cache_refresh_events;
+int64_t qpim_rpf_cache_refresh_last;
+int64_t qpim_scan_oil_events;
+int64_t qpim_scan_oil_last;
+int64_t qpim_nexthop_lookups;
+extern int qpim_packet_process;
+extern uint8_t qpim_ecmp_enable;
+extern uint8_t qpim_ecmp_rebalance_enable;
 
 #define PIM_DEFAULT_PACKET_PROCESS 3
 
@@ -238,8 +237,8 @@ extern int32_t qpim_register_probe_time;
 void pim_init(void);
 void pim_terminate(void);
 
-extern void pim_route_map_init (void);
+extern void pim_route_map_init(void);
 extern void pim_route_map_terminate(void);
-void pim_prefix_list_update (struct prefix_list *plist);
+void pim_prefix_list_update(struct prefix_list *plist);
 
 #endif /* PIMD_H */
