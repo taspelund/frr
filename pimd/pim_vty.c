@@ -343,17 +343,13 @@ int pim_interface_config_write(struct vty *vty)
 	  }
 
 	  writes += pim_static_write_mroute (pim, vty, ifp);
+          /* PIM BFD write */
           pim_bfd_write_config (vty, ifp);
 	}
 	vty_out(vty, "!\n");
 	++writes;
       }
     }
-
-  vty_out (vty, "!\n");
-  ++writes;
-  /* PIM BFD write */
-  pim_bfd_write_config (vty, ifp);
 
   return writes;
 }
