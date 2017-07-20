@@ -2333,6 +2333,8 @@ static void
 pim_show_nexthop (struct pim_instance *pim, struct vty *vty)
 {
   struct pnc_cache_walk_data cwd;
+  cwd.vty = vty;
+  cwd.pim = pim;
 
   if (pimg && !pimg->rpf_hash)
     {
