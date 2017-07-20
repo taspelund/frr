@@ -2736,6 +2736,8 @@ static int pim_print_pnc_cache_walkcb(struct hash_backet *backet, void *arg)
 static void pim_show_nexthop(struct pim_instance *pim, struct vty *vty)
 {
 	struct pnc_cache_walk_data cwd;
+	cwd.vty = vty;
+	cwd.pim = pim;
 
 	if (pimg && !pimg->rpf_hash) {
 		vty_out(vty, "no nexthop cache \n");
