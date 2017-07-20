@@ -41,101 +41,102 @@
 #include "pim_zlookup.h"
 #include "pim_zebra.h"
 
-const char *const PIM_ALL_SYSTEMS      = MCAST_ALL_SYSTEMS;
-const char *const PIM_ALL_ROUTERS      = MCAST_ALL_ROUTERS;
-const char *const PIM_ALL_PIM_ROUTERS  = MCAST_ALL_PIM_ROUTERS;
+const char *const PIM_ALL_SYSTEMS = MCAST_ALL_SYSTEMS;
+const char *const PIM_ALL_ROUTERS = MCAST_ALL_ROUTERS;
+const char *const PIM_ALL_PIM_ROUTERS = MCAST_ALL_PIM_ROUTERS;
 const char *const PIM_ALL_IGMP_ROUTERS = MCAST_ALL_IGMP_ROUTERS;
 
-struct thread_master     *master = NULL;
-uint32_t                  qpim_debugs = 0;
-int                       qpim_t_periodic = PIM_DEFAULT_T_PERIODIC; /* Period between Join/Prune Messages */
-struct pim_assert_metric  qpim_infinite_assert_metric;
-long                      qpim_rpf_cache_refresh_delay_msec = 50;
-struct thread            *qpim_rpf_cache_refresher = NULL;
-int64_t                   qpim_rpf_cache_refresh_requests = 0;
-int64_t                   qpim_rpf_cache_refresh_events = 0;
-int64_t                   qpim_rpf_cache_refresh_last =  0;
-int64_t                   qpim_scan_oil_events = 0;
-int64_t                   qpim_scan_oil_last = 0;
-int64_t                   qpim_nexthop_lookups = 0;
-int                       qpim_packet_process = PIM_DEFAULT_PACKET_PROCESS;
-uint8_t                   qpim_ecmp_enable = 0;
-uint8_t                   qpim_ecmp_rebalance_enable = 0;
-struct pim_instance       *pimg = NULL;
+struct thread_master *master = NULL;
+uint32_t qpim_debugs = 0;
+int qpim_t_periodic =
+	PIM_DEFAULT_T_PERIODIC; /* Period between Join/Prune Messages */
+struct pim_assert_metric qpim_infinite_assert_metric;
+long qpim_rpf_cache_refresh_delay_msec = 50;
+struct thread *qpim_rpf_cache_refresher = NULL;
+int64_t qpim_rpf_cache_refresh_requests = 0;
+int64_t qpim_rpf_cache_refresh_events = 0;
+int64_t qpim_rpf_cache_refresh_last = 0;
+int64_t qpim_scan_oil_events = 0;
+int64_t qpim_scan_oil_last = 0;
+int64_t qpim_nexthop_lookups = 0;
+int qpim_packet_process = PIM_DEFAULT_PACKET_PROCESS;
+uint8_t qpim_ecmp_enable = 0;
+uint8_t qpim_ecmp_rebalance_enable = 0;
+struct pim_instance *pimg = NULL;
 
 int32_t qpim_register_suppress_time = PIM_REGISTER_SUPPRESSION_TIME_DEFAULT;
 int32_t qpim_register_probe_time = PIM_REGISTER_PROBE_TIME_DEFAULT;
 
-void
-pim_prefix_list_update (struct prefix_list *plist)
+void pim_prefix_list_update(struct prefix_list *plist)
 {
-  struct pim_instance *pim;
-  struct vrf *vrf;
+	struct pim_instance *pim;
+	struct vrf *vrf;
 
-  RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
-    {
-      pim = vrf->info;
-      if (!pim)
-	continue;
+	RB_FOREACH(vrf, vrf_name_head, &vrfs_by_name)
+	{
+		pim = vrf->info;
+		if (!pim)
+			continue;
 
-      pim_rp_prefix_list_update (pim, plist);
-      pim_ssm_prefix_list_update (pim, plist);
-      pim_upstream_spt_prefix_list_update (pim, plist);
-    }
+		pim_rp_prefix_list_update(pim, plist);
+		pim_ssm_prefix_list_update(pim, plist);
+		pim_upstream_spt_prefix_list_update(pim, plist);
+	}
 }
 
 static void pim_free()
 {
-  pim_route_map_terminate();
+	pim_route_map_terminate();
 
-  zclient_lookup_free ();
+	zclient_lookup_free();
 
-  zprivs_terminate(&pimd_privs);
+	zprivs_terminate(&pimd_privs);
 }
 
 void pim_init()
 {
-  if (!inet_aton(PIM_ALL_PIM_ROUTERS, &qpim_all_pim_routers_addr)) {
-    zlog_err("%s %s: could not solve %s to group address: errno=%d: %s",
-	     __FILE__, __PRETTY_FUNCTION__,
-	     PIM_ALL_PIM_ROUTERS, errno, safe_strerror(errno));
-    zassert(0);
-    return;
-  }
+	if (!inet_aton(PIM_ALL_PIM_ROUTERS, &qpim_all_pim_routers_addr)) {
+		zlog_err(
+			"%s %s: could not solve %s to group address: errno=%d: %s",
+			__FILE__, __PRETTY_FUNCTION__, PIM_ALL_PIM_ROUTERS,
+			errno, safe_strerror(errno));
+		zassert(0);
+		return;
+	}
 
-  /*
-    RFC 4601: 4.6.3.  Assert Metrics
+	/*
+	  RFC 4601: 4.6.3.  Assert Metrics
 
-    assert_metric
-    infinite_assert_metric() {
-    return {1,infinity,infinity,0}
-    }
-  */
-  qpim_infinite_assert_metric.rpt_bit_flag      = 1;
-  qpim_infinite_assert_metric.metric_preference = PIM_ASSERT_METRIC_PREFERENCE_MAX;
-  qpim_infinite_assert_metric.route_metric      = PIM_ASSERT_ROUTE_METRIC_MAX;
-  qpim_infinite_assert_metric.ip_address.s_addr = INADDR_ANY;
+	  assert_metric
+	  infinite_assert_metric() {
+	  return {1,infinity,infinity,0}
+	  }
+	*/
+	qpim_infinite_assert_metric.rpt_bit_flag = 1;
+	qpim_infinite_assert_metric.metric_preference =
+		PIM_ASSERT_METRIC_PREFERENCE_MAX;
+	qpim_infinite_assert_metric.route_metric = PIM_ASSERT_ROUTE_METRIC_MAX;
+	qpim_infinite_assert_metric.ip_address.s_addr = INADDR_ANY;
 
-  pim_cmd_init();
+	pim_cmd_init();
 }
 
 void pim_terminate()
 {
-  struct zclient *zclient;
+	struct zclient *zclient;
 
-  pim_free();
+	pim_free();
 
-  /* reverse prefix_list_init */
-  prefix_list_add_hook (NULL);
-  prefix_list_delete_hook (NULL);
-  prefix_list_reset ();
+	/* reverse prefix_list_init */
+	prefix_list_add_hook(NULL);
+	prefix_list_delete_hook(NULL);
+	prefix_list_reset();
 
-  pim_vrf_terminate ();
+	pim_vrf_terminate();
 
-  zclient = pim_zebra_zclient_get ();
-  if (zclient)
-    {
-      zclient_stop (zclient);
-      zclient_free (zclient);
-    }
+	zclient = pim_zebra_zclient_get();
+	if (zclient) {
+		zclient_stop(zclient);
+		zclient_free(zclient);
+	}
 }
