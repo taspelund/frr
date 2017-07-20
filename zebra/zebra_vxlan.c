@@ -4409,7 +4409,7 @@ zebra_vxlan_if_update (struct interface *ifp, u_int16_t chgflags)
                 vxl->access_vlan, inet_ntoa (vxl->vtep_ip),
                 zif->brslave_info.bridge_ifindex, chgflags);
 
-  /* Removed from bridge? */
+  /* Removed from bridge? Cleanup and return. */
   if ((chgflags & ZEBRA_VXLIF_MASTER_CHANGE) &&
       (zif->brslave_info.bridge_ifindex == IFINDEX_INTERNAL))
     {
@@ -4419,8 +4419,11 @@ zebra_vxlan_if_update (struct interface *ifp, u_int16_t chgflags)
       zvni_neigh_del_all (zvrf, zvni, 1, 0, DEL_ALL_NEIGH);
       zvni_mac_del_all (zvrf, zvni, 1, 0, DEL_ALL_MAC);
       zvni_vtep_del_all (zvni, 1);
+      return 0;
     }
-  else if (chgflags & ZEBRA_VXLIF_VLAN_CHANGE)
+
+  /* Handle other changes. */
+  if (chgflags & ZEBRA_VXLIF_VLAN_CHANGE)
     {
       /* Remove all existing local neighbors and MACs for this VNI
        * (including from BGP)
