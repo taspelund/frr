@@ -6342,11 +6342,11 @@ bgp_redistribute_withdraw (struct bgp *bgp, afi_t afi, int type, u_short instanc
 
 /* Static function to display route. */
 static void
-route_vty_out_route (struct prefix *p, struct vty *vty, json_object *json)
+route_vty_out_route (struct prefix *p, struct vty *vty)
 {
-  int               len;
-  u_int32_t         destination;
-  char              buf[BUFSIZ];
+  int len;
+  u_int32_t destination; 
+  char buf[BUFSIZ];
 
   if (p->family == AF_INET)
     {
@@ -6366,11 +6366,8 @@ route_vty_out_route (struct prefix *p, struct vty *vty, json_object *json)
   else if (p->family == AF_ETHERNET)
     {
 #if defined (HAVE_CUMULUS)
-      if (!json)
-        len = vty_out (vty, "%s",
-                       bgp_evpn_route2str((struct prefix_evpn *)p, buf, BUFSIZ));
-      else
-        bgp_evpn_route2json ( (struct prefix_evpn *) p, json);
+      len = vty_out (vty, "%s",
+                     bgp_evpn_route2str((struct prefix_evpn *)p, buf, BUFSIZ));
 #else
       prefix2str(p, buf, PREFIX_STRLEN);
       len = vty_out (vty, "%s", buf);
@@ -6380,14 +6377,11 @@ route_vty_out_route (struct prefix *p, struct vty *vty, json_object *json)
     len = vty_out (vty, "%s/%d", inet_ntop (p->family, &p->u.prefix, buf, BUFSIZ),
 		   p->prefixlen);
 
-  if (!json)
-    {
-      len = 17 - len;
-      if (len < 1)
-        vty_out (vty, "%s%*s", VTY_NEWLINE, 20, " ");
-      else
-        vty_out (vty, "%*s", len, " ");
-    }
+  len = 17 - len;
+  if (len < 1)
+    vty_out (vty, "%s%*s", VTY_NEWLINE, 20, " ");
+  else
+    vty_out (vty, "%*s", len, " ");
 }
 
 enum bgp_display_type
@@ -6475,7 +6469,7 @@ route_vty_short_status_out (struct vty *vty, struct bgp_info *binfo,
 /* called from terminal list command */
 void
 route_vty_out (struct vty *vty, struct prefix *p,
-               struct bgp_info *binfo, int display, safi_t safi,
+	       struct bgp_info *binfo, int display, safi_t safi,
                json_object *json_paths)
 {
   struct attr *attr;
@@ -6494,18 +6488,14 @@ route_vty_out (struct vty *vty, struct prefix *p,
     {
       /* print prefix and mask */
       if (! display)
-        route_vty_out_route (p, vty, json_path);
+        route_vty_out_route (p, vty);
       else
         vty_out (vty, "%*s", 17, " ");
-    }
-  else
-    {
-      route_vty_out_route (p, vty, json_path);
     }
 
   /* Print attribute */
   attr = binfo->attr;
-  if (attr)
+  if (attr) 
     {
       /*
        * For ENCAP and EVPN routes, nexthop address family is not
@@ -6747,7 +6737,7 @@ route_vty_out (struct vty *vty, struct prefix *p,
         rfapi_vty_out_vncinfo(vty, p, binfo, safi);
 #endif
     }
-}
+}  
 
 /* called from terminal list command */
 void
@@ -6774,7 +6764,7 @@ route_vty_out_tmp (struct vty *vty, struct prefix *p, struct attr *attr, safi_t 
   if (use_json)
     json_object_string_add(json_net, "addrPrefix", inet_ntop (p->family, &p->u.prefix, buff, BUFSIZ));
   else
-    route_vty_out_route (p, vty, NULL);
+    route_vty_out_route (p, vty);
 
   /* Print attribute */
   if (attr) 
@@ -6901,7 +6891,7 @@ route_vty_out_tag (struct vty *vty, struct prefix *p,
   if (json == NULL)
     {
       if (! display)
-        route_vty_out_route (p, vty, NULL);
+        route_vty_out_route (p, vty);
       else
         vty_out (vty, "%*s", 17, " ");
     }
@@ -7004,7 +6994,7 @@ route_vty_out_overlay (struct vty *vty, struct prefix *p,
 
   /* print prefix and mask */
   if (! display)
-    route_vty_out_route (p, vty, NULL);
+    route_vty_out_route (p, vty);
   else
     vty_out (vty, "%*s", 17, " ");
 
@@ -7087,7 +7077,7 @@ damp_route_vty_out (struct vty *vty, struct prefix *p, struct bgp_info *binfo,
   if (!use_json)
     {
       if (! display)
-        route_vty_out_route (p, vty, NULL);
+        route_vty_out_route (p, vty);
       else
         vty_out (vty, "%*s", 17, " ");
     }
@@ -7157,7 +7147,7 @@ flap_route_vty_out (struct vty *vty, struct prefix *p, struct bgp_info *binfo,
   if (!use_json)
     {
       if (! display)
-        route_vty_out_route (p, vty, NULL);
+        route_vty_out_route (p, vty);
       else
         vty_out (vty, "%*s", 17, " ");
     }
@@ -8391,7 +8381,6 @@ route_vty_out_detail_header (struct vty *vty, struct bgp *bgp,
   struct listnode *node, *nnode;
   char buf1[INET6_ADDRSTRLEN];
   char buf2[INET6_ADDRSTRLEN];
-  char  prefix_str[BUFSIZ];
 #if defined (HAVE_CUMULUS)
   char buf3[EVPN_ROUTE_STRLEN];
 #endif
@@ -8417,7 +8406,8 @@ route_vty_out_detail_header (struct vty *vty, struct bgp *bgp,
       if (has_valid_label)
         json_object_int_add(json, "localLabel", label);
 
-      json_object_string_add (json, "prefix", prefix2str (p, prefix_str, sizeof (prefix_str)));
+      json_object_string_add(json, "prefix", inet_ntop (p->family, &p->u.prefix, buf2, INET6_ADDRSTRLEN));
+      json_object_int_add(json, "prefixlen", p->prefixlen);
     }
   else
     {
