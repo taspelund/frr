@@ -1550,21 +1550,13 @@ zvni_gw_macip_del_for_vni_hash (struct hash_backet *backet, void *zvrf)
   struct zebra_l2info_vxlan   zl2_info ;
   struct interface            *vlan_if = NULL;
   struct interface            *vrr_if = NULL;
-  struct interface            *ifp;
 
   /* Add primary SVI MAC*/
   zvni = (zebra_vni_t *) backet->data;
   if (!zvni)
     return;
-  ifp = zvni->vxlan_if;
-  if (!ifp)
-    return;
-  zif = ifp->info;
 
-  /* If down or not mapped to a bridge, we're done. */
-  if (!if_is_operative (ifp) || !zif->brslave_info.br_if)
-    return;
-
+  zif = zvni->vxlan_if->info;
   zl2_info = zif->l2info.vxl;
 
   vlan_if = zvni_map_to_svi (zvrf, zl2_info.access_vlan,
@@ -1591,7 +1583,6 @@ zvni_gw_macip_add_for_vni_hash (struct hash_backet *backet, void *zvrf)
   struct zebra_l2info_vxlan   zl2_info ;
   struct interface            *vlan_if = NULL;
   struct interface            *vrr_if = NULL;
-  struct interface            *ifp;
 
   zvni = (zebra_vni_t *) backet->data;
   if (!zvni)
@@ -1600,15 +1591,7 @@ zvni_gw_macip_add_for_vni_hash (struct hash_backet *backet, void *zvrf)
   if (!advertise_gw_macip_enabled (zvrf, zvni))
     return;
 
-  ifp = zvni->vxlan_if;
-  if (!ifp)
-    return;
-  zif = ifp->info;
-
-  /* If down or not mapped to a bridge, we're done. */
-  if (!if_is_operative (ifp) || !zif->brslave_info.br_if)
-    return;
-
+  zif = zvni->vxlan_if->info;
   zl2_info = zif->l2info.vxl;
 
   vlan_if = zvni_map_to_svi (zvrf, zl2_info.access_vlan,
@@ -1984,10 +1967,6 @@ zvni_map_to_svi (struct zebra_vrf *zvrf, vlanid_t vid,
   struct zebra_l2info_bridge *br;
   struct zebra_l2info_vlan *vl;
   u_char bridge_vlan_aware;
-
-  /* Defensive check, caller expected to invoke only with valid bridge. */
-  if (!br_if)
-    return NULL;
 
   /* Determine if bridge is VLAN-aware or not */
   zif = br_if->info;
@@ -3249,8 +3228,6 @@ int zebra_vxlan_remote_macip_del (struct zserv *client, int sock,
   u_short                   l = 0, ipa_len;
   char                      buf[ETHER_ADDR_STRLEN];
   char                      buf1[INET6_ADDRSTRLEN];
-  struct interface          *ifp;
-  struct zebra_if           *zif;
 
   s = client->ibuf;
 
@@ -3292,18 +3269,12 @@ int zebra_vxlan_remote_macip_del (struct zserv *client, int sock,
                         "VRF %d VNI %u", zvrf_id (zvrf), vni);
           continue;
         }
-      ifp = zvni->vxlan_if;
-      if (!ifp)
+      if (!zvni->vxlan_if)
         {
           zlog_err ("VNI %u hash %p doesn't have intf upon remote MACIP DEL",
                     vni, zvni);
           continue;
         }
-      zif = ifp->info;
-
-      /* If down or not mapped to a bridge, we're done. */
-      if (!if_is_operative (ifp) || !zif->brslave_info.br_if)
-        continue;
 
       /* The remote VTEP specified is normally expected to exist, but it is
        * possible that the peer may delete the VTEP before deleting any MACs
@@ -3311,6 +3282,12 @@ int zebra_vxlan_remote_macip_del (struct zserv *client, int sock,
        * would have already deleted the MACs.
        */
       if (!zvni_vtep_find (zvni, &vtep_ip))
+        continue;
+
+      /* If the local VxLAN interface is not up (should be a transient
+       * event),  there's nothing more to do.
+       */
+      if (!if_is_operative (zvni->vxlan_if))
         continue;
 
       mac = zvni_mac_lookup (zvni, &macaddr);
@@ -3391,8 +3368,6 @@ zebra_vxlan_remote_macip_add (struct zserv *client, int sock,
   char                    buf[ETHER_ADDR_STRLEN];
   char                    buf1[INET6_ADDRSTRLEN];
   u_char                  sticky;
-  struct interface        *ifp;
-  struct zebra_if         *zif;
 
   assert (EVPN_ENABLED (zvrf));
 
@@ -3441,17 +3416,16 @@ zebra_vxlan_remote_macip_add (struct zserv *client, int sock,
                     zvrf_id (zvrf), vni);
           continue;
         }
-      ifp = zvni->vxlan_if;
-      if (!ifp)
+      if (!zvni->vxlan_if)
         {
           zlog_err ("VNI %u hash %p doesn't have intf upon remote MACIP add",
                     vni, zvni);
           continue;
         }
-      zif = ifp->info;
-
-      /* If down or not mapped to a bridge, we're done. */
-      if (!if_is_operative (ifp) || !zif->brslave_info.br_if)
+      /* If the local VxLAN interface is not up (should be a transient
+       * event),  there's nothing more to do.
+       */
+      if (!if_is_operative (zvni->vxlan_if))
         continue;
 
       /* The remote VTEP specified should normally exist, but it is possible
@@ -3923,8 +3897,6 @@ int zebra_vxlan_remote_vtep_del (struct zserv *client, int sock,
   struct in_addr vtep_ip;
   zebra_vni_t *zvni;
   zebra_vtep_t *zvtep;
-  struct interface *ifp;
-  struct zebra_if *zif;
 
   s = client->ibuf;
 
@@ -3950,19 +3922,6 @@ int zebra_vxlan_remote_vtep_del (struct zserv *client, int sock,
                         "VRF %d VNI %u", zvrf_id (zvrf), vni);
           continue;
         }
-
-      ifp = zvni->vxlan_if;
-      if (!ifp)
-        {
-          zlog_err ("VNI %u hash %p doesn't have intf upon remote VTEP DEL",
-                    zvni->vni, zvni);
-          continue;
-        }
-      zif = ifp->info;
-
-      /* If down or not mapped to a bridge, we're done. */
-      if (!if_is_operative (ifp) || !zif->brslave_info.br_if)
-        continue;
 
       /* If the remote VTEP does not exist, there's nothing more to do.
        * Otherwise, uninstall any remote MACs pointing to this VTEP and
@@ -3992,8 +3951,6 @@ int zebra_vxlan_remote_vtep_add (struct zserv *client, int sock,
   vni_t vni;
   struct in_addr vtep_ip;
   zebra_vni_t *zvni;
-  struct interface *ifp;
-  struct zebra_if *zif;
 
   assert (EVPN_ENABLED (zvrf));
 
@@ -4020,23 +3977,22 @@ int zebra_vxlan_remote_vtep_add (struct zserv *client, int sock,
                     zvrf_id (zvrf), vni);
           continue;
         }
-      ifp = zvni->vxlan_if;
-      if (!ifp)
+      if (!zvni->vxlan_if)
         {
           zlog_err ("VNI %u hash %p doesn't have intf upon remote VTEP ADD",
                     zvni->vni, zvni);
           continue;
         }
-      zif = ifp->info;
 
-      /* If down or not mapped to a bridge, we're done. */
-      if (!if_is_operative (ifp) || !zif->brslave_info.br_if)
-        continue;
 
-      /* If the remote VTEP already exists, there's nothing more to do.
+      /* If the remote VTEP already exists, or the local VxLAN interface is
+       * not up (should be a transient event),  there's nothing more to do.
        * Otherwise, add and install the entry.
        */
       if (zvni_vtep_find (zvni, &vtep_ip))
+        continue;
+
+      if (!if_is_operative (zvni->vxlan_if))
         continue;
 
       if (zvni_vtep_add (zvni, &vtep_ip) == NULL)
@@ -4567,7 +4523,6 @@ int zebra_vxlan_advertise_gw_macip (struct zserv *client, int sock,
       struct zebra_l2info_vxlan   zl2_info ;
       struct interface            *vlan_if = NULL;
       struct interface            *vrr_if = NULL;
-      struct interface            *ifp;
 
       if (IS_ZEBRA_DEBUG_VXLAN)
         zlog_debug ("%u:EVPN gateway macip Adv %s on VNI %d , currently %s",
@@ -4583,14 +4538,7 @@ int zebra_vxlan_advertise_gw_macip (struct zserv *client, int sock,
 
       zvni->advertise_gw_macip = advertise;
 
-      ifp = zvni->vxlan_if;
-      if (!ifp)
-        return 0;
-      zif = ifp->info;
-      /* If down or not mapped to a bridge, we're done. */
-      if (!if_is_operative (ifp) || !zif->brslave_info.br_if)
-        return 0;
-
+      zif = zvni->vxlan_if->info;
       zl2_info = zif->l2info.vxl;
 
       vlan_if = zvni_map_to_svi (zvrf, zl2_info.access_vlan,
