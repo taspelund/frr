@@ -22,71 +22,91 @@
 #define _ZEBRA_HASH_H
 
 #include "memory.h"
+#include "frratomic.h"
 
 DECLARE_MTYPE(HASH)
 DECLARE_MTYPE(HASH_BACKET)
 
-/* Default hash table size.  */ 
+/* Default hash table size.  */
 #define HASH_INITIAL_SIZE     256	/* initial number of backets. */
 #define HASH_THRESHOLD	      10	/* expand when backet. */
 
 #define HASHWALK_CONTINUE 0
 #define HASHWALK_ABORT -1
 
-struct hash_backet
-{
-  /* Linked list.  */
-  struct hash_backet *next;
+struct hash_backet {
+	/* if this backet is the head of the linked listed, len denotes the
+	 * number of
+	 * elements in the list */
+	int len;
 
-  /* Hash key. */
-  unsigned int key;
+	/* Linked list.  */
+	struct hash_backet *next;
 
-  /* Data.  */
-  void *data;
+	/* Hash key. */
+	unsigned int key;
+
+	/* Data.  */
+	void *data;
 };
 
-struct hash
-{
-  /* Hash backet. */
-  struct hash_backet **index;
+struct hashstats {
+	/* number of empty hash buckets */
+	_Atomic uint_fast32_t empty;
+	/* sum of squares of bucket length */
+	_Atomic uint_fast32_t ssq;
+};
 
-  /* Hash table size. Must be power of 2 */
-  unsigned int size;
+struct hash {
+	/* Hash backet. */
+	struct hash_backet **index;
 
-  /* If expansion failed. */
-  int no_expand;
+	/* Hash table size. Must be power of 2 */
+	unsigned int size;
 
-  /* Key make function. */
-  unsigned int (*hash_key) (void *);
+	/* If expansion failed. */
+	int no_expand;
 
-  /* Data compare function. */
-  int (*hash_cmp) (const void *, const void *);
+	/* Key make function. */
+	unsigned int (*hash_key)(void *);
 
-  /* Backet alloc. */
-  unsigned long count;
+	/* Data compare function. */
+	int (*hash_cmp)(const void *, const void *);
+
+	/* Backet alloc. */
+	unsigned long count;
+
+	struct hashstats stats;
+
+	/* hash name */
+	char *name;
 };
 
 #define hashcount(X) ((X)->count)
 
-extern struct hash *hash_create (unsigned int (*) (void *), 
-				 int (*) (const void *, const void *));
-extern struct hash *hash_create_size (unsigned int, unsigned int (*) (void *), 
-				      int (*) (const void *, const void *));
+extern struct hash *hash_create(unsigned int (*)(void *),
+				int (*)(const void *, const void *),
+				const char *);
+extern struct hash *hash_create_size(unsigned int, unsigned int (*)(void *),
+				     int (*)(const void *, const void *),
+				     const char *);
 
-extern void *hash_get (struct hash *, void *, void * (*) (void *));
-extern void *hash_alloc_intern (void *);
-extern void *hash_lookup (struct hash *, void *);
-extern void *hash_release (struct hash *, void *);
+extern void *hash_get(struct hash *, void *, void *(*)(void *));
+extern void *hash_alloc_intern(void *);
+extern void *hash_lookup(struct hash *, void *);
+extern void *hash_release(struct hash *, void *);
 
-extern void hash_iterate (struct hash *, 
-		   void (*) (struct hash_backet *, void *), void *);
+extern void hash_iterate(struct hash *, void (*)(struct hash_backet *, void *),
+			 void *);
 
-extern void hash_walk (struct hash *,
-		   int (*) (struct hash_backet *, void *), void *);
+extern void hash_walk(struct hash *, int (*)(struct hash_backet *, void *),
+		      void *);
 
-extern void hash_clean (struct hash *, void (*) (void *));
-extern void hash_free (struct hash *);
+extern void hash_clean(struct hash *, void (*)(void *));
+extern void hash_free(struct hash *);
 
-extern unsigned int string_hash_make (const char *);
+extern unsigned int string_hash_make(const char *);
+
+extern void hash_cmd_init(void);
 
 #endif /* _ZEBRA_HASH_H */

@@ -13,7 +13,7 @@ Add packages:
 
     apt-get install git autoconf automake libtool make gawk libreadline-dev \
        texinfo libpam0g-dev dejagnu libjson0-dev pkg-config libpam0g-dev \
-       libjson0-dev flex python-pip libc-ares-dev python3-dev libxml2 libxml2-dev
+       libjson0-dev flex python-pip libc-ares-dev python3-dev
 
 Install newer bison from 14.04 package source (Ubuntu 12.04 package source
 is too old)
@@ -50,11 +50,6 @@ Install newer version of autoconf and automake:
     make
     sudo make install
     cd ..
-
-Install XML::LibXML
-
-    sudo cpan
-        install XML::LibXML
 
 Install pytest:
 
@@ -139,10 +134,10 @@ other settings)
 
 ### Install the init.d service
 
-    sudo install -m 755 tools/frr /etc/init.d/frr  
-    sudo install -m 644 cumulus/etc/frr/daemons /etc/frr/daemons    
-    sudo install -m 644 cumulus/etc/frr/daemons.conf /etc/frr/daemons.conf    
-    sudo install -m 644 -o frr -g frr cumulus/etc/frr/vtysh.conf /etc/frr/vtysh.conf 
+    sudo install -m 755 tools/frr /etc/init.d/frr
+    sudo install -m 644 tools/etc/frr/daemons /etc/frr/daemons
+    sudo install -m 644 tools/etc/frr/daemons.conf /etc/frr/daemons.conf
+    sudo install -m 644 -o frr -g frr tools/etc/frr/vtysh.conf /etc/frr/vtysh.conf
     
 ### Enable daemons 
 Edit `/etc/frr/daemons` and change the value from "no" to "yes" for those daemons you want to start by systemd.  

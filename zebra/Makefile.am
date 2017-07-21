@@ -70,9 +70,9 @@ zebra_fpm_la_SOURCES += zebra_fpm_netlink.c
 endif
 if HAVE_PROTOBUF
 zebra_fpm_la_SOURCES += zebra_fpm_protobuf.c
-endif
 if DEV_BUILD
 zebra_fpm_la_SOURCES += zebra_fpm_dt.c
+endif
 endif
 
 
@@ -88,7 +88,7 @@ EXTRA_DIST = if_ioctl.c if_ioctl_solaris.c if_netlink.c \
 client : client_main.o ../lib/libfrr.la
 	$(CC) -g -o client client_main.o ../liblzebra.la $(LIBS) $(LIB_IPV6)
 
-quaggaconfdir = $(sysconfdir)
+frrconfdir = $(sysconfdir)
 
 examplesdir = $(exampledir)
 dist_examples_DATA = zebra.conf.sample
