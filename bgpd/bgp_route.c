@@ -6288,7 +6288,8 @@ void bgp_redistribute_withdraw(struct bgp *bgp, afi_t afi, int type,
 }
 
 /* Static function to display route. */
-static void route_vty_out_route(struct prefix *p, struct vty *vty, json_object *json)
+static void route_vty_out_route(struct prefix *p, struct vty *vty,
+				json_object *json)
 {
 	int len;
 	u_int32_t destination;
@@ -6309,10 +6310,12 @@ static void route_vty_out_route(struct prefix *p, struct vty *vty, json_object *
 	} else if (p->family == AF_ETHERNET) {
 #if defined(HAVE_CUMULUS)
 		if (!json)
-			len = vty_out(vty, "%s",
-				bgp_evpn_route2str((struct prefix_evpn *)p, buf, BUFSIZ));
+			len = vty_out(
+				vty, "%s",
+				bgp_evpn_route2str((struct prefix_evpn *)p, buf,
+						   BUFSIZ));
 		else
-			bgp_evpn_route2json ( (struct prefix_evpn *) p, json);
+			bgp_evpn_route2json((struct prefix_evpn *)p, json);
 #else
 		prefix2str(p, buf, PREFIX_STRLEN);
 		len = vty_out(vty, "%s", buf);
@@ -6436,7 +6439,7 @@ void route_vty_out(struct vty *vty, struct prefix *p, struct bgp_info *binfo,
 		else
 			vty_out(vty, "%*s", 17, " ");
 	} else {
-		route_vty_out_route (p, vty, json_path);
+		route_vty_out_route(p, vty, json_path);
 	}
 
 	/* Print attribute */
@@ -8407,7 +8410,7 @@ void route_vty_out_detail_header(struct vty *vty, struct bgp *bgp,
 	struct listnode *node, *nnode;
 	char buf1[INET6_ADDRSTRLEN];
 	char buf2[INET6_ADDRSTRLEN];
-	char  prefix_str[BUFSIZ];
+	char prefix_str[BUFSIZ];
 #if defined(HAVE_CUMULUS)
 	char buf3[EVPN_ROUTE_STRLEN];
 #endif
@@ -8432,7 +8435,9 @@ void route_vty_out_detail_header(struct vty *vty, struct bgp *bgp,
 		if (has_valid_label)
 			json_object_int_add(json, "localLabel", label);
 
-		json_object_string_add (json, "prefix", prefix2str (p, prefix_str, sizeof (prefix_str)));
+		json_object_string_add(
+			json, "prefix",
+			prefix2str(p, prefix_str, sizeof(prefix_str)));
 		json_object_int_add(json, "prefixlen", p->prefixlen);
 	} else {
 #if defined(HAVE_CUMULUS)
