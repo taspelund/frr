@@ -12,8 +12,9 @@ Package: frr
 Architecture: any
 Depends: ${shlibs:Depends}, logrotate (>= 3.2-11), iproute, ${misc:Depends}, libc-ares2
 Pre-Depends: adduser
-Conflicts: zebra, zebra-pj, quagga
+Conflicts: zebra, zebra-pj
 Replaces: zebra, zebra-pj
+Breaks: quagga (<< 1.0.0+cl3u14~)
 Suggests: snmpd
 Description: BGP/OSPF/RIP routing daemon
  Frr is free software which manages TCP/IP based routing protocols.
@@ -31,6 +32,8 @@ Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, frr (= ${binary:Version})
 Priority: extra
 Section: debug
+Replaces: quagga-dbg (<< 1.0.0+cl3u14~)
+Breaks: quagga-dbg (<< 1.0.0+cl3u14~)
 Description: BGP/OSPF/RIP routing daemon (debug symbols)
  This package provides debugging symbols for all binary packages built from                                                                                                                                                                    
  frr source package. It's highly recommended to have this package installed                                                                                                                                                                 
@@ -41,6 +44,8 @@ Package: frr-doc
 Section: net
 Architecture: all
 Depends: ${misc:Depends}
+Replaces: quagga-doc (<< 1.0.0+cl3u14~)
+Breaks: quagga-doc (<< 1.0.0+cl3u14~)
 Suggests: frr
 Description: documentation files for frr
  This package includes info files for frr, a free software which manages
