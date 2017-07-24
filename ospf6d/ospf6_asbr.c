@@ -622,7 +622,7 @@ void ospf6_asbr_redistribute_remove(int type, ifindex_t ifindex,
 	node = route_node_lookup(ospf6->external_id_table, &prefix_id);
 	assert(node);
 	node->info = NULL;
-        route_unlock_node(node); /* to free the lookup lock */
+	route_unlock_node(node); /* to free the lookup lock */
 	route_unlock_node(node); /* to free the original lock */
 
 	ospf6_route_remove(match, ospf6->external_table);

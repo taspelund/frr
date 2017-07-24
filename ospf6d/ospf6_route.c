@@ -438,7 +438,7 @@ struct ospf6_route *ospf6_route_lookup(struct prefix *prefix,
 		return NULL;
 
 	route = (struct ospf6_route *)node->info;
-        route_unlock_node (node); /* to free the lookup lock */
+	route_unlock_node(node); /* to free the lookup lock */
 	return route;
 }
 
@@ -787,10 +787,10 @@ void ospf6_route_remove(struct ospf6_route *route,
 			SET_FLAG(route->next->flag, OSPF6_ROUTE_BEST);
 		} else {
 			node->info = NULL;
-                        route->rnode = NULL;
-                        route_unlock_node (node); /* to free the lookup lock */
-                        route_unlock_node (node); /* to free the original lock */
-                }
+			route->rnode = NULL;
+			route_unlock_node(node); /* to free the lookup lock */
+			route_unlock_node(node); /* to free the original lock */
+		}
 	}
 
 	table->count--;
