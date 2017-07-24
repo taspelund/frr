@@ -1650,10 +1650,9 @@ static void zvni_mac_del_from_vtep(zebra_vni_t *zvni, int uninstall,
 	wctx.flags = DEL_REMOTE_MAC_FROM_VTEP;
 	wctx.r_vtep_ip = *r_vtep_ip;
 
-	hash_iterate(
-		zvni->mac_table,
-		(void (*)(struct hash_backet *, void *))zvni_mac_del_hash_entry,
-		&wctx);
+	hash_iterate(zvni->mac_table, (void (*)(struct hash_backet *,
+						void *))zvni_mac_del_hash_entry,
+		     &wctx);
 }
 
 /*
@@ -1674,10 +1673,9 @@ static void zvni_mac_del_all(struct zebra_vrf *zvrf, zebra_vni_t *zvni,
 	wctx.upd_client = upd_client;
 	wctx.flags = flags;
 
-	hash_iterate(
-		zvni->mac_table,
-		(void (*)(struct hash_backet *, void *))zvni_mac_del_hash_entry,
-		&wctx);
+	hash_iterate(zvni->mac_table, (void (*)(struct hash_backet *,
+						void *))zvni_mac_del_hash_entry,
+		     &wctx);
 }
 
 /*
@@ -2426,9 +2424,8 @@ void zebra_vxlan_print_neigh_vni(struct vty *vty, struct zebra_vrf *zvrf,
 
 	hash_iterate(zvni->neigh_table, zvni_print_neigh_hash, &wctx);
 	if (use_json) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2455,9 +2452,8 @@ void zebra_vxlan_print_neigh_all_vni(struct vty *vty, struct zebra_vrf *zvrf,
 			       void *))zvni_print_neigh_hash_all_vni,
 		     args);
 	if (use_json) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2497,9 +2493,8 @@ void zebra_vxlan_print_specific_neigh_vni(struct vty *vty,
 	zvni_print_neigh(n, vty, json);
 
 	if (use_json) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2540,9 +2535,8 @@ void zebra_vxlan_print_neigh_vni_vtep(struct vty *vty, struct zebra_vrf *zvrf,
 	hash_iterate(zvni->neigh_table, zvni_print_neigh_hash, &wctx);
 
 	if (use_json) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2596,9 +2590,8 @@ void zebra_vxlan_print_macs_vni(struct vty *vty, struct zebra_vrf *zvrf,
 
 	if (use_json) {
 		json_object_object_add(json, "macs", json_mac);
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2626,9 +2619,8 @@ void zebra_vxlan_print_macs_all_vni(struct vty *vty, struct zebra_vrf *zvrf,
 	hash_iterate(zvrf->vni_table, zvni_print_mac_hash_all_vni, &wctx);
 
 	if (use_json) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2658,9 +2650,8 @@ void zebra_vxlan_print_macs_all_vni_vtep(struct vty *vty,
 	hash_iterate(zvrf->vni_table, zvni_print_mac_hash_all_vni, &wctx);
 
 	if (use_json) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2735,9 +2726,8 @@ void zebra_vxlan_print_macs_vni_vtep(struct vty *vty, struct zebra_vrf *zvrf,
 		json_object_int_add(json, "numMacs", wctx.count);
 		if (wctx.count)
 			json_object_object_add(json, "macs", json_mac);
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2769,9 +2759,8 @@ void zebra_vxlan_print_vni(struct vty *vty, struct zebra_vrf *zvrf, vni_t vni,
 	args[1] = json;
 	zvni_print(zvni, (void *)args);
 	if (use_json) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2815,9 +2804,8 @@ void zebra_vxlan_print_vnis(struct vty *vty, struct zebra_vrf *zvrf,
 		     args);
 
 	if (use_json) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
 }
@@ -2987,7 +2975,7 @@ int zebra_vxlan_local_neigh_add_update(struct interface *ifp,
 				send_del = 1;
 		} else if (ext_learned)
 		/* The neighbor is remote and that is the notification we got.
-		 */
+		   */
 		{
 			/* TODO: Evaluate if we need to do anything here. */
 			return 0;

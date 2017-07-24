@@ -2002,9 +2002,8 @@ void config_write_access_zebra(struct vty *vty, struct filter *mfilter)
 		if (is_zero_mac(&(p->u.prefix_eth)))
 			vty_out(vty, " any");
 		else
-			vty_out(vty, " %s",
-				prefix_mac2str(&(p->u.prefix_eth), buf,
-					       sizeof(buf)));
+			vty_out(vty, " %s", prefix_mac2str(&(p->u.prefix_eth),
+							   buf, sizeof(buf)));
 	}
 
 	vty_out(vty, "\n");
