@@ -703,6 +703,11 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 	struct ospf6_inter_prefix_lsa *prefix_lsa = NULL;
 	struct ospf6_inter_router_lsa *router_lsa = NULL;
 
+	if (oa->running_ospf6_abr_examin_summary)
+		return;
+
+	oa->running_ospf6_abr_examin_summary = 1;
+
 	memset(&prefix, 0, sizeof(prefix));
 
 	if (lsa->header->type == htons(OSPF6_LSTYPE_INTER_PREFIX)) {
@@ -770,6 +775,8 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 			zlog_debug("cost is LS_INFINITY, ignore");
 		if (old)
 			ospf6_route_remove(old, table);
+
+		oa->running_ospf6_abr_examin_summary = 0;
 		return;
 	}
 	if (OSPF6_LSA_IS_MAXAGE(lsa)) {
@@ -777,6 +784,8 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 			zlog_debug("LSA is MaxAge, ignore");
 		if (old)
 			ospf6_route_remove(old, table);
+
+		oa->running_ospf6_abr_examin_summary = 0;
 		return;
 	}
 
@@ -786,6 +795,8 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 			zlog_debug("LSA is self-originated, ignore");
 		if (old)
 			ospf6_route_remove(old, table);
+
+		oa->running_ospf6_abr_examin_summary = 0;
 		return;
 	}
 
@@ -799,6 +810,8 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 					"Prefix is equal to address range, ignore");
 			if (old)
 				ospf6_route_remove(old, table);
+
+			oa->running_ospf6_abr_examin_summary = 0;
 			return;
 		}
 
@@ -810,6 +823,8 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 				zlog_debug("Prefix has NU/LA bit set, ignore");
 			if (old)
 				ospf6_route_remove(old, table);
+
+			oa->running_ospf6_abr_examin_summary = 0;
 			return;
 		}
 	}
@@ -823,6 +838,7 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 			if (old)
 				ospf6_route_remove(old, table);
 
+			oa->running_ospf6_abr_examin_summary = 0;
 			return;
 		}
 		/* Avoid infinite recursion if someone has maliciously announced
@@ -837,6 +853,7 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 			if (old)
 				ospf6_route_remove(old, table);
 
+			oa->running_ospf6_abr_examin_summary = 0;
 			return;
 		}
 	}
@@ -851,6 +868,7 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 			zlog_debug("ABR router entry does not exist, ignore");
 		if (old)
 			ospf6_route_remove(old, table);
+		oa->running_ospf6_abr_examin_summary = 0;
 		return;
 	}
 
@@ -868,6 +886,7 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 						"Prefix was denied by import-list");
 				if (old)
 					ospf6_route_remove(old, table);
+				oa->running_ospf6_abr_examin_summary = 0;
 				return;
 			}
 	}
@@ -886,6 +905,7 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 						"Prefix was denied by prefix-list");
 				if (old)
 					ospf6_route_remove(old, table);
+				oa->running_ospf6_abr_examin_summary = 0;
 				return;
 			}
 	}
@@ -935,6 +955,8 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 		/* ospf6_ia_add_nw_route (table, &prefix, route); */
 		ospf6_route_add(route, table);
 	}
+
+	oa->running_ospf6_abr_examin_summary = 0;
 }
 
 void ospf6_abr_examin_brouter(u_int32_t router_id)
