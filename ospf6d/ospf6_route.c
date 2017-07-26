@@ -583,6 +583,7 @@ struct ospf6_route *ospf6_route_add(struct ospf6_route *route,
 			SET_FLAG(old->flag, OSPF6_ROUTE_ADD);
 			ospf6_route_table_assert(table);
 
+			route_unlock_node(node); /* to free the lookup lock */
 			return old;
 		}
 
@@ -628,9 +629,10 @@ struct ospf6_route *ospf6_route_add(struct ospf6_route *route,
 	if (prev || next) {
 		if (IS_OSPF6_DEBUG_ROUTE(MEMORY))
 			zlog_debug(
-				"%s %p: route add %p: another path: prev %p, next %p",
+				"%s %p: route add %p: another path: prev %p, next %p node lock %u",
 				ospf6_route_table_name(table), (void *)table,
-				(void *)route, (void *)prev, (void *)next);
+				(void *)route, (void *)prev, (void *)next,
+				node->lock);
 		else if (IS_OSPF6_DEBUG_ROUTE(TABLE))
 			zlog_debug("%s: route add: another path found",
 				   ospf6_route_table_name(table));
@@ -755,9 +757,9 @@ void ospf6_route_remove(struct ospf6_route *route,
 		prefix2str(&route->prefix, buf, sizeof(buf));
 
 	if (IS_OSPF6_DEBUG_ROUTE(MEMORY))
-		zlog_debug("%s %p: route remove %p: %s",
+		zlog_debug("%s %p: route remove %p: %s rnode lock %u",
 			   ospf6_route_table_name(table), (void *)table,
-			   (void *)route, buf);
+			   (void *)route, buf, route->rnode->lock);
 	else if (IS_OSPF6_DEBUG_ROUTE(TABLE))
 		zlog_debug("%s: route remove: %s",
 			   ospf6_route_table_name(table), buf);
@@ -768,11 +770,9 @@ void ospf6_route_remove(struct ospf6_route *route,
 	/* find the route to remove, making sure that the route pointer
 	   is from the route table. */
 	current = node->info;
-	while (current && ospf6_route_is_same(current, route)) {
-		if (current == route)
-			break;
+	while (current && current != route)
 		current = current->next;
-	}
+
 	assert(current == route);
 
 	/* adjust doubly linked list */
@@ -788,11 +788,11 @@ void ospf6_route_remove(struct ospf6_route *route,
 		} else {
 			node->info = NULL;
 			route->rnode = NULL;
-			route_unlock_node(node); /* to free the lookup lock */
 			route_unlock_node(node); /* to free the original lock */
 		}
 	}
 
+	route_unlock_node(node); /* to free the lookup lock */
 	table->count--;
 	ospf6_route_table_assert(table);
 
