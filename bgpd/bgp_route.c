@@ -487,67 +487,6 @@ static int bgp_info_cmp(struct bgp *bgp, struct bgp_info *new,
 		}
 	}
 
-	/* For EVPN routes, we cannot just go by local vs remote, we have to
-	 * look at the MAC mobility sequence number, if present.
-	 */
-	if (safi == SAFI_EVPN) {
-		/* This is an error condition described in RFC 7432 Section
-		 * 15.2. The RFC
-		 * states that in this scenario "the PE MUST alert the operator"
-		 * but it
-		 * does not state what other action to take. In order to provide
-		 * some
-		 * consistency in this scenario we are going to prefer the path
-		 * with the
-		 * sticky flag.
-		 */
-		if (newattr->sticky != existattr->sticky) {
-			if (!debug) {
-				prefix2str(&new->net->p, pfx_buf,
-					   sizeof(*pfx_buf)
-						   * PREFIX2STR_BUFFER);
-				bgp_info_path_with_addpath_rx_str(new, new_buf);
-				bgp_info_path_with_addpath_rx_str(exist,
-								  exist_buf);
-			}
-
-			if (newattr->sticky && !existattr->sticky) {
-				zlog_warn(
-					"%s: %s wins over %s due to sticky MAC flag",
-					pfx_buf, new_buf, exist_buf);
-				return 1;
-			}
-
-			if (!newattr->sticky && existattr->sticky) {
-				zlog_warn(
-					"%s: %s loses to %s due to sticky MAC flag",
-					pfx_buf, new_buf, exist_buf);
-				return 0;
-			}
-		}
-
-		new_mm_seq = mac_mobility_seqnum(newattr);
-		exist_mm_seq = mac_mobility_seqnum(existattr);
-
-		if (new_mm_seq > exist_mm_seq) {
-			if (debug)
-				zlog_debug(
-					"%s: %s wins over %s due to MM seq %u > %u",
-					pfx_buf, new_buf, exist_buf, new_mm_seq,
-					exist_mm_seq);
-			return 1;
-		}
-
-		if (new_mm_seq < exist_mm_seq) {
-			if (debug)
-				zlog_debug(
-					"%s: %s loses to %s due to MM seq %u < %u",
-					pfx_buf, new_buf, exist_buf, new_mm_seq,
-					exist_mm_seq);
-			return 0;
-		}
-	}
-
 	/* 1. Weight check. */
 	new_weight = exist_weight = 0;
 
