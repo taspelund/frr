@@ -32,7 +32,7 @@
 #define FRR_CONFDIR SYSCONFDIR
 #define FRR_INTCONF "frr.conf"
 #define QUAGGA_CONFDIR "/etc/quagga"
-#define QUAGGA_INTCONF "quagga.conf"
+#define QUAGGA_INTCONF "Quagga.conf"
 
 #define FRR_NO_PRIVSEP		(1 << 0)
 #define FRR_NO_TCPVTY		(1 << 1)
