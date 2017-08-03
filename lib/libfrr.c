@@ -38,6 +38,8 @@ char frr_sysconfdir[] = FRR_CONFDIR;
 char frr_vtydir[] = DAEMON_VTY_DIR;
 char frr_moduledir[] = MODULE_PATH;
 
+char compat_indicator[MAXPATHLEN];
+
 char frr_protoname[256] = "NONE";
 char frr_protonameinst[256] = "NONE";
 
@@ -168,6 +170,11 @@ void frr_preinit(struct frr_daemon_info *daemon, int argc, char **argv)
 
 	strlcpy(frr_protoname, di->logname, sizeof(frr_protoname));
 	strlcpy(frr_protonameinst, di->logname, sizeof(frr_protonameinst));
+
+	snprintf(compat_indicator, sizeof(compat_indicator), "%s/.qcompat", frr_vtydir);
+
+	/* delete quagga compatibility mode indicator */
+	remove(compat_indicator);
 }
 
 void frr_opt_add(const char *optstr, const struct option *longopts,
@@ -307,6 +314,10 @@ static int frr_opt(int opt)
 		di->privs->group = optarg;
 		break;
 	case 'q':
+		{}
+		int f = open(compat_indicator, O_RDONLY | O_CREAT,
+			     S_IRUSR | S_IWUSR);
+		close(f);
 		quagga_compat_mode = true;
 		snprintf(config_default, sizeof(config_default), "%s/%s.conf",
 			 QUAGGA_CONFDIR, di->name);
