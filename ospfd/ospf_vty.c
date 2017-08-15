@@ -6963,6 +6963,7 @@ DEFUN (ip_ospf_area,
 	/* enable ospf on this interface with area_id */
 	SET_IF_PARAM(params, if_area);
 	params->if_area = area_id;
+	params->if_area_id_fmt = format;
 	ospf_interface_area_set(ifp);
 	ospf->if_ospf_cli_count++;
 
@@ -8304,8 +8305,10 @@ static int config_write_interface(struct vty *vty)
 				else
 					vty_out(vty, " ip ospf");
 
-				vty_out(vty, " area %s",
-					inet_ntoa(params->if_area));
+				char buf[15];
+				area_id2str(buf, sizeof(buf), &params->if_area,
+					    params->if_area_id_fmt);
+				vty_out(vty, " area %s", buf);
 				if (params != IF_DEF_PARAMS(ifp))
 					vty_out(vty, " %s",
 						inet_ntoa(rn->p.u.prefix4));
