@@ -176,6 +176,7 @@ int ripng_send_packet(caddr_t buf, int bufsize, struct sockaddr_in6 *to,
 		addr.sin6_port = htons(RIPNG_PORT_DEFAULT);
 	}
 
+	memset(&msg, 0, sizeof(msg));
 	msg.msg_name = (void *)&addr;
 	msg.msg_namelen = sizeof(struct sockaddr_in6);
 	msg.msg_iov = &iov;
@@ -228,6 +229,7 @@ static int ripng_recv_packet(int sock, u_char *buf, int bufsize,
 	char adata[1024];
 
 	/* Fill in message and iovec. */
+	memset(&msg, 0, sizeof(msg));
 	msg.msg_name = (void *)from;
 	msg.msg_namelen = sizeof(struct sockaddr_in6);
 	msg.msg_iov = &iov;
@@ -2215,7 +2217,7 @@ DEFUN (ripng_route,
 	if (rp->info) {
 		vty_out(vty, "There is already same static route.\n");
 		route_unlock_node(rp);
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 	rp->info = (void *)1;
 
@@ -2283,7 +2285,7 @@ DEFUN (ripng_aggregate_address,
 	if (node->info) {
 		vty_out(vty, "There is already same aggregate route.\n");
 		route_unlock_node(node);
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 	node->info = (void *)1;
 
@@ -2619,7 +2621,7 @@ DEFUN (ripng_allow_ecmp,
 {
 	if (ripng->ecmp) {
 		vty_out(vty, "ECMP is already enabled.\n");
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	ripng->ecmp = 1;
@@ -2635,7 +2637,7 @@ DEFUN (no_ripng_allow_ecmp,
 {
 	if (!ripng->ecmp) {
 		vty_out(vty, "ECMP is already disabled.\n");
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	ripng->ecmp = 0;

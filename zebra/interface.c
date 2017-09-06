@@ -497,7 +497,7 @@ void if_add_update(struct interface *ifp)
 	if (!CHECK_FLAG(ifp->status, ZEBRA_INTERFACE_ACTIVE)) {
 		SET_FLAG(ifp->status, ZEBRA_INTERFACE_ACTIVE);
 
-		if (if_data && if_data->shutdown == IF_ZEBRA_SHUTDOWN_ON) {
+		if (if_data->shutdown == IF_ZEBRA_SHUTDOWN_ON) {
 			if (IS_ZEBRA_DEBUG_KERNEL)
 				zlog_debug(
 					"interface %s vrf %u index %d is shutdown. "
@@ -527,18 +527,13 @@ static void if_install_connected(struct interface *ifp)
 	struct listnode *node;
 	struct listnode *next;
 	struct connected *ifc;
-	struct prefix *p;
 
 	if (ifp->connected) {
 		for (ALL_LIST_ELEMENTS(ifp->connected, node, next, ifc)) {
 			if (CHECK_FLAG(ifc->conf, ZEBRA_IFC_REAL))
 				zebra_interface_address_add_update(ifp, ifc);
 
-			p = ifc->address;
-			if (p->family == AF_INET)
-				connected_up_ipv4(ifp, ifc);
-			else if (p->family == AF_INET6)
-				connected_up_ipv6(ifp, ifc);
+			connected_up(ifp, ifc);
 		}
 	}
 }
@@ -549,17 +544,11 @@ static void if_uninstall_connected(struct interface *ifp)
 	struct listnode *node;
 	struct listnode *next;
 	struct connected *ifc;
-	struct prefix *p;
 
 	if (ifp->connected) {
 		for (ALL_LIST_ELEMENTS(ifp->connected, node, next, ifc)) {
-			p = ifc->address;
 			zebra_interface_address_delete_update(ifp, ifc);
-
-			if (p->family == AF_INET)
-				connected_down_ipv4(ifp, ifc);
-			else if (p->family == AF_INET6)
-				connected_down_ipv6(ifp, ifc);
+			connected_down(ifp, ifc);
 		}
 	}
 }
@@ -608,7 +597,7 @@ static void if_delete_connected(struct interface *ifp)
 					next = anode->next;
 
 					ifc = listgetdata(anode);
-					connected_down_ipv4(ifp, ifc);
+					connected_down(ifp, ifc);
 
 					/* XXX: We have to send notifications
 					 * here explicitly, because we destroy
@@ -642,7 +631,7 @@ static void if_delete_connected(struct interface *ifp)
 				rn->info = NULL;
 				route_unlock_node(rn);
 			} else if (cp.family == AF_INET6) {
-				connected_down_ipv6(ifp, ifc);
+				connected_down(ifp, ifc);
 
 				zebra_interface_address_delete_update(ifp, ifc);
 
@@ -2564,28 +2553,28 @@ DEFUN (no_ip_address,
 				    NULL, NULL);
 }
 
-DEFUN (ip_address_peer,
-       ip_address_peer_cmd,
-       "ip address A.B.C.D peer A.B.C.D/M",
-       "Interface Internet Protocol config commands\n"
-       "Set the IP address of an interface\n"
-       "Local IP (e.g. 10.0.0.1) for P-t-P address\n"
-       "Specify P-t-P address\n"
-       "Peer IP address (e.g. 10.0.0.1/8)\n")
+DEFUN(ip_address_peer,
+      ip_address_peer_cmd,
+      "ip address A.B.C.D peer A.B.C.D/M",
+      "Interface Internet Protocol config commands\n"
+      "Set the IP address of an interface\n"
+      "Local IP (e.g. 10.0.0.1) for P-t-P address\n"
+      "Specify P-t-P address\n"
+      "Peer IP address (e.g. 10.0.0.1/8)\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	return ip_address_install(vty, ifp, argv[2]->arg, argv[4]->arg, NULL);
 }
 
-DEFUN (no_ip_address_peer,
-       no_ip_address_peer_cmd,
-       "no ip address A.B.C.D peer A.B.C.D/M",
-       NO_STR
-       "Interface Internet Protocol config commands\n"
-       "Set the IP address of an interface\n"
-       "Local IP (e.g. 10.0.0.1) for P-t-P address\n"
-       "Specify P-t-P address\n"
-       "Peer IP address (e.g. 10.0.0.1/8)\n")
+DEFUN(no_ip_address_peer,
+      no_ip_address_peer_cmd,
+      "no ip address A.B.C.D peer A.B.C.D/M",
+      NO_STR
+      "Interface Internet Protocol config commands\n"
+      "Set the IP address of an interface\n"
+      "Local IP (e.g. 10.0.0.1) for P-t-P address\n"
+      "Specify P-t-P address\n"
+      "Peer IP address (e.g. 10.0.0.1/8)\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	return ip_address_uninstall(vty, ifp, argv[3]->arg, argv[5]->arg, NULL);
@@ -2893,16 +2882,16 @@ static int if_config_write(struct vty *vty)
 				p = ifc->address;
 				vty_out(vty, " ip%s address %s",
 					p->family == AF_INET ? "" : "v6",
-					inet_ntop(p->family, &p->u.prefix,
-						  buf, sizeof(buf)));
-				if (CONNECTED_PEER (ifc)) {
+					inet_ntop(p->family, &p->u.prefix, buf,
+						  sizeof(buf)));
+				if (CONNECTED_PEER(ifc)) {
 					p = ifc->destination;
 					vty_out(vty, " peer %s",
 						inet_ntop(p->family,
-							  &p->u.prefix,
-							  buf, sizeof(buf)));
+							  &p->u.prefix, buf,
+							  sizeof(buf)));
 				}
-				vty_out (vty, "/%d", p->prefixlen);
+				vty_out(vty, "/%d", p->prefixlen);
 
 				if (ifc->label)
 					vty_out(vty, " label %s", ifc->label);

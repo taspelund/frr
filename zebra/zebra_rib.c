@@ -292,7 +292,7 @@ struct nexthop *route_entry_nexthop_ipv6_ifindex_add(struct route_entry *re,
 }
 
 struct nexthop *route_entry_nexthop_blackhole_add(struct route_entry *re,
-                                                  enum blackhole_type bh_type)
+						  enum blackhole_type bh_type)
 {
 	struct nexthop *nexthop;
 
@@ -2061,10 +2061,9 @@ void _route_entry_dump(const char *func, union prefixconstptr pp,
 		   is_srcdst ? prefix2str(src_pp, srcaddr, sizeof(srcaddr))
 			     : "",
 		   re->vrf_id);
-	zlog_debug(
-		"%s: refcnt == %lu, uptime == %lu, type == %u, instance == %d, table == %d",
-		func, re->refcnt, (unsigned long)re->uptime, re->type,
-		re->instance, re->table);
+	zlog_debug("%s: uptime == %lu, type == %u, instance == %d, table == %d",
+		   func, (unsigned long)re->uptime, re->type, re->instance,
+		   re->table);
 	zlog_debug(
 		"%s: metric == %u, mtu == %u, distance == %u, flags == %u, status == %u",
 		func, re->metric, re->mtu, re->distance, re->flags, re->status);
@@ -2073,8 +2072,9 @@ void _route_entry_dump(const char *func, union prefixconstptr pp,
 
 	for (ALL_NEXTHOPS(re->nexthop, nexthop)) {
 		inet_ntop(p->family, &nexthop->gate, straddr, INET6_ADDRSTRLEN);
-		zlog_debug("%s: %s %s with flags %s%s%s", func,
+		zlog_debug("%s: %s %s[%u] with flags %s%s%s", func,
 			   (nexthop->rparent ? "  NH" : "NH"), straddr,
+			   nexthop->ifindex,
 			   (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ACTIVE)
 				    ? "ACTIVE "
 				    : ""),
@@ -2335,12 +2335,6 @@ void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 		    && rtnh->type == NEXTHOP_TYPE_IFINDEX && nh) {
 			if (rtnh->ifindex != nh->ifindex)
 				continue;
-			if (re->refcnt) {
-				re->refcnt--;
-				route_unlock_node(rn);
-				route_unlock_node(rn);
-				return;
-			}
 			same = re;
 			break;
 		}
@@ -2394,8 +2388,8 @@ void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 						"via %s ifindex %d type %d "
 						"doesn't exist in rib",
 						inet_ntop(
-							family2afi(afi), &nh->gate,
-							buf2,
+							family2afi(afi),
+							&nh->gate, buf2,
 							INET_ADDRSTRLEN), /* FIXME
 									     */
 						nh->ifindex, type);
@@ -2476,13 +2470,16 @@ int rib_add(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type, u_short instance,
 			break;
 		}
 		/* Duplicate system route comes in. */
-		else if ((rtnh = re->nexthop)
-			 && rtnh->type == NEXTHOP_TYPE_IFINDEX
-			 && rtnh->ifindex == nh->ifindex
-			 && !CHECK_FLAG(re->status, ROUTE_ENTRY_REMOVED)) {
-			re->refcnt++;
+		rtnh = re->nexthop;
+		if (nexthop_same_no_recurse(rtnh, nh))
 			return 0;
-		}
+		/*
+		 * Nexthop is different. Remove the old route unless it's
+		 * a link-local route.
+		 */
+		else if (afi != AFI_IP6
+			 || !IN6_IS_ADDR_LINKLOCAL(&p->u.prefix6))
+			same = re;
 	}
 
 	/* Allocate new re structure. */
@@ -2648,23 +2645,50 @@ static void rib_sweep_table(struct route_table *table)
 	struct route_node *rn;
 	struct route_entry *re;
 	struct route_entry *next;
+	struct nexthop *nexthop;
 	int ret = 0;
 
-	if (table)
-		for (rn = route_top(table); rn; rn = srcdest_route_next(rn))
-			RNODE_FOREACH_RE_SAFE(rn, re, next)
-			{
-				if (CHECK_FLAG(re->status, ROUTE_ENTRY_REMOVED))
-					continue;
+	if (!table)
+		return;
 
-				if (re->type == ZEBRA_ROUTE_KERNEL
-				    && CHECK_FLAG(re->flags,
-						  ZEBRA_FLAG_SELFROUTE)) {
-					ret = rib_uninstall_kernel(rn, re);
-					if (!ret)
-						rib_delnode(rn, re);
-				}
-			}
+	for (rn = route_top(table); rn; rn = srcdest_route_next(rn)) {
+		RNODE_FOREACH_RE_SAFE(rn, re, next)
+		{
+			if (IS_ZEBRA_DEBUG_RIB)
+				route_entry_dump(&rn->p, NULL, re);
+
+			if (CHECK_FLAG(re->status, ROUTE_ENTRY_REMOVED))
+				continue;
+
+			if (!CHECK_FLAG(re->flags, ZEBRA_FLAG_SELFROUTE))
+				continue;
+
+			/*
+			 * So we are starting up and have received
+			 * routes from the kernel that we have installed
+			 * from a previous run of zebra but not cleaned
+			 * up ( say a kill -9 )
+			 * But since we haven't actually installed
+			 * them yet( we received them from the kernel )
+			 * we don't think they are active.
+			 * So let's pretend they are active to actually
+			 * remove them.
+			 * In all honesty I'm not sure if we should
+			 * mark them as active when we receive them
+			 * This is startup only so probably ok.
+			 *
+			 * If we ever decide to move rib_sweep_table
+			 * to a different spot (ie startup )
+			 * this decision needs to be revisited
+			 */
+			for (ALL_NEXTHOPS(re->nexthop, nexthop))
+				SET_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB);
+
+			ret = rib_uninstall_kernel(rn, re);
+			if (!ret)
+				rib_delnode(rn, re);
+		}
+	}
 }
 
 /* Sweep all RIB tables.  */
@@ -2673,8 +2697,10 @@ void rib_sweep_route(void)
 	struct vrf *vrf;
 	struct zebra_vrf *zvrf;
 
-	RB_FOREACH(vrf, vrf_id_head, &vrfs_by_id)
-	if ((zvrf = vrf->info) != NULL) {
+	RB_FOREACH(vrf, vrf_id_head, &vrfs_by_id) {
+		if ((zvrf = vrf->info) == NULL)
+			continue;
+
 		rib_sweep_table(zvrf->table[AFI_IP][SAFI_UNICAST]);
 		rib_sweep_table(zvrf->table[AFI_IP6][SAFI_UNICAST]);
 	}
@@ -2726,23 +2752,27 @@ unsigned long rib_score_proto(u_char proto, u_short instance)
 void rib_close_table(struct route_table *table)
 {
 	struct route_node *rn;
-	rib_table_info_t *info = table->info;
+	rib_table_info_t *info;
 	struct route_entry *re;
 
-	if (table)
-		for (rn = route_top(table); rn; rn = srcdest_route_next(rn))
-			RNODE_FOREACH_RE(rn, re)
-			{
-				if (!CHECK_FLAG(re->status,
-						ROUTE_ENTRY_SELECTED_FIB))
-					continue;
+	if (!table)
+		return;
 
-				if (info->safi == SAFI_UNICAST)
-					hook_call(rib_update, rn, NULL);
+	info = table->info;
 
-				if (!RIB_SYSTEM_ROUTE(re))
-					rib_uninstall_kernel(rn, re);
-			}
+	for (rn = route_top(table); rn; rn = srcdest_route_next(rn))
+		RNODE_FOREACH_RE(rn, re)
+		{
+			if (!CHECK_FLAG(re->status,
+					ROUTE_ENTRY_SELECTED_FIB))
+				continue;
+
+			if (info->safi == SAFI_UNICAST)
+				hook_call(rib_update, rn, NULL);
+
+			if (!RIB_SYSTEM_ROUTE(re))
+				rib_uninstall_kernel(rn, re);
+		}
 }
 
 /* Routing information base initialize. */

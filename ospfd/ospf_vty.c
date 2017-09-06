@@ -507,7 +507,7 @@ DEFUN (ospf_network_area,
 	ret = ospf_network_set(ospf, &p, area_id, format);
 	if (ret == 0) {
 		vty_out(vty, "There is already same network statement.\n");
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	return CMD_SUCCESS;
@@ -847,7 +847,7 @@ static int ospf_vl_set_security(struct ospf_vl_data *vl_data,
 		    != NULL) {
 			vty_out(vty, "OSPF: Key %d already exists\n",
 				vl_config->crypto_key_id);
-			return CMD_WARNING_CONFIG_FAILED;
+			return CMD_WARNING;
 		}
 		ck = ospf_crypt_key_new();
 		ck->key_id = vl_config->crypto_key_id;
@@ -2310,7 +2310,10 @@ DEFUN (ospf_neighbor,
 	unsigned int priority = OSPF_NEIGHBOR_PRIORITY_DEFAULT;
 	unsigned int interval = OSPF_POLL_INTERVAL_DEFAULT;
 
-	inet_aton(argv[idx_ipv4]->arg, &nbr_addr);
+	if (!inet_aton(argv[idx_ipv4]->arg, &nbr_addr)) {
+		vty_out(vty, "Please specify Neighbor ID by A.B.C.D\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 
 	if (argc > 2)
 		priority = strtoul(argv[idx_pri]->arg, NULL, 10);
@@ -2347,7 +2350,10 @@ DEFUN (ospf_neighbor_poll_interval,
 	unsigned int priority = OSPF_NEIGHBOR_PRIORITY_DEFAULT;
 	unsigned int interval = OSPF_POLL_INTERVAL_DEFAULT;
 
-	inet_aton(argv[idx_ipv4]->arg, &nbr_addr);
+	if (!inet_aton(argv[idx_ipv4]->arg, &nbr_addr)) {
+		vty_out(vty, "Please specify Neighbor ID by A.B.C.D\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 
 	interval = strtoul(argv[idx_poll]->arg, NULL, 10);
 
@@ -2378,7 +2384,10 @@ DEFUN (no_ospf_neighbor,
 	int idx_ipv4 = 2;
 	struct in_addr nbr_addr;
 
-	inet_aton(argv[idx_ipv4]->arg, &nbr_addr);
+	if (!inet_aton(argv[idx_ipv4]->arg, &nbr_addr)) {
+		vty_out(vty, "Please specify Neighbor ID by A.B.C.D\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 
 	(void)ospf_nbr_nbma_unset(ospf, nbr_addr);
 
@@ -2400,7 +2409,10 @@ DEFUN (no_ospf_neighbor_poll,
 	int idx_ipv4 = 2;
 	struct in_addr nbr_addr;
 
-	inet_aton(argv[idx_ipv4]->arg, &nbr_addr);
+	if (!inet_aton(argv[idx_ipv4]->arg, &nbr_addr)) {
+		vty_out(vty, "Please specify Neighbor ID by A.B.C.D\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 
 	(void)ospf_nbr_nbma_unset(ospf, nbr_addr);
 
@@ -5954,7 +5966,7 @@ DEFUN (ip_ospf_message_digest_key,
 	key_id = strtol(keyid, NULL, 10);
 	if (ospf_crypt_key_lookup(params->auth_crypt, key_id) != NULL) {
 		vty_out(vty, "OSPF: Key %d already exists\n", key_id);
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	ck = ospf_crypt_key_new();
@@ -6962,7 +6974,10 @@ DEFUN (ip_ospf_area,
 
 	// Check if we have an address arg and proccess it
 	if (argc == idx + 3) {
-		inet_aton(argv[idx + 2]->arg, &addr);
+		if (!inet_aton(argv[idx + 2]->arg, &addr)) {
+			vty_out(vty, "Please specify Intf Address by A.B.C.D\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
 		// update/create address-level params
 		params = ospf_get_if_params((ifp), (addr));
 		if (OSPF_IF_PARAM_CONFIGURED(params, if_area)) {
@@ -7021,7 +7036,10 @@ DEFUN (no_ip_ospf_area,
 
 	// Check if we have an address arg and proccess it
 	if (argc == idx + 3) {
-		inet_aton(argv[idx + 2]->arg, &addr);
+		if (!inet_aton(argv[idx + 2]->arg, &addr)) {
+			vty_out(vty, "Please specify Intf Address by A.B.C.D\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
 		params = ospf_lookup_if_params(ifp, addr);
 		if ((params) == NULL)
 			return CMD_SUCCESS;

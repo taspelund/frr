@@ -2825,16 +2825,16 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 		bgp->peer_self->hostname = NULL;
 	}
 	if (cmd_hostname_get())
-		bgp->peer_self->hostname = XSTRDUP(MTYPE_BGP_PEER_HOST,
-						   cmd_hostname_get());
+		bgp->peer_self->hostname =
+			XSTRDUP(MTYPE_BGP_PEER_HOST, cmd_hostname_get());
 
 	if (bgp->peer_self->domainname != NULL) {
 		XFREE(MTYPE_BGP_PEER_HOST, bgp->peer_self->domainname);
 		bgp->peer_self->domainname = NULL;
 	}
 	if (cmd_domainname_get())
-		bgp->peer_self->domainname = XSTRDUP(MTYPE_BGP_PEER_HOST,
-						     cmd_domainname_get());
+		bgp->peer_self->domainname =
+			XSTRDUP(MTYPE_BGP_PEER_HOST, cmd_domainname_get());
 	bgp->peer = list_new();
 	bgp->peer->cmp = (int (*)(void *, void *))peer_cmp;
 	bgp->peerhash = hash_create(peer_hash_key_make, peer_hash_same, NULL);
@@ -3191,6 +3191,7 @@ void bgp_free(struct bgp *bgp)
 	safi_t safi;
 	struct bgp_table *table;
 	struct bgp_node *rn;
+	struct bgp_rmap *rmap;
 
 	QOBJ_UNREG(bgp);
 
@@ -3219,6 +3220,9 @@ void bgp_free(struct bgp *bgp)
 				bgp_table_finish(&bgp->aggregate[afi][safi]);
 			if (bgp->rib[afi][safi])
 				bgp_table_finish(&bgp->rib[afi][safi]);
+			rmap = &bgp->table_map[afi][safi];
+			if (rmap->name)
+				XFREE(MTYPE_ROUTE_MAP_NAME, rmap->name);
 		}
 
 	bgp_scan_finish(bgp);
@@ -6934,14 +6938,12 @@ static void bgp_config_write_peer_af(struct vty *vty, struct bgp *bgp,
 			vty_out(vty,
 				"  neighbor %s attribute-unchanged%s%s%s\n",
 				addr,
-				peer_af_flag_check(
-					peer, afi, safi,
-					PEER_FLAG_AS_PATH_UNCHANGED)
+				peer_af_flag_check(peer, afi, safi,
+						   PEER_FLAG_AS_PATH_UNCHANGED)
 					? " as-path"
 					: "",
-				peer_af_flag_check(
-					peer, afi, safi,
-					PEER_FLAG_NEXTHOP_UNCHANGED)
+				peer_af_flag_check(peer, afi, safi,
+						   PEER_FLAG_NEXTHOP_UNCHANGED)
 					? " next-hop"
 					: "",
 				peer_af_flag_check(peer, afi, safi,
@@ -7190,6 +7192,10 @@ int bgp_config_write(struct vty *vty)
 				bgp->restart_time);
 		if (bgp_flag_check(bgp, BGP_FLAG_GRACEFUL_RESTART))
 			vty_out(vty, " bgp graceful-restart\n");
+
+		/* BGP graceful-shutdown */
+		if (bgp_flag_check(bgp, BGP_FLAG_GRACEFUL_SHUTDOWN))
+			vty_out(vty, " bgp graceful-shutdown\n");
 
 		/* BGP graceful-restart Preserve State F bit. */
 		if (bgp_flag_check(bgp, BGP_FLAG_GR_PRESERVE_FWD))

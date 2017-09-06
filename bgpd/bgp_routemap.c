@@ -659,8 +659,10 @@ static void *route_match_vni_compile(const char *arg)
 		return NULL;
 
 	*vni = strtoul(arg, &end, 10);
-	if (*end != '\0')
+	if (*end != '\0') {
+		XFREE(MTYPE_ROUTE_MAP_COMPILED, vni);
 		return NULL;
+	}
 
 	return vni;
 }
@@ -1492,17 +1494,18 @@ static route_map_result_t route_set_community(void *rule, struct prefix *prefix,
 		if (rcs->additive && old) {
 			merge = community_merge(community_dup(old), rcs->com);
 
-			/* HACK: if the old community is not intern'd,
-			 * we should free it here, or all reference to it may be
-			 * lost.
-			 * Really need to cleanup attribute caching sometime.
-			 */
-			if (old->refcnt == 0)
-				community_free(old);
 			new = community_uniq_sort(merge);
 			community_free(merge);
 		} else
 			new = community_dup(rcs->com);
+
+		/* HACK: if the old community is not intern'd,
+		 * we should free it here, or all reference to it may be
+		 * lost.
+		 * Really need to cleanup attribute caching sometime.
+		 */
+		if (old && old->refcnt == 0)
+			community_free(old);
 
 		/* will be interned by caller if required */
 		attr->community = new;
@@ -1528,7 +1531,7 @@ static void *route_set_community_compile(const char *arg)
 		sp = strstr(arg, "additive");
 
 		if (sp && sp > arg) {
-			/* "additive" keyworkd is included.  */
+			/* "additive" keyword is included.  */
 			additive = 1;
 			*(sp - 1) = '\0';
 		}
@@ -1609,17 +1612,18 @@ static route_map_result_t route_set_lcommunity(void *rule,
 			merge = lcommunity_merge(lcommunity_dup(old),
 						 rcs->lcom);
 
-			/* HACK: if the old large-community is not intern'd,
-			 * we should free it here, or all reference to it may be
-			 * lost.
-			 * Really need to cleanup attribute caching sometime.
-			 */
-			if (old->refcnt == 0)
-				lcommunity_free(&old);
 			new = lcommunity_uniq_sort(merge);
 			lcommunity_free(&merge);
 		} else
 			new = lcommunity_dup(rcs->lcom);
+
+		/* HACK: if the old large-community is not intern'd,
+		 * we should free it here, or all reference to it may be
+		 * lost.
+		 * Really need to cleanup attribute caching sometime.
+		 */
+		if (old && old->refcnt == 0)
+			lcommunity_free(&old);
 
 		/* will be intern()'d or attr_flush()'d by bgp_update_main() */
 		attr->lcommunity = new;
@@ -2670,25 +2674,27 @@ static int bgp_route_match_add(struct vty *vty, const char *command,
 			       const char *arg, route_map_event_t type)
 {
 	VTY_DECLVAR_CONTEXT(route_map_index, index);
+	int retval = CMD_SUCCESS;
 	int ret;
 
 	ret = route_map_add_match(index, command, arg);
-	if (ret) {
-		switch (ret) {
-		case RMAP_RULE_MISSING:
-			vty_out(vty, "%% BGP Can't find rule.\n");
-			return CMD_WARNING_CONFIG_FAILED;
-		case RMAP_COMPILE_ERROR:
-			vty_out(vty, "%% BGP Argument is malformed.\n");
-			return CMD_WARNING_CONFIG_FAILED;
+	switch (ret) {
+	case RMAP_RULE_MISSING:
+		vty_out(vty, "%% BGP Can't find rule.\n");
+		retval = CMD_WARNING_CONFIG_FAILED;
+		break;
+	case RMAP_COMPILE_ERROR:
+		vty_out(vty, "%% BGP Argument is malformed.\n");
+		retval = CMD_WARNING_CONFIG_FAILED;
+		break;
+	case RMAP_COMPILE_SUCCESS:
+		if (type != RMAP_EVENT_MATCH_ADDED) {
+			route_map_upd8_dependency(type, arg, index->map->name);
 		}
+		break;
 	}
 
-	if (type != RMAP_EVENT_MATCH_ADDED) {
-		route_map_upd8_dependency(type, arg, index->map->name);
-	}
-
-	return CMD_SUCCESS;
+	return retval;
 }
 
 /* Delete bgp route map rule. */
@@ -2697,6 +2703,7 @@ static int bgp_route_match_delete(struct vty *vty, const char *command,
 {
 	VTY_DECLVAR_CONTEXT(route_map_index, index);
 	int ret;
+	int retval = CMD_SUCCESS;
 	char *dep_name = NULL;
 	const char *tmpstr;
 	char *rmap_name = NULL;
@@ -2715,31 +2722,27 @@ static int bgp_route_match_delete(struct vty *vty, const char *command,
 	}
 
 	ret = route_map_delete_match(index, command, dep_name);
-	if (ret) {
-		switch (ret) {
-		case RMAP_RULE_MISSING:
-			vty_out(vty, "%% BGP Can't find rule.\n");
-			break;
-		case RMAP_COMPILE_ERROR:
-			vty_out(vty, "%% BGP Argument is malformed.\n");
-			break;
-		}
-		if (dep_name)
-			XFREE(MTYPE_ROUTE_MAP_RULE, dep_name);
-		if (rmap_name)
-			XFREE(MTYPE_ROUTE_MAP_NAME, rmap_name);
-		return CMD_WARNING_CONFIG_FAILED;
+	switch (ret) {
+	case RMAP_RULE_MISSING:
+		vty_out(vty, "%% BGP Can't find rule.\n");
+		retval = CMD_WARNING_CONFIG_FAILED;
+		break;
+	case RMAP_COMPILE_ERROR:
+		vty_out(vty, "%% BGP Argument is malformed.\n");
+		retval = CMD_WARNING_CONFIG_FAILED;
+		break;
+	case RMAP_COMPILE_SUCCESS:
+		if (type != RMAP_EVENT_MATCH_DELETED && dep_name)
+			route_map_upd8_dependency(type, dep_name, rmap_name);
+		break;
 	}
-
-	if (type != RMAP_EVENT_MATCH_DELETED && dep_name)
-		route_map_upd8_dependency(type, dep_name, rmap_name);
 
 	if (dep_name)
 		XFREE(MTYPE_ROUTE_MAP_RULE, dep_name);
 	if (rmap_name)
 		XFREE(MTYPE_ROUTE_MAP_NAME, rmap_name);
 
-	return CMD_SUCCESS;
+	return retval;
 }
 
 /*
@@ -3767,6 +3770,11 @@ DEFUN (set_community,
 		    && strncmp(argv[i]->arg, "no-export", strlen(argv[i]->arg))
 			       == 0) {
 			buffer_putstr(b, "no-export");
+			continue;
+		}
+		if (strncmp(argv[i]->arg, "graceful-shutdown", strlen(argv[i]->arg))
+		    == 0) {
+			buffer_putstr(b, "graceful-shutdown");
 			continue;
 		}
 		buffer_putstr(b, argv[i]->arg);

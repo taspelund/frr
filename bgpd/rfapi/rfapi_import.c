@@ -3874,10 +3874,9 @@ rfapiBgpInfoFilteredImportFunction(safi_t safi)
 
 	default:
 		/* not expected */
+		zlog_err("%s: bad safi %d", __func__, safi);
 		return NULL;
 	}
-	zlog_err("%s: bad safi %d", __func__, safi);
-	return NULL;
 }
 
 void rfapiProcessUpdate(struct peer *peer,

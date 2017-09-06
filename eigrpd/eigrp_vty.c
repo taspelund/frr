@@ -400,7 +400,7 @@ DEFUN (eigrp_network,
 
 	if (ret == 0) {
 		vty_out(vty, "There is already same network statement.\n");
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	return CMD_SUCCESS;
@@ -464,7 +464,7 @@ DEFUN (show_ip_eigrp_topology,
 	struct eigrp *eigrp;
 	struct listnode *node, *node2;
 	struct eigrp_prefix_entry *tn;
-	struct eigrp_neighbor_entry *te;
+	struct eigrp_nexthop_entry *te;
 	int first;
 
 	eigrp = eigrp_lookup();
@@ -480,12 +480,12 @@ DEFUN (show_ip_eigrp_topology,
 		for (ALL_LIST_ELEMENTS_RO(tn->entries, node2, te)) {
 			if (argc == 5
 			    || (((te->flags
-				  & EIGRP_NEIGHBOR_ENTRY_SUCCESSOR_FLAG)
-				 == EIGRP_NEIGHBOR_ENTRY_SUCCESSOR_FLAG)
+				  & EIGRP_NEXTHOP_ENTRY_SUCCESSOR_FLAG)
+				 == EIGRP_NEXTHOP_ENTRY_SUCCESSOR_FLAG)
 				|| ((te->flags
-				     & EIGRP_NEIGHBOR_ENTRY_FSUCCESSOR_FLAG)
-				    == EIGRP_NEIGHBOR_ENTRY_FSUCCESSOR_FLAG))) {
-				show_ip_eigrp_neighbor_entry(vty, eigrp, te,
+				     & EIGRP_NEXTHOP_ENTRY_FSUCCESSOR_FLAG)
+				    == EIGRP_NEXTHOP_ENTRY_FSUCCESSOR_FLAG))) {
+				show_ip_eigrp_nexthop_entry(vty, eigrp, te,
 							     &first);
 				first = 0;
 			}
@@ -1267,7 +1267,11 @@ DEFUN (clear_ip_eigrp_neighbors_IP,
 	struct eigrp_neighbor *nbr;
 	struct in_addr nbr_addr;
 
-	inet_aton(argv[4]->arg, &nbr_addr);
+	if (!inet_aton(argv[4]->arg, &nbr_addr)) {
+		vty_out(vty, "Unable to parse %s",
+			argv[4]->arg);
+		return CMD_WARNING;
+	}
 
 	/* Check if eigrp process is enabled */
 	eigrp = eigrp_lookup();
@@ -1370,7 +1374,11 @@ DEFUN (clear_ip_eigrp_neighbors_IP_soft,
 	struct eigrp_neighbor *nbr;
 	struct in_addr nbr_addr;
 
-	inet_aton(argv[4]->arg, &nbr_addr);
+	if (!inet_aton(argv[4]->arg, &nbr_addr)) {
+		vty_out(vty, "Unable to parse: %s",
+			argv[4]->arg);
+		return CMD_WARNING;
+	}
 
 	/* Check if eigrp process is enabled */
 	eigrp = eigrp_lookup();
