@@ -42,9 +42,9 @@ DEFINE_KOOH(frr_fini, (), ())
 
 bool quagga_compat_mode = false;
 
-char frr_sysconfdir[256] = FRR_CONFDIR;
-char frr_vtydir[] = DAEMON_VTY_DIR;
-char frr_moduledir[] = MODULE_PATH;
+const char frr_sysconfdir[] = FRR_CONFDIR;
+const char frr_vtydir[] = DAEMON_VTY_DIR;
+const char frr_moduledir[] = MODULE_PATH;
 
 char compat_indicator[MAXPATHLEN];
 
@@ -464,15 +464,12 @@ static int frr_opt(int opt)
 		di->privs->group = optarg;
 		break;
 	case 'q':
+		/* touch file indicating we're in quagga compat mode */
 		{}
 		int f = open(compat_indicator, O_RDONLY | O_CREAT,
 			     S_IRUSR | S_IWUSR);
 		close(f);
 		quagga_compat_mode = true;
-		snprintf(config_default_int, sizeof(config_default_int),
-			 "%s/%s", QUAGGA_CONFDIR, QUAGGA_INTCONF);
-		snprintf(frr_sysconfdir, sizeof(config_default), "%s",
-			 QUAGGA_CONFDIR);
 		break;
 	default:
 		return 1;
@@ -564,8 +561,14 @@ struct thread_master *frr_init(void)
 		snprintf(p_pathspace, sizeof(p_pathspace), "/%s",
 			 di->pathspace);
 
+	const char *confdir =
+		quagga_compat_mode ? QUAGGA_CONFDIR : frr_sysconfdir;
+
 	snprintf(config_default, sizeof(config_default), "%s%s/%s%s.conf",
-		 frr_sysconfdir, p_pathspace, di->name, p_instance);
+		 confdir, p_pathspace, di->name, p_instance);
+	snprintf(config_default_int, sizeof(config_default_int), "%s%s/%s",
+		 confdir, p_pathspace,
+		 quagga_compat_mode ? QUAGGA_INTCONF : FRR_INTCONF);
 	snprintf(pidfile_default, sizeof(pidfile_default), "%s%s/%s%s.pid",
 		 frr_vtydir, p_pathspace, di->name, p_instance);
 
