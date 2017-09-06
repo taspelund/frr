@@ -530,8 +530,7 @@ static int pim_mroute_msg_wrvifwhole(int fd, struct interface *ifp,
 			return -2;
 		}
 		PIM_UPSTREAM_FLAG_SET_SRC_STREAM(up->flags);
-		pim_upstream_keep_alive_timer_start(
-			up, pim_ifp->pim->keep_alive_time);
+		pim_upstream_keep_alive_timer_start(up, pim_ifp->pim->keep_alive_time);
 		up->channel_oil = oil;
 		up->channel_oil->cc.pktcnt++;
 		pim_register_join(up);

@@ -219,7 +219,6 @@ int pim_global_config_write_worker(struct pim_instance *pim, struct vty *vty)
 	if (pim->ssmpingd_list) {
 		struct listnode *node;
 		struct ssmpingd_sock *ss;
-		vty_out(vty, "!\n");
 		++writes;
 		for (ALL_LIST_ELEMENTS_RO(pim->ssmpingd_list, node, ss)) {
 			char source_str[INET_ADDRSTRLEN];
@@ -256,10 +255,10 @@ int pim_interface_config_write(struct vty *vty)
 
 			/* IF name */
 			if (vrf->vrf_id == VRF_DEFAULT)
-				vty_out(vty, "interface %s\n", ifp->name);
+				vty_frame(vty, "interface %s\n", ifp->name);
 			else
-				vty_out(vty, "interface %s vrf %s\n", ifp->name,
-					vrf->name);
+				vty_frame(vty, "interface %s vrf %s\n",
+					  ifp->name, vrf->name);
 			++writes;
 
 			if (ifp->info) {
@@ -362,10 +361,9 @@ int pim_interface_config_write(struct vty *vty)
 
 				writes +=
 					pim_static_write_mroute(pim, vty, ifp);
-				/* PIM BFD write */
 				pim_bfd_write_config(vty, ifp);
 			}
-			vty_out(vty, "!\n");
+			vty_endframe(vty, "!\n");
 			++writes;
 		}
 	}

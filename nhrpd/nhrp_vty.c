@@ -74,7 +74,7 @@ static int nhrp_vty_return(struct vty *vty, int ret)
 	if (ret == NHRP_OK)
 		return CMD_SUCCESS;
 
-	if (ret > 0 && ret <= (int)ZEBRA_NUM_OF(errmsgs))
+	if (ret > 0 && ret <= NHRP_ERR_MAX)
 		if (errmsgs[ret])
 			str = errmsgs[ret];
 
@@ -110,11 +110,11 @@ static int toggle_flag(
 
 #ifndef NO_DEBUG
 
-DEFUN(show_debugging_nhrp, show_debugging_nhrp_cmd,
-	"show debugging nhrp",
-	SHOW_STR
-	"Debugging information\n"
-	"NHRP configuration\n")
+DEFUN_NOSH(show_debugging_nhrp, show_debugging_nhrp_cmd,
+	   "show debugging [nhrp]",
+	   SHOW_STR
+	   "Debugging information\n"
+	   "NHRP configuration\n")
 {
 	int i;
 
@@ -854,7 +854,7 @@ static int interface_config_write(struct vty *vty)
 	int i;
 
 	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(VRF_DEFAULT), node, ifp)) {
-		vty_out (vty, "interface %s\n", ifp->name);
+		vty_frame(vty, "interface %s\n", ifp->name);
 		if (ifp->desc)
 			vty_out (vty, " description %s\n", ifp->desc);
 
@@ -913,7 +913,7 @@ static int interface_config_write(struct vty *vty)
 			}
 		}
 
-		vty_out (vty, "!\n");
+		vty_endframe(vty, "!\n");
 	}
 
 	return 0;

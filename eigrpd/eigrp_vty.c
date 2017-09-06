@@ -93,7 +93,7 @@ static int config_write_interfaces(struct vty *vty, struct eigrp *eigrp)
 	struct listnode *node;
 
 	for (ALL_LIST_ELEMENTS_RO(eigrp->eiflist, node, ei)) {
-		vty_out(vty, "interface %s\n", ei->ifp->name);
+		vty_frame(vty, "interface %s\n", ei->ifp->name);
 
 		if ((IF_DEF_PARAMS(ei->ifp)->auth_type)
 		    == EIGRP_AUTH_TYPE_MD5) {
@@ -128,7 +128,7 @@ static int config_write_interfaces(struct vty *vty, struct eigrp *eigrp)
 		}
 
 		/*Separate this EIGRP interface configuration from the others*/
-		vty_out(vty, "!\n");
+		vty_endframe(vty, "!\n");
 	}
 
 	return 0;
@@ -140,7 +140,7 @@ static int eigrp_write_interface(struct vty *vty)
 	struct interface *ifp;
 
 	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(VRF_DEFAULT), node, ifp)) {
-		vty_out(vty, "interface %s\n", ifp->name);
+		vty_frame(vty, "interface %s\n", ifp->name);
 
 		if (ifp->desc)
 			vty_out(vty, " description %s\n", ifp->desc);
@@ -157,7 +157,7 @@ static int eigrp_write_interface(struct vty *vty)
 			vty_out(vty, " ip hold-time eigrp %u\n",
 				IF_DEF_PARAMS(ifp)->v_wait);
 
-		vty_out(vty, "!\n");
+		vty_endframe(vty, "!\n");
 	}
 
 	return 0;
@@ -237,6 +237,11 @@ DEFUN (no_router_eigrp,
 	struct eigrp *eigrp;
 
 	eigrp = eigrp_lookup();
+	if (eigrp == NULL) {
+		vty_out(vty, " EIGRP Routing Process not enabled\n");
+		return CMD_SUCCESS;
+	}
+
 	if (eigrp->AS != atoi(argv[3]->arg)) {
 		vty_out(vty, "%% Attempting to deconfigure non-existent AS\n");
 		return CMD_WARNING_CONFIG_FAILED;
@@ -386,10 +391,10 @@ DEFUN (eigrp_network,
        "EIGRP network prefix\n")
 {
 	VTY_DECLVAR_CONTEXT(eigrp, eigrp);
-	struct prefix_ipv4 p;
+	struct prefix p;
 	int ret;
 
-	str2prefix_ipv4(argv[1]->arg, &p);
+	str2prefix(argv[1]->arg, &p);
 
 	ret = eigrp_network_set(eigrp, &p);
 
@@ -409,10 +414,10 @@ DEFUN (no_eigrp_network,
        "EIGRP network prefix\n")
 {
 	VTY_DECLVAR_CONTEXT(eigrp, eigrp);
-	struct prefix_ipv4 p;
+	struct prefix p;
 	int ret;
 
-	str2prefix_ipv4(argv[2]->arg, &p);
+	str2prefix(argv[2]->arg, &p);
 
 	ret = eigrp_network_unset(eigrp, &p);
 
@@ -1000,9 +1005,11 @@ DEFUN (eigrp_redistribute_source_metric,
 
 	/* Get distribute source. */
 	argv_find(argv, argc, "redistribute", &idx);
-	source = proto_redistnum(AFI_IP, argv[idx + 1]->arg);
-	if (source < 0)
+	source = proto_redistnum(AFI_IP, argv[idx + 1]->text);
+	if (source < 0) {
+		vty_out(vty, "%% Invalid route type\n");
 		return CMD_WARNING_CONFIG_FAILED;
+	}
 
 	/* Get metrics values */
 
@@ -1029,9 +1036,11 @@ DEFUN (no_eigrp_redistribute_source_metric,
 
 	/* Get distribute source. */
 	argv_find(argv, argc, "redistribute", &idx);
-	source = proto_redistnum(AFI_IP, argv[idx + 1]->arg);
-	if (source < 0)
+	source = proto_redistnum(AFI_IP, argv[idx + 1]->text);
+	if (source < 0) {
+		vty_out(vty, "%% Invalid route type\n");
 		return CMD_WARNING_CONFIG_FAILED;
+	}
 
 	/* Get metrics values */
 

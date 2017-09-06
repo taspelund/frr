@@ -250,6 +250,13 @@ static int vtysh_client_execute(struct vtysh_client *head_client,
 
 static void vtysh_client_config(struct vtysh_client *head_client, char *line)
 {
+	/* watchfrr currently doesn't load any config, and has some hardcoded
+	 * settings that show up in "show run".  skip it here (for now at
+	 * least) so we don't get that mangled up in config-write.
+	 */
+	if (head_client->flag == VTYSH_WATCHFRR)
+		return;
+
 	vtysh_client_run_all(head_client, line, 1, NULL,
 			     vtysh_config_parse_line, NULL);
 }
@@ -745,6 +752,7 @@ int vtysh_config_from_file(struct vty *vty, FILE *fp)
 							lineno, cmd_stat,
 							vtysh_client[i].name,
 							vty->buf);
+						retcode = cmd_stat;
 						break;
 					}
 				}
@@ -921,6 +929,10 @@ static struct cmd_node isis_node = {
 
 static struct cmd_node interface_node = {
 	INTERFACE_NODE, "%s(config-if)# ",
+};
+
+static struct cmd_node pw_node = {
+	PW_NODE, "%s(config-pw)# ",
 };
 
 static struct cmd_node ns_node = {
@@ -1418,6 +1430,7 @@ static int vtysh_exit(struct vty *vty)
 		vty->node = ENABLE_NODE;
 		break;
 	case INTERFACE_NODE:
+	case PW_NODE:
 	case NS_NODE:
 	case VRF_NODE:
 	case ZEBRA_NODE:
@@ -1671,6 +1684,15 @@ DEFUNSH(VTYSH_INTERFACE, vtysh_interface, vtysh_interface_cmd,
 	return CMD_SUCCESS;
 }
 
+DEFUNSH(VTYSH_ZEBRA, vtysh_pseudowire, vtysh_pseudowire_cmd,
+	"pseudowire IFNAME",
+	"Static pseudowire configuration\n"
+	"Pseudowire name\n")
+{
+	vty->node = PW_NODE;
+	return CMD_SUCCESS;
+}
+
 /* TODO Implement "no interface command in isisd. */
 DEFSH(VTYSH_ZEBRA | VTYSH_RIPD | VTYSH_RIPNGD | VTYSH_OSPFD | VTYSH_OSPF6D
 	      | VTYSH_EIGRPD,
@@ -1893,6 +1915,28 @@ static int show_per_daemon(const char *line, const char *headline)
 	return ret;
 }
 
+DEFUN (vtysh_show_debugging,
+       vtysh_show_debugging_cmd,
+       "show debugging",
+       SHOW_STR
+       DEBUG_STR)
+{
+	return show_per_daemon("do show debugging\n",
+			       "Debugging Information for %s:\n");
+}
+
+DEFUN (vtysh_show_debugging_hashtable,
+       vtysh_show_debugging_hashtable_cmd,
+       "show debugging hashtable [statistics]",
+       SHOW_STR
+       DEBUG_STR
+       "Statistics about hash tables\n"
+       "Statistics about hash tables\n")
+{
+	return show_per_daemon("do show debugging hashtable\n",
+			       "Hashtable statistics for %s:\n");
+}
+
 /* Memory */
 DEFUN (vtysh_show_memory,
        vtysh_show_memory_cmd,
@@ -1900,7 +1944,8 @@ DEFUN (vtysh_show_memory,
        SHOW_STR
        "Memory statistics\n")
 {
-	return show_per_daemon("show memory\n", "Memory statistics for %s:\n");
+	return show_per_daemon("show memory\n",
+			       "Memory statistics for %s:\n");
 }
 
 DEFUN (vtysh_show_modules,
@@ -1920,20 +1965,8 @@ DEFUN (vtysh_show_logging,
        SHOW_STR
        "Show current logging configuration\n")
 {
-	unsigned int i;
-	int ret = CMD_SUCCESS;
-	char line[] = "do show logging\n";
-
-	for (i = 0; i < array_size(vtysh_client); i++)
-		if (vtysh_client[i].fd >= 0) {
-			fprintf(stdout, "Logging configuration for %s:\n",
-				vtysh_client[i].name);
-			ret = vtysh_client_execute(&vtysh_client[i], line,
-						   stdout);
-			fprintf(stdout, "\n");
-		}
-
-	return ret;
+	return show_per_daemon("do show logging\n",
+			       "Logging configuration for %s:\n");
 }
 
 DEFUNSH(VTYSH_ALL, vtysh_log_stdout, vtysh_log_stdout_cmd, "log stdout",
@@ -2262,12 +2295,12 @@ int vtysh_write_config_integrated(void)
 
 	fprintf(stdout, "Building Configuration...\n");
 
-	backup_config_file(frr_conf);
-	fp = fopen(frr_conf, "w");
+	backup_config_file(frr_config);
+	fp = fopen(frr_config, "w");
 	if (fp == NULL) {
 		fprintf(stdout,
 			"%% Error: failed to open configuration file %s: %s\n",
-			frr_conf, safe_strerror(errno));
+			frr_config, safe_strerror(errno));
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 	fd = fileno(fp);
@@ -2280,7 +2313,7 @@ int vtysh_write_config_integrated(void)
 
 	if (fchmod(fd, CONFIGFILE_MASK) != 0) {
 		printf("%% Warning: can't chmod configuration file %s: %s\n",
-		       frr_conf, safe_strerror(errno));
+		       frr_config, safe_strerror(errno));
 		err++;
 	}
 
@@ -2312,18 +2345,18 @@ int vtysh_write_config_integrated(void)
 		if ((uid != (uid_t)-1 || gid != (gid_t)-1)
 		    && fchown(fd, uid, gid)) {
 			printf("%% Warning: can't chown configuration file %s: %s\n",
-			       frr_conf, safe_strerror(errno));
+			       frr_config, safe_strerror(errno));
 			err++;
 		}
 	} else {
-		printf("%% Warning: stat() failed on %s: %s\n", frr_conf,
+		printf("%% Warning: stat() failed on %s: %s\n", frr_config,
 		       safe_strerror(errno));
 		err++;
 	}
 
 	fclose(fp);
 
-	printf("Integrated configuration saved to %s\n", frr_conf);
+	printf("Integrated configuration saved to %s\n", frr_config);
 	if (err)
 		return CMD_WARNING;
 
@@ -2337,7 +2370,7 @@ static bool want_config_integrated(void)
 
 	switch (vtysh_write_integrated) {
 	case WRITE_INTEGRATED_UNSPECIFIED:
-		if (stat(frr_conf, &s) && errno == ENOENT)
+		if (stat(frr_config, &s) && errno == ENOENT)
 			return false;
 		return true;
 	case WRITE_INTEGRATED_NO:
@@ -2465,7 +2498,7 @@ DEFUN (vtysh_show_daemons,
 
 /* Execute command in child process. */
 static void execute_command(const char *command, int argc,
-			    struct cmd_token *arg1, const char *arg2)
+			    const char *arg1, const char *arg2)
 {
 	pid_t pid;
 	int status;
@@ -2510,7 +2543,10 @@ DEFUN (vtysh_ping,
        "Send echo messages\n"
        "Ping destination address or hostname\n")
 {
-	execute_command("ping", 1, argv[0], NULL);
+	int idx = 1;
+
+	argv_find(argv, argc, "WORD", &idx);
+	execute_command("ping", 1, argv[idx]->arg, NULL);
 	return CMD_SUCCESS;
 }
 
@@ -2525,7 +2561,10 @@ DEFUN (vtysh_traceroute,
        "Trace route to destination\n"
        "Trace route to destination address or hostname\n")
 {
-	execute_command("traceroute", 1, argv[0], NULL);
+	int idx = 1;
+
+	argv_find(argv, argc, "WORD", &idx);
+	execute_command("traceroute", 1, argv[idx]->arg, NULL);
 	return CMD_SUCCESS;
 }
 
@@ -2541,7 +2580,7 @@ DEFUN (vtysh_ping6,
        "IPv6 echo\n"
        "Ping destination address or hostname\n")
 {
-	execute_command("ping6", 1, argv[0], NULL);
+	execute_command("ping6", 1, argv[2]->arg, NULL);
 	return CMD_SUCCESS;
 }
 
@@ -2552,7 +2591,7 @@ DEFUN (vtysh_traceroute6,
        "IPv6 trace\n"
        "Trace route to destination address or hostname\n")
 {
-	execute_command("traceroute6", 1, argv[0], NULL);
+	execute_command("traceroute6", 1, argv[2]->arg, NULL);
 	return CMD_SUCCESS;
 }
 
@@ -2563,7 +2602,7 @@ DEFUN (vtysh_telnet,
        "Open a telnet connection\n"
        "IP address or hostname of a remote system\n")
 {
-	execute_command("telnet", 1, argv[0], NULL);
+	execute_command("telnet", 1, argv[1]->arg, NULL);
 	return CMD_SUCCESS;
 }
 
@@ -2574,7 +2613,7 @@ DEFUN (vtysh_telnet_port,
        "IP address or hostname of a remote system\n"
        "TCP Port number\n")
 {
-	execute_command("telnet", 2, argv[0], argv[1]);
+	execute_command("telnet", 2, argv[1]->arg, argv[2]->arg);
 	return CMD_SUCCESS;
 }
 
@@ -2584,7 +2623,7 @@ DEFUN (vtysh_ssh,
        "Open an ssh connection\n"
        "[user@]host\n")
 {
-	execute_command("ssh", 1, argv[0], NULL);
+	execute_command("ssh", 1, argv[1]->arg, NULL);
 	return CMD_SUCCESS;
 }
 
@@ -2673,7 +2712,7 @@ static int vtysh_connect(struct vtysh_client *vclient)
 
 	if (!vclient->path[0])
 		snprintf(vclient->path, sizeof(vclient->path), "%s/%s.vty",
-			 vty_sock_path, vclient->name);
+			 vtydir, vclient->name);
 	path = vclient->path;
 
 	/* Stat socket to see if we have permission to access it. */
@@ -2767,7 +2806,7 @@ static void vtysh_update_all_insances(struct vtysh_client *head_client)
 		return;
 
 	/* ls vty_sock_dir and look for all files ending in .vty */
-	dir = opendir(vty_sock_path);
+	dir = opendir(vtydir);
 	if (dir) {
 		while ((file = readdir(dir)) != NULL) {
 			if (begins_with(file->d_name, "ospfd-")
@@ -2775,7 +2814,7 @@ static void vtysh_update_all_insances(struct vtysh_client *head_client)
 				if (n == MAXIMUM_INSTANCES) {
 					fprintf(stderr,
 						"Parsing %s, client limit(%d) reached!\n",
-						vty_sock_path, n);
+						vtydir, n);
 					break;
 				}
 				client = (struct vtysh_client *)malloc(
@@ -2784,7 +2823,7 @@ static void vtysh_update_all_insances(struct vtysh_client *head_client)
 				client->name = "ospfd";
 				client->flag = VTYSH_OSPFD;
 				snprintf(client->path, sizeof(client->path),
-					 "%s/%s", vty_sock_path, file->d_name);
+					 "%s/%s", vtydir, file->d_name);
 				client->next = NULL;
 				vtysh_client_sorted_insert(head_client, client);
 				n++;
@@ -2852,21 +2891,9 @@ void vtysh_readline_init(void)
 
 char *vtysh_prompt(void)
 {
-	static struct utsname names;
 	static char buf[100];
-	const char *hostname;
-	extern struct host host;
 
-	hostname = host.name;
-
-	if (!hostname) {
-		if (!names.nodename[0])
-			uname(&names);
-		hostname = names.nodename;
-	}
-
-	snprintf(buf, sizeof buf, cmd_prompt(vty->node), hostname);
-
+	snprintf(buf, sizeof buf, cmd_prompt(vty->node), cmd_hostname_get());
 	return buf;
 }
 
@@ -2915,6 +2942,7 @@ void vtysh_init_vty(void)
 	install_node(&bgp_node, NULL);
 	install_node(&rip_node, NULL);
 	install_node(&interface_node, NULL);
+	install_node(&pw_node, NULL);
 	install_node(&link_params_node, NULL);
 	install_node(&ns_node, NULL);
 	install_node(&vrf_node, NULL);
@@ -3087,6 +3115,10 @@ void vtysh_init_vty(void)
 	install_element(LINK_PARAMS_NODE, &vtysh_exit_interface_cmd);
 	install_element(INTERFACE_NODE, &vtysh_quit_interface_cmd);
 
+	install_element(PW_NODE, &vtysh_end_all_cmd);
+	install_element(PW_NODE, &vtysh_exit_interface_cmd);
+	install_element(PW_NODE, &vtysh_quit_interface_cmd);
+
 	install_element(NS_NODE, &vtysh_end_all_cmd);
 
 	install_element(CONFIG_NODE, &vtysh_ns_cmd);
@@ -3162,6 +3194,7 @@ void vtysh_init_vty(void)
 	install_element(CONFIG_NODE, &vtysh_interface_cmd);
 	install_element(CONFIG_NODE, &vtysh_no_interface_cmd);
 	install_element(CONFIG_NODE, &vtysh_no_interface_vrf_cmd);
+	install_element(CONFIG_NODE, &vtysh_pseudowire_cmd);
 	install_element(INTERFACE_NODE, &vtysh_link_params_cmd);
 	install_element(ENABLE_NODE, &vtysh_show_running_config_cmd);
 	install_element(ENABLE_NODE, &vtysh_copy_running_config_cmd);
@@ -3199,6 +3232,8 @@ void vtysh_init_vty(void)
 	install_element(ENABLE_NODE, &vtysh_start_zsh_cmd);
 #endif
 
+	install_element(VIEW_NODE, &vtysh_show_debugging_cmd);
+	install_element(VIEW_NODE, &vtysh_show_debugging_hashtable_cmd);
 	install_element(VIEW_NODE, &vtysh_show_memory_cmd);
 	install_element(VIEW_NODE, &vtysh_show_modules_cmd);
 

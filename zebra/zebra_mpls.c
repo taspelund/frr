@@ -1321,9 +1321,9 @@ static void nhlfe_print(zebra_nhlfe_t *nhlfe, struct vty *vty)
 	default:
 		break;
 	}
-	vty_out(vty, "%s",
-		CHECK_FLAG(nhlfe->flags, NHLFE_FLAG_INSTALLED) ? " (installed)"
-							       : "");
+	vty_out(vty, "%s", CHECK_FLAG(nhlfe->flags, NHLFE_FLAG_INSTALLED)
+				   ? " (installed)"
+				   : "");
 	vty_out(vty, "\n");
 }
 
@@ -1671,27 +1671,20 @@ int mpls_str2label(const char *label_str, u_int8_t *num_labels,
 char *mpls_label2str(u_int8_t num_labels, mpls_label_t *labels, char *buf,
 		     int len, int pretty)
 {
-	char *buf_ptr = buf;
+	char label_buf[BUFSIZ];
+	int i;
+
 	buf[0] = '\0';
-
-	if (pretty) {
-		if (num_labels == 1) {
-			label2str(labels[0], buf, len);
-		} else if (num_labels == 2) {
-			label2str(labels[0], buf, len);
-			buf_ptr += strlen(buf);
-
-			snprintf(buf_ptr, len, "/");
-			buf_ptr++;
-
-			label2str(labels[1], buf_ptr, len);
-		}
-	} else {
-		if (num_labels == 1)
-			snprintf(buf, len, "%u", labels[0]);
-		else if (num_labels == 2)
-			snprintf(buf, len, "%u/%u", labels[0], labels[1]);
+	for (i = 0; i < num_labels; i++) {
+		if (i != 0)
+			strlcat(buf, "/", len);
+		if (pretty)
+			label2str(labels[i], label_buf, sizeof(label_buf));
+		else
+			snprintf(label_buf, sizeof(label_buf), "%u", labels[i]);
+		strlcat(buf, label_buf, len);
 	}
+
 	return buf;
 }
 
@@ -2222,7 +2215,7 @@ found:
 		return 0;
 
 	SET_FLAG(re->status, ROUTE_ENTRY_CHANGED);
-	SET_FLAG(re->status, ROUTE_ENTRY_NEXTHOPS_CHANGED);
+	SET_FLAG(re->status, ROUTE_ENTRY_LABELS_CHANGED);
 	rib_queue_add(rn);
 
 	return 0;
@@ -2405,7 +2398,7 @@ void mpls_ldp_ftn_uninstall_all(struct zebra_vrf *zvrf, int afi)
 				nexthop_del_labels(nexthop);
 				SET_FLAG(re->status, ROUTE_ENTRY_CHANGED);
 				SET_FLAG(re->status,
-					 ROUTE_ENTRY_NEXTHOPS_CHANGED);
+					 ROUTE_ENTRY_LABELS_CHANGED);
 				update = 1;
 			}
 

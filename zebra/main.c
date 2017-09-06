@@ -125,9 +125,7 @@ static void sigint(void)
 
 	zlog_notice("Terminating on signal");
 
-#ifdef HAVE_IRDP
-	irdp_finish();
-#endif
+	frr_early_fini();
 
 	zebra_ptm_finish();
 	list_delete_all_node(zebrad.client_list);
@@ -147,17 +145,14 @@ static void sigint(void)
 	access_list_reset();
 	prefix_list_reset();
 	route_map_finish();
-	cmd_terminate();
-	vty_terminate();
-	zprivs_terminate(&zserv_privs);
+
 	list_delete(zebrad.client_list);
 	work_queue_free(zebrad.ribq);
 	if (zebrad.lsp_process_q)
 		work_queue_free(zebrad.lsp_process_q);
 	meta_queue_free(zebrad.mq);
-	thread_master_free(zebrad.master);
-	closezlog();
 
+	frr_fini();
 	exit(0);
 }
 
@@ -204,6 +199,8 @@ int main(int argc, char **argv)
 	char *zserv_path = NULL;
 	/* Socket to external label manager */
 	char *lblmgr_path = NULL;
+	struct sockaddr_storage dummy;
+	socklen_t dummylen;
 
 	frr_preinit(&zebra_di, argc, argv);
 
@@ -256,6 +253,12 @@ int main(int argc, char **argv)
 			break;
 		case 'z':
 			zserv_path = optarg;
+			if (!frr_zclient_addr(&dummy, &dummylen, optarg)) {
+				fprintf(stderr,
+					"Invalid zserv socket path: %s\n",
+					optarg);
+				exit(1);
+			}
 			break;
 		case 'l':
 			lblmgr_path = optarg;
@@ -289,9 +292,6 @@ int main(int argc, char **argv)
 #if defined(HAVE_RTADV)
 	rtadv_cmd_init();
 #endif
-#ifdef HAVE_IRDP
-	irdp_init();
-#endif
 /* PTM socket */
 #ifdef ZEBRA_PTM_SUPPORT
 	zebra_ptm_init();
@@ -299,6 +299,7 @@ int main(int argc, char **argv)
 
 	zebra_mpls_init();
 	zebra_mpls_vty_init();
+	zebra_pw_vty_init();
 
 	/* For debug purpose. */
 	/* SET_FLAG (zebra_debug_event, ZEBRA_DEBUG_EVENT); */

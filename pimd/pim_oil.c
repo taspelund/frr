@@ -101,7 +101,6 @@ static unsigned int pim_oil_hash_key(void *arg)
 
 void pim_oil_init(struct pim_instance *pim)
 {
-
 	char hash_name[64];
 
 	snprintf(hash_name, 64, "PIM %s Oil Hash", pim->vrf->name);

@@ -1620,12 +1620,12 @@ DEFUN (no_debug_bgp,
 	return CMD_SUCCESS;
 }
 
-DEFUN (show_debugging_bgp,
-       show_debugging_bgp_cmd,
-       "show debugging bgp",
-       SHOW_STR
-       DEBUG_STR
-       BGP_STR)
+DEFUN_NOSH (show_debugging_bgp,
+	    show_debugging_bgp_cmd,
+	    "show debugging [bgp]",
+	    SHOW_STR
+	    DEBUG_STR
+	    BGP_STR)
 {
 	vty_out(vty, "BGP debugging status:\n");
 

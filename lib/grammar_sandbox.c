@@ -404,7 +404,8 @@ DEFUN (grammar_findambig,
 			nodegraph = cnode->cmdgraph;
 			if (!nodegraph)
 				continue;
-			vty_out(vty, "scanning node %d\n", scannode - 1);
+			vty_out(vty, "scanning node %d (%s)\n",
+				scannode - 1, node_names[scannode - 1]);
 		}
 
 		commands = cmd_graph_permutations(nodegraph);
@@ -498,6 +499,8 @@ struct message tokennames[] = {item(WORD_TKN),	// words
 			       item(IPV4_PREFIX_TKN), // IPV4 network prefixes
 			       item(IPV6_TKN),	// IPV6 prefixes
 			       item(IPV6_PREFIX_TKN), // IPV6 network prefixes
+			       item(MAC_TKN),	 // MAC address
+			       item(MAC_PREFIX_TKN),  // MAC address w/ mask
 
 			       /* plumbing types */
 			       item(FORK_TKN),

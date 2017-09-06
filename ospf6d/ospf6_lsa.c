@@ -467,7 +467,7 @@ void ospf6_lsa_show(struct vty *vty, struct ospf6_lsa *lsa)
 	char adv_router[64], id[64];
 	struct ospf6_lsa_handler *handler;
 	struct timeval now, res;
-	char duration[16];
+	char duration[64];
 
 	assert(lsa && lsa->header);
 
@@ -508,8 +508,9 @@ struct ospf6_lsa *ospf6_lsa_create(struct ospf6_lsa_header *header)
 	lsa_size = ntohs(header->length); /* XXX vulnerable */
 
 	/* allocate memory for this LSA */
-	new_header = (struct ospf6_lsa_header *)XMALLOC(MTYPE_OSPF6_LSA_HEADER,
-							lsa_size);
+	new_header =
+		(struct ospf6_lsa_header *)XMALLOC(MTYPE_OSPF6_LSA_HEADER,
+						   lsa_size);
 
 	/* copy LSA from original header */
 	memcpy(new_header, header, lsa_size);

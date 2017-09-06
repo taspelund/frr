@@ -3545,9 +3545,9 @@ DEFUN (show_ip_rip_status,
 	vty_out(vty, "  Default version control: send version %s,",
 		lookup_msg(ri_version_msg, rip->version_send, NULL));
 	if (rip->version_recv == RI_RIP_VERSION_1_AND_2)
-		vty_out(vty, " receive any version\n");
+		vty_out(vty, " receive any version \n");
 	else
-		vty_out(vty, " receive version %s\n",
+		vty_out(vty, " receive version %s \n",
 			lookup_msg(ri_version_msg, rip->version_recv, NULL));
 
 	vty_out(vty, "    Interface        Send  Recv   Key-chain\n");

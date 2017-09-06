@@ -48,14 +48,14 @@
 #include "zebra/rt_netlink.h"
 #include "zebra/interface.h"
 #include "zebra/zebra_vxlan.h"
+#include "zebra/zebra_static.h"
 
 #define ZEBRA_PTM_SUPPORT
 
-#if defined(HAVE_RTADV)
-/* Order is intentional.  Matches RFC4191.  This array is also used for
-   command matching, so only modify with care. */
-const char *rtadv_pref_strs[] = {"medium", "high", "INVALID", "low", 0};
-#endif /* HAVE_RTADV */
+DEFINE_HOOK(zebra_if_extra_info, (struct vty *vty, struct interface *ifp),
+				 (vty, ifp))
+DEFINE_HOOK(zebra_if_config_wr, (struct vty *vty, struct interface *ifp),
+				(vty, ifp))
 
 static void if_down_del_nbr_connected(struct interface *ifp);
 
@@ -119,8 +119,6 @@ static int if_zebra_new_hook(struct interface *ifp)
 		route_table_init_with_delegate(&zebra_if_table_delegate);
 
 	ifp->info = zebra_if;
-
-	zebra_vrf_static_route_interface_fixup(ifp);
 	return 0;
 }
 
@@ -244,7 +242,7 @@ int if_subnet_add(struct interface *ifp, struct connected *ifc)
 	/* Get address derived subnet node and associated address list, while
 	   marking
 	   address secondary attribute appropriately. */
-	cp = *ifc->address;
+	cp = *CONNECTED_PREFIX(ifc);
 	apply_mask(&cp);
 	rn = route_node_get(zebra_if->ipv4_subnets, &cp);
 
@@ -269,12 +267,16 @@ int if_subnet_delete(struct interface *ifp, struct connected *ifc)
 	struct route_node *rn;
 	struct zebra_if *zebra_if;
 	struct list *addr_list;
+	struct prefix cp;
 
 	assert(ifp && ifp->info && ifc);
 	zebra_if = ifp->info;
 
+	cp = *CONNECTED_PREFIX(ifc);
+	apply_mask(&cp);
+
 	/* Get address derived subnet node. */
-	rn = route_node_lookup(zebra_if->ipv4_subnets, ifc->address);
+	rn = route_node_lookup(zebra_if->ipv4_subnets, &cp);
 	if (!(rn && rn->info)) {
 		zlog_warn(
 			"Trying to remove an address from an unknown subnet."
@@ -510,6 +512,8 @@ void if_add_update(struct interface *ifp)
 			zlog_debug(
 				"interface %s vrf %u index %d becomes active.",
 				ifp->name, ifp->vrf_id, ifp->ifindex);
+
+		static_ifindex_update(ifp, true);
 	} else {
 		if (IS_ZEBRA_DEBUG_KERNEL)
 			zlog_debug("interface %s vrf %u index %d is added.",
@@ -565,7 +569,7 @@ static void if_uninstall_connected(struct interface *ifp)
 static void if_delete_connected(struct interface *ifp)
 {
 	struct connected *ifc;
-	struct prefix *p;
+	struct prefix cp;
 	struct route_node *rn;
 	struct zebra_if *zebra_if;
 
@@ -578,11 +582,13 @@ static void if_delete_connected(struct interface *ifp)
 		while ((node = (last ? last->next
 				     : listhead(ifp->connected)))) {
 			ifc = listgetdata(node);
-			p = ifc->address;
 
-			if (p->family == AF_INET
+			cp = *CONNECTED_PREFIX(ifc);
+			apply_mask(&cp);
+
+			if (cp.family == AF_INET
 			    && (rn = route_node_lookup(zebra_if->ipv4_subnets,
-						       p))) {
+						       &cp))) {
 				struct listnode *anode;
 				struct listnode *next;
 				struct listnode *first;
@@ -635,7 +641,7 @@ static void if_delete_connected(struct interface *ifp)
 				list_delete(addr_list);
 				rn->info = NULL;
 				route_unlock_node(rn);
-			} else if (p->family == AF_INET6) {
+			} else if (cp.family == AF_INET6) {
 				connected_down_ipv6(ifp, ifc);
 
 				zebra_interface_address_delete_update(ifp, ifc);
@@ -674,6 +680,8 @@ void if_delete_update(struct interface *ifp)
 	if (IS_ZEBRA_DEBUG_KERNEL)
 		zlog_debug("interface %s vrf %u index %d is now inactive.",
 			   ifp->name, ifp->vrf_id, ifp->ifindex);
+
+	static_ifindex_update(ifp, false);
 
 	/* Delete connected routes from the kernel. */
 	if_delete_connected(ifp);
@@ -714,6 +722,8 @@ void if_handle_vrf_change(struct interface *ifp, vrf_id_t vrf_id)
 
 	old_vrf_id = ifp->vrf_id;
 
+	static_ifindex_update(ifp, false);
+
 	/* Uninstall connected routes. */
 	if_uninstall_connected(ifp);
 
@@ -737,6 +747,8 @@ void if_handle_vrf_change(struct interface *ifp, vrf_id_t vrf_id)
 	/* Install connected routes (in new VRF). */
 	if_install_connected(ifp);
 
+	static_ifindex_update(ifp, true);
+
 	/* Due to connected route change, schedule RIB processing for both old
 	 * and new VRF.
 	 */
@@ -745,8 +757,6 @@ void if_handle_vrf_change(struct interface *ifp, vrf_id_t vrf_id)
 			   ifp->vrf_id, ifp->name);
 	rib_update(old_vrf_id, RIB_UPDATE_IF_CHANGE);
 	rib_update(ifp->vrf_id, RIB_UPDATE_IF_CHANGE);
-
-	zebra_vrf_static_route_interface_fixup(ifp);
 }
 
 static void ipv6_ll_address_to_mac(struct in6_addr *address, u_char *mac)
@@ -859,8 +869,6 @@ void if_up(struct interface *ifp)
 			   ifp->vrf_id, ifp->name);
 	rib_update(ifp->vrf_id, RIB_UPDATE_IF_CHANGE);
 
-	zebra_vrf_static_route_interface_fixup(ifp);
-
 	/* Handle interface up for specific types for EVPN. Non-VxLAN interfaces
 	 * are checked to see if (remote) neighbor entries need to be installed
 	 * on them for ARP suppression.
@@ -966,6 +974,8 @@ static void connected_dump_vty(struct vty *vty, struct connected *connected)
 		vty_out(vty,
 			(CONNECTED_PEER(connected) ? " peer " : " broadcast "));
 		prefix_vty_out(vty, connected->destination);
+		if (CONNECTED_PEER(connected))
+			vty_out(vty, "/%d", connected->destination->prefixlen);
 	}
 
 	if (CHECK_FLAG(connected->flags, ZEBRA_IFA_SECONDARY))
@@ -994,74 +1004,6 @@ static void nbr_connected_dump_vty(struct vty *vty,
 
 	vty_out(vty, "\n");
 }
-
-#if defined(HAVE_RTADV)
-/* Dump interface ND information to vty. */
-static void nd_dump_vty(struct vty *vty, struct interface *ifp)
-{
-	struct zebra_if *zif;
-	struct rtadvconf *rtadv;
-	int interval;
-
-	zif = (struct zebra_if *)ifp->info;
-	rtadv = &zif->rtadv;
-
-	if (rtadv->AdvSendAdvertisements) {
-		vty_out(vty,
-			"  ND advertised reachable time is %d milliseconds\n",
-			rtadv->AdvReachableTime);
-		vty_out(vty,
-			"  ND advertised retransmit interval is %d milliseconds\n",
-			rtadv->AdvRetransTimer);
-		vty_out(vty, "  ND router advertisements sent: %d rcvd: %d\n",
-			zif->ra_sent, zif->ra_rcvd);
-		interval = rtadv->MaxRtrAdvInterval;
-		if (interval % 1000)
-			vty_out(vty,
-				"  ND router advertisements are sent every "
-				"%d milliseconds\n",
-				interval);
-		else
-			vty_out(vty,
-				"  ND router advertisements are sent every "
-				"%d seconds\n",
-				interval / 1000);
-		if (rtadv->AdvDefaultLifetime != -1)
-			vty_out(vty,
-				"  ND router advertisements live for %d seconds\n",
-				rtadv->AdvDefaultLifetime);
-		else
-			vty_out(vty,
-				"  ND router advertisements lifetime tracks ra-interval\n");
-		vty_out(vty,
-			"  ND router advertisement default router preference is "
-			"%s\n",
-			rtadv_pref_strs[rtadv->DefaultPreference]);
-		if (rtadv->AdvManagedFlag)
-			vty_out(vty,
-				"  Hosts use DHCP to obtain routable addresses.\n");
-		else
-			vty_out(vty,
-				"  Hosts use stateless autoconfig for addresses.\n");
-		if (rtadv->AdvHomeAgentFlag) {
-			vty_out(vty,
-				"  ND router advertisements with Home Agent flag bit set.\n");
-			if (rtadv->HomeAgentLifetime != -1)
-				vty_out(vty,
-					"  Home Agent lifetime is %u seconds\n",
-					rtadv->HomeAgentLifetime);
-			else
-				vty_out(vty,
-					"  Home Agent lifetime tracks ra-lifetime\n");
-			vty_out(vty, "  Home Agent preference is %u\n",
-				rtadv->HomeAgentPreference);
-		}
-		if (rtadv->AdvIntervalOption)
-			vty_out(vty,
-				"  ND router advertisements with Adv. Interval option.\n");
-	}
-}
-#endif /* HAVE_RTADV */
 
 static const char *zebra_ziftype_2str(zebra_iftype_t zif_type)
 {
@@ -1281,12 +1223,8 @@ static void if_dump_vty(struct vty *vty, struct interface *ifp)
 				inet_ntoa(iflp->rmt_ip), iflp->rmt_as);
 	}
 
-#ifdef RTADV
-	nd_dump_vty(vty, ifp);
-#endif /* RTADV */
-#if defined(HAVE_RTADV)
-	nd_dump_vty(vty, ifp);
-#endif /* HAVE_RTADV */
+	hook_call(zebra_if_extra_info, vty, ifp);
+
 	if (listhead(ifp->nbr_connected))
 		vty_out(vty, "  Neighbor address(s):\n");
 	for (ALL_LIST_ELEMENTS_RO(ifp->nbr_connected, node, nbr_connected))
@@ -2442,38 +2380,56 @@ static int ip_address_install(struct vty *vty, struct interface *ifp,
 			      const char *label)
 {
 	struct zebra_if *if_data;
-	struct prefix_ipv4 cp;
+	struct prefix_ipv4 lp, pp;
 	struct connected *ifc;
 	struct prefix_ipv4 *p;
 	int ret;
 
 	if_data = ifp->info;
 
-	ret = str2prefix_ipv4(addr_str, &cp);
+	ret = str2prefix_ipv4(addr_str, &lp);
 	if (ret <= 0) {
 		vty_out(vty, "%% Malformed address \n");
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	if (ipv4_martian(&cp.prefix)) {
+	if (ipv4_martian(&lp.prefix)) {
 		vty_out(vty, "%% Invalid address\n");
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	ifc = connected_check(ifp, (struct prefix *)&cp);
+	if (peer_str) {
+		if (lp.prefixlen != 32) {
+			vty_out(vty,
+				"%% Local prefix length for P-t-P address must be /32\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
+
+		ret = str2prefix_ipv4(peer_str, &pp);
+		if (ret <= 0) {
+			vty_out(vty, "%% Malformed peer address\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
+	}
+
+	ifc = connected_check_ptp(ifp, &lp, peer_str ? &pp : NULL);
 	if (!ifc) {
 		ifc = connected_new();
 		ifc->ifp = ifp;
 
 		/* Address. */
 		p = prefix_ipv4_new();
-		*p = cp;
+		*p = lp;
 		ifc->address = (struct prefix *)p;
 
-		/* Broadcast. */
-		if (p->prefixlen <= IPV4_MAX_PREFIXLEN - 2) {
+		if (peer_str) {
+			SET_FLAG(ifc->flags, ZEBRA_IFA_PEER);
 			p = prefix_ipv4_new();
-			*p = cp;
+			*p = pp;
+			ifc->destination = (struct prefix *)p;
+		} else if (p->prefixlen <= IPV4_MAX_PREFIXLEN - 2) {
+			p = prefix_ipv4_new();
+			*p = lp;
 			p->prefix.s_addr = ipv4_broadcast_addr(p->prefix.s_addr,
 							       p->prefixlen);
 			ifc->destination = (struct prefix *)p;
@@ -2522,19 +2478,33 @@ static int ip_address_uninstall(struct vty *vty, struct interface *ifp,
 				const char *addr_str, const char *peer_str,
 				const char *label)
 {
-	struct prefix_ipv4 cp;
+	struct prefix_ipv4 lp, pp;
 	struct connected *ifc;
 	int ret;
 
 	/* Convert to prefix structure. */
-	ret = str2prefix_ipv4(addr_str, &cp);
+	ret = str2prefix_ipv4(addr_str, &lp);
 	if (ret <= 0) {
 		vty_out(vty, "%% Malformed address \n");
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
+	if (peer_str) {
+		if (lp.prefixlen != 32) {
+			vty_out(vty,
+				"%% Local prefix length for P-t-P address must be /32\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
+
+		ret = str2prefix_ipv4(peer_str, &pp);
+		if (ret <= 0) {
+			vty_out(vty, "%% Malformed peer address\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
+	}
+
 	/* Check current interface address. */
-	ifc = connected_check(ifp, (struct prefix *)&cp);
+	ifc = connected_check_ptp(ifp, &lp, peer_str ? &pp : NULL);
 	if (!ifc) {
 		vty_out(vty, "%% Can't find address\n");
 		return CMD_WARNING_CONFIG_FAILED;
@@ -2594,6 +2564,32 @@ DEFUN (no_ip_address,
 				    NULL, NULL);
 }
 
+DEFUN (ip_address_peer,
+       ip_address_peer_cmd,
+       "ip address A.B.C.D peer A.B.C.D/M",
+       "Interface Internet Protocol config commands\n"
+       "Set the IP address of an interface\n"
+       "Local IP (e.g. 10.0.0.1) for P-t-P address\n"
+       "Specify P-t-P address\n"
+       "Peer IP address (e.g. 10.0.0.1/8)\n")
+{
+	VTY_DECLVAR_CONTEXT(interface, ifp);
+	return ip_address_install(vty, ifp, argv[2]->arg, argv[4]->arg, NULL);
+}
+
+DEFUN (no_ip_address_peer,
+       no_ip_address_peer_cmd,
+       "no ip address A.B.C.D peer A.B.C.D/M",
+       NO_STR
+       "Interface Internet Protocol config commands\n"
+       "Set the IP address of an interface\n"
+       "Local IP (e.g. 10.0.0.1) for P-t-P address\n"
+       "Specify P-t-P address\n"
+       "Peer IP address (e.g. 10.0.0.1/8)\n")
+{
+	VTY_DECLVAR_CONTEXT(interface, ifp);
+	return ip_address_uninstall(vty, ifp, argv[3]->arg, argv[5]->arg, NULL);
+}
 
 #ifdef HAVE_NETLINK
 DEFUN (ip_address_label,
@@ -2868,7 +2864,7 @@ static int if_config_write(struct vty *vty)
 		vrf = vrf_lookup_by_id(ifp->vrf_id);
 
 		if (ifp->vrf_id == VRF_DEFAULT)
-			vty_out(vty, "interface %s\n", ifp->name);
+			vty_frame(vty, "interface %s\n", ifp->name);
 		else
 			vty_out(vty, "interface %s vrf %s\n", ifp->name,
 				vrf->name);
@@ -2897,7 +2893,16 @@ static int if_config_write(struct vty *vty)
 				p = ifc->address;
 				vty_out(vty, " ip%s address %s",
 					p->family == AF_INET ? "" : "v6",
-					prefix2str(p, buf, sizeof(buf)));
+					inet_ntop(p->family, &p->u.prefix,
+						  buf, sizeof(buf)));
+				if (CONNECTED_PEER (ifc)) {
+					p = ifc->destination;
+					vty_out(vty, " peer %s",
+						inet_ntop(p->family,
+							  &p->u.prefix,
+							  buf, sizeof(buf)));
+				}
+				vty_out (vty, "/%d", p->prefixlen);
 
 				if (ifc->label)
 					vty_out(vty, " label %s", ifc->label);
@@ -2915,17 +2920,11 @@ static int if_config_write(struct vty *vty)
 						: "no ");
 		}
 
-#if defined(HAVE_RTADV)
-		rtadv_config_write(vty, ifp);
-#endif /* HAVE_RTADV */
-
-#ifdef HAVE_IRDP
-		irdp_config_write(vty, ifp);
-#endif /* IRDP */
+		hook_call(zebra_if_config_wr, vty, ifp);
 
 		link_params_config_write(vty, ifp);
 
-		vty_out(vty, "!\n");
+		vty_endframe(vty, "!\n");
 	}
 	return 0;
 }
@@ -2934,8 +2933,8 @@ static int if_config_write(struct vty *vty)
 void zebra_if_init(void)
 {
 	/* Initialize interface and new hook. */
-	if_add_hook(IF_NEW_HOOK, if_zebra_new_hook);
-	if_add_hook(IF_DELETE_HOOK, if_zebra_delete_hook);
+	hook_register_prio(if_add, 0, if_zebra_new_hook);
+	hook_register_prio(if_del, 0, if_zebra_delete_hook);
 
 	/* Install configuration write function. */
 	install_node(&interface_node, if_config_write);
@@ -2959,6 +2958,8 @@ void zebra_if_init(void)
 	install_element(INTERFACE_NODE, &no_bandwidth_if_cmd);
 	install_element(INTERFACE_NODE, &ip_address_cmd);
 	install_element(INTERFACE_NODE, &no_ip_address_cmd);
+	install_element(INTERFACE_NODE, &ip_address_peer_cmd);
+	install_element(INTERFACE_NODE, &no_ip_address_peer_cmd);
 	install_element(INTERFACE_NODE, &ipv6_address_cmd);
 	install_element(INTERFACE_NODE, &no_ipv6_address_cmd);
 #ifdef HAVE_NETLINK

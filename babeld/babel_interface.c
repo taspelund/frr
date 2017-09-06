@@ -1256,8 +1256,8 @@ void
 babel_if_init ()
 {
     /* initialize interface list */
-    if_add_hook (IF_NEW_HOOK,    babel_if_new_hook);
-    if_add_hook (IF_DELETE_HOOK, babel_if_delete_hook);
+    hook_register_prio(if_add, 0, babel_if_new_hook);
+    hook_register_prio(if_del, 0, babel_if_delete_hook);
 
     babel_enable_if = vector_init (1);
 
@@ -1321,7 +1321,7 @@ interface_config_write (struct vty *vty)
     int write = 0;
 
     for (ALL_LIST_ELEMENTS_RO (vrf_iflist(VRF_DEFAULT), node, ifp)) {
-        vty_out (vty, "interface %s\n",ifp->name);
+        vty_frame (vty, "interface %s\n",ifp->name);
         if (ifp->desc)
             vty_out (vty, " description %s\n",ifp->desc);
         babel_interface_nfo *babel_ifp = babel_get_if_nfo (ifp);
@@ -1377,7 +1377,7 @@ interface_config_write (struct vty *vty)
                 write++;
             }
         }
-        vty_out (vty, "!\n");
+        vty_endframe (vty, "!\n");
         write++;
     }
     return write;

@@ -229,7 +229,7 @@ int eigrp_if_drop_allspfrouters(struct eigrp *top, struct prefix *p,
 	return ret;
 }
 
-int eigrp_network_set(struct eigrp *eigrp, struct prefix_ipv4 *p)
+int eigrp_network_set(struct eigrp *eigrp, struct prefix *p)
 {
 	struct route_node *rn;
 	struct interface *ifp;
@@ -242,7 +242,7 @@ int eigrp_network_set(struct eigrp *eigrp, struct prefix_ipv4 *p)
 		return 0;
 	}
 
-	struct prefix_ipv4 *pref = prefix_ipv4_new();
+	struct prefix *pref = prefix_new();
 	PREFIX_COPY_IPV4(pref, p);
 	rn->info = (void *)pref;
 
@@ -253,7 +253,7 @@ int eigrp_network_set(struct eigrp *eigrp, struct prefix_ipv4 *p)
 	/* Get target interface. */
 	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(VRF_DEFAULT), node, ifp)) {
 		zlog_debug("Setting up %s", ifp->name);
-		eigrp_network_run_interface(eigrp, (struct prefix *)p, ifp);
+		eigrp_network_run_interface(eigrp, p, ifp);
 	}
 	return 1;
 }
@@ -334,21 +334,21 @@ void eigrp_if_update(struct interface *ifp)
 	}
 }
 
-int eigrp_network_unset(struct eigrp *eigrp, struct prefix_ipv4 *p)
+int eigrp_network_unset(struct eigrp *eigrp, struct prefix *p)
 {
 	struct route_node *rn;
 	struct listnode *node, *nnode;
 	struct eigrp_interface *ei;
 	struct prefix *pref;
 
-	rn = route_node_lookup(eigrp->networks, (struct prefix *)p);
+	rn = route_node_lookup(eigrp->networks, p);
 	if (rn == NULL)
 		return 0;
 
 	pref = rn->info;
 	route_unlock_node(rn);
 
-	if (!IPV4_ADDR_SAME(&pref->u.prefix4, &p->prefix))
+	if (!IPV4_ADDR_SAME(&pref->u.prefix4, &p->u.prefix4))
 		return 0;
 
 	prefix_ipv4_free(rn->info);
@@ -392,9 +392,9 @@ u_int32_t eigrp_calculate_metrics(struct eigrp *eigrp,
 	// {K1*BW+[(K2*BW)/(256-load)]+(K3*delay)}*{K5/(reliability+K4)}
 
 	if (eigrp->k_values[0])
-		temp_metric += (eigrp->k_values[0] * metric.bandwith);
+		temp_metric += (eigrp->k_values[0] * metric.bandwidth);
 	if (eigrp->k_values[1])
-		temp_metric += ((eigrp->k_values[1] * metric.bandwith)
+		temp_metric += ((eigrp->k_values[1] * metric.bandwidth)
 				/ (256 - metric.load));
 	if (eigrp->k_values[2])
 		temp_metric += (eigrp->k_values[2] * metric.delay);
@@ -425,9 +425,9 @@ u_int32_t eigrp_calculate_total_metrics(struct eigrp *eigrp,
 
 	u_int32_t bw =
 		eigrp_bandwidth_to_scaled(EIGRP_IF_PARAM(entry->ei, bandwidth));
-	entry->total_metric.bandwith = entry->total_metric.bandwith > bw
+	entry->total_metric.bandwidth = entry->total_metric.bandwidth > bw
 					       ? bw
-					       : entry->total_metric.bandwith;
+					       : entry->total_metric.bandwidth;
 
 	return eigrp_calculate_metrics(eigrp, entry->total_metric);
 }
@@ -435,7 +435,7 @@ u_int32_t eigrp_calculate_total_metrics(struct eigrp *eigrp,
 u_char eigrp_metrics_is_same(struct eigrp_metrics metric1,
 			     struct eigrp_metrics metric2)
 {
-	if ((metric1.bandwith == metric2.bandwith)
+	if ((metric1.bandwidth == metric2.bandwidth)
 	    && (metric1.delay == metric2.delay)
 	    && (metric1.hop_count == metric2.hop_count)
 	    && (metric1.load == metric2.load)

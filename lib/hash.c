@@ -335,12 +335,13 @@ void hash_free(struct hash *hash)
 
 /* CLI commands ------------------------------------------------------------ */
 
-DEFUN(show_hash_stats,
-      show_hash_stats_cmd,
-      "show hashtable [statistics]",
-      SHOW_STR
-      "Statistics about hash tables\n"
-      "Statistics about hash tables\n")
+DEFUN_NOSH(show_hash_stats,
+           show_hash_stats_cmd,
+           "show debugging hashtable [statistics]",
+           SHOW_STR
+           DEBUG_STR
+           "Statistics about hash tables\n"
+           "Statistics about hash tables\n")
 {
 	struct hash *h;
 	struct listnode *ln;
@@ -401,7 +402,7 @@ DEFUN(show_hash_stats,
 			continue;
 
 		ssq = (long double)h->stats.ssq;
-		x2 = powl(h->count, 2.0);
+		x2 = h->count * h->count;
 		ldc = (long double)h->count;
 		full = h->size - h->stats.empty;
 		lf = h->count / (double)h->size;

@@ -26,10 +26,6 @@
 #include <netinet/if_ether.h>
 #endif
 
-#ifndef ETHER_ADDR_LEN
-#define	ETHER_ADDR_LEN	ETHERADDRL
-#endif
-
 #include "log.h"
 #include "memory.h"
 #include "vrf.h"
@@ -48,7 +44,6 @@
 #include "isisd/isis_common.h"
 #include "isisd/isis_flags.h"
 #include "isisd/isis_circuit.h"
-#include "isisd/isis_tlv.h"
 #include "isisd/isis_lsp.h"
 #include "isisd/isis_pdu.h"
 #include "isisd/isis_network.h"
@@ -953,7 +948,7 @@ int isis_interface_config_write(struct vty *vty)
 			continue;
 
 		/* IF name */
-		vty_out(vty, "interface %s\n", ifp->name);
+		vty_frame(vty, "interface %s\n", ifp->name);
 		write++;
 		/* IF desc */
 		if (ifp->desc) {
@@ -1150,7 +1145,7 @@ int isis_interface_config_write(struct vty *vty)
 			}
 			write += circuit_write_mt_settings(circuit, vty);
 		}
-		vty_out(vty, "!\n");
+		vty_endframe(vty, "!\n");
 	}
 
 	return write;
@@ -1341,8 +1336,8 @@ int isis_if_delete_hook(struct interface *ifp)
 void isis_circuit_init()
 {
 	/* Initialize Zebra interface data structure */
-	if_add_hook(IF_NEW_HOOK, isis_if_new_hook);
-	if_add_hook(IF_DELETE_HOOK, isis_if_delete_hook);
+	hook_register_prio(if_add, 0, isis_if_new_hook);
+	hook_register_prio(if_del, 0, isis_if_delete_hook);
 
 	/* Install interface node */
 	install_node(&interface_node, isis_interface_config_write);

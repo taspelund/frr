@@ -41,6 +41,7 @@ DEFINE_MTYPE_STATIC(LIB, ZLOG, "Logging")
 static int logfile_fd = -1; /* Used in signal handler. */
 
 struct zlog *zlog_default = NULL;
+bool zlog_startup_stderr = true;
 
 const char *zlog_priority[] = {
 	"emergencies",   "alerts",	"critical",  "errors", "warnings",
@@ -172,6 +173,25 @@ static void time_print(FILE *fp, struct timestamp_control *ctl)
 }
 
 
+static void vzlog_file(struct zlog *zl, struct timestamp_control *tsctl,
+		       const char *proto_str, int record_priority,
+		       int priority, FILE *fp, const char *format,
+		       va_list args)
+{
+	va_list ac;
+
+	time_print(fp, tsctl);
+	if (record_priority)
+		fprintf(fp, "%s: ", zlog_priority[priority]);
+
+	fprintf(fp, "%s", proto_str);
+	va_copy(ac, args);
+	vfprintf(fp, format, ac);
+	va_end(ac);
+	fprintf(fp, "\n");
+	fflush(fp);
+}
+
 /* va_list version of zlog. */
 void vzlog(int priority, const char *format, va_list args)
 {
@@ -210,32 +230,21 @@ void vzlog(int priority, const char *format, va_list args)
 		sprintf(proto_str, "%s: ", zl->protoname);
 
 	/* File output. */
-	if ((priority <= zl->maxlvl[ZLOG_DEST_FILE]) && zl->fp) {
-		va_list ac;
-		time_print(zl->fp, &tsctl);
-		if (zl->record_priority)
-			fprintf(zl->fp, "%s: ", zlog_priority[priority]);
-		fprintf(zl->fp, "%s", proto_str);
-		va_copy(ac, args);
-		vfprintf(zl->fp, format, ac);
-		va_end(ac);
-		fprintf(zl->fp, "\n");
-		fflush(zl->fp);
-	}
+	if ((priority <= zl->maxlvl[ZLOG_DEST_FILE]) && zl->fp)
+		vzlog_file(zl, &tsctl, proto_str, zl->record_priority,
+				priority, zl->fp, format, args);
 
-	/* stdout output. */
-	if (priority <= zl->maxlvl[ZLOG_DEST_STDOUT]) {
-		va_list ac;
-		time_print(stdout, &tsctl);
-		if (zl->record_priority)
-			fprintf(stdout, "%s: ", zlog_priority[priority]);
-		fprintf(stdout, "%s", proto_str);
-		va_copy(ac, args);
-		vfprintf(stdout, format, ac);
-		va_end(ac);
-		fprintf(stdout, "\n");
-		fflush(stdout);
-	}
+	/* fixed-config logging to stderr while we're stating up & haven't
+	 * daemonized / reached mainloop yet
+	 *
+	 * note the "else" on stdout output -- we don't want to print the same
+	 * message to both stderr and stdout. */
+	if (zlog_startup_stderr && priority <= LOG_WARNING)
+		vzlog_file(zl, &tsctl, proto_str, 1,
+				priority, stderr, format, args);
+	else if (priority <= zl->maxlvl[ZLOG_DEST_STDOUT])
+		vzlog_file(zl, &tsctl, proto_str, zl->record_priority,
+				priority, stdout, format, args);
 
 	/* Terminal monitor. */
 	if (priority <= zl->maxlvl[ZLOG_DEST_MONITOR])
@@ -692,7 +701,7 @@ void _zlog_assert_failed(const char *assertion, const char *file,
 	     assertion, file, line, (function ? function : "?"));
 	zlog_backtrace(LOG_CRIT);
 	zlog_thread_info(LOG_CRIT);
-	log_memstats_stderr("log");
+	log_memstats(stderr, "log");
 	abort();
 }
 
@@ -858,6 +867,8 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_INTERFACE_UP),
 	DESC_ENTRY(ZEBRA_INTERFACE_DOWN),
 	DESC_ENTRY(ZEBRA_INTERFACE_SET_MASTER),
+	DESC_ENTRY(ZEBRA_ROUTE_ADD),
+	DESC_ENTRY(ZEBRA_ROUTE_DELETE),
 	DESC_ENTRY(ZEBRA_IPV4_ROUTE_ADD),
 	DESC_ENTRY(ZEBRA_IPV4_ROUTE_DELETE),
 	DESC_ENTRY(ZEBRA_IPV6_ROUTE_ADD),
@@ -884,10 +895,8 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_BFD_DEST_DEREGISTER),
 	DESC_ENTRY(ZEBRA_BFD_DEST_UPDATE),
 	DESC_ENTRY(ZEBRA_BFD_DEST_REPLAY),
-	DESC_ENTRY(ZEBRA_REDISTRIBUTE_IPV4_ADD),
-	DESC_ENTRY(ZEBRA_REDISTRIBUTE_IPV4_DEL),
-	DESC_ENTRY(ZEBRA_REDISTRIBUTE_IPV6_ADD),
-	DESC_ENTRY(ZEBRA_REDISTRIBUTE_IPV6_DEL),
+	DESC_ENTRY(ZEBRA_REDISTRIBUTE_ROUTE_ADD),
+	DESC_ENTRY(ZEBRA_REDISTRIBUTE_ROUTE_DEL),
 	DESC_ENTRY(ZEBRA_VRF_UNREGISTER),
 	DESC_ENTRY(ZEBRA_VRF_ADD),
 	DESC_ENTRY(ZEBRA_VRF_DELETE),
@@ -899,10 +908,6 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_INTERFACE_LINK_PARAMS),
 	DESC_ENTRY(ZEBRA_MPLS_LABELS_ADD),
 	DESC_ENTRY(ZEBRA_MPLS_LABELS_DELETE),
-	DESC_ENTRY(ZEBRA_IPV4_NEXTHOP_ADD),
-	DESC_ENTRY(ZEBRA_IPV4_NEXTHOP_DELETE),
-	DESC_ENTRY(ZEBRA_IPV6_NEXTHOP_ADD),
-	DESC_ENTRY(ZEBRA_IPV6_NEXTHOP_DELETE),
 	DESC_ENTRY(ZEBRA_IPMR_ROUTE_STATS),
 	DESC_ENTRY(ZEBRA_LABEL_MANAGER_CONNECT),
 	DESC_ENTRY(ZEBRA_GET_LABEL_CHUNK),
@@ -917,6 +922,11 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_MACIP_DEL),
 	DESC_ENTRY(ZEBRA_REMOTE_MACIP_ADD),
 	DESC_ENTRY(ZEBRA_REMOTE_MACIP_DEL),
+	DESC_ENTRY(ZEBRA_PW_ADD),
+	DESC_ENTRY(ZEBRA_PW_DELETE),
+	DESC_ENTRY(ZEBRA_PW_SET),
+	DESC_ENTRY(ZEBRA_PW_UNSET),
+	DESC_ENTRY(ZEBRA_PW_STATUS_UPDATE),
 };
 #undef DESC_ENTRY
 

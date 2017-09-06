@@ -687,7 +687,7 @@ static void rfapiRibBi2Ri(struct bgp_info *bi, struct rfapi_info *ri,
 		/* copy from RD already stored in bi, so we don't need it_node
 		 */
 		memcpy(&vo->v.l2addr.macaddr, bi->extra->vnc.import.rd.val + 2,
-		       ETHER_ADDR_LEN);
+		       ETH_ALEN);
 
 		if (bi->attr) {
 			(void)rfapiEcommunityGetLNI(
@@ -2236,9 +2236,12 @@ void rfapiRibShowResponsesSummary(void *stream)
 	struct rfapi_descriptor *rfd;
 	struct listnode *node;
 
-
 	if (rfapiStream2Vty(stream, &fp, &vty, &out, &vty_newline) == 0)
 		return;
+	if (!bgp) {
+		fp(out, "Unable to find default BGP instance\n");
+		return;
+	}
 
 	fp(out, "%-24s ", "Responses: (Prefixes)");
 	fp(out, "%-8s %-8u ", "Active:", bgp->rfapi->rib_prefix_count_total);
@@ -2388,6 +2391,11 @@ void rfapiRibShowResponses(void *stream, struct prefix *pfx_match,
 
 	if (rfapiStream2Vty(stream, &fp, &vty, &out, &vty_newline) == 0)
 		return;
+	if (!bgp) {
+		fp(out, "Unable to find default BGP instance\n");
+		return;
+	}
+
 	/*
 	 * loop over NVEs
 	 */

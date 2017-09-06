@@ -33,22 +33,25 @@
 #endif
 #include "sockunion.h"
 #include "ipaddr.h"
+#include "compiler.h"
 
-#ifndef ETHER_ADDR_LEN
-#ifdef ETHERADDRL
-#define ETHER_ADDR_LEN  ETHERADDRL
-#else
-#define ETHER_ADDR_LEN 6
-#endif
+#ifndef ETH_ALEN
+#define ETH_ALEN 6
 #endif
 
-#define ETHER_ADDR_STRLEN (3*ETHER_ADDR_LEN)
+/* for compatibility */
+#ifdef ETHER_ADDR_LEN
+#undef ETHER_ADDR_LEN
+#endif
+#define ETHER_ADDR_LEN 6 CPP_WARN("ETHER_ADDR_LEN is being replaced by ETH_ALEN.\\n")
+
+#define ETHER_ADDR_STRLEN (3*ETH_ALEN)
 /*
  * there isn't a portable ethernet address type. We define our
  * own to simplify internal handling
  */
 struct ethaddr {
-	u_char octet[ETHER_ADDR_LEN];
+	u_char octet[ETH_ALEN];
 } __attribute__((packed));
 
 
@@ -98,7 +101,18 @@ struct evpn_addr {
 #endif
 #endif
 
-/* IPv4 and IPv6 unified prefix structure. */
+/* The 'family' in the prefix structure is internal to FRR and need not
+ * map to standard OS AF_ definitions except where needed for interacting
+ * with the kernel. However, AF_ definitions are currently in use and
+ * prevalent across the code. Define a new FRR-specific AF for EVPN to
+ * distinguish between 'ethernet' (MAC-only) and 'evpn' prefixes and
+ * ensure it does not conflict with any OS AF_ definition.
+ */
+#if !defined(AF_EVPN)
+#define AF_EVPN (AF_MAX + 1)
+#endif
+
+/* FRR generic prefix structure. */
 struct prefix {
 	u_char family;
 	u_char prefixlen;
@@ -111,9 +125,9 @@ struct prefix {
 			struct in_addr adv_router;
 		} lp;
 		struct ethaddr prefix_eth; /* AF_ETHERNET */
-		u_char val[8];
+		u_char val[16];
 		uintptr_t ptr;
-		struct evpn_addr prefix_evpn;
+		struct evpn_addr prefix_evpn; /* AF_EVPN */
 	} u __attribute__((aligned(8)));
 };
 
@@ -212,8 +226,20 @@ union prefixconstptr {
 #define IPV4_MAX_BITLEN    32
 #define IPV4_MAX_PREFIXLEN 32
 #define IPV4_ADDR_CMP(D,S)   memcmp ((D), (S), IPV4_MAX_BYTELEN)
-#define IPV4_ADDR_SAME(D,S)  (memcmp ((D), (S), IPV4_MAX_BYTELEN) == 0)
-#define IPV4_ADDR_COPY(D,S)  memcpy ((D), (S), IPV4_MAX_BYTELEN)
+
+static inline bool ipv4_addr_same(const struct in_addr *a,
+				  const struct in_addr *b)
+{
+	return (a->s_addr == b->s_addr);
+}
+#define IPV4_ADDR_SAME(A,B)  ipv4_addr_same((A), (B))
+
+static inline void ipv4_addr_copy(struct in_addr *dst,
+				  const struct in_addr *src)
+{
+	dst->s_addr = src->s_addr;
+}
+#define IPV4_ADDR_COPY(D,S)  ipv4_addr_copy((D), (S))
 
 #define IPV4_NET0(a)    ((((u_int32_t) (a)) & 0xff000000) == 0x00000000)
 #define IPV4_NET127(a)  ((((u_int32_t) (a)) & 0xff000000) == 0x7f000000)
@@ -247,7 +273,6 @@ union prefixconstptr {
 #endif /*s6_addr32*/
 
 /* Prototypes. */
-extern int is_zero_mac(struct ethaddr *mac);
 extern int str2family(const char *);
 extern int afi2family(afi_t);
 extern afi_t family2afi(int);
@@ -324,6 +349,8 @@ extern const char *inet6_ntoa(struct in6_addr);
 
 extern int prefix_str2mac(const char *str, struct ethaddr *mac);
 extern char *prefix_mac2str(const struct ethaddr *mac, char *buf, int size);
+
+extern unsigned prefix_hash_key(void *pp);
 
 static inline int ipv6_martian(struct in6_addr *addr)
 {

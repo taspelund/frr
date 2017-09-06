@@ -42,6 +42,7 @@
 #include "command_graph.h"
 #include "qobj.h"
 #include "defaults.h"
+#include "libfrr.h"
 
 DEFINE_MTYPE(LIB, HOST, "Host config")
 DEFINE_MTYPE(LIB, STRVEC, "String vector")
@@ -101,7 +102,7 @@ const char *node_names[] = {
 	"ipv4 access list",         // ACCESS_NODE,
 	"ipv4 prefix list",         // PREFIX_NODE,
 	"ipv6 access list",         // ACCESS_IPV6_NODE,
-	"mac access list",	    // ACCESS_MAC_NODE,
+	"MAC access list",          // ACCESS_MAC_NODE,
 	"ipv6 prefix list",         // PREFIX_IPV6_NODE,
 	"as list",		    // AS_LIST_NODE,
 	"community list",	    // COMMUNITY_LIST_NODE,
@@ -111,6 +112,7 @@ const char *node_names[] = {
 	"forwarding",		    // FORWARDING_NODE,
 	"protocol",		    // PROTOCOL_NODE,
 	"mpls",			    // MPLS_NODE,
+	"pw",			    // PW_NODE,
 	"vty",			    // VTY_NODE,
 	"link-params",		    // LINK_PARAMS_NODE,
 	"bgp evpn vni",		    // BGP_EVPN_VNI_NODE,
@@ -122,6 +124,23 @@ vector cmdvec = NULL;
 
 /* Host information structure. */
 struct host host;
+
+/*
+ * Returns host.name if any, otherwise
+ * it returns the system hostname.
+ */
+const char *cmd_hostname_get(void)
+{
+	return host.name;
+}
+
+/*
+ * Returns unix domainname
+ */
+const char *cmd_domainname_get(void)
+{
+	return host.domainname;
+}
 
 /* Standard command node structures. */
 static struct cmd_node auth_node = {
@@ -358,21 +377,23 @@ void install_element(enum node_type ntype, struct cmd_element *cmd)
 		return;
 	}
 
-	cnode = vector_slot(cmdvec, ntype);
+	cnode = vector_lookup(cmdvec, ntype);
 
 	if (cnode == NULL) {
 		fprintf(stderr,
-			"Command node %d doesn't exist, please check it\n",
-			ntype);
-		fprintf(stderr,
-			"Have you called install_node before this install_element?\n");
+			"%s[%s]:\n"
+			"\tnode %d (%s) does not exist.\n"
+			"\tplease call install_node() before install_element()\n",
+			cmd->name, cmd->string, ntype, node_names[ntype]);
 		exit(EXIT_FAILURE);
 	}
 
 	if (hash_lookup(cnode->cmd_hash, cmd) != NULL) {
 		fprintf(stderr,
-			"Multiple command installs to node %d of command:\n%s\n",
-			ntype, cmd->string);
+			"%s[%s]:\n"
+			"\tnode %d (%s) already has this command installed.\n"
+			"\tduplicate install_element call?\n",
+			cmd->name, cmd->string, ntype, node_names[ntype]);
 		return;
 	}
 
@@ -405,21 +426,23 @@ void uninstall_element(enum node_type ntype, struct cmd_element *cmd)
 		return;
 	}
 
-	cnode = vector_slot(cmdvec, ntype);
+	cnode = vector_lookup(cmdvec, ntype);
 
 	if (cnode == NULL) {
 		fprintf(stderr,
-			"Command node %d doesn't exist, please check it\n",
-			ntype);
-		fprintf(stderr,
-			"Have you called install_node before this install_element?\n");
+			"%s[%s]:\n"
+			"\tnode %d (%s) does not exist.\n"
+			"\tplease call install_node() before uninstall_element()\n",
+			cmd->name, cmd->string, ntype, node_names[ntype]);
 		exit(EXIT_FAILURE);
 	}
 
 	if (hash_release(cnode->cmd_hash, cmd) == NULL) {
 		fprintf(stderr,
-			"Trying to uninstall non-installed command (node %d):\n%s\n",
-			ntype, cmd->string);
+			"%s[%s]:\n"
+			"\tnode %d (%s) does not have this command installed.\n"
+			"\tduplicate uninstall_element call?\n",
+			cmd->name, cmd->string, ntype, node_names[ntype]);
 		return;
 	}
 
@@ -469,8 +492,8 @@ static char *zencrypt(const char *passwd)
 /* This function write configuration of this host. */
 static int config_write_host(struct vty *vty)
 {
-	if (host.name)
-		vty_out(vty, "hostname %s\n", host.name);
+	if (cmd_hostname_get())
+		vty_out(vty, "hostname %s\n", cmd_hostname_get());
 
 	/* The following are all configuration commands that are not sent to
          * watchfrr.  For instance watchfrr is hardcoded to log to syslog so
@@ -561,6 +584,9 @@ static int config_write_host(struct vty *vty)
 		else if (!host.motd)
 			vty_out(vty, "no banner motd\n");
 	}
+
+	if (debug_memstats_at_exit)
+		vty_out(vty, "!\ndebug memstats-at-exit\n");
 
 	return 1;
 }
@@ -1267,6 +1293,7 @@ void cmd_exit(struct vty *vty)
 		vty_config_unlock(vty);
 		break;
 	case INTERFACE_NODE:
+	case PW_NODE:
 	case NS_NODE:
 	case VRF_NODE:
 	case ZEBRA_NODE:
@@ -1352,6 +1379,7 @@ DEFUN (config_end,
 		break;
 	case CONFIG_NODE:
 	case INTERFACE_NODE:
+	case PW_NODE:
 	case NS_NODE:
 	case VRF_NODE:
 	case ZEBRA_NODE:
@@ -1408,7 +1436,7 @@ DEFUN (show_version,
        "Displays zebra version\n")
 {
 	vty_out(vty, "%s %s (%s).\n", FRR_FULL_NAME, FRR_VERSION,
-		host.name ? host.name : "");
+		cmd_hostname_get() ? cmd_hostname_get() : "");
 	vty_out(vty, "%s%s\n", FRR_COPYRIGHT, GIT_INFO);
 	vty_out(vty, "configured with:\n    %s\n", FRR_CONFIG_ARGS);
 
@@ -1740,6 +1768,40 @@ DEFUN (show_startup_config,
 	fclose(confp);
 
 	return CMD_SUCCESS;
+}
+
+int cmd_domainname_set(const char *domainname)
+{
+	XFREE(MTYPE_HOST, host.domainname);
+	host.domainname = domainname ? XSTRDUP(MTYPE_HOST, domainname) : NULL;
+	return CMD_SUCCESS;
+}
+
+/* Hostname configuration */
+DEFUN (config_domainname,
+       domainname_cmd,
+       "domainname WORD",
+       "Set system's domain name\n"
+       "This system's domain name\n")
+{
+	struct cmd_token *word = argv[1];
+
+	if (!isalpha((int)word->arg[0])) {
+		vty_out(vty, "Please specify string starting with alphabet\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	return cmd_domainname_set(word->arg);
+}
+
+DEFUN (config_no_domainname,
+       no_domainname_cmd,
+       "no domainname [DOMAINNAME]",
+       NO_STR
+       "Reset system's domain name\n"
+       "domain name of this router\n")
+{
+	return cmd_domainname_set(NULL);
 }
 
 int cmd_hostname_set(const char *hostname)
@@ -2378,6 +2440,17 @@ DEFUN (no_config_log_timestamp_precision,
 	return CMD_SUCCESS;
 }
 
+DEFUN (debug_memstats,
+       debug_memstats_cmd,
+       "[no] debug memstats-at-exit",
+       NO_STR
+       DEBUG_STR
+       "Print memory type statistics at exit\n")
+{
+	debug_memstats_at_exit = !!strcmp(argv[0]->text, "no");
+	return CMD_SUCCESS;
+}
+
 int cmd_banner_motd_file(const char *file)
 {
 	int success = CMD_SUCCESS;
@@ -2508,9 +2581,12 @@ void install_default(enum node_type node)
  * terminal = -1 -- watchfrr / no logging, but minimal config control */
 void cmd_init(int terminal)
 {
+	struct utsname names;
+
 	if (array_size(node_names) != NODE_TYPE_MAX)
 		assert(!"Update the CLI node description array!");
 
+	uname(&names);
 	qobj_init();
 
 	varhandlers = list_new();
@@ -2519,7 +2595,15 @@ void cmd_init(int terminal)
 	cmdvec = vector_init(VECTOR_MIN_SIZE);
 
 	/* Default host value settings. */
-	host.name = NULL;
+	host.name = XSTRDUP(MTYPE_HOST, names.nodename);
+#ifdef HAVE_STRUCT_UTSNAME_DOMAINNAME
+	if ((strcmp(names.domainname, "(none)") == 0))
+		host.domainname = NULL;
+	else
+		host.domainname = XSTRDUP(MTYPE_HOST, names.domainname);
+#else
+	host.domainname = NULL;
+#endif
 	host.password = NULL;
 	host.enable = NULL;
 	host.logfile = NULL;
@@ -2539,6 +2623,7 @@ void cmd_init(int terminal)
 	/* Each node's basic commands. */
 	install_element(VIEW_NODE, &show_version_cmd);
 	install_element(ENABLE_NODE, &show_startup_config_cmd);
+	install_element(ENABLE_NODE, &debug_memstats_cmd);
 
 	if (terminal) {
 		install_element(VIEW_NODE, &config_list_cmd);
@@ -2571,7 +2656,10 @@ void cmd_init(int terminal)
 
 	install_element(CONFIG_NODE, &hostname_cmd);
 	install_element(CONFIG_NODE, &no_hostname_cmd);
+	install_element(CONFIG_NODE, &domainname_cmd);
+	install_element(CONFIG_NODE, &no_domainname_cmd);
 	install_element(CONFIG_NODE, &frr_version_defaults_cmd);
+	install_element(CONFIG_NODE, &debug_memstats_cmd);
 
 	if (terminal > 0) {
 		install_element(CONFIG_NODE, &password_cmd);
@@ -2635,6 +2723,8 @@ void cmd_terminate()
 
 	if (host.name)
 		XFREE(MTYPE_HOST, host.name);
+	if (host.domainname)
+		XFREE(MTYPE_HOST, host.domainname);
 	if (host.password)
 		XFREE(MTYPE_HOST, host.password);
 	if (host.password_encrypt)

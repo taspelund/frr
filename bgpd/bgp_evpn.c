@@ -349,11 +349,11 @@ static int bgp_zebra_send_remote_macip(struct bgp *bgp, struct bgpevpn *vpn,
 	s = zclient->obuf;
 	stream_reset(s);
 
-	zclient_create_header(
-		s, add ? ZEBRA_REMOTE_MACIP_ADD : ZEBRA_REMOTE_MACIP_DEL,
-		bgp->vrf_id);
+	zclient_create_header(s, add ? ZEBRA_REMOTE_MACIP_ADD
+				     : ZEBRA_REMOTE_MACIP_DEL,
+			      bgp->vrf_id);
 	stream_putl(s, vpn->vni);
-	stream_put(s, &p->prefix.mac.octet, ETHER_ADDR_LEN); /* Mac Addr */
+	stream_put(s, &p->prefix.mac.octet, ETH_ALEN); /* Mac Addr */
 	/* IP address length and IP address, if any. */
 	if (IS_EVPN_PREFIX_IPADDR_NONE(p))
 		stream_putl(s, 0);
@@ -402,9 +402,9 @@ static int bgp_zebra_send_remote_vtep(struct bgp *bgp, struct bgpevpn *vpn,
 	s = zclient->obuf;
 	stream_reset(s);
 
-	zclient_create_header(
-		s, add ? ZEBRA_REMOTE_VTEP_ADD : ZEBRA_REMOTE_VTEP_DEL,
-		bgp->vrf_id);
+	zclient_create_header(s, add ? ZEBRA_REMOTE_VTEP_ADD
+				     : ZEBRA_REMOTE_VTEP_DEL,
+			      bgp->vrf_id);
 	stream_putl(s, vpn->vni);
 	if (IS_EVPN_PREFIX_IPADDR_V4(p))
 		stream_put_in_addr(s, &p->prefix.ip.ipaddr_v4);
@@ -474,7 +474,7 @@ static void add_mac_mobility_to_attr(u_int32_t seq_num, struct attr *attr)
 {
 	struct ecommunity ecom_tmp;
 	struct ecommunity_val eval;
-	struct ecommunity *ecom_mm;
+	u_int8_t *ecom_val_ptr;
 	int i;
 	u_int8_t *pnt;
 	int type = 0;
@@ -484,7 +484,7 @@ static void add_mac_mobility_to_attr(u_int32_t seq_num, struct attr *attr)
 	encode_mac_mobility_extcomm(0, seq_num, &eval);
 
 	/* Find current MM ecommunity */
-	ecom_mm = NULL;
+	ecom_val_ptr = NULL;
 
 	if (attr->ecommunity) {
 		for (i = 0; i < attr->ecommunity->size; i++) {
@@ -495,17 +495,17 @@ static void add_mac_mobility_to_attr(u_int32_t seq_num, struct attr *attr)
 			if (type == ECOMMUNITY_ENCODE_EVPN
 			    && sub_type
 				       == ECOMMUNITY_EVPN_SUBTYPE_MACMOBILITY) {
-				ecom_mm = (struct ecommunity *)
-						  attr->ecommunity->val
-					  + (i * 8);
+				ecom_val_ptr =
+					(u_int8_t *)(attr->ecommunity->val
+						     + (i * 8));
 				break;
 			}
 		}
 	}
 
 	/* Update the existing MM ecommunity */
-	if (ecom_mm) {
-		memcpy(ecom_mm->val, eval.val, sizeof(char) * ECOMMUNITY_SIZE);
+	if (ecom_val_ptr) {
+		memcpy(ecom_val_ptr, eval.val, sizeof(char) * ECOMMUNITY_SIZE);
 	}
 	/* Add MM to existing */
 	else {
@@ -1816,7 +1816,7 @@ static int process_type2_route(struct peer *peer, afi_t afi, safi_t safi,
 
 	/* Make EVPN prefix. */
 	memset(&p, 0, sizeof(struct prefix_evpn));
-	p.family = AF_ETHERNET;
+	p.family = AF_EVPN;
 	p.prefixlen = EVPN_TYPE_2_ROUTE_PREFIXLEN;
 	p.prefix.route_type = BGP_EVPN_MAC_IP_ROUTE;
 
@@ -1830,9 +1830,9 @@ static int process_type2_route(struct peer *peer, afi_t afi, safi_t safi,
 	macaddr_len = *pfx++;
 
 	/* Get the MAC Addr */
-	if (macaddr_len == (ETHER_ADDR_LEN * 8)) {
-		memcpy(&p.prefix.mac.octet, pfx, ETHER_ADDR_LEN);
-		pfx += ETHER_ADDR_LEN;
+	if (macaddr_len == (ETH_ALEN * 8)) {
+		memcpy(&p.prefix.mac.octet, pfx, ETH_ALEN);
+		pfx += ETH_ALEN;
 	} else {
 		zlog_err(
 			"%u:%s - Rx EVPN Type-2 NLRI with unsupported MAC address length %d",
@@ -1905,7 +1905,7 @@ static int process_type3_route(struct peer *peer, afi_t afi, safi_t safi,
 
 	/* Make EVPN prefix. */
 	memset(&p, 0, sizeof(struct prefix_evpn));
-	p.family = AF_ETHERNET;
+	p.family = AF_EVPN;
 	p.prefixlen = EVPN_TYPE_3_ROUTE_PREFIXLEN;
 	p.prefix.route_type = BGP_EVPN_IMET_ROUTE;
 
@@ -1970,7 +1970,7 @@ static int process_type5_route(struct peer *peer, afi_t afi, safi_t safi,
 
 	/* Make EVPN prefix. */
 	memset(&p, 0, sizeof(struct prefix_evpn));
-	p.family = AF_ETHERNET;
+	p.family = AF_EVPN;
 	p.prefix.route_type = BGP_EVPN_IP_PREFIX_ROUTE;
 
 	/* Additional information outside of prefix - ESI and GW IP */
@@ -2039,7 +2039,7 @@ static void evpn_mpattr_encode_type5(struct stream *s, struct prefix *p,
 	struct evpn_addr *p_evpn_p;
 
 	memset(&temp, 0, 16);
-	if (p->family != AF_ETHERNET)
+	if (p->family != AF_EVPN)
 		return;
 	p_evpn_p = &(p->u.prefix_evpn);
 
@@ -2216,7 +2216,7 @@ void bgp_evpn_route2json(struct prefix_evpn *p, json_object *json)
 				json, "esi",
 				0); /* TODO: we don't support esi yet */
 			json_object_int_add(json, "ethTag", 0);
-			json_object_int_add(json, "macLen", 8 * ETHER_ADDR_LEN);
+			json_object_int_add(json, "macLen", 8 * ETH_ALEN);
 			json_object_string_add(json, "mac",
 					       prefix_mac2str(&p->prefix.mac,
 							      buf1,
@@ -2233,7 +2233,7 @@ void bgp_evpn_route2json(struct prefix_evpn *p, json_object *json)
 				json, "esi",
 				0); /* TODO: we don't support esi yet */
 			json_object_int_add(json, "ethTag", 0);
-			json_object_int_add(json, "macLen", 8 * ETHER_ADDR_LEN);
+			json_object_int_add(json, "macLen", 8 * ETH_ALEN);
 			json_object_string_add(json, "mac",
 					       prefix_mac2str(&p->prefix.mac,
 							      buf1,
@@ -2252,7 +2252,6 @@ void bgp_evpn_route2json(struct prefix_evpn *p, json_object *json)
 	}
 }
 
-
 /*
  * Function to convert evpn route to string.
  * NOTE: We don't use prefix2str as the output here is a bit different.
@@ -2270,7 +2269,7 @@ char *bgp_evpn_route2str(struct prefix_evpn *p, char *buf, int len)
 	} else if (p->prefix.route_type == BGP_EVPN_MAC_IP_ROUTE) {
 		if (IS_EVPN_PREFIX_IPADDR_NONE(p))
 			snprintf(buf, len, "[%d]:[0]:[0]:[%d]:[%s]",
-				 p->prefix.route_type, 8 * ETHER_ADDR_LEN,
+				 p->prefix.route_type, 8 * ETH_ALEN,
 				 prefix_mac2str(&p->prefix.mac, buf1,
 						sizeof(buf1)));
 		else {
@@ -2279,7 +2278,7 @@ char *bgp_evpn_route2str(struct prefix_evpn *p, char *buf, int len)
 			family = IS_EVPN_PREFIX_IPADDR_V4(p) ? AF_INET
 							     : AF_INET6;
 			snprintf(buf, len, "[%d]:[0]:[0]:[%d]:[%s]:[%d]:[%s]",
-				 p->prefix.route_type, 8 * ETHER_ADDR_LEN,
+				 p->prefix.route_type, 8 * ETH_ALEN,
 				 prefix_mac2str(&p->prefix.mac, buf1,
 						sizeof(buf1)),
 				 family == AF_INET ? IPV4_MAX_BITLEN
@@ -2288,7 +2287,7 @@ char *bgp_evpn_route2str(struct prefix_evpn *p, char *buf, int len)
 					   PREFIX2STR_BUFFER));
 		}
 	} else {
-		/* Currently, this is to cater to other AF_ETHERNET code. */
+		/* For EVPN route types not supported yet. */
 	}
 
 	return (buf);
@@ -2321,7 +2320,7 @@ void bgp_evpn_encode_prefix(struct stream *s, struct prefix *p,
 		stream_put(s, prd->val, 8);	 /* RD */
 		stream_put(s, 0, 10);		    /* ESI */
 		stream_putl(s, 0);		    /* Ethernet Tag ID */
-		stream_putc(s, 8 * ETHER_ADDR_LEN); /* Mac Addr Len - bits */
+		stream_putc(s, 8 * ETH_ALEN); /* Mac Addr Len - bits */
 		stream_put(s, evp->prefix.mac.octet, 6); /* Mac Addr */
 		stream_putc(s, 8 * ipa_len);		 /* IP address Length */
 		if (ipa_len)
@@ -2640,11 +2639,11 @@ int bgp_evpn_unimport_route(struct bgp *bgp, afi_t afi, safi_t safi,
 /* filter routes which have martian next hops */
 int bgp_filter_evpn_routes_upon_martian_nh_change(struct bgp *bgp)
 {
-	afi_t			afi;
-	safi_t			safi;
-	struct bgp_node		*rd_rn, *rn;
-	struct bgp_table	*table;
-	struct bgp_info		*ri;
+	afi_t afi;
+	safi_t safi;
+	struct bgp_node *rd_rn, *rn;
+	struct bgp_table *table;
+	struct bgp_info *ri;
 
 	afi = AFI_L2VPN;
 	safi = SAFI_EVPN;
@@ -2683,10 +2682,7 @@ int bgp_filter_evpn_routes_upon_martian_nh_change(struct bgp *bgp)
 					if (bgp_debug_update(ri->peer, &rn->p,
 							     NULL, 1))
 						zlog_debug(
-							"%u: prefix %s with "
-							"attr %s - DENIED"
-							"due to martian or seld"
-							"nexthop",
+							"%u: prefix %s with attr %s - DENIED due to martian or self nexthop",
 							bgp->vrf_id,
 							prefix2str(
 								&rn->p,
@@ -2768,11 +2764,9 @@ int bgp_evpn_local_macip_add(struct bgp *bgp, vni_t vni, struct ethaddr *mac,
 		char buf2[INET6_ADDRSTRLEN];
 
 		zlog_err(
-			"%u:Failed to create Type-2 route, VNI %u %s %s MAC %s IP %s",
+			"%u:Failed to create Type-2 route, VNI %u %s MAC %s IP %s",
 			bgp->vrf_id, vpn->vni,
-			CHECK_FLAG(flags, ZEBRA_MAC_TYPE_STICKY) ? "sticky "
-								 : "",
-			CHECK_FLAG(flags, ZEBRA_MAC_TYPE_STICKY) ? "gateway "
+			CHECK_FLAG(flags, ZEBRA_MAC_TYPE_STICKY) ? "sticky gateway"
 								 : "",
 			prefix_mac2str(mac, buf, sizeof(buf)),
 			ipaddr2str(ip, buf2, sizeof(buf2)));
@@ -2838,8 +2832,8 @@ int bgp_evpn_local_vni_add(struct bgp *bgp, vni_t vni,
 	/* Lookup VNI. If present and no change, exit. */
 	vpn = bgp_evpn_lookup_vni(bgp, vni);
 	if (vpn) {
-		if (is_vni_live(vpn) && IPV4_ADDR_SAME(&vpn->originator_ip,
-							&originator_ip))
+		if (is_vni_live(vpn)
+		    && IPV4_ADDR_SAME(&vpn->originator_ip, &originator_ip))
 			/* Probably some other param has changed that we don't
 			 * care about. */
 			return 0;

@@ -177,6 +177,7 @@ void ospf6_nexthop_delete(struct ospf6_nexthop *nh)
 	if (nh)
 		XFREE(MTYPE_OSPF6_NEXTHOP, nh);
 }
+
 void ospf6_clear_nexthops(struct list *nh_list)
 {
 	struct listnode *node;
@@ -284,8 +285,7 @@ void ospf6_add_nexthop(struct list *nh_list, int ifindex, struct in6_addr *addr)
 }
 
 void ospf6_route_zebra_copy_nexthops(struct ospf6_route *route,
-				     ifindex_t *ifindexes,
-				     struct in6_addr **nexthop_addr,
+				     struct zapi_nexthop nexthops[],
 				     int entries)
 {
 	struct ospf6_nexthop *nh;
@@ -305,13 +305,16 @@ void ospf6_route_zebra_copy_nexthops(struct ospf6_route *route,
 				zlog_debug("  nexthop: %s%%%.*s(%d)", buf,
 					   IFNAMSIZ, ifname, nh->ifindex);
 			}
-			if (i < entries) {
-				nexthop_addr[i] = &nh->address;
-				ifindexes[i] = nh->ifindex;
-				i++;
-			} else {
+			if (i >= entries)
 				return;
-			}
+
+			nexthops[i].ifindex = nh->ifindex;
+			if (!IN6_IS_ADDR_UNSPECIFIED(&nh->address)) {
+				nexthops[i].gate.ipv6 = nh->address;
+				nexthops[i].type = NEXTHOP_TYPE_IPV6_IFINDEX;
+			} else
+				nexthops[i].type = NEXTHOP_TYPE_IFINDEX;
+			i++;
 		}
 	}
 }
@@ -330,10 +333,9 @@ int ospf6_route_get_first_nh_index(struct ospf6_route *route)
 
 static int ospf6_nexthop_cmp(struct ospf6_nexthop *a, struct ospf6_nexthop *b)
 {
-	if ((a)->ifindex == (b)->ifindex
-	    && IN6_ARE_ADDR_EQUAL(&(a)->address, &(b)->address))
+	if ((a)->ifindex == (b)->ifindex &&
+	    IN6_ARE_ADDR_EQUAL(&(a)->address, &(b)->address))
 		return 1;
-
 	return 0;
 }
 
@@ -343,7 +345,7 @@ struct ospf6_route *ospf6_route_create(void)
 	route = XCALLOC(MTYPE_OSPF6_ROUTE, sizeof(struct ospf6_route));
 	route->nh_list = list_new();
 	route->nh_list->cmp = (int (*)(void *, void *))ospf6_nexthop_cmp;
-	route->nh_list->del = (void (*)(void *))ospf6_nexthop_delete;
+	route->nh_list->del = (void (*) (void *))ospf6_nexthop_delete;
 	return route;
 }
 
@@ -583,7 +585,8 @@ struct ospf6_route *ospf6_route_add(struct ospf6_route *route,
 			SET_FLAG(old->flag, OSPF6_ROUTE_ADD);
 			ospf6_route_table_assert(table);
 
-			route_unlock_node(node); /* to free the lookup lock */
+			/* to free the lookup lock */
+			route_unlock_node(node);
 			return old;
 		}
 
@@ -629,7 +632,7 @@ struct ospf6_route *ospf6_route_add(struct ospf6_route *route,
 	if (prev || next) {
 		if (IS_OSPF6_DEBUG_ROUTE(MEMORY))
 			zlog_debug(
-				"%s %p: route add %p: another path: prev %p, next %p node lock %u",
+				"%s %p: route add %p: another path: prev %p, next %p node refcount %u",
 				ospf6_route_table_name(table), (void *)table,
 				(void *)route, (void *)prev, (void *)next,
 				node->lock);
@@ -757,7 +760,7 @@ void ospf6_route_remove(struct ospf6_route *route,
 		prefix2str(&route->prefix, buf, sizeof(buf));
 
 	if (IS_OSPF6_DEBUG_ROUTE(MEMORY))
-		zlog_debug("%s %p: route remove %p: %s rnode lock %u",
+		zlog_debug("%s %p: route remove %p: %s rnode refcount %u",
 			   ospf6_route_table_name(table), (void *)table,
 			   (void *)route, buf, route->rnode->lock);
 	else if (IS_OSPF6_DEBUG_ROUTE(TABLE))
@@ -950,7 +953,7 @@ void ospf6_route_show(struct vty *vty, struct ospf6_route *route)
 {
 	int i;
 	char destination[PREFIX2STR_BUFFER], nexthop[64];
-	char duration[16];
+	char duration[64];
 	const char *ifname;
 	struct timeval now, res;
 	struct listnode *node;
@@ -996,7 +999,7 @@ void ospf6_route_show_detail(struct vty *vty, struct ospf6_route *route)
 	char destination[PREFIX2STR_BUFFER], nexthop[64];
 	char area_id[16], id[16], adv_router[16], capa[16], options[16];
 	struct timeval now, res;
-	char duration[16];
+	char duration[64];
 	struct listnode *node;
 	struct ospf6_nexthop *nh;
 

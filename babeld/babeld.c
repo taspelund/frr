@@ -76,6 +76,7 @@ static int
 babel_config_write (struct vty *vty)
 {
     int lines = 0;
+    int afi;
     int i;
 
     /* list enabled debug modes */
@@ -108,13 +109,17 @@ babel_config_write (struct vty *vty)
     /* list enabled interfaces */
     lines = 1 + babel_enable_if_config_write (vty);
     /* list redistributed protocols */
-    for (i = 0; i < ZEBRA_ROUTE_MAX; i++)
-        if (i != zclient->redist_default &&
-	    vrf_bitmap_check (zclient->redist[AFI_IP][i], VRF_DEFAULT))
-        {
-            vty_out (vty, " redistribute %s\n", zebra_route_string(i));
-            lines++;
+    for (afi = AFI_IP; afi <= AFI_IP6; afi++) {
+        for (i = 0; i < ZEBRA_ROUTE_MAX; i++) {
+            if (i != zclient->redist_default &&
+                vrf_bitmap_check (zclient->redist[afi][i], VRF_DEFAULT)) {
+                vty_out (vty, " redistribute %s %s\n",
+                         (afi == AFI_IP) ? "ipv4" : "ipv6",
+                         zebra_route_string(i));
+                lines++;
+            }
         }
+    }
 
     lines += config_write_distribute (vty);
 
@@ -326,8 +331,8 @@ babel_main_loop(struct thread *thread)
         /* if there is no timeout, we must wait. */
         if(timeval_compare(&tv, &babel_now) > 0) {
             timeval_minus(&tv, &tv, &babel_now);
-            debugf(BABEL_DEBUG_TIMEOUT, "babel main loop : timeout: %ld msecs",
-                   tv.tv_sec * 1000 + tv.tv_usec / 1000);
+            debugf(BABEL_DEBUG_TIMEOUT, "babel main loop : timeout: %lld msecs",
+                   (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000);
             /* it happens often to have less than 1 ms, it's bad. */
             timeval_add_msec(&tv, &tv, 300);
             babel_set_timer(&tv);

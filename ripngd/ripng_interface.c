@@ -1084,7 +1084,7 @@ static int interface_config_write(struct vty *vty)
 		    && (ri->split_horizon == ri->split_horizon_default))
 			continue;
 
-		vty_out(vty, "interface %s\n", ifp->name);
+		vty_frame(vty, "interface %s\n", ifp->name);
 		if (ifp->desc)
 			vty_out(vty, " description %s\n", ifp->desc);
 
@@ -1105,7 +1105,7 @@ static int interface_config_write(struct vty *vty)
 			}
 		}
 
-		vty_out(vty, "!\n");
+		vty_endframe(vty, "!\n");
 
 		write++;
 	}
@@ -1121,8 +1121,8 @@ static struct cmd_node interface_node = {
 void ripng_if_init()
 {
 	/* Interface initialize. */
-	if_add_hook(IF_NEW_HOOK, ripng_if_new_hook);
-	if_add_hook(IF_DELETE_HOOK, ripng_if_delete_hook);
+	hook_register_prio(if_add, 0, ripng_if_new_hook);
+	hook_register_prio(if_del, 0, ripng_if_delete_hook);
 
 	/* RIPng enable network init. */
 	ripng_enable_network = route_table_init();

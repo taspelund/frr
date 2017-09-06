@@ -20,6 +20,8 @@
 
 #include <zebra.h>
 
+#ifdef HAVE_NETLINK
+
 #include "linklist.h"
 #include "if.h"
 #include "log.h"
@@ -260,8 +262,9 @@ static int netlink_information_fetch(struct sockaddr_nl *snl,
 		return netlink_neigh_change(snl, h, ns_id);
 		break;
 	default:
-		zlog_warn("Unknown netlink nlmsg_type %d vrf %u\n",
-			  h->nlmsg_type, ns_id);
+		if (IS_ZEBRA_DEBUG_KERNEL)
+			zlog_debug("Unknown netlink nlmsg_type %d vrf %u\n",
+				   h->nlmsg_type, ns_id);
 		break;
 	}
 	return 0;
@@ -826,3 +829,5 @@ void kernel_terminate(struct zebra_ns *zns)
 		zns->netlink_cmd.sock = -1;
 	}
 }
+
+#endif /* HAVE_NETLINK */

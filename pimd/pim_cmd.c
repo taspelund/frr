@@ -1236,9 +1236,8 @@ static void pim_show_interfaces_single(struct pim_instance *pim,
 			print_header = 1;
 			for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode,
 						  up)) {
-				if (strcmp(ifp->name,
-					   up->rpf.source_nexthop
-						   .interface->name)
+				if (strcmp(ifp->name, up->rpf.source_nexthop
+							      .interface->name)
 				    == 0) {
 					if (up->flags
 					    & PIM_UPSTREAM_FLAG_MASK_FHR) {
@@ -1370,7 +1369,7 @@ static void pim_show_interfaces(struct pim_instance *pim, struct vty *vty,
 		json_object_pim_ifp_add(json_row, ifp);
 		json_object_int_add(json_row, "pimNeighbors", pim_nbrs);
 		json_object_int_add(json_row, "pimIfChannels", pim_ifchannels);
-		json_object_int_add(json_row, "firstHopRouter", fhr);
+		json_object_int_add(json_row, "firstHopRouterCount", fhr);
 		json_object_string_add(json_row, "pimDesignatedRouter",
 				       inet_ntoa(pim_ifp->pim_dr_addr));
 
@@ -1667,7 +1666,7 @@ static void pim_show_join_helper(struct vty *vty,
 					       json_row);
 	} else {
 		vty_out(vty,
-			"%-9s %-15s %-15s %-15s %-6s %8s %-6s %5s\n",
+			"%-9s %-15s %-15s %-15s %-10s %8s %-6s %5s\n",
 			ch->interface->name, inet_ntoa(ifaddr),
 			ch_src_str, ch_grp_str,
 			pim_ifchannel_ifjoin_name(ch->ifjoin_state,
@@ -1691,7 +1690,7 @@ static void pim_show_join(struct pim_instance *pim, struct vty *vty, u_char uj)
 		json = json_object_new_object();
 	else
 		vty_out(vty,
-			"Interface Address         Source          Group           State  Uptime   Expire Prune\n");
+			"Interface Address         Source          Group           State      Uptime   Expire Prune\n");
 
 	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(pim->vrf_id), if_node, ifp)) {
 		pim_ifp = ifp->info;
@@ -2789,16 +2788,11 @@ static int pim_print_pnc_cache_walkcb(struct hash_backet *backet, void *arg)
 static void pim_show_nexthop(struct pim_instance *pim, struct vty *vty)
 {
 	struct pnc_cache_walk_data cwd;
+
 	cwd.vty = vty;
 	cwd.pim = pim;
-
-	if (pimg && !pimg->rpf_hash) {
-		vty_out(vty, "no nexthop cache \n");
-		return;
-	}
-
-	vty_out(vty, "Number of registered addresses: %lu \n",
-		pimg->rpf_hash->count);
+	vty_out(vty, "Number of registered addresses: %lu\n",
+		pim->rpf_hash->count);
 	vty_out(vty, "Address         Interface      Nexthop\n");
 	vty_out(vty, "-------------------------------------------\n");
 
@@ -3361,7 +3355,7 @@ DEFUN (show_ip_igmp_interface,
        "IGMP interface information\n"
        "Detailed output\n"
        "interface name\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -3389,7 +3383,7 @@ DEFUN (show_ip_igmp_interface_vrf_all,
        "IGMP interface information\n"
        "Detailed output\n"
        "interface name\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	u_char uj = use_json(argc, argv);
@@ -3480,7 +3474,7 @@ DEFUN (show_ip_igmp_groups,
        IGMP_STR
        VRF_CMD_HELP_STR
        IGMP_GROUP_STR
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -3502,7 +3496,7 @@ DEFUN (show_ip_igmp_groups_vrf_all,
        IGMP_STR
        VRF_CMD_HELP_STR
        IGMP_GROUP_STR
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	u_char uj = use_json(argc, argv);
 	struct vrf *vrf;
@@ -3679,7 +3673,7 @@ DEFUN (show_ip_pim_interface,
        "PIM interface information\n"
        "Detailed output\n"
        "interface name\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -3707,7 +3701,7 @@ DEFUN (show_ip_pim_interface_vrf_all,
        "PIM interface information\n"
        "Detailed output\n"
        "interface name\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 6;
 	u_char uj = use_json(argc, argv);
@@ -3825,7 +3819,7 @@ DEFUN (show_ip_pim_neighbor,
        "PIM neighbor information\n"
        "Detailed output\n"
        "Name of interface or neighbor\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -3853,7 +3847,7 @@ DEFUN (show_ip_pim_neighbor_vrf_all,
        "PIM neighbor information\n"
        "Detailed output\n"
        "Name of interface or neighbor\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	u_char uj = use_json(argc, argv);
@@ -3914,7 +3908,7 @@ DEFUN (show_ip_pim_state,
        "PIM state information\n"
        "Unicast or Multicast address\n"
        "Multicast address\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	const char *src_or_group = NULL;
 	const char *group = NULL;
@@ -3949,7 +3943,7 @@ DEFUN (show_ip_pim_state_vrf_all,
        "PIM state information\n"
        "Unicast or Multicast address\n"
        "Multicast address\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	const char *src_or_group = NULL;
 	const char *group = NULL;
@@ -3994,7 +3988,7 @@ DEFUN (show_ip_pim_upstream,
        PIM_STR
        VRF_CMD_HELP_STR
        "PIM upstream information\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -4047,7 +4041,7 @@ DEFUN (show_ip_pim_upstream_join_desired,
        PIM_STR
        VRF_CMD_HELP_STR
        "PIM upstream join-desired\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -4069,7 +4063,7 @@ DEFUN (show_ip_pim_upstream_rpf,
        PIM_STR
        VRF_CMD_HELP_STR
        "PIM upstream source rpf\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -4091,7 +4085,7 @@ DEFUN (show_ip_pim_rp,
        PIM_STR
        VRF_CMD_HELP_STR
        "PIM RP information\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -4113,7 +4107,7 @@ DEFUN (show_ip_pim_rp_vrf_all,
        PIM_STR
        VRF_CMD_HELP_STR
        "PIM RP information\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	u_char uj = use_json(argc, argv);
 	struct vrf *vrf;
@@ -4146,7 +4140,7 @@ DEFUN (show_ip_pim_rpf,
        PIM_STR
        VRF_CMD_HELP_STR
        "PIM cached source rpf information\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -4168,7 +4162,7 @@ DEFUN (show_ip_pim_rpf_vrf_all,
        PIM_STR
        VRF_CMD_HELP_STR
        "PIM cached source rpf information\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	u_char uj = use_json(argc, argv);
 	struct vrf *vrf;
@@ -4308,7 +4302,7 @@ DEFUN (show_ip_pim_interface_traffic,
        "PIM interface information\n"
        "Protocol Packet counters\n"
        "Interface name\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -4334,7 +4328,7 @@ static void show_multicast_interfaces(struct pim_instance *pim, struct vty *vty)
 	vty_out(vty, "\n");
 
 	vty_out(vty,
-		"Interface Address         ifi Vif  PktsIn PktsOut    BytesIn   BytesOut\n");
+		"Interface Address            ifi Vif  PktsIn PktsOut    BytesIn   BytesOut\n");
 
 	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(pim->vrf_id), node, ifp)) {
 		struct pim_interface *pim_ifp;
@@ -4351,7 +4345,7 @@ static void show_multicast_interfaces(struct pim_instance *pim, struct vty *vty)
 
 		if (ioctl(pim->mroute_socket, SIOCGETVIFCNT, &vreq)) {
 			zlog_warn(
-				"ioctl(SIOCGETVIFCNT=%lu) failure for interface %s vif_index=%d: errno=%d: %s\n",
+				"ioctl(SIOCGETVIFCNT=%lu) failure for interface %s vif_index=%d: errno=%d: %s",
 				(unsigned long)SIOCGETVIFCNT, ifp->name,
 				pim_ifp->mroute_vif_index, errno,
 				safe_strerror(errno));
@@ -4359,7 +4353,7 @@ static void show_multicast_interfaces(struct pim_instance *pim, struct vty *vty)
 
 		ifaddr = pim_ifp->primary_address;
 
-		vty_out(vty, "%-9s %-15s %3d %3d %7lu %7lu %10lu %10lu\n",
+		vty_out(vty, "%-12s %-15s %3d %3d %7lu %7lu %10lu %10lu\n",
 			ifp->name, inet_ntoa(ifaddr), ifp->ifindex,
 			pim_ifp->mroute_vif_index, (unsigned long)vreq.icount,
 			(unsigned long)vreq.ocount, (unsigned long)vreq.ibytes,
@@ -4376,8 +4370,9 @@ static void pim_cmd_show_ip_multicast_helper(struct pim_instance *pim,
 
 	pim = vrf->info;
 
-	vty_out(vty, "Mroute socket descriptor: %d(%s)\n", pim->mroute_socket,
-		vrf->name);
+	vty_out(vty, "Mroute socket descriptor:");
+
+	vty_out(vty, " %d(%s)\n", pim->mroute_socket, vrf->name);
 
 	pim_time_uptime(uptime, sizeof(uptime),
 			now - pim->mroute_socket_creation);
@@ -4755,7 +4750,7 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty, u_char uj)
 						       json_ifp_out);
 			} else {
 				vty_out(vty,
-					"%-15s %-15s %-6s %-10s %-10s %-3d  %8s%s\n",
+					"%-15s %-15s %-6s %-10s %-10s %-3d  %8s %s\n",
 					src_str, grp_str, proto, in_ifname,
 					out_ifname, ttl, oif_uptime,
 					pim->vrf->name);
@@ -4770,7 +4765,7 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty, u_char uj)
 
 		if (!uj && !found_oif) {
 			vty_out(vty,
-				"%-15s %-15s %-6s %-10s %-10s %-3d  %8s%s\n",
+				"%-15s %-15s %-6s %-10s %-10s %-3d  %8s %s\n",
 				src_str, grp_str, proto, in_ifname, "none", 0,
 				"--:--:--", pim->vrf->name);
 		}
@@ -5529,7 +5524,7 @@ DEFUN (show_ip_pim_ssm_range,
        PIM_STR
        VRF_CMD_HELP_STR
        "PIM group type\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -5582,7 +5577,7 @@ DEFUN (show_ip_pim_group_type,
        VRF_CMD_HELP_STR
        "multicast group type\n"
        "group address\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
@@ -6501,7 +6496,7 @@ DEFUN (interface_ip_mroute,
 	oif = if_lookup_by_name(oifname, pim->vrf_id);
 	if (!oif) {
 		vty_out(vty, "No such interface name %s\n", oifname);
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	grp_str = argv[idx_ipv4]->arg;
@@ -6509,14 +6504,14 @@ DEFUN (interface_ip_mroute,
 	if (result <= 0) {
 		vty_out(vty, "Bad group address %s: errno=%d: %s\n", grp_str,
 			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	src_addr.s_addr = INADDR_ANY;
 
 	if (pim_static_add(pim, iif, oif, grp_addr, src_addr)) {
 		vty_out(vty, "Failed to add route\n");
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	return CMD_SUCCESS;
@@ -6532,6 +6527,7 @@ DEFUN (interface_ip_mroute_source,
        "Source address\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, iif);
+	struct pim_interface *pim_ifp;
 	struct pim_instance *pim;
 	int idx_interface = 2;
 	int idx_ipv4 = 3;
@@ -6543,7 +6539,6 @@ DEFUN (interface_ip_mroute_source,
 	const char *src_str;
 	struct in_addr src_addr;
 	int result;
-	struct pim_interface *pim_ifp;
 
 	pim_ifp = iif->info;
 	pim = pim_ifp->pim;
@@ -6552,7 +6547,7 @@ DEFUN (interface_ip_mroute_source,
 	oif = if_lookup_by_name(oifname, pim->vrf_id);
 	if (!oif) {
 		vty_out(vty, "No such interface name %s\n", oifname);
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	grp_str = argv[idx_ipv4]->arg;
@@ -6560,7 +6555,7 @@ DEFUN (interface_ip_mroute_source,
 	if (result <= 0) {
 		vty_out(vty, "Bad group address %s: errno=%d: %s\n", grp_str,
 			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	src_str = argv[idx_ipv4_2]->arg;
@@ -6568,33 +6563,12 @@ DEFUN (interface_ip_mroute_source,
 	if (result <= 0) {
 		vty_out(vty, "Bad source address %s: errno=%d: %s\n", src_str,
 			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	if (pim_static_add(pim, iif, oif, grp_addr, src_addr)) {
 		vty_out(vty, "Failed to add route\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
-	grp_str = argv[idx_ipv4]->arg;
-	result = inet_pton(AF_INET, grp_str, &grp_addr);
-	if (result <= 0) {
-		vty_out(vty, "Bad group address %s: errno=%d: %s\n", grp_str,
-			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
-	src_str = argv[idx_ipv4_2]->arg;
-	result = inet_pton(AF_INET, src_str, &src_addr);
-	if (result <= 0) {
-		vty_out(vty, "Bad source address %s: errno=%d: %s\n", src_str,
-			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
-	if (pim_static_add(pim, iif, oif, grp_addr, src_addr)) {
-		vty_out(vty, "Failed to add route\n");
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	return CMD_SUCCESS;
@@ -6610,6 +6584,7 @@ DEFUN (interface_no_ip_mroute,
        "Group Address\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, iif);
+	struct pim_interface *pim_ifp;
 	struct pim_instance *pim;
 	int idx_interface = 3;
 	int idx_ipv4 = 4;
@@ -6619,7 +6594,6 @@ DEFUN (interface_no_ip_mroute,
 	struct in_addr grp_addr;
 	struct in_addr src_addr;
 	int result;
-	struct pim_interface *pim_ifp;
 
 	pim_ifp = iif->info;
 	pim = pim_ifp->pim;
@@ -6628,7 +6602,7 @@ DEFUN (interface_no_ip_mroute,
 	oif = if_lookup_by_name(oifname, pim->vrf_id);
 	if (!oif) {
 		vty_out(vty, "No such interface name %s\n", oifname);
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	grp_str = argv[idx_ipv4]->arg;
@@ -6636,14 +6610,14 @@ DEFUN (interface_no_ip_mroute,
 	if (result <= 0) {
 		vty_out(vty, "Bad group address %s: errno=%d: %s\n", grp_str,
 			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	src_addr.s_addr = INADDR_ANY;
 
 	if (pim_static_del(pim, iif, oif, grp_addr, src_addr)) {
 		vty_out(vty, "Failed to remove route\n");
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	return CMD_SUCCESS;
@@ -6660,6 +6634,7 @@ DEFUN (interface_no_ip_mroute_source,
        "Source Address\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, iif);
+	struct pim_interface *pim_ifp;
 	struct pim_instance *pim;
 	int idx_interface = 3;
 	int idx_ipv4 = 4;
@@ -6671,7 +6646,6 @@ DEFUN (interface_no_ip_mroute_source,
 	const char *src_str;
 	struct in_addr src_addr;
 	int result;
-	struct pim_interface *pim_ifp;
 
 	pim_ifp = iif->info;
 	pim = pim_ifp->pim;
@@ -6680,7 +6654,7 @@ DEFUN (interface_no_ip_mroute_source,
 	oif = if_lookup_by_name(oifname, pim->vrf_id);
 	if (!oif) {
 		vty_out(vty, "No such interface name %s\n", oifname);
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	grp_str = argv[idx_ipv4]->arg;
@@ -6688,7 +6662,7 @@ DEFUN (interface_no_ip_mroute_source,
 	if (result <= 0) {
 		vty_out(vty, "Bad group address %s: errno=%d: %s\n", grp_str,
 			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	src_str = argv[idx_ipv4_2]->arg;
@@ -6696,33 +6670,12 @@ DEFUN (interface_no_ip_mroute_source,
 	if (result <= 0) {
 		vty_out(vty, "Bad source address %s: errno=%d: %s\n", src_str,
 			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	if (pim_static_del(pim, iif, oif, grp_addr, src_addr)) {
 		vty_out(vty, "Failed to remove route\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
-	grp_str = argv[idx_ipv4]->arg;
-	result = inet_pton(AF_INET, grp_str, &grp_addr);
-	if (result <= 0) {
-		vty_out(vty, "Bad group address %s: errno=%d: %s\n", grp_str,
-			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
-	src_str = argv[idx_ipv4_2]->arg;
-	result = inet_pton(AF_INET, src_str, &src_addr);
-	if (result <= 0) {
-		vty_out(vty, "Bad source address %s: errno=%d: %s\n", src_str,
-			errno, safe_strerror(errno));
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
-	if (pim_static_del(pim, iif, oif, grp_addr, src_addr)) {
-		vty_out(vty, "Failed to remove route\n");
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_WARNING;
 	}
 
 	return CMD_SUCCESS;
@@ -7301,14 +7254,17 @@ DEFUN (no_debug_msdp_packets,
 ALIAS(no_debug_msdp_packets, undebug_msdp_packets_cmd, "undebug msdp packets",
       UNDEBUG_STR DEBUG_MSDP_STR DEBUG_MSDP_PACKETS_STR)
 
-DEFUN (show_debugging_pim,
-       show_debugging_pim_cmd,
-       "show debugging pim",
-       SHOW_STR
-       DEBUG_STR
-       PIM_STR)
+DEFUN_NOSH (show_debugging_pim,
+	    show_debugging_pim_cmd,
+	    "show debugging [pim]",
+	    SHOW_STR
+	    DEBUG_STR
+	    PIM_STR)
 {
+	vty_out(vty, "PIM debugging status\n");
+
 	pim_debug_config_write(vty);
+
 	return CMD_SUCCESS;
 }
 
@@ -7355,11 +7311,12 @@ DEFUN (interface_pim_use_source,
 
 DEFUN (interface_no_pim_use_source,
        interface_no_pim_use_source_cmd,
-       "no ip pim use-source",
+       "no ip pim use-source [A.B.C.D]",
        NO_STR
        IP_STR
        "pim multicast routing\n"
-       "Delete source IP address\n")
+       "Delete source IP address\n"
+       "source ip address\n")
 {
 	return interface_pim_use_src_cmd_worker(vty, "0.0.0.0");
 }
@@ -7843,7 +7800,7 @@ DEFUN (show_ip_msdp_mesh_group,
        MSDP_STR
        VRF_CMD_HELP_STR
        "MSDP mesh-group information\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	u_char uj = use_json(argc, argv);
 	int idx = 2;
@@ -7865,7 +7822,7 @@ DEFUN (show_ip_msdp_mesh_group_vrf_all,
        MSDP_STR
        VRF_CMD_HELP_STR
        "MSDP mesh-group information\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	u_char uj = use_json(argc, argv);
 	struct vrf *vrf;
@@ -8059,20 +8016,20 @@ DEFUN (show_ip_msdp_peer_detail,
        "MSDP peer information\n"
        "Detailed output\n"
        "peer ip address\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	u_char uj = use_json(argc, argv);
 	int idx = 2;
-	struct vrf *vrf = pim_cmd_lookup_vrf (vty, argv, argc, &idx);
+	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
 
 	if (!vrf)
 		return CMD_WARNING;
 
 	char *arg = NULL;
 
-	if (argv_find (argv, argc, "detail", &idx))
+	if (argv_find(argv, argc, "detail", &idx))
 		arg = argv[idx]->text;
-	else if (argv_find (argv, argc, "A.B.C.D", &idx))
+	else if (argv_find(argv, argc, "A.B.C.D", &idx))
 		arg = argv[idx]->arg;
 
 	if (arg)
@@ -8093,7 +8050,7 @@ DEFUN (show_ip_msdp_peer_detail_vrf_all,
        "MSDP peer information\n"
        "Detailed output\n"
        "peer ip address\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	int idx = 2;
 	u_char uj = use_json(argc, argv);
@@ -8301,7 +8258,7 @@ DEFUN (show_ip_msdp_sa_detail,
        VRF_CMD_HELP_STR
        "MSDP active-source information\n"
        "Detailed output\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	u_char uj = use_json(argc, argv);
 	int idx = 2;
@@ -8324,7 +8281,7 @@ DEFUN (show_ip_msdp_sa_detail_vrf_all,
        VRF_CMD_HELP_STR
        "MSDP active-source information\n"
        "Detailed output\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	u_char uj = use_json(argc, argv);
 	struct vrf *vrf;
@@ -8417,7 +8374,7 @@ DEFUN (show_ip_msdp_sa_sg,
        "MSDP active-source information\n"
        "source or group ip\n"
        "group ip\n"
-       "JavaScript Object Notation\n")
+       JSON_STR)
 {
 	u_char uj = use_json(argc, argv);
 	struct vrf *vrf;
@@ -8443,6 +8400,54 @@ DEFUN (show_ip_msdp_sa_sg,
 
 	return CMD_SUCCESS;
 }
+
+DEFUN (show_ip_msdp_sa_sg_vrf_all,
+       show_ip_msdp_sa_sg_vrf_all_cmd,
+       "show ip msdp vrf all sa [A.B.C.D [A.B.C.D]] [json]",
+       SHOW_STR
+       IP_STR
+       MSDP_STR
+       VRF_CMD_HELP_STR
+       "MSDP active-source information\n"
+       "source or group ip\n"
+       "group ip\n"
+       JSON_STR)
+{
+	u_char uj = use_json(argc, argv);
+	struct vrf *vrf;
+	bool first = true;
+	int idx = 2;
+
+	char *src_ip = argv_find(argv, argc, "A.B.C.D", &idx) ? argv[idx++]->arg
+		: NULL;
+	char *grp_ip = idx < argc && argv_find(argv, argc, "A.B.C.D", &idx)
+		? argv[idx]->arg
+		: NULL;
+
+	if (uj)
+		vty_out(vty, "{ ");
+	RB_FOREACH(vrf, vrf_name_head, &vrfs_by_name) {
+		if (uj) {
+			if (!first)
+				vty_out(vty, ", ");
+			vty_out(vty, " \"%s\": ", vrf->name);
+			first = false;
+		} else
+			vty_out(vty, "VRF: %s\n", vrf->name);
+
+		if (src_ip && grp_ip)
+			ip_msdp_show_sa_sg(vrf->info, vty, src_ip, grp_ip, uj);
+		else if (src_ip)
+			ip_msdp_show_sa_addr(vrf->info, vty, src_ip, uj);
+		else
+			ip_msdp_show_sa(vrf->info, vty, uj);
+	}
+	if (uj)
+		vty_out(vty, "}\n");
+
+	return CMD_SUCCESS;
+}
+
 
 void pim_cmd_init(void)
 {
@@ -8699,6 +8704,7 @@ void pim_cmd_init(void)
 	install_element(VIEW_NODE, &show_ip_msdp_sa_detail_cmd);
 	install_element(VIEW_NODE, &show_ip_msdp_sa_detail_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_msdp_sa_sg_cmd);
+	install_element(VIEW_NODE, &show_ip_msdp_sa_sg_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_msdp_mesh_group_cmd);
 	install_element(VIEW_NODE, &show_ip_msdp_mesh_group_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_ssm_range_cmd);

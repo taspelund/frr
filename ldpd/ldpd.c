@@ -256,7 +256,7 @@ main(int argc, char *argv[])
 	strlcpy(init.user, ldpd_privs.user, sizeof(init.user));
 	strlcpy(init.group, ldpd_privs.group, sizeof(init.group));
 	strlcpy(init.ctl_sock_path, ctl_sock_path, sizeof(init.ctl_sock_path));
-	strlcpy(init.zclient_serv_path, zclient_serv_path_get(),
+	strlcpy(init.zclient_serv_path, frr_zclientpath,
 	    sizeof(init.zclient_serv_path));
 
 	argc -= optind;
@@ -392,6 +392,8 @@ ldpd_shutdown(void)
 	pid_t		 pid;
 	int		 status;
 
+	frr_early_fini();
+
 	/* close pipes */
 	msgbuf_clear(&iev_ldpe->ibuf.w);
 	close(iev_ldpe->ibuf.fd);
@@ -423,13 +425,9 @@ ldpd_shutdown(void)
 
 	vrf_terminate();
 	access_list_reset();
-	cmd_terminate();
-	vty_terminate();
 	ldp_zebra_destroy();
-	zprivs_terminate(&ldpd_privs);
-	thread_master_free(master);
-	closezlog();
 
+	frr_fini();
 	exit(0);
 }
 
@@ -578,21 +576,36 @@ main_dispatch_lde(struct thread *thread)
 			if (kr_delete(imsg.data))
 				log_warnx("%s: error deleting route", __func__);
 			break;
-		case IMSG_KPWLABEL_CHANGE:
+		case IMSG_KPW_ADD:
+		case IMSG_KPW_DELETE:
+		case IMSG_KPW_SET:
+		case IMSG_KPW_UNSET:
 			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
-			    sizeof(struct kpw))
+			    sizeof(struct zapi_pw))
 				fatalx("invalid size of IMSG_KPWLABEL_CHANGE");
-			if (kmpw_set(imsg.data))
-				log_warnx("%s: error changing pseudowire",
-				    __func__);
-			break;
-		case IMSG_KPWLABEL_DELETE:
-			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
-			    sizeof(struct kpw))
-				fatalx("invalid size of IMSG_KPWLABEL_DELETE");
-			if (kmpw_unset(imsg.data))
-				log_warnx("%s: error unsetting pseudowire",
-				    __func__);
+
+			switch (imsg.hdr.type) {
+			case IMSG_KPW_ADD:
+				if (kmpw_add(imsg.data))
+					log_warnx("%s: error adding "
+					    "pseudowire", __func__);
+				break;
+			case IMSG_KPW_DELETE:
+				if (kmpw_del(imsg.data))
+					log_warnx("%s: error deleting "
+					    "pseudowire", __func__);
+				break;
+			case IMSG_KPW_SET:
+				if (kmpw_set(imsg.data))
+					log_warnx("%s: error setting "
+					    "pseudowire", __func__);
+				break;
+			case IMSG_KPW_UNSET:
+				if (kmpw_unset(imsg.data))
+					log_warnx("%s: error unsetting "
+					    "pseudowire", __func__);
+				break;
+			}
 			break;
 		case IMSG_ACL_CHECK:
 			if (imsg.hdr.len != IMSG_HEADER_SIZE +

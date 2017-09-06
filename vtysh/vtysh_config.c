@@ -181,6 +181,8 @@ void vtysh_config_parse_line(void *arg, const char *line)
 	default:
 		if (strncmp(line, "interface", strlen("interface")) == 0)
 			config = config_get(INTERFACE_NODE, line);
+		else if (strncmp(line, "pseudowire", strlen("pseudowire")) == 0)
+			config = config_get(PW_NODE, line);
 		else if (strncmp(line, "logical-router", strlen("ns")) == 0)
 			config = config_get(NS_NODE, line);
 		else if (strncmp(line, "vrf", strlen("vrf")) == 0)
@@ -243,7 +245,10 @@ void vtysh_config_parse_line(void *arg, const char *line)
 				 == 0
 			 || strncmp(line, "ip extcommunity-list",
 				    strlen("ip extcommunity-list"))
-				    == 0)
+				 == 0
+			 || strncmp(line, "ip large-community-list",
+				    strlen("ip large-community-list"))
+				 == 0)
 			config = config_get(COMMUNITY_LIST_NODE, line);
 		else if (strncmp(line, "ip route", strlen("ip route")) == 0)
 			config = config_get(IP_NODE, line);
@@ -418,10 +423,9 @@ int vtysh_read_config(const char *config_default_dir)
 void vtysh_config_write()
 {
 	char line[81];
-	extern struct host host;
 
-	if (host.name) {
-		sprintf(line, "hostname %s", host.name);
+	if (cmd_hostname_get()) {
+		sprintf(line, "hostname %s", cmd_hostname_get());
 		vtysh_config_parse_line(NULL, line);
 	}
 	if (vtysh_write_integrated == WRITE_INTEGRATED_NO)

@@ -22,6 +22,7 @@
 #define _QUAGGA_BGP_ROUTE_H
 
 #include "queue.h"
+#include "nexthop.h"
 #include "bgp_table.h"
 
 struct bgp_nexthop_cache;
@@ -328,8 +329,7 @@ extern int bgp_nlri_parse_ip(struct peer *, struct attr *, struct bgp_nlri *);
 extern int bgp_maximum_prefix_overflow(struct peer *, afi_t, safi_t, int);
 
 extern void bgp_redistribute_add(struct bgp *, struct prefix *,
-				 const struct in_addr *,
-				 const struct in6_addr *, unsigned int ifindex,
+				 const union g_addr *, unsigned int ifindex,
 				 u_int32_t, u_char, u_short, route_tag_t);
 extern void bgp_redistribute_delete(struct bgp *, struct prefix *, u_char,
 				    u_short);
@@ -369,12 +369,9 @@ extern void bgp_process(struct bgp *, struct bgp_node *, afi_t, safi_t);
  * queue element with NULL bgp node.
  */
 extern void bgp_add_eoiu_mark(struct bgp *);
-extern int bgp_config_write_table_map(struct vty *, struct bgp *, afi_t, safi_t,
-				      int *);
-extern int bgp_config_write_network(struct vty *, struct bgp *, afi_t, safi_t,
-				    int *);
-extern int bgp_config_write_distance(struct vty *, struct bgp *, afi_t, safi_t,
-				     int *);
+extern void bgp_config_write_table_map(struct vty *, struct bgp *, afi_t, safi_t);
+extern void bgp_config_write_network(struct vty *, struct bgp *, afi_t, safi_t);
+extern void bgp_config_write_distance(struct vty *, struct bgp *, afi_t, safi_t);
 
 extern void bgp_aggregate_increment(struct bgp *, struct prefix *,
 				    struct bgp_info *, afi_t, safi_t);

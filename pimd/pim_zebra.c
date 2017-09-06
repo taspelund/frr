@@ -289,10 +289,9 @@ static int pim_zebra_if_address_add(int command, struct zclient *zclient,
 		prefix2str(p, buf, BUFSIZ);
 		zlog_debug("%s: %s(%d) connected IP address %s flags %u %s",
 			   __PRETTY_FUNCTION__, c->ifp->name, vrf_id, buf,
-			   c->flags,
-			   CHECK_FLAG(c->flags, ZEBRA_IFA_SECONDARY)
-				   ? "secondary"
-				   : "primary");
+			   c->flags, CHECK_FLAG(c->flags, ZEBRA_IFA_SECONDARY)
+					     ? "secondary"
+					     : "primary");
 
 #ifdef PIM_DEBUG_IFADDR_DUMP
 		dump_if_address(c->ifp);

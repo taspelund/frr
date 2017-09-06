@@ -72,10 +72,11 @@ static struct pim_instance *pim_instance_init(struct vrf *vrf)
 	if (!pim)
 		return NULL;
 
+	pim_if_init(pim);
+
 	pim->keep_alive_time = PIM_KEEPALIVE_PERIOD;
 	pim->rp_keep_alive_time = PIM_RP_KEEPALIVE_PERIOD;
 
-	pim_if_init(pim);
 
 	pim->vrf_id = vrf->vrf_id;
 	pim->vrf = vrf;
@@ -86,7 +87,7 @@ static struct pim_instance *pim_instance_init(struct vrf *vrf)
 	pim_msdp_init(pim, master);
 
 	snprintf(hash_name, 64, "PIM %s RPF Hash", vrf->name);
-	pim->rpf_hash = hash_create_size(256, pim_rpf_hash_key,
+	pim->rpf_hash =	hash_create_size(256, pim_rpf_hash_key,
 					 pim_rpf_equal, hash_name);
 
 	if (PIM_DEBUG_ZEBRA)

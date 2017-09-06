@@ -19,6 +19,9 @@
  */
 
 #include <zebra.h>
+
+#ifndef HAVE_NETLINK
+
 #include <net/if_types.h>
 #ifdef __OpenBSD__
 #include <netmpls/mpls.h>
@@ -85,13 +88,10 @@ extern struct zebra_privs_t zserv_privs;
 #if !defined(ROUNDUP)
 
 /*
- * It's a bug for a platform not to define rounding/alignment for
- * sockaddrs on the routing socket.  This warning really is
- * intentional, to provoke filing bug reports with operating systems
- * that don't define RT_ROUNDUP or equivalent.
+ * If you're porting to a platform that changed RT_ROUNDUP but doesn't
+ * have it in its headers, this will break rather obviously and you'll
+ * have to fix it here.
  */
-#warning                                                                       \
-	"net/route.h does not define RT_ROUNDUP; making unwarranted assumptions!"
 
 /* OS X (Xcode as of 2014-12) is known not to define RT_ROUNDUP */
 #ifdef __APPLE__
@@ -441,6 +441,12 @@ int ifm_read(struct if_msghdr *ifm)
 	RTA_ADDR_GET(NULL, RTA_IFA, ifm->ifm_addrs, cp);
 	RTA_ADDR_GET(NULL, RTA_AUTHOR, ifm->ifm_addrs, cp);
 	RTA_ADDR_GET(NULL, RTA_BRD, ifm->ifm_addrs, cp);
+#ifdef RTA_LABEL
+	RTA_ATTR_GET(NULL, RTA_LABEL, ifm->ifm_addrs, cp);
+#endif
+#ifdef RTA_SRC
+	RTA_ADDR_GET(NULL, RTA_SRC, ifm->ifm_addrs, cp);
+#endif
 
 	if (IS_ZEBRA_DEBUG_KERNEL)
 		zlog_debug("%s: sdl ifname %s", __func__,
@@ -624,6 +630,7 @@ int ifm_read(struct if_msghdr *ifm)
 #ifdef HAVE_NET_RT_IFLIST
 	ifp->stats = ifm->ifm_data;
 #endif /* HAVE_NET_RT_IFLIST */
+	ifp->speed = ifm->ifm_data.ifi_baudrate / 1000000;
 
 	if (IS_ZEBRA_DEBUG_KERNEL)
 		zlog_debug("%s: interface %s index %d", __func__, ifp->name,
@@ -660,6 +667,12 @@ static void ifam_read_mesg(struct ifa_msghdr *ifm, union sockunion *addr,
 	RTA_ADDR_GET(addr, RTA_IFA, ifm->ifam_addrs, pnt);
 	RTA_ADDR_GET(NULL, RTA_AUTHOR, ifm->ifam_addrs, pnt);
 	RTA_ADDR_GET(brd, RTA_BRD, ifm->ifam_addrs, pnt);
+#ifdef RTA_LABEL
+	RTA_ATTR_GET(NULL, RTA_LABEL, ifm->ifam_addrs, pnt);
+#endif
+#ifdef RTA_SRC
+	RTA_ADDR_GET(NULL, RTA_SRC, ifm->ifam_addrs, pnt);
+#endif
 
 	if (IS_ZEBRA_DEBUG_KERNEL) {
 		int family = sockunion_family(addr);
@@ -761,12 +774,10 @@ int ifam_read(struct ifa_msghdr *ifam)
 		if (ifam->ifam_type == RTM_NEWADDR)
 			connected_add_ipv6(ifp, flags, &addr.sin6.sin6_addr,
 					   ip6_masklen(mask.sin6.sin6_addr),
-					   &brd.sin6.sin6_addr,
 					   (isalias ? ifname : NULL));
 		else
 			connected_delete_ipv6(ifp, &addr.sin6.sin6_addr,
-					      ip6_masklen(mask.sin6.sin6_addr),
-					      &brd.sin6.sin6_addr);
+					      ip6_masklen(mask.sin6.sin6_addr));
 		break;
 	default:
 		/* Unsupported family silently ignore... */
@@ -828,6 +839,17 @@ static int rtm_read_mesg(struct rt_msghdr *rtm, union sockunion *dest,
 	RTA_ADDR_GET(NULL, RTA_IFA, rtm->rtm_addrs, pnt);
 	RTA_ADDR_GET(NULL, RTA_AUTHOR, rtm->rtm_addrs, pnt);
 	RTA_ADDR_GET(NULL, RTA_BRD, rtm->rtm_addrs, pnt);
+#ifdef RTA_LABEL
+#if 0
+	union sockunion label;
+	memset(&label, 0, sizeof(label));
+	RTA_ATTR_GET(&label, RTA_LABEL, rtm->rtm_addrs, pnt);
+#endif
+	RTA_ATTR_GET(NULL, RTA_LABEL, rtm->rtm_addrs, pnt);
+#endif
+#ifdef RTA_SRC
+	RTA_ADDR_GET(NULL, RTA_SRC, rtm->rtm_addrs, pnt);
+#endif
 
 	/* If there is netmask information set it's family same as
 	   destination family*/
@@ -848,6 +870,7 @@ void rtm_read(struct rt_msghdr *rtm)
 	union sockunion dest, mask, gate;
 	char ifname[INTERFACE_NAMSIZ + 1];
 	short ifnlen = 0;
+	struct nexthop nh;
 
 	zebra_flags = 0;
 
@@ -885,11 +908,15 @@ void rtm_read(struct rt_msghdr *rtm)
 	if (flags & RTF_STATIC)
 		SET_FLAG(zebra_flags, ZEBRA_FLAG_STATIC);
 
+	memset(&nh, 0, sizeof(nh));
 	/* This is a reject or blackhole route */
-	if (flags & RTF_REJECT)
-		SET_FLAG(zebra_flags, ZEBRA_FLAG_REJECT);
-	if (flags & RTF_BLACKHOLE)
-		SET_FLAG(zebra_flags, ZEBRA_FLAG_BLACKHOLE);
+	if (flags & RTF_REJECT) {
+		nh.type = NEXTHOP_TYPE_BLACKHOLE;
+		nh.bh_type = BLACKHOLE_REJECT;
+	} else if (flags & RTF_BLACKHOLE) {
+		nh.type = NEXTHOP_TYPE_BLACKHOLE;
+		nh.bh_type = BLACKHOLE_NULL;
+	}
 
 	if (dest.sa.sa_family == AF_INET) {
 		struct prefix p;
@@ -1014,19 +1041,23 @@ void rtm_read(struct rt_msghdr *rtm)
 		 */
 		if (rtm->rtm_type == RTM_CHANGE)
 			rib_delete(AFI_IP, SAFI_UNICAST, VRF_DEFAULT,
-				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				   NULL, 0, 0);
+				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p,
+				   NULL, NULL, 0, 0);
 
-		union g_addr ggate = {.ipv4 = gate.sin.sin_addr};
+		if (!nh.type) {
+			nh.type = NEXTHOP_TYPE_IPV4;
+			nh.gate.ipv4 = gate.sin.sin_addr;
+		}
+
 		if (rtm->rtm_type == RTM_GET || rtm->rtm_type == RTM_ADD
 		    || rtm->rtm_type == RTM_CHANGE)
 			rib_add(AFI_IP, SAFI_UNICAST, VRF_DEFAULT,
 				ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				&ggate, NULL, 0, 0, 0, 0, 0);
+				&nh, 0, 0, 0, 0);
 		else
 			rib_delete(AFI_IP, SAFI_UNICAST, VRF_DEFAULT,
 				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				   &ggate, 0, 0);
+				   &nh, 0, 0);
 	}
 	if (dest.sa.sa_family == AF_INET6) {
 		/* One day we might have a debug section here like one in the
@@ -1056,19 +1087,25 @@ void rtm_read(struct rt_msghdr *rtm)
 		 */
 		if (rtm->rtm_type == RTM_CHANGE)
 			rib_delete(AFI_IP6, SAFI_UNICAST, VRF_DEFAULT,
-				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				   NULL, 0, 0);
+				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p,
+				   NULL, NULL, 0, 0);
 
-		union g_addr ggate = {.ipv6 = gate.sin6.sin6_addr};
+		if (!nh.type) {
+			nh.type = ifindex ? NEXTHOP_TYPE_IPV6_IFINDEX
+					  : NEXTHOP_TYPE_IPV6;
+			nh.gate.ipv6 = gate.sin6.sin6_addr;
+			nh.ifindex = ifindex;
+		}
+
 		if (rtm->rtm_type == RTM_GET || rtm->rtm_type == RTM_ADD
 		    || rtm->rtm_type == RTM_CHANGE)
 			rib_add(AFI_IP6, SAFI_UNICAST, VRF_DEFAULT,
 				ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				&ggate, NULL, ifindex, 0, 0, 0, 0);
+				&nh, 0, 0, 0, 0);
 		else
 			rib_delete(AFI_IP6, SAFI_UNICAST, VRF_DEFAULT,
 				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				   &ggate, ifindex, 0);
+				   &nh, 0, 0);
 	}
 }
 
@@ -1078,7 +1115,7 @@ void rtm_read(struct rt_msghdr *rtm)
  */
 int rtm_write(int message, union sockunion *dest, union sockunion *mask,
 	      union sockunion *gate, union sockunion *mpls, unsigned int index,
-	      int zebra_flags, int metric)
+	      enum blackhole_type bh_type, int metric)
 {
 	int ret;
 	caddr_t pnt;
@@ -1168,11 +1205,16 @@ int rtm_write(int message, union sockunion *dest, union sockunion *mask,
 	/* Tagging route with flags */
 	msg.rtm.rtm_flags |= (RTF_PROTO1);
 
-	/* Additional flags. */
-	if (zebra_flags & ZEBRA_FLAG_BLACKHOLE)
-		msg.rtm.rtm_flags |= RTF_BLACKHOLE;
-	if (zebra_flags & ZEBRA_FLAG_REJECT)
+	switch (bh_type) {
+	case BLACKHOLE_UNSPEC:
+		break;
+	case BLACKHOLE_REJECT:
 		msg.rtm.rtm_flags |= RTF_REJECT;
+		break;
+	default:
+		msg.rtm.rtm_flags |= RTF_BLACKHOLE;
+		break;
+	}
 
 
 #define SOCKADDRSET(X, R)                                                      \
@@ -1376,3 +1418,5 @@ void kernel_terminate(struct zebra_ns *zns)
 {
 	return;
 }
+
+#endif /* !HAVE_NETLINK */

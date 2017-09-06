@@ -37,6 +37,7 @@
 #include "zclient.h"
 #include "stream.h"
 #include "network.h"
+#include "libfrr.h"
 
 static void		 lde_shutdown(void);
 static int		 lde_dispatch_imsg(struct thread *);
@@ -164,13 +165,15 @@ lde_init(struct ldpd_init *init)
 	/* drop privileges */
 	lde_privs.user = init->user;
 	lde_privs.group = init->group;
+	zprivs_preinit(&lde_privs);
 	zprivs_init(&lde_privs);
 
 	/* start the LIB garbage collector */
 	lde_gc_start_timer();
 
 	/* Init synchronous zclient and label list */
-	zclient_serv_path_set(init->zclient_serv_path);
+	frr_zclient_addr(&zclient_addr, &zclient_addr_len,
+			 init->zclient_serv_path);
 	zclient_sync_init(init->instance);
 	lde_label_list_init();
 }
@@ -472,6 +475,15 @@ lde_dispatch_parent(struct thread *thread)
 				}
 			}
 			break;
+		case IMSG_PW_UPDATE:
+			if (imsg.hdr.len != IMSG_HEADER_SIZE +
+			    sizeof(struct zapi_pw_status))
+				fatalx("PW_UPDATE imsg with wrong len");
+
+			if (l2vpn_pw_status_update(imsg.data) != 0)
+				log_warnx("%s: error updating PW status",
+				    __func__);
+			break;
 		case IMSG_NETWORK_ADD:
 		case IMSG_NETWORK_UPDATE:
 			if (imsg.hdr.len != IMSG_HEADER_SIZE +
@@ -712,8 +724,8 @@ lde_update_label(struct fec_node *fn)
 void
 lde_send_change_klabel(struct fec_node *fn, struct fec_nh *fnh)
 {
-	struct kroute	kr;
-	struct kpw	kpw;
+	struct kroute	 kr;
+	struct zapi_pw	 zpw;
 	struct l2vpn_pw	*pw;
 
 	switch (fn->fec.type) {
@@ -751,19 +763,10 @@ lde_send_change_klabel(struct fec_node *fn, struct fec_nh *fnh)
 			return;
 
 		pw = (struct l2vpn_pw *) fn->data;
-		pw->flags |= F_PW_STATUS_UP;
-
-		memset(&kpw, 0, sizeof(kpw));
-		kpw.ifindex = pw->ifindex;
-		kpw.pw_type = fn->fec.u.pwid.type;
-		kpw.af = pw->af;
-		kpw.nexthop = pw->addr;
-		kpw.local_label = fn->local_label;
-		kpw.remote_label = fnh->remote_label;
-		kpw.flags = pw->flags;
-
-		lde_imsg_compose_parent(IMSG_KPWLABEL_CHANGE, 0, &kpw,
-		    sizeof(kpw));
+		pw2zpw(pw, &zpw);
+		zpw.local_label = fn->local_label;
+		zpw.remote_label = fnh->remote_label;
+		lde_imsg_compose_parent(IMSG_KPW_SET, 0, &zpw, sizeof(zpw));
 		break;
 	}
 }
@@ -772,7 +775,7 @@ void
 lde_send_delete_klabel(struct fec_node *fn, struct fec_nh *fnh)
 {
 	struct kroute	 kr;
-	struct kpw	 kpw;
+	struct zapi_pw	 zpw;
 	struct l2vpn_pw	*pw;
 
 	switch (fn->fec.type) {
@@ -806,21 +809,10 @@ lde_send_delete_klabel(struct fec_node *fn, struct fec_nh *fnh)
 		break;
 	case FEC_TYPE_PWID:
 		pw = (struct l2vpn_pw *) fn->data;
-		if (!(pw->flags & F_PW_STATUS_UP))
-			return;
-		pw->flags &= ~F_PW_STATUS_UP;
-
-		memset(&kpw, 0, sizeof(kpw));
-		kpw.ifindex = pw->ifindex;
-		kpw.pw_type = fn->fec.u.pwid.type;
-		kpw.af = pw->af;
-		kpw.nexthop = pw->addr;
-		kpw.local_label = fn->local_label;
-		kpw.remote_label = fnh->remote_label;
-		kpw.flags = pw->flags;
-
-		lde_imsg_compose_parent(IMSG_KPWLABEL_DELETE, 0, &kpw,
-		    sizeof(kpw));
+		pw2zpw(pw, &zpw);
+		zpw.local_label = fn->local_label;
+		zpw.remote_label = fnh->remote_label;
+		lde_imsg_compose_parent(IMSG_KPW_UNSET, 0, &zpw, sizeof(zpw));
 		break;
 	}
 }
@@ -901,8 +893,12 @@ lde_send_labelmapping(struct lde_nbr *ln, struct fec_node *fn, int single)
 	 */
 	lw = (struct lde_wdraw *)fec_find(&ln->sent_wdraw, &fn->fec);
 	if (lw) {
-		if (!fec_find(&ln->sent_map_pending, &fn->fec))
+		if (!fec_find(&ln->sent_map_pending, &fn->fec)) {
+			debug_evt("%s: FEC %s: scheduling to send label "
+			    "mapping later (waiting for pending label release)",
+			    __func__, log_fec(&fn->fec));
 			lde_map_pending_add(ln, fn);
+		}
 		return;
 	}
 
@@ -948,8 +944,7 @@ lde_send_labelmapping(struct lde_nbr *ln, struct fec_node *fn, int single)
 			map.flags |= F_MAP_PW_CWORD;
 		if (pw->flags & F_PW_STATUSTLV) {
 			map.flags |= F_MAP_PW_STATUS;
-			/* VPLS are always up */
-			map.pw_status = PW_FORWARDING;
+			map.pw_status = pw->local_status;
 		}
 		break;
 	}
@@ -1328,7 +1323,6 @@ lde_nbr_addr_update(struct lde_nbr *ln, struct lde_addr *lde_addr, int removed)
 	struct lde_map		*me;
 
 	RB_FOREACH(fec, fec_tree, &ln->recv_map) {
-		fn = (struct fec_node *)fec_find(&ft, fec);
 		switch (fec->type) {
 		case FEC_TYPE_IPV4:
 			if (lde_addr->af != AF_INET)
@@ -1341,6 +1335,11 @@ lde_nbr_addr_update(struct lde_nbr *ln, struct lde_addr *lde_addr, int removed)
 		default:
 			continue;
 		}
+
+		fn = (struct fec_node *)fec_find(&ft, fec);
+		if (fn == NULL)
+			/* shouldn't happen */
+			continue;
 
 		LIST_FOREACH(fnh, &fn->nexthops, entry) {
 			if (ldp_addrcmp(fnh->af, &fnh->nexthop,

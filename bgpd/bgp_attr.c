@@ -566,12 +566,6 @@ unsigned int attrhash_key_make(void *p)
 	MIX(attr->nexthop.s_addr);
 	MIX(attr->med);
 	MIX(attr->local_pref);
-
-	key += attr->origin;
-	key += attr->nexthop.s_addr;
-	key += attr->med;
-	key += attr->local_pref;
-
 	MIX(attr->aggregator_as);
 	MIX(attr->aggregator_addr.s_addr);
 	MIX(attr->weight);
@@ -1677,7 +1671,8 @@ int bgp_mp_reach_parse(struct bgp_attr_parser_args *args,
 {
 	iana_afi_t pkt_afi;
 	afi_t afi;
-	safi_t pkt_safi, safi;
+	iana_safi_t pkt_safi;
+	safi_t safi;
 	bgp_size_t nlri_len;
 	size_t start;
 	struct stream *s;
@@ -1826,7 +1821,8 @@ int bgp_mp_unreach_parse(struct bgp_attr_parser_args *args,
 	struct stream *s;
 	iana_afi_t pkt_afi;
 	afi_t afi;
-	safi_t pkt_safi, safi;
+	iana_safi_t pkt_safi;
+	safi_t safi;
 	u_int16_t withdraw_len;
 	struct peer *const peer = args->peer;
 	struct attr *const attr = args->attr;
@@ -2039,7 +2035,7 @@ static int bgp_attr_encap(uint8_t type, struct peer *peer, /* IN */
 			}
 #endif
 		}
-		stlv_last->next = tlv;
+		stlv_last = tlv;
 	}
 
 	if (BGP_ATTR_ENCAP == type) {
@@ -2593,7 +2589,7 @@ size_t bgp_packet_mpattr_start(struct stream *s, struct peer *peer, afi_t afi,
 {
 	size_t sizep;
 	iana_afi_t pkt_afi;
-	safi_t pkt_safi;
+	iana_safi_t pkt_safi;
 	afi_t nh_afi;
 
 	/* Set extended bit always to encode the attribute length as 2 bytes */
@@ -3279,7 +3275,7 @@ size_t bgp_packet_mpunreach_start(struct stream *s, afi_t afi, safi_t safi)
 {
 	unsigned long attrlen_pnt;
 	iana_afi_t pkt_afi;
-	safi_t pkt_safi;
+	iana_safi_t pkt_safi;
 
 	/* Set extended bit always to encode the attribute length as 2 bytes */
 	stream_putc(s, BGP_ATTR_FLAG_OPTIONAL | BGP_ATTR_FLAG_EXTLEN);
