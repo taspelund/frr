@@ -1999,6 +1999,7 @@ static void rfapiBgpInfoAttachSorted(struct route_node *rn,
 	struct bgp_info *next;
 	char pfx_buf[PREFIX2STR_BUFFER];
 
+
 	bgp = bgp_get_default(); /* assume 1 instance for now */
 
 	if (VNC_DEBUG(IMPORT_BI_ATTACH)) {

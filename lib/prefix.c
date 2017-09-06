@@ -479,24 +479,6 @@ void prefix_copy(struct prefix *dest, const struct prefix *src)
 	}
 }
 
-/* check if the two prefix_eth struct are same*/
-int prefix_eth_same(struct prefix_eth *p1, struct prefix_eth *p2)
-{
-	if (!p1 && !p2)
-		return 1;
-
-	if (p1 && !p2)
-		return 0;
-
-	if (!p1 && p2)
-		return 0;
-
-	if (memcmp(p1, p2, sizeof(struct prefix_eth)) == 0)
-		return 1;
-
-	return 0;
-}
-
 /*
  * Return 1 if the address/netmask contained in the prefix structure
  * is the same, and else return 0.  For this routine, 'same' requires

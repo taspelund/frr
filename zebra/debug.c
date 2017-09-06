@@ -437,10 +437,6 @@ static int config_write_debug(struct vty *vty)
 		vty_out(vty, "debug zebra vxlan\n");
 		write++;
 	}
-	if (IS_ZEBRA_DEBUG_VXLAN) {
-		vty_out(vty, "debug zebra vxlan\n");
-		write++;
-	}
 	if (IS_ZEBRA_DEBUG_PW) {
 		vty_out(vty, "debug zebra pseudowires\n");
 		write++;

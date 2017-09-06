@@ -7391,14 +7391,14 @@ static void bgp_show_peer_afi(struct vty *vty, struct peer *p, afi_t afi,
 			      safi_t safi, u_char use_json,
 			      json_object *json_neigh)
 {
-	struct bgp_filter	*filter;
-	struct peer_af		*paf;
-	char			orf_pfx_name[BUFSIZ];
-	int			orf_pfx_count;
-	json_object		*json_af = NULL;
-	json_object		*json_prefA = NULL;
-	json_object		*json_prefB = NULL;
-	json_object		*json_addr = NULL;
+	struct bgp_filter *filter;
+	struct peer_af *paf;
+	char orf_pfx_name[BUFSIZ];
+	int orf_pfx_count;
+	json_object *json_af = NULL;
+	json_object *json_prefA = NULL;
+	json_object *json_prefB = NULL;
+	json_object *json_addr = NULL;
 
 	if (use_json) {
 		json_addr = json_object_new_object();
@@ -9771,10 +9771,10 @@ static int bgp_show_neighbor(struct vty *vty, struct bgp *bgp,
 static void bgp_show_all_instances_neighbors_vty(struct vty *vty,
 						 u_char use_json)
 {
-	struct listnode			*node, *nnode;
-	struct bgp			*bgp;
-	json_object			*json = NULL;
-	int				is_first = 1;
+	struct listnode *node, *nnode;
+	struct bgp *bgp;
+	json_object *json = NULL;
+	int is_first = 1;
 
 	if (use_json)
 		vty_out(vty, "{\n");
