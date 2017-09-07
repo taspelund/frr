@@ -180,7 +180,7 @@ struct option longopts[] = {
 	{"mark", no_argument, NULL, 'm'},
 	{"quagga", no_argument, NULL, 'q'},
 	{"writeconfig", no_argument, NULL, 'w'},
-	{"pathspace", no_argument, NULL, 'N'},
+	{"pathspace", required_argument, NULL, 'N'},
 	{0}};
 
 /* Read a string, and return a pointer to it.  Returns NULL on EOF. */
@@ -320,7 +320,7 @@ int main(int argc, char **argv, char **env)
 
 	/* Option handling. */
 	while (1) {
-		opt = getopt_long(argc, argv, "be:c:d:nf:mEhCqw", longopts, 0);
+		opt = getopt_long(argc, argv, "be:c:d:nf:mEhCqwN:", longopts, 0);
 
 		if (opt == EOF)
 			break;
