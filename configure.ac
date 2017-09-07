@@ -1810,9 +1810,9 @@ AC_CONFIG_FILES([Makefile
 	  vtysh/Makefile
 	  doc/Makefile tests/Makefile
 	  bgpd/rfp-example/rfptest/Makefile bgpd/rfp-example/librfp/Makefile
-	  debianpkg/Makefile
+	  debian/Makefile
 	  redhat/frr.spec
-	  debianpkg/changelog
+	  debian/changelog
 	  snapcraft/snapcraft.yaml
 	  lib/version.h
 	  tests/lib/cli/test_cli.refout
