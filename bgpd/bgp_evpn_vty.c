@@ -22,6 +22,7 @@
 #include "command.h"
 #include "prefix.h"
 #include "lib/json.h"
+#include "stream.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_table.h"
@@ -34,6 +35,7 @@
 #include "bgpd/bgp_evpn_private.h"
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_vty.h"
+#include "bgpd/bgp_ecommunity.h"
 
 #define SHOW_DISPLAY_STANDARD 0
 #define SHOW_DISPLAY_TAGS 1
@@ -61,14 +63,8 @@ static void display_import_rt(struct vty *vty, struct irt_node *irt,
 {
 	u_char *pnt;
 	u_char type, sub_type;
-	struct ecommunity_as {
-		as_t as;
-		u_int32_t val;
-	} eas;
-	struct ecommunity_ip {
-		struct in_addr ip;
-		u_int16_t val;
-	} eip;
+	struct ecommunity_as eas;
+	struct ecommunity_ip eip;
 	struct listnode *node, *nnode;
 	struct bgpevpn *tmp_vpn = NULL;
 	json_object *json_rt = NULL;
@@ -88,15 +84,12 @@ static void display_import_rt(struct vty *vty, struct irt_node *irt,
 	if (sub_type != ECOMMUNITY_ROUTE_TARGET)
 		return;
 
+	memset(&eas, 0, sizeof(eas));
 	switch (type) {
 	case ECOMMUNITY_ENCODE_AS:
 		eas.as = (*pnt++ << 8);
 		eas.as |= (*pnt++);
-
-		eas.val = (*pnt++ << 24);
-		eas.val |= (*pnt++ << 16);
-		eas.val |= (*pnt++ << 8);
-		eas.val |= (*pnt++);
+		pnt = ptr_get_be32(pnt, &eas.val);
 
 		snprintf(rt_buf, RT_ADDRSTRLEN, "%u:%u", eas.as, eas.val);
 
@@ -124,11 +117,7 @@ static void display_import_rt(struct vty *vty, struct irt_node *irt,
 		break;
 
 	case ECOMMUNITY_ENCODE_AS4:
-		eas.as = (*pnt++ << 24);
-		eas.as |= (*pnt++ << 16);
-		eas.as |= (*pnt++ << 8);
-		eas.as |= (*pnt++);
-
+		pnt = ptr_get_be32(pnt, &eas.val);
 		eas.val = (*pnt++ << 8);
 		eas.val |= (*pnt++);
 
