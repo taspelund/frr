@@ -42,7 +42,7 @@ DEFINE_KOOH(frr_fini, (), ())
 
 bool quagga_compat_mode = false;
 
-char frr_sysconfdir[] = FRR_CONFDIR;
+char frr_sysconfdir[256] = FRR_CONFDIR;
 char frr_vtydir[] = DAEMON_VTY_DIR;
 char frr_moduledir[] = MODULE_PATH;
 
