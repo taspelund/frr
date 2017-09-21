@@ -237,6 +237,8 @@ static void display_vni(struct vty *vty, struct bgpevpn *vpn, json_object *json)
 	json_object *json_import_rtl;
 	json_object *json_export_rtl;
 
+	json_import_rtl = json_export_rtl = 0;
+
 	if (json) {
 		json_import_rtl = json_object_new_array();
 		json_export_rtl = json_object_new_array();
