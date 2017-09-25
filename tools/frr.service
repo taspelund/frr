@@ -1,6 +1,6 @@
 [Unit]
-Description=FRRouting
-After=networking.service
+Description=Cumulus Linux FRR
+After=syslog.target networking.service
 OnFailure=heartbeat-failed@%n.service
 
 [Service]
