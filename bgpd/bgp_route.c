@@ -1320,7 +1320,6 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_info *ri,
 	struct peer *onlypeer;
 	struct bgp *bgp;
 	struct attr *riattr;
-	struct peer_af *paf;
 	char buf[PREFIX_STRLEN];
 	int ret;
 	int transparent;
@@ -1711,16 +1710,12 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_info *ri,
 			 * Note: 3rd party nexthop currently implemented for
 			 * IPv4 only.
 			 */
-			SUBGRP_FOREACH_PEER (subgrp, paf) {
-				if (bgp_multiaccess_check_v4(riattr->nexthop,
-							     paf->peer))
-					break;
-			}
-			if (!paf)
+			if (!bgp_subgrp_multiaccess_check_v4(riattr->nexthop,
+							     subgrp))
 				subgroup_announce_reset_nhop(
 					(peer_cap_enhe(peer, afi, safi)
-						 ? AF_INET6
-						 : p->family),
+					 ? AF_INET6
+					 : p->family),
 					attr);
 		}
 		/* If IPv6/MP and nexthop does not have any override and happens
@@ -11143,11 +11138,23 @@ static void bgp_config_write_network_evpn(struct vty *vty, struct bgp *bgp,
 
 			/* "network" configuration display.  */
 			prefix_rd2str(prd, rdbuf, RD_ADDRSTRLEN);
+			if (p->u.prefix_evpn.route_type == 5) {
+				char local_buf[PREFIX_STRLEN];
+				uint8_t family = IS_EVPN_PREFIX_IPADDR_V4((struct prefix_evpn *)p)
+					? AF_INET
+					: AF_INET6;
+				inet_ntop(family, &p->u.prefix_evpn.ip.ip.addr, local_buf,
+					  PREFIX_STRLEN);
+				sprintf(buf, "%s/%u", local_buf,p->u.prefix_evpn.ip_prefix_length);
+			} else {
+				prefix2str(p, buf, sizeof(buf));
+			}
 
-			inet_ntop(AF_INET, &bgp_static->igpnexthop, buf2,
-				  SU_ADDRSTRLEN);
-
-			prefix2str(p, buf, sizeof(buf));
+			if (bgp_static->gatewayIp.family == AF_INET ||
+			    bgp_static->gatewayIp.family == AF_INET6)
+				inet_ntop(bgp_static->gatewayIp.family,
+					  &bgp_static->gatewayIp.u.prefix, buf2,
+					  sizeof(buf2));
 			vty_out(vty,
 				" network %s rd %s ethtag %u tag %u esi %s gwip %s routermac %s\n",
 				buf, rdbuf, p->u.prefix_evpn.eth_tag,

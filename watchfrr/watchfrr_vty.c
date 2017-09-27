@@ -32,7 +32,19 @@
 pid_t integrated_write_pid;
 static int integrated_result_fd;
 
-DEFUN(config_write_integrated, config_write_integrated_cmd, "write integrated",
+DEFUN_NOSH(show_watchfrr_debugging,
+	   show_watchfrr_debugging_cmd,
+	   "show debugging [watchfrr]",
+	   SHOW_STR
+	   DEBUG_STR
+	   "WatchFRR\n")
+{
+	return CMD_SUCCESS;
+}
+
+DEFUN(config_write_integrated,
+      config_write_integrated_cmd,
+      "write integrated",
       "Write running configuration to memory, network, or terminal\n"
       "Write integrated all-daemon configuration file\n")
 {
@@ -134,4 +146,5 @@ void watchfrr_vty_init(void)
 {
 	integrated_write_pid = -1;
 	install_element(ENABLE_NODE, &config_write_integrated_cmd);
+	install_element(ENABLE_NODE, &show_watchfrr_debugging_cmd);
 }
