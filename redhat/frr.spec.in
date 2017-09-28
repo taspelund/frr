@@ -26,6 +26,7 @@
 %{!?with_watchfrr:      %global  with_watchfrr      1 }
 %{!?with_bgp_vnc:       %global  with_bgp_vnc       0 }
 %{!?with_pimd:          %global  with_pimd          1 }
+%{!?with_cumulus:       %global  with_cumulus       1 }
 
 # path defines
 %define     _sysconfdir   /etc/frr
@@ -297,6 +298,11 @@ developing OSPF-API and frr applications.
 %if "%{initsystem}" == "systemd"
     --enable-systemd=yes \
 %endif
+%if %{with_cumulus}
+    --enable-cumulus=yes \
+%else
+    --enable-cumulus=no \
+%endif
     --enable-poll=yes
 
 make %{?_smp_mflags} MAKEINFO="makeinfo --no-split"
@@ -316,6 +322,9 @@ make DESTDIR=%{buildroot} INSTALL="install -p" CP="cp -p" install
 
 # Remove this file, as it is uninstalled and causes errors when building on RH9
 rm -rf %{buildroot}/usr/share/info/dir
+
+# cumulus/support is inapplicable outside Cumulus Linux
+rm -rf %{buildroot}/usr/share/cumulus/support
 
 # Remove debian init script if it was installed
 rm -f %{buildroot}%{_sbindir}/frr
