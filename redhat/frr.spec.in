@@ -27,6 +27,8 @@
 %{!?with_bgp_vnc:       %global  with_bgp_vnc       0 }
 %{!?with_pimd:          %global  with_pimd          1 }
 %{!?with_cumulus:       %global  with_cumulus       1 }
+%{!?with_datacenter:    %global  with_datacenter    1 }
+%{!?with_oldvpn:        %global  with_oldvpn        1 }
 
 # path defines
 %define     _sysconfdir   /etc/frr
@@ -303,7 +305,16 @@ developing OSPF-API and frr applications.
 %else
     --enable-cumulus=no \
 %endif
-    --enable-poll=yes
+%if %{with_datacenter}
+    --enable-datacenter=yes \
+%else
+    --enable-datacenter=no \
+%endif
+%if %{with_oldvpn}
+    --enable-oldvpn-commands=yes
+%else
+    --enable-oldvpn-commands=no
+%endif
 
 make %{?_smp_mflags} MAKEINFO="makeinfo --no-split"
 
