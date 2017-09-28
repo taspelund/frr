@@ -3,6 +3,7 @@
 export DH_VERBOSE=1
 export DEB_BUILD_HARDENING=1
 export DH_OPTIONS=-v
+export WANT_SNMP=1
 
 ifeq ($(WANT_SNMP), 1)
   USE_SNMP=--enable-snmp
@@ -51,10 +52,13 @@ override_dh_auto_configure:
 		--enable-gcc-rdynamic \
 		--with-libpam \
 		--enable-systemd=no \
-		--enable-poll=yes \
 		--enable-cumulus=yes \
 		--enable-pimd=no \
 		--enable-dependency-tracking \
+		--enable-oldvpn-commands=yes \
+		--enable-datacenter=yes \
+		--with-vtysh-pager=cat \
+		--enable-bgp-vnc=no \
 		--disable-rr-semantics; \
 	fi
 
