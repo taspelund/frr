@@ -564,7 +564,7 @@ struct thread_master *frr_init(void)
 	const char *confdir =
 		quagga_compat_mode ? QUAGGA_CONFDIR : frr_sysconfdir;
 
-	snprintf(config_default, sizeof(config_default), "%s%s/%s%s.conf",
+	snprintf(config_default, sizeof(config_default), "%s%s%s%s.conf",
 		 confdir, p_pathspace, di->name, p_instance);
 	snprintf(config_default_int, sizeof(config_default_int), "%s%s/%s",
 		 confdir, p_pathspace,
