@@ -285,7 +285,6 @@ int main(int argc, char **argv)
 	zebra_if_init();
 	zebra_debug_init();
 	router_id_cmd_init();
-	zebra_vty_init();
 	access_list_init();
 	prefix_list_init();
 #if defined(HAVE_RTADV)
@@ -306,6 +305,10 @@ int main(int argc, char **argv)
 	/* Initialize NS( and implicitly the VRF module), and make kernel
 	 * routing socket. */
 	zebra_ns_init();
+
+	/* Initialize show/config command after the vrf initialization is
+	 * complete */
+	zebra_vty_init();
 
 	/* Process the configuration file. Among other configuration
 	*  directives we can meet those installing static routes. Such
