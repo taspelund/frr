@@ -4432,7 +4432,6 @@ int zebra_vxlan_remote_macip_add(struct zserv *client, u_short length,
 	struct stream *s;
 	vni_t vni;
 	struct ethaddr macaddr;
-	struct ethaddr rmac;
 	struct ipaddr ip;
 	struct in_addr vtep_ip;
 	zebra_vni_t *zvni;
@@ -4443,7 +4442,6 @@ int zebra_vxlan_remote_macip_add(struct zserv *client, u_short length,
 	int update_mac = 0, update_neigh = 0;
 	char buf[ETHER_ADDR_STRLEN];
 	char buf1[INET6_ADDRSTRLEN];
-	char buf2[ETHER_ADDR_STRLEN];
 	u_char sticky;
 	struct interface *ifp = NULL;
 	struct zebra_if *zif = NULL;
@@ -4451,7 +4449,6 @@ int zebra_vxlan_remote_macip_add(struct zserv *client, u_short length,
 	assert(EVPN_ENABLED(zvrf));
 
 	memset(&macaddr, 0, sizeof(struct ethaddr));
-	memset(&rmac, 0, sizeof(struct ethaddr));
 	memset(&ip, 0, sizeof(struct ipaddr));
 	memset(&vtep_ip, 0, sizeof(struct in_addr));
 
@@ -4482,18 +4479,13 @@ int zebra_vxlan_remote_macip_add(struct zserv *client, u_short length,
 		sticky = stream_getc(s);
 		l++;
 
-		/* Get router mac */
-		stream_get(&rmac.octet, s, ETH_ALEN);
-		l += ETH_ALEN;
-
 		if (IS_ZEBRA_DEBUG_VXLAN)
 			zlog_debug(
-				"Recv MACIP Add %sMAC %s IP %s VNI %u Remote VTEP %s RMAC %s from %s",
+				"Recv MACIP Add %sMAC %s IP %s VNI %u Remote VTEP %s from %s",
 				sticky ? "sticky " : "",
 				prefix_mac2str(&macaddr, buf, sizeof(buf)),
 				ipaddr2str(&ip, buf1, sizeof(buf1)), vni,
 				inet_ntoa(vtep_ip),
-				prefix_mac2str(&rmac, buf2, sizeof(buf2)),
 				zebra_route_string(client->proto));
 
 		/* Locate VNI hash entry - expected to exist. */
