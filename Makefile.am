@@ -40,6 +40,7 @@ include watchfrr/subdir.am
 include qpb/subdir.am
 include fpm/subdir.am
 include tools/subdir.am
+include debian/subdir.am
 
 include ripd/subdir.am
 include ripngd/subdir.am
@@ -62,7 +63,6 @@ DIST_SUBDIRS = . bgpd \
 	  vtysh doc tests \
 	  solaris bgpd/rfp-example/librfp \
 	  bgpd/rfp-example/rfptest \
-	  debian \
 	  # end
 
 if PKGSRC
