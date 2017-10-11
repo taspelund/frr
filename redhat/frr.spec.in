@@ -77,9 +77,6 @@
 %endif
 
 # misc internal defines
-%{!?frr_uid:            %global  frr_uid            92 }
-%{!?frr_gid:            %global  frr_gid            92 }
-%{!?vty_gid:            %global  vty_gid            85 }
 
 %define     daemon_list zebra ripd ospfd bgpd isisd ripngd ospf6d
 
@@ -367,17 +364,16 @@ install -d -m750  %{buildroot}/var/run/frr
 # add vty_group
 %if 0%{?vty_group:1}
 if getent group %vty_group > /dev/null ; then : ; else \
- /usr/sbin/groupadd -r -g %vty_gid %vty_group > /dev/null || : ; fi
+ /usr/sbin/groupadd -r %vty_group > /dev/null || : ; fi
 %endif
 
 # add frr user and group
 %if 0%{?frr_user:1}
-# Ensure that frr_gid gets correctly allocated
 if getent group %frr_user >/dev/null; then : ; else \
- /usr/sbin/groupadd -g %frr_gid %frr_user > /dev/null || : ; \
+ /usr/sbin/groupadd %frr_user > /dev/null || : ; \
 fi
 if getent passwd %frr_user >/dev/null ; then : ; else \
- /usr/sbin/useradd  -u %frr_uid -g %frr_gid \
+ /usr/sbin/useradd  -g %frr_user \
   -M -r -s /sbin/nologin -c "FRRouting suite" \
   -d %_localstatedir %frr_user 2> /dev/null || : ; \
 fi
