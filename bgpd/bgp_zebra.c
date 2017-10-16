@@ -1137,8 +1137,8 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 			api_nh->type = NEXTHOP_TYPE_IPV6_IFINDEX;
 		}
 
-		if (mpinfo->extra
-		    && bgp_is_valid_label(&mpinfo->extra->label)) {
+		if (mpinfo->extra && bgp_is_valid_label(&mpinfo->extra->label)
+		    && !CHECK_FLAG(api.flags, ZEBRA_FLAG_EVPN_TYPE2_ROUTE)) {
 			has_valid_label = 1;
 			label = label_pton(&mpinfo->extra->label);
 
@@ -1148,7 +1148,9 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 		valid_nh_count++;
 	}
 
-	if (has_valid_label)
+	/* if this is a evpn route we don't have to include the label */
+	if (has_valid_label &&
+	    !(CHECK_FLAG(api.flags, ZEBRA_FLAG_EVPN_TYPE2_ROUTE)))
 		SET_FLAG(api.message, ZAPI_MESSAGE_LABEL);
 
 	if (info->sub_type != BGP_ROUTE_AGGREGATE)
@@ -1190,7 +1192,8 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 				  sizeof(nh_buf));
 
 			label_buf[0] = '\0';
-			if (has_valid_label)
+			if (has_valid_label &&
+			    !CHECK_FLAG(api.flags, ZEBRA_FLAG_EVPN_TYPE2_ROUTE))
 				sprintf(label_buf, "label %u",
 					api_nh->labels[0]);
 			zlog_debug("  nhop [%d]: %s %s", i + 1, nh_buf,
