@@ -65,3 +65,8 @@ nhrpd_options=("-A 127.0.0.1")
 eigrpd_options=("-A 127.0.0.1")
 babeld_options=("-A 127.0.0.1")
 
+#
+# Allow the frr script to read in
+# config from frr.conf
+vtysh_enable=yes
+
