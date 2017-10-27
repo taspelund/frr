@@ -236,7 +236,7 @@ void pim_delete_tracked_nexthop(struct pim_instance *pim, struct prefix *addr,
 			pim_sendmsg_zebra_rnh(pim, zclient, pnc,
 					      ZEBRA_NEXTHOP_UNREGISTER);
 
-			list_delete(pnc->rp_list);
+			list_delete_and_null(&pnc->rp_list);
 			hash_free(pnc->upstream_hash);
 
 			hash_release(pim->rpf_hash, pnc);
@@ -410,12 +410,12 @@ static int pim_update_upstream_nh_helper(struct hash_backet *backet, void *arg)
 static int pim_update_upstream_nh(struct pim_instance *pim,
 				  struct pim_nexthop_cache *pnc)
 {
-	struct listnode *node, *ifnode;
+	struct listnode *node;
 	struct interface *ifp;
 
 	hash_walk(pnc->upstream_hash, pim_update_upstream_nh_helper, pim);
 
-	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(pim->vrf_id), ifnode, ifp))
+	FOR_ALL_INTERFACES (pim->vrf, ifp)
 		if (ifp->info) {
 			struct pim_interface *pim_ifp = ifp->info;
 			struct pim_iface_upstream_switch *us;

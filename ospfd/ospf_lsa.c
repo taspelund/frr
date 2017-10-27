@@ -284,12 +284,12 @@ const char *dump_lsa_key(struct ospf_lsa *lsa)
 
 	if (lsa != NULL && (lsah = lsa->data) != NULL) {
 		char id[INET_ADDRSTRLEN], ar[INET_ADDRSTRLEN];
-		strcpy(id, inet_ntoa(lsah->id));
-		strcpy(ar, inet_ntoa(lsah->adv_router));
+		strlcpy(id, inet_ntoa(lsah->id), sizeof(id));
+		strlcpy(ar, inet_ntoa(lsah->adv_router), sizeof(ar));
 
 		sprintf(buf, "Type%d,id(%s),ar(%s)", lsah->type, id, ar);
 	} else
-		strcpy(buf, "NULL");
+		strlcpy(buf, "NULL", sizeof(buf));
 
 	return buf;
 }
@@ -1702,7 +1702,7 @@ static void ospf_install_flood_nssa(struct ospf *ospf, struct ospf_lsa *lsa,
 			not adversited into OSPF as an internal OSPF route and
 			the
 			type-7 LSA's P-bit is set a forwarding address should be
-			selected from one of the router's active OSPF inteface
+			selected from one of the router's active OSPF interface
 			addresses
 			which belong to the NSSA.  If no such addresses exist,
 			then
@@ -2713,7 +2713,8 @@ struct ospf_lsa *ospf_lsa_install(struct ospf *ospf, struct ospf_interface *oi,
 					      new->data->type, NULL));
 			break;
 		default:
-			strcpy(area_str, inet_ntoa(new->area->area_id));
+			strlcpy(area_str, inet_ntoa(new->area->area_id),
+				sizeof(area_str));
 			zlog_debug("LSA[%s]: Install %s to Area %s",
 				   dump_lsa_key(new),
 				   lookup_msg(ospf_lsa_type_msg,
@@ -3621,7 +3622,7 @@ void ospf_refresher_unregister_lsa(struct ospf *ospf, struct ospf_lsa *lsa)
 			ospf->lsa_refresh_queue.qs[lsa->refresh_list];
 		listnode_delete(refresh_list, lsa);
 		if (!listcount(refresh_list)) {
-			list_free(refresh_list);
+			list_delete_and_null(&refresh_list);
 			ospf->lsa_refresh_queue.qs[lsa->refresh_list] = NULL;
 		}
 		ospf_lsa_unlock(&lsa); /* lsa_refresh_queue */
@@ -3690,7 +3691,7 @@ int ospf_lsa_refresh_walker(struct thread *t)
 				lsa->refresh_list = -1;
 				listnode_add(lsa_to_refresh, lsa);
 			}
-			list_free(refresh_list);
+			list_delete_and_null(&refresh_list);
 		}
 	}
 
@@ -3706,7 +3707,7 @@ int ospf_lsa_refresh_walker(struct thread *t)
 			&lsa); /* lsa_refresh_queue & temp for lsa_to_refresh*/
 	}
 
-	list_delete(lsa_to_refresh);
+	list_delete_and_null(&lsa_to_refresh);
 
 	if (IS_DEBUG_OSPF(lsa, LSA_REFRESH))
 		zlog_debug("LSA[Refresh]: ospf_lsa_refresh_walker(): end");

@@ -260,7 +260,6 @@ main(int argc, char *argv[])
 	    sizeof(init.zclient_serv_path));
 
 	argc -= optind;
-	argv += optind;
 	if (argc > 0 || (lflag && eflag))
 		frr_help_exit(1);
 
@@ -450,10 +449,15 @@ start_child(enum ldpd_process p, char *argv0, int fd_async, int fd_sync)
 	}
 
 	nullfd = open("/dev/null", O_RDONLY | O_NOCTTY);
-	dup2(nullfd, 0);
-	dup2(nullfd, 1);
-	dup2(nullfd, 2);
-	close(nullfd);
+	if (nullfd == -1) {
+		zlog_err("%s: failed to open /dev/null: %s", __func__,
+			 safe_strerror(errno));
+	} else {
+		dup2(nullfd, 0);
+		dup2(nullfd, 1);
+		dup2(nullfd, 2);
+		close(nullfd);
+	}
 
 	if (dup2(fd_async, LDPD_FD_ASYNC) == -1)
 		fatal("cannot setup imsg async fd");

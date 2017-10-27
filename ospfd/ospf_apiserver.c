@@ -180,7 +180,7 @@ void ospf_apiserver_term(void)
 
 	/* Free client list itself */
 	if (apiserver_list)
-		list_delete(apiserver_list);
+		list_delete_and_null(&apiserver_list);
 
 	/* Free wildcard list */
 	/* XXX  */
@@ -2322,7 +2322,7 @@ void ospf_apiserver_clients_notify_nsm_change(struct ospf_neighbor *nbr)
 {
 	struct msg *msg;
 	struct in_addr ifaddr = {.s_addr = 0L};
-	struct in_addr nbraddr = {.s_addr = 0L};
+	struct in_addr nbraddr;
 
 	assert(nbr);
 

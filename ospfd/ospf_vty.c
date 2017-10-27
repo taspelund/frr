@@ -171,6 +171,18 @@ static struct ospf *ospf_cmd_lookup_ospf(struct vty *vty,
 	return ospf;
 }
 
+static void ospf_show_vrf_name(struct ospf *ospf, struct vty *vty,
+			       json_object *json)
+{
+	if (ospf->name) {
+		if (json)
+			json_object_string_add(json, "vrfName", ospf->name);
+		else
+			vty_out(vty, "VRF Name: %s\n", ospf->name);
+	}
+
+}
+
 #ifndef VTYSH_EXTRACT_PL
 #include "ospf_vty_clippy.c"
 #endif
@@ -333,13 +345,14 @@ DEFPY (no_ospf_router_id,
 
 static void ospf_passive_interface_default(struct ospf *ospf, u_char newval)
 {
+	struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
 	struct listnode *ln;
 	struct interface *ifp;
 	struct ospf_interface *oi;
 
 	ospf->passive_interface_default = newval;
 
-	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(ospf->vrf_id), ln, ifp)) {
+	FOR_ALL_INTERFACES (vrf, ifp) {
 		if (ifp && OSPF_IF_PARAM_CONFIGURED(IF_DEF_PARAMS(ifp),
 						    passive_interface))
 			UNSET_IF_PARAM(IF_DEF_PARAMS(ifp), passive_interface);
@@ -413,7 +426,7 @@ DEFUN (ospf_passive_interface,
 		return CMD_SUCCESS;
 	}
 
-	ifp = if_get_by_name(argv[1]->arg, ospf->vrf_id);
+	ifp = if_get_by_name(argv[1]->arg, ospf->vrf_id, 0);
 	if (ifp == NULL) {
 		vty_out(vty, "interface %s not found.\n",
 			(char *)argv[1]->arg);
@@ -485,7 +498,7 @@ DEFUN (no_ospf_passive_interface,
 		return CMD_SUCCESS;
 	}
 
-	ifp = if_get_by_name(argv[2]->arg, ospf->vrf_id);
+	ifp = if_get_by_name(argv[2]->arg, ospf->vrf_id, 0);
 	if (ifp == NULL) {
 		vty_out(vty, "interface %s not found.\n",
 			(char *)argv[1]->arg);
@@ -1457,7 +1470,8 @@ DEFUN (no_ospf_area_stub_no_summary,
 }
 
 static int ospf_area_nssa_cmd_handler(struct vty *vty, int argc,
-				      struct cmd_token **argv, int nosum)
+				      struct cmd_token **argv, int cfg_nosum,
+				      int nosum)
 {
 	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
 	struct in_addr area_id;
@@ -1489,30 +1503,18 @@ static int ospf_area_nssa_cmd_handler(struct vty *vty, int argc,
 						   OSPF_NSSA_ROLE_CANDIDATE);
 	}
 
-	if (nosum)
-		ospf_area_no_summary_set(ospf, area_id);
-	else
-		ospf_area_no_summary_unset(ospf, area_id);
+	if (cfg_nosum) {
+		if (nosum)
+			ospf_area_no_summary_set(ospf, area_id);
+		else
+			ospf_area_no_summary_unset(ospf, area_id);
+	}
 
 	ospf_schedule_abr_task(ospf);
 
 	return CMD_SUCCESS;
 }
 
-DEFUN (ospf_area_nssa_translate_no_summary,
-       ospf_area_nssa_translate_no_summary_cmd,
-       "area <A.B.C.D|(0-4294967295)> nssa <translate-candidate|translate-never|translate-always> no-summary",
-       "OSPF area parameters\n"
-       "OSPF area ID in IP address format\n"
-       "OSPF area ID as a decimal value\n"
-       "Configure OSPF area as nssa\n"
-       "Configure NSSA-ABR for translate election (default)\n"
-       "Configure NSSA-ABR to never translate\n"
-       "Configure NSSA-ABR to always translate\n"
-       "Do not inject inter-area routes into nssa\n")
-{
-	return ospf_area_nssa_cmd_handler(vty, argc, argv, 1);
-}
 
 DEFUN (ospf_area_nssa_translate,
        ospf_area_nssa_translate_cmd,
@@ -1525,7 +1527,7 @@ DEFUN (ospf_area_nssa_translate,
        "Configure NSSA-ABR to never translate\n"
        "Configure NSSA-ABR to always translate\n")
 {
-	return ospf_area_nssa_cmd_handler(vty, argc, argv, 0);
+	return ospf_area_nssa_cmd_handler(vty, argc, argv, 0, 0);
 }
 
 DEFUN (ospf_area_nssa,
@@ -1536,7 +1538,7 @@ DEFUN (ospf_area_nssa,
        "OSPF area ID as a decimal value\n"
        "Configure OSPF area as nssa\n")
 {
-	return ospf_area_nssa_cmd_handler(vty, argc, argv, 0);
+	return ospf_area_nssa_cmd_handler(vty, argc, argv, 1, 0);
 }
 
 DEFUN (ospf_area_nssa_no_summary,
@@ -1548,12 +1550,54 @@ DEFUN (ospf_area_nssa_no_summary,
        "Configure OSPF area as nssa\n"
        "Do not inject inter-area routes into nssa\n")
 {
-	return ospf_area_nssa_cmd_handler(vty, argc, argv, 1);
+	int idx_ipv4_number = 1;
+	struct in_addr area_id;
+	int format;
+
+	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
+	VTY_GET_OSPF_AREA_ID_NO_BB("NSSA", area_id, format,
+				   argv[idx_ipv4_number]->arg);
+
+	ospf_area_display_format_set(ospf, ospf_area_get(ospf, area_id),
+				     format);
+	ospf_area_nssa_no_summary_set(ospf, area_id);
+
+	ospf_schedule_abr_task(ospf);
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (no_ospf_area_nssa_no_summary,
+       no_ospf_area_nssa_no_summary_cmd,
+       "no area <A.B.C.D|(0-4294967295)> nssa no-summary",
+       NO_STR
+       "OSPF area parameters\n"
+       "OSPF area ID in IP address format\n"
+       "OSPF area ID as a decimal value\n"
+       "Configure OSPF area as nssa\n"
+       "Do not inject inter-area routes into nssa\n")
+{
+	int idx_ipv4_number = 2;
+	struct in_addr area_id;
+	int format;
+
+	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
+
+	VTY_GET_OSPF_AREA_ID_NO_BB("nssa", area_id, format,
+				   argv[idx_ipv4_number]->arg);
+
+	ospf_area_display_format_set(ospf, ospf_area_get(ospf, area_id),
+				     format);
+	ospf_area_no_summary_unset(ospf, area_id);
+
+	ospf_schedule_abr_task(ospf);
+
+	return CMD_SUCCESS;
 }
 
 DEFUN (no_ospf_area_nssa,
        no_ospf_area_nssa_cmd,
-       "no area <A.B.C.D|(0-4294967295)> nssa [<translate-candidate|translate-never|translate-always> [no-summary]]",
+       "no area <A.B.C.D|(0-4294967295)> nssa [<translate-candidate|translate-never|translate-always>]",
        NO_STR
        "OSPF area parameters\n"
        "OSPF area ID in IP address format\n"
@@ -1561,8 +1605,7 @@ DEFUN (no_ospf_area_nssa,
        "Configure OSPF area as nssa\n"
        "Configure NSSA-ABR for translate election (default)\n"
        "Configure NSSA-ABR to never translate\n"
-       "Configure NSSA-ABR to always translate\n"
-       "Do not inject inter-area routes into nssa\n")
+       "Configure NSSA-ABR to always translate\n")
 {
 	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
 	int idx_ipv4_number = 2;
@@ -1572,8 +1615,7 @@ DEFUN (no_ospf_area_nssa,
 	VTY_GET_OSPF_AREA_ID_NO_BB("NSSA", area_id, format,
 				   argv[idx_ipv4_number]->arg);
 
-	ospf_area_nssa_unset(ospf, area_id);
-	ospf_area_no_summary_unset(ospf, area_id);
+	ospf_area_nssa_unset(ospf, area_id, argc);
 
 	ospf_schedule_abr_task(ospf);
 
@@ -2457,9 +2499,9 @@ DEFUN (ospf_auto_cost_reference_bandwidth,
        "The reference bandwidth in terms of Mbits per second\n")
 {
 	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
+	struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
 	int idx_number = 2;
 	u_int32_t refbw;
-	struct listnode *node;
 	struct interface *ifp;
 
 	refbw = strtol(argv[idx_number]->arg, NULL, 10);
@@ -2473,7 +2515,7 @@ DEFUN (ospf_auto_cost_reference_bandwidth,
 		return CMD_SUCCESS;
 
 	ospf->ref_bandwidth = refbw;
-	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(ospf->vrf_id), node, ifp))
+	FOR_ALL_INTERFACES (vrf, ifp)
 		ospf_if_recalculate_output_cost(ifp);
 
 	return CMD_SUCCESS;
@@ -2488,7 +2530,7 @@ DEFUN (no_ospf_auto_cost_reference_bandwidth,
        "The reference bandwidth in terms of Mbits per second\n")
 {
 	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
-	struct listnode *node, *nnode;
+	struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
 	struct interface *ifp;
 
 	if (ospf->ref_bandwidth == OSPF_DEFAULT_REF_BANDWIDTH)
@@ -2499,7 +2541,7 @@ DEFUN (no_ospf_auto_cost_reference_bandwidth,
 	vty_out(vty,
 		"        Please ensure reference bandwidth is consistent across all routers\n");
 
-	for (ALL_LIST_ELEMENTS(vrf_iflist(ospf->vrf_id), node, nnode, ifp))
+	FOR_ALL_INTERFACES (vrf, ifp)
 		ospf_if_recalculate_output_cost(ifp);
 
 	return CMD_SUCCESS;
@@ -2889,6 +2931,8 @@ static int show_ip_ospf_common(struct vty *vty, struct ospf *ospf,
 			vty_out(vty, "\nOSPF Instance: %d\n\n", ospf->instance);
 		}
 	}
+
+	ospf_show_vrf_name(ospf, vty, json);
 
 	/* Show Router ID. */
 	if (use_json) {
@@ -3555,7 +3599,7 @@ static int show_ip_ospf_interface_common(struct vty *vty, struct ospf *ospf,
 					 int iface_argv, u_char use_json)
 {
 	struct interface *ifp;
-	struct listnode *node;
+	struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
 	json_object *json = NULL;
 	json_object *json_interface_sub = NULL;
 
@@ -3573,8 +3617,7 @@ static int show_ip_ospf_interface_common(struct vty *vty, struct ospf *ospf,
 
 	if (argc == iface_argv) {
 		/* Show All Interfaces.*/
-		for (ALL_LIST_ELEMENTS_RO(vrf_iflist(ospf->vrf_id),
-					  node, ifp)) {
+		FOR_ALL_INTERFACES (vrf, ifp) {
 			if (ospf_oi_count(ifp)) {
 				if (use_json)
 					json_interface_sub =
@@ -3619,6 +3662,154 @@ static int show_ip_ospf_interface_common(struct vty *vty, struct ospf *ospf,
 		json_object_free(json);
 	} else
 		vty_out(vty, "\n");
+
+	return CMD_SUCCESS;
+}
+
+static void show_ip_ospf_interface_traffic_sub(struct vty *vty,
+					       struct ospf_interface *oi,
+					       json_object *json_interface_sub,
+					       u_char use_json)
+{
+	if (use_json) {
+		json_object_int_add(json_interface_sub,
+			    "ifIndex",
+			    oi->ifp->ifindex);
+		json_object_int_add(json_interface_sub,
+			    "helloIn",
+			    oi->hello_in);
+		json_object_int_add(json_interface_sub,
+			    "helloOut",
+			    oi->hello_out);
+		json_object_int_add(json_interface_sub,
+			    "dbDescIn",
+			    oi->db_desc_in);
+		json_object_int_add(json_interface_sub,
+			    "dbDescOut",
+			    oi->db_desc_out);
+		json_object_int_add(json_interface_sub,
+			    "lsReqIn",
+			    oi->ls_req_in);
+		json_object_int_add(json_interface_sub,
+			    "lsReqOut",
+			    oi->ls_req_out);
+		json_object_int_add(json_interface_sub,
+			    "lsUpdIn",
+			    oi->ls_upd_in);
+		json_object_int_add(json_interface_sub,
+			    "lsUpdOut",
+			    oi->ls_upd_out);
+		json_object_int_add(json_interface_sub,
+			    "lsAckIn",
+			    oi->ls_ack_in);
+		json_object_int_add(json_interface_sub,
+			    "lsAckOut",
+			    oi->ls_ack_out);
+	} else {
+		vty_out(vty,
+			"%-10s %8u/%-8u %7u/%-7u %7u/%-7u %7u/%-7u %7u/%-7u\n",
+			oi->ifp->name, oi->hello_in,
+			oi->hello_out,
+			oi->db_desc_in, oi->db_desc_out,
+			oi->ls_req_in, oi->ls_req_out,
+			oi->ls_upd_in, oi->ls_upd_out,
+			oi->ls_ack_in, oi->ls_ack_out);
+	}
+}
+
+/* OSPFv2 Packet Counters */
+static int show_ip_ospf_interface_traffic_common(struct vty *vty,
+						 struct ospf *ospf,
+						 char *intf_name,
+						 int display_once,
+						 u_char use_json)
+{
+	struct vrf *vrf = NULL;
+	struct interface *ifp = NULL;
+	json_object *json = NULL;
+	json_object *json_interface_sub = NULL;
+
+	if (!use_json && !display_once) {
+		vty_out(vty, "\n");
+		vty_out(vty, "%-12s%-17s%-17s%-17s%-17s%-17s\n",
+			"Interface", "    HELLO", "    DB-Desc", "   LS-Req",
+			"   LS-Update", "   LS-Ack");
+		vty_out(vty, "%-10s%-18s%-18s%-17s%-17s%-17s\n", "",
+			"      Rx/Tx", "     Rx/Tx", "    Rx/Tx", "    Rx/Tx", "    Rx/Tx");
+		vty_out(vty,
+		"--------------------------------------------------------------------------------------------\n");
+	} else if (use_json) {
+		json = json_object_new_object();
+	}
+
+	if (intf_name == NULL) {
+		vrf = vrf_lookup_by_id(ospf->vrf_id);
+		FOR_ALL_INTERFACES (vrf, ifp) {
+			struct route_node *rn;
+			struct ospf_interface *oi;
+
+			if (ospf_oi_count(ifp) == 0)
+				continue;
+
+			for (rn = route_top(IF_OIFS(ifp)); rn;
+				rn = route_next(rn)) {
+				oi = rn->info;
+
+				if (oi == NULL)
+					continue;
+
+				if (use_json) {
+					json_interface_sub =
+						json_object_new_object();
+				}
+
+				show_ip_ospf_interface_traffic_sub(vty, oi,
+							   json_interface_sub,
+							   use_json);
+				if (use_json) {
+					json_object_object_add(json, ifp->name,
+						json_interface_sub);
+				}
+			}
+		}
+	} else {
+		/* Interface name is specified. */
+		ifp = if_lookup_by_name(intf_name, ospf->vrf_id);
+		if (ifp != NULL) {
+			struct route_node *rn;
+			struct ospf_interface *oi;
+
+			if (ospf_oi_count(ifp) == 0) {
+				vty_out(vty, "  OSPF not enabled on this interface %s\n",
+					ifp->name);
+				return CMD_SUCCESS;
+			}
+
+			for (rn = route_top(IF_OIFS(ifp)); rn;
+			     rn = route_next(rn)) {
+				oi = rn->info;
+
+				if (use_json) {
+					json_interface_sub =
+						json_object_new_object();
+				}
+
+				show_ip_ospf_interface_traffic_sub(vty, oi,
+							   json_interface_sub,
+							   use_json);
+				if (use_json) {
+					json_object_object_add(json, ifp->name,
+						json_interface_sub);
+				}
+			}
+		}
+	}
+
+	if (use_json) {
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					     json, JSON_C_TO_STRING_PRETTY));
+		json_object_free(json);
+	}
 
 	return CMD_SUCCESS;
 }
@@ -3709,6 +3900,71 @@ DEFUN (show_ip_ospf_instance_interface,
 
 	return show_ip_ospf_interface_common(vty, ospf, argc, argv, 5, uj);
 }
+
+DEFUN (show_ip_ospf_interface_traffic,
+       show_ip_ospf_interface_traffic_cmd,
+       "show ip ospf [vrf <NAME|all>] interface traffic [INTERFACE] [json]",
+       SHOW_STR
+       IP_STR
+       "OSPF information\n"
+       VRF_CMD_HELP_STR
+       "All VRFs\n"
+       "Interface information\n"
+       "Protocol Packet counters\n"
+       "Interface name\n"
+       JSON_STR)
+{
+	struct ospf *ospf = NULL;
+	struct listnode *node = NULL;
+	char *vrf_name = NULL, *intf_name = NULL;
+	bool all_vrf = FALSE;
+	int inst = 0;
+	int idx_vrf = 0, idx_intf = 0;
+	u_char uj = use_json(argc, argv);
+	int ret = CMD_SUCCESS;
+	int display_once = 0;
+
+	if (uj)
+		argc--;
+
+
+	OSPF_FIND_VRF_ARGS(argv, argc, idx_vrf, vrf_name, all_vrf);
+
+	if (argv_find(argv, argc, "INTERFACE", &idx_intf))
+		intf_name = argv[idx_intf]->arg;
+
+	if (vrf_name) {
+		if (all_vrf) {
+			for (ALL_LIST_ELEMENTS_RO(om->ospf, node, ospf)) {
+				if (!ospf->oi_running)
+					continue;
+
+				ret = show_ip_ospf_interface_traffic_common(vty,
+								ospf, intf_name,
+								display_once,
+								uj);
+				display_once = 1;
+			}
+			return ret;
+		}
+		ospf = ospf_lookup_by_inst_name(inst, vrf_name);
+		if (ospf == NULL || !ospf->oi_running)
+			return CMD_SUCCESS;
+		ret = show_ip_ospf_interface_traffic_common(vty, ospf,
+							    intf_name,
+							    display_once, uj);
+	} else {
+		ospf = ospf_lookup_by_vrf_id(VRF_DEFAULT);
+		if (ospf == NULL || !ospf->oi_running)
+			return CMD_SUCCESS;
+		ret = show_ip_ospf_interface_traffic_common(vty, ospf,
+							    intf_name,
+							    display_once, uj);
+	}
+
+	return ret;
+}
+
 
 static void show_ip_ospf_neighbour_header(struct vty *vty)
 {
@@ -3856,6 +4112,8 @@ static int show_ip_ospf_neighbor_common(struct vty *vty, struct ospf *ospf,
 		else
 			vty_out(vty, "\nOSPF Instance: %d\n\n", ospf->instance);
 	}
+
+	ospf_show_vrf_name(ospf, vty, json);
 
 	for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi))
 		show_ip_ospf_neighbor_sub(vty, oi, json, use_json);
@@ -4145,6 +4403,8 @@ static int show_ip_ospf_neighbor_int_common(struct vty *vty, struct ospf *ospf,
 		else
 			vty_out(vty, "\nOSPF Instance: %d\n\n", ospf->instance);
 	}
+
+	ospf_show_vrf_name(ospf, vty, json);
 
 	/*ifp = if_lookup_by_name(argv[arg_base]->arg, ospf->vrf_id);*/
 	ifp = if_lookup_by_name_all_vrf(argv[arg_base]->arg);
@@ -4558,6 +4818,8 @@ static int show_ip_ospf_neighbor_id_common(struct vty *vty, struct ospf *ospf,
 			vty_out(vty, "\nOSPF Instance: %d\n\n", ospf->instance);
 	}
 
+	ospf_show_vrf_name(ospf, vty, json);
+
 	ret = inet_aton(argv[arg_base]->arg, &router_id);
 	if (!ret) {
 		if (!use_json)
@@ -4656,6 +4918,8 @@ static int show_ip_ospf_neighbor_detail_common(struct vty *vty,
 		else
 			vty_out(vty, "\nOSPF Instance: %d\n\n", ospf->instance);
 	}
+
+	ospf_show_vrf_name(ospf, vty, json);
 
 	for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi)) {
 		struct route_node *rn;
@@ -4780,6 +5044,8 @@ static int show_ip_ospf_neighbor_detail_all_common(struct vty *vty,
 		else
 			vty_out(vty, "\nOSPF Instance: %d\n\n", ospf->instance);
 	}
+
+	ospf_show_vrf_name(ospf, vty, json);
 
 	for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi)) {
 		struct route_node *rn;
@@ -5591,6 +5857,8 @@ static int show_ip_ospf_database_common(struct vty *vty, struct ospf *ospf,
 	if (ospf->instance)
 		vty_out(vty, "\nOSPF Instance: %d\n", ospf->instance);
 
+	ospf_show_vrf_name(ospf, vty, NULL);
+
 	vty_out(vty, "\n       OSPF Router with ID (%s)\n\n",
 		inet_ntoa(ospf->router_id));
 
@@ -5812,6 +6080,8 @@ static int show_ip_ospf_database_type_adv_router_common(struct vty *vty,
 	if (ospf->instance)
 		vty_out(vty, "\nOSPF Instance: %d\n", ospf->instance);
 
+	ospf_show_vrf_name(ospf, vty, NULL);
+
 	vty_out(vty, "\n       OSPF Router with ID (%s)\n\n",
 		inet_ntoa(ospf->router_id));
 
@@ -5973,7 +6243,7 @@ DEFUN (ip_ospf_authentication,
        "IP Information\n"
        "OSPF interface commands\n"
        "Enable authentication on this interface\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx_ipv4 = 3;
@@ -6010,7 +6280,7 @@ DEFUN (no_ip_ospf_authentication_args,
        "Enable authentication on this interface\n"
        "Use null authentication\n"
        "Use message-digest authentication\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx_encryption = 4;
@@ -6090,7 +6360,7 @@ DEFUN (no_ip_ospf_authentication,
        "IP Information\n"
        "OSPF interface commands\n"
        "Enable authentication on this interface\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx_ipv4 = 4;
@@ -6167,7 +6437,7 @@ DEFUN (ip_ospf_authentication_key,
        "OSPF interface commands\n"
        "Authentication password (key)\n"
        "The OSPF password (key)\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx = 0;
@@ -6379,7 +6649,9 @@ DEFUN_HIDDEN (no_ospf_message_digest_key,
               "OSPF interface commands\n"
               "Message digest authentication password (key)\n"
               "Key ID\n"
-              "Address of interface")
+              "Use MD5 algorithm\n"
+              "The OSPF password (key)\n"
+              "Address of interface\n")
 {
 	return no_ip_ospf_message_digest_key(self, vty, argc, argv);
 }
@@ -6442,9 +6714,11 @@ DEFUN (no_ip_ospf_cost,
        no_ip_ospf_cost_cmd,
        "no ip ospf cost [(1-65535)] [A.B.C.D]",
        NO_STR
+       "IP Information\n"
        "OSPF interface commands\n"
        "Interface cost\n"
-       "Address of interface")
+       "Cost\n"
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx = 0;
@@ -6637,7 +6911,10 @@ DEFUN (no_ip_ospf_dead_interval,
        "OSPF interface commands\n"
        "Interval time after which a neighbor is declared down\n"
        "Seconds\n"
-       "Address of interface")
+       "Minimal 1s dead-interval with fast sub-second hellos\n"
+       "Hello multiplier factor\n"
+       "Number of Hellos to send each second\n"
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx_ipv4 = argc - 1;
@@ -6699,7 +6976,10 @@ DEFUN_HIDDEN (no_ospf_dead_interval,
               "OSPF interface commands\n"
               "Interval time after which a neighbor is declared down\n"
               "Seconds\n"
-              "Address of interface")
+              "Minimal 1s dead-interval with fast sub-second hellos\n"
+              "Hello multiplier factor\n"
+              "Number of Hellos to send each second\n"
+              "Address of interface\n")
 {
 	return no_ip_ospf_dead_interval(self, vty, argc, argv);
 }
@@ -6928,7 +7208,7 @@ DEFUN (ip_ospf_priority,
        "OSPF interface commands\n"
        "Router priority\n"
        "Priority\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx = 0;
@@ -6976,7 +7256,7 @@ DEFUN_HIDDEN (ospf_priority,
               "OSPF interface commands\n"
               "Router priority\n"
               "Priority\n"
-              "Address of interface")
+              "Address of interface\n")
 {
 	return ip_ospf_priority(self, vty, argc, argv);
 }
@@ -6989,7 +7269,7 @@ DEFUN (no_ip_ospf_priority,
        "OSPF interface commands\n"
        "Router priority\n" // ignored
        "Priority\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx = 0;
@@ -7041,7 +7321,7 @@ DEFUN_HIDDEN (no_ospf_priority,
               "OSPF interface commands\n"
               "Router priority\n"
               "Priority\n"
-              "Address of interface")
+              "Address of interface\n")
 {
 	return no_ip_ospf_priority(self, vty, argc, argv);
 }
@@ -7053,7 +7333,7 @@ DEFUN (ip_ospf_retransmit_interval,
        "OSPF interface commands\n"
        "Time between retransmitting lost link state advertisements\n"
        "Seconds\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx = 0;
@@ -7088,7 +7368,7 @@ DEFUN_HIDDEN (ospf_retransmit_interval,
               "OSPF interface commands\n"
               "Time between retransmitting lost link state advertisements\n"
               "Seconds\n"
-              "Address of interface")
+              "Address of interface\n")
 {
 	return ip_ospf_retransmit_interval(self, vty, argc, argv);
 }
@@ -7152,7 +7432,7 @@ DEFUN (ip_ospf_transmit_delay,
        "OSPF interface commands\n"
        "Link state transmit delay\n"
        "Seconds\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx = 0;
@@ -7187,7 +7467,7 @@ DEFUN_HIDDEN (ospf_transmit_delay,
               "OSPF interface commands\n"
               "Link state transmit delay\n"
               "Seconds\n"
-              "Address of interface")
+              "Address of interface\n")
 {
 	return ip_ospf_transmit_delay(self, vty, argc, argv);
 }
@@ -7199,7 +7479,8 @@ DEFUN (no_ip_ospf_transmit_delay,
        "IP Information\n"
        "OSPF interface commands\n"
        "Link state transmit delay\n"
-       "Address of interface")
+       "Seconds\n"
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx = 0;
@@ -7239,7 +7520,7 @@ DEFUN_HIDDEN (no_ospf_transmit_delay,
               "OSPF interface commands\n"
               "Link state transmit delay\n"
               "Seconds\n"
-              "Address of interface")
+              "Address of interface\n")
 {
 	return no_ip_ospf_transmit_delay(self, vty, argc, argv);
 }
@@ -7933,7 +8214,7 @@ DEFUN (ip_ospf_mtu_ignore,
        "IP Information\n"
        "OSPF interface commands\n"
        "Disable MTU mismatch detection on this interface\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx_ipv4 = 3;
@@ -7969,10 +8250,11 @@ DEFUN (ip_ospf_mtu_ignore,
 DEFUN (no_ip_ospf_mtu_ignore,
        no_ip_ospf_mtu_ignore_addr_cmd,
        "no ip ospf mtu-ignore [A.B.C.D]",
+       NO_STR
        "IP Information\n"
        "OSPF interface commands\n"
        "Disable MTU mismatch detection on this interface\n"
-       "Address of interface")
+       "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx_ipv4 = 4;
@@ -8368,6 +8650,8 @@ static int show_ip_ospf_border_routers_common(struct vty *vty,
 	if (ospf->instance)
 		vty_out(vty, "\nOSPF Instance: %d\n\n", ospf->instance);
 
+	ospf_show_vrf_name(ospf, vty, NULL);
+
 	if (ospf->new_table == NULL) {
 		vty_out(vty, "No OSPF routing information exist\n");
 		return CMD_SUCCESS;
@@ -8459,6 +8743,8 @@ static int show_ip_ospf_route_common(struct vty *vty, struct ospf *ospf)
 {
 	if (ospf->instance)
 		vty_out(vty, "\nOSPF Instance: %d\n\n", ospf->instance);
+
+	ospf_show_vrf_name(ospf, vty, NULL);
 
 	if (ospf->new_table == NULL) {
 		vty_out(vty, "No OSPF routing information exist\n");
@@ -8633,20 +8919,18 @@ const char *ospf_int_type_str[] = {"unknown", /* should never be used. */
 
 static int config_write_interface_one(struct vty *vty, struct ospf *ospf)
 {
-	struct listnode *n1, *n2;
+	struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
+	struct listnode *node;
 	struct interface *ifp;
 	struct crypt_key *ck;
 	struct route_node *rn = NULL;
 	struct ospf_if_params *params;
 	int write = 0;
 
-	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(ospf->vrf_id), n1, ifp)) {
+	FOR_ALL_INTERFACES (vrf, ifp) {
 		struct vrf *vrf = NULL;
 
 		if (memcmp(ifp->name, "VLINK", 5) == 0)
-			continue;
-
-		if (ifp->ifindex == IFINDEX_DELETED)
 			continue;
 
 		vrf = vrf_lookup_by_id(ifp->vrf_id);
@@ -8729,7 +9013,7 @@ static int config_write_interface_one(struct vty *vty, struct ospf *ospf)
 			/* Cryptographic Authentication Key print. */
 			if (params && params->auth_crypt) {
 				for (ALL_LIST_ELEMENTS_RO(params->auth_crypt,
-							  n2, ck)) {
+							  node, ck)) {
 					vty_out(vty,
 						" ip ospf message-digest-key %d md5 %s",
 						ck->key_id, ck->auth_key);
@@ -8955,27 +9239,29 @@ static int config_write_ospf_area(struct vty *vty, struct ospf *ospf)
 
 		if ((area->external_routing == OSPF_AREA_STUB)
 		    || (area->external_routing == OSPF_AREA_NSSA)) {
-			if (area->external_routing == OSPF_AREA_STUB)
+			if (area->external_routing == OSPF_AREA_STUB) {
 				vty_out(vty, " area %s stub", buf);
-			else if (area->external_routing == OSPF_AREA_NSSA) {
-				vty_out(vty, " area %s nssa", buf);
+				if (area->no_summary)
+					vty_out(vty, " no-summary\n");
+				vty_out(vty, "\n");
+			} else if (area->external_routing == OSPF_AREA_NSSA) {
 				switch (area->NSSATranslatorRole) {
 				case OSPF_NSSA_ROLE_NEVER:
-					vty_out(vty, " translate-never");
+					vty_out(vty,
+						" area %s nssa translate-never\n",
+						buf);
 					break;
 				case OSPF_NSSA_ROLE_ALWAYS:
-					vty_out(vty, " translate-always");
+					vty_out(vty,
+						" area %s nssa translate-always\n",
+						buf);
 					break;
-				case OSPF_NSSA_ROLE_CANDIDATE:
-				default:
-					vty_out(vty, " translate-candidate");
 				}
+				if (area->no_summary)
+					vty_out(vty,
+						" area %s nssa no-summary\n",
+						buf);
 			}
-
-			if (area->no_summary)
-				vty_out(vty, " no-summary");
-
-			vty_out(vty, "\n");
 
 			if (area->default_cost != 1)
 				vty_out(vty, " area %s default-cost %d\n", buf,
@@ -9234,6 +9520,7 @@ static int config_write_ospf_distance(struct vty *vty, struct ospf *ospf)
 
 static int ospf_config_write_one(struct vty *vty, struct ospf *ospf)
 {
+	struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
 	struct interface *ifp;
 	struct ospf_interface *oi;
 	struct listnode *node = NULL;
@@ -9328,7 +9615,7 @@ static int ospf_config_write_one(struct vty *vty, struct ospf *ospf)
 	if (ospf->passive_interface_default == OSPF_IF_PASSIVE)
 		vty_out(vty, " passive-interface default\n");
 
-	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(ospf->vrf_id), node, ifp))
+	FOR_ALL_INTERFACES (vrf, ifp)
 		if (OSPF_IF_PARAM_CONFIGURED(IF_DEF_PARAMS(ifp),
 					     passive_interface)
 		    && IF_DEF_PARAMS(ifp)->passive_interface
@@ -9422,6 +9709,8 @@ void ospf_vty_show_init(void)
 	install_element(VIEW_NODE, &show_ip_ospf_interface_cmd);
 
 	install_element(VIEW_NODE, &show_ip_ospf_instance_interface_cmd);
+	/* "show ip ospf interface traffic */
+	install_element(VIEW_NODE, &show_ip_ospf_interface_traffic_cmd);
 
 	/* "show ip ospf neighbor" commands. */
 	install_element(VIEW_NODE, &show_ip_ospf_neighbor_int_detail_cmd);
@@ -9591,14 +9880,14 @@ DEFUN (clear_ip_ospf_interface,
 {
 	int idx_ifname = 4;
 	struct interface *ifp;
-	struct listnode *node, *n1;
+	struct listnode *node;
 	struct ospf *ospf = NULL;
 
 	if (argc == 4) /* Clear all the ospfv2 interfaces. */
 	{
-		for (ALL_LIST_ELEMENTS_RO(om->ospf, n1, ospf)) {
-			for (ALL_LIST_ELEMENTS_RO(vrf_iflist(ospf->vrf_id),
-						  node, ifp))
+		for (ALL_LIST_ELEMENTS_RO(om->ospf, node, ospf)) {
+			struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
+			FOR_ALL_INTERFACES (vrf, ifp)
 				ospf_interface_clear(ifp);
 		}
 	} else {
@@ -9690,9 +9979,9 @@ void ospf_vty_init(void)
 
 	/* "area nssa" commands. */
 	install_element(OSPF_NODE, &ospf_area_nssa_cmd);
-	install_element(OSPF_NODE, &ospf_area_nssa_translate_no_summary_cmd);
 	install_element(OSPF_NODE, &ospf_area_nssa_translate_cmd);
 	install_element(OSPF_NODE, &ospf_area_nssa_no_summary_cmd);
+	install_element(OSPF_NODE, &no_ospf_area_nssa_no_summary_cmd);
 	install_element(OSPF_NODE, &no_ospf_area_nssa_cmd);
 
 	install_element(OSPF_NODE, &ospf_area_default_cost_cmd);

@@ -152,8 +152,8 @@ static struct ospf6_vertex *ospf6_vertex_create(struct ospf6_lsa *lsa)
 
 static void ospf6_vertex_delete(struct ospf6_vertex *v)
 {
-	list_delete(v->nh_list);
-	list_delete(v->child_list);
+	list_delete_and_null(&v->nh_list);
+	list_delete_and_null(&v->child_list);
 	XFREE(MTYPE_OSPF6_VERTEX, v);
 }
 
@@ -240,7 +240,8 @@ static char *ospf6_lsdesc_backlink(struct ospf6_lsa *lsa, caddr_t lsdesc,
 	}
 
 	if (IS_OSPF6_DEBUG_SPF(PROCESS))
-		zlog_debug("  Backlink %s", (found ? "OK" : "FAIL"));
+		zlog_debug("Vertex %s Lsa %s Backlink %s", v->name, lsa->name,
+			   (found ? "OK" : "FAIL"));
 
 	return found;
 }

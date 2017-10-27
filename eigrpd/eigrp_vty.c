@@ -132,11 +132,11 @@ static int config_write_interfaces(struct vty *vty, struct eigrp *eigrp)
 
 static int eigrp_write_interface(struct vty *vty)
 {
-	struct listnode *node;
+	struct vrf *vrf = vrf_lookup_by_id(VRF_DEFAULT);
 	struct interface *ifp;
 	struct eigrp_interface *ei;
 
-	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(VRF_DEFAULT), node, ifp)) {
+	FOR_ALL_INTERFACES (vrf, ifp) {
 		ei = ifp->info;
 		if (!ei)
 			continue;
@@ -398,7 +398,7 @@ DEFUN (eigrp_network,
 	struct prefix p;
 	int ret;
 
-	str2prefix(argv[1]->arg, &p);
+	(void)str2prefix(argv[1]->arg, &p);
 
 	ret = eigrp_network_set(eigrp, &p);
 
@@ -421,7 +421,7 @@ DEFUN (no_eigrp_network,
 	struct prefix p;
 	int ret;
 
-	str2prefix(argv[2]->arg, &p);
+	(void)str2prefix(argv[2]->arg, &p);
 
 	ret = eigrp_network_unset(eigrp, &p);
 
@@ -466,9 +466,10 @@ DEFUN (show_ip_eigrp_topology,
        "Show all links in topology table\n")
 {
 	struct eigrp *eigrp;
-	struct listnode *node, *node2;
+	struct listnode *node;
 	struct eigrp_prefix_entry *tn;
 	struct eigrp_nexthop_entry *te;
+	struct route_node *rn;
 	int first;
 
 	eigrp = eigrp_lookup();
@@ -479,9 +480,13 @@ DEFUN (show_ip_eigrp_topology,
 
 	show_ip_eigrp_topology_header(vty, eigrp);
 
-	for (ALL_LIST_ELEMENTS_RO(eigrp->topology_table, node, tn)) {
+	for (rn = route_top(eigrp->topology_table); rn; rn = route_next(rn)) {
+		if (!rn->info)
+			continue;
+
+		tn = rn->info;
 		first = 1;
-		for (ALL_LIST_ELEMENTS_RO(tn->entries, node2, te)) {
+		for (ALL_LIST_ELEMENTS_RO(tn->entries, node, te)) {
 			if (argc == 5
 			    || (((te->flags
 				  & EIGRP_NEXTHOP_ENTRY_SUCCESSOR_FLAG)
@@ -865,11 +870,10 @@ DEFUN (no_eigrp_ip_summary_address,
 DEFUN (no_eigrp_if_ip_holdinterval,
        no_eigrp_if_ip_holdinterval_cmd,
        "no ip hold-time eigrp",
-       "No"
+       NO_STR
        "Interface Internet Protocol config commands\n"
        "Configures EIGRP hello interval\n"
-       "Enhanced Interior Gateway Routing Protocol (EIGRP)\n"
-       "Seconds before neighbor is considered down\n")
+       "Enhanced Interior Gateway Routing Protocol (EIGRP)\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	struct eigrp_interface *ei = ifp->info;

@@ -212,13 +212,14 @@ kmpw_unset(struct zapi_pw *zpw)
 void
 kif_redistribute(const char *ifname)
 {
-	struct listnode		*node, *cnode;
+	struct vrf		*vrf = vrf_lookup_by_id(VRF_DEFAULT);
+	struct listnode		*cnode;
 	struct interface	*ifp;
 	struct connected	*ifc;
 	struct kif		 kif;
 	struct kaddr		 ka;
 
-	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(VRF_DEFAULT), node, ifp)) {
+	FOR_ALL_INTERFACES (vrf, ifp) {
 		if (ifname && strcmp(ifname, ifp->name) != 0)
 			continue;
 
@@ -287,7 +288,7 @@ ldp_interface_delete(int command, struct zclient *zclient, zebra_size_t length,
 
 	/* To support pseudo interface do not free interface structure.  */
 	/* if_delete(ifp); */
-	ifp->ifindex = IFINDEX_DELETED;
+	if_set_index(ifp, IFINDEX_INTERNAL);
 
 	ifp2kif(ifp, &kif);
 	main_imsg_compose_both(IMSG_IFSTATUS, &kif, sizeof(kif));
@@ -506,12 +507,14 @@ ldp_zebra_connected(struct zclient *zclient)
 	    ZEBRA_ROUTE_ALL, 0, VRF_DEFAULT);
 }
 
+extern struct zebra_privs_t ldpd_privs;
+
 void
 ldp_zebra_init(struct thread_master *master)
 {
 	/* Set default values. */
 	zclient = zclient_new(master);
-	zclient_init(zclient, ZEBRA_ROUTE_LDP, 0);
+	zclient_init(zclient, ZEBRA_ROUTE_LDP, 0, &ldpd_privs);
 
 	/* set callbacks */
 	zclient->zebra_connected = ldp_zebra_connected;

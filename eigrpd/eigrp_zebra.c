@@ -103,7 +103,7 @@ void eigrp_zebra_init(void)
 {
 	zclient = zclient_new(master);
 
-	zclient_init(zclient, ZEBRA_ROUTE_EIGRP, 0);
+	zclient_init(zclient, ZEBRA_ROUTE_EIGRP, 0, &eigrpd_privs);
 	zclient->zebra_connected = eigrp_zebra_connected;
 	zclient->router_id_update = eigrp_router_id_update_zebra;
 	zclient->interface_add = eigrp_interface_add;
@@ -192,6 +192,7 @@ static int eigrp_interface_delete(int command, struct zclient *zclient,
 		eigrp_if_free(ifp->info,
 			      INTERFACE_DOWN_BY_ZEBRA);
 
+	if_set_index(ifp, IFINDEX_INTERNAL);
 	return 0;
 }
 
@@ -334,8 +335,7 @@ static struct interface *zebra_interface_if_lookup(struct stream *s)
 	stream_get(ifname_tmp, s, INTERFACE_NAMSIZ);
 
 	/* And look it up. */
-	return if_lookup_by_name_len(
-		ifname_tmp, strnlen(ifname_tmp, INTERFACE_NAMSIZ), VRF_DEFAULT);
+	return if_lookup_by_name(ifname_tmp, VRF_DEFAULT);
 }
 
 void eigrp_zebra_route_add(struct prefix *p, struct list *successors)

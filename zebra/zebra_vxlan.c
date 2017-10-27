@@ -1211,12 +1211,11 @@ struct interface *zebra_get_vrr_intf_for_svi(struct interface *ifp)
 	struct zebra_vrf *zvrf = NULL;
 	struct interface *tmp_if = NULL;
 	struct zebra_if *zif = NULL;
-	struct listnode *node;
 
 	zvrf = vrf_info_lookup(ifp->vrf_id);
 	assert(zvrf);
 
-	for (ALL_LIST_ELEMENTS_RO(vrf_iflist(zvrf_id(zvrf)), node, tmp_if)) {
+	FOR_ALL_INTERFACES (zvrf->vrf, tmp_if) {
 		zif = tmp_if->info;
 		if (!zif)
 			continue;
@@ -1569,7 +1568,7 @@ static int zvni_mac_del(zebra_vni_t *zvni, zebra_mac_t *mac)
 {
 	zebra_mac_t *tmp_mac;
 
-	list_delete(mac->neigh_list);
+	list_delete_and_null(&mac->neigh_list);
 
 	/* Free the VNI hash entry and allocated memory. */
 	tmp_mac = hash_release(zvni->mac_table, mac);
@@ -3032,7 +3031,7 @@ int zebra_vxlan_local_neigh_add_update(struct interface *ifp,
 /*
  * Handle message from client to delete a remote MACIP for a VNI.
  */
-int zebra_vxlan_remote_macip_del(struct zserv *client, int sock, u_short length,
+int zebra_vxlan_remote_macip_del(struct zserv *client, u_short length,
 				 struct zebra_vrf *zvrf)
 {
 	struct stream *s;
@@ -3172,7 +3171,7 @@ int zebra_vxlan_remote_macip_del(struct zserv *client, int sock, u_short length,
  * could be just the add of a MAC address or the add of a neighbor
  * (IP+MAC).
  */
-int zebra_vxlan_remote_macip_add(struct zserv *client, int sock, u_short length,
+int zebra_vxlan_remote_macip_add(struct zserv *client, u_short length,
 				 struct zebra_vrf *zvrf)
 {
 	struct stream *s;
@@ -3674,7 +3673,7 @@ int zebra_vxlan_local_mac_add_update(struct interface *ifp,
 /*
  * Handle message from client to delete a remote VTEP for a VNI.
  */
-int zebra_vxlan_remote_vtep_del(struct zserv *client, int sock, u_short length,
+int zebra_vxlan_remote_vtep_del(struct zserv *client, u_short length,
 				struct zebra_vrf *zvrf)
 {
 	struct stream *s;
@@ -3753,7 +3752,7 @@ int zebra_vxlan_remote_vtep_del(struct zserv *client, int sock, u_short length,
 /*
  * Handle message from client to add a remote VTEP for a VNI.
  */
-int zebra_vxlan_remote_vtep_add(struct zserv *client, int sock, u_short length,
+int zebra_vxlan_remote_vtep_add(struct zserv *client, u_short length,
 				struct zebra_vrf *zvrf)
 {
 	struct stream *s;
@@ -4282,8 +4281,8 @@ int zebra_vxlan_if_add(struct interface *ifp)
  * Handle message from client to enable/disable advertisement of g/w macip
  * routes
  */
-int zebra_vxlan_advertise_gw_macip(struct zserv *client, int sock,
-				   u_short length, struct zebra_vrf *zvrf)
+int zebra_vxlan_advertise_gw_macip(struct zserv *client, u_short length,
+				   struct zebra_vrf *zvrf)
 {
 	struct stream *s;
 	int advertise;
@@ -4390,7 +4389,7 @@ int zebra_vxlan_advertise_gw_macip(struct zserv *client, int sock,
  * when disabled, the entries should be deleted and remote VTEPs and MACs
  * uninstalled from the kernel.
  */
-int zebra_vxlan_advertise_all_vni(struct zserv *client, int sock,
+int zebra_vxlan_advertise_all_vni(struct zserv *client,
 				  u_short length, struct zebra_vrf *zvrf)
 {
 	struct stream *s;

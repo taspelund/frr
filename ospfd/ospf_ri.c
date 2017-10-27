@@ -188,11 +188,9 @@ static int ospf_router_info_unregister()
 void ospf_router_info_term(void)
 {
 
-	list_delete(OspfRI.pce_info.pce_domain);
-	list_delete(OspfRI.pce_info.pce_neighbor);
+	list_delete_and_null(&OspfRI.pce_info.pce_domain);
+	list_delete_and_null(&OspfRI.pce_info.pce_neighbor);
 
-	OspfRI.pce_info.pce_domain = NULL;
-	OspfRI.pce_info.pce_neighbor = NULL;
 	OspfRI.enabled = false;
 
 	ospf_router_info_unregister();
@@ -661,6 +659,7 @@ static int ospf_router_info_lsa_originate1(void *arg)
 	if (top == NULL) {
 		zlog_debug("%s: ospf instance not found for vrf id %u",
 			   __PRETTY_FUNCTION__, vrf_id);
+		ospf_lsa_unlock(&new);
 		return rc;
 	}
 
@@ -1120,7 +1119,7 @@ DEFUN (router_info,
        OSPF_RI_STR
        "Enable the Router Information functionality with AS flooding scope\n"
        "Enable the Router Information functionality with Area flooding scope\n"
-       "OSPF area ID in IP format")
+       "OSPF area ID in IP format\n")
 {
 	int idx_ipv4 = 2;
 	char *area = (argc == 3) ? argv[idx_ipv4]->arg : NULL;

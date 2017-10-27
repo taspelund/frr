@@ -166,7 +166,7 @@ static int ospf_interface_delete(int command, struct zclient *zclient,
 		if (rn->info)
 			ospf_if_free((struct ospf_interface *)rn->info);
 
-	ifp->ifindex = IFINDEX_DELETED;
+	if_set_index(ifp, IFINDEX_INTERNAL);
 	return 0;
 }
 
@@ -179,8 +179,7 @@ static struct interface *zebra_interface_if_lookup(struct stream *s,
 	stream_get(ifname_tmp, s, INTERFACE_NAMSIZ);
 
 	/* And look it up. */
-	return if_lookup_by_name_len(
-		ifname_tmp, strnlen(ifname_tmp, INTERFACE_NAMSIZ), vrf_id);
+	return if_lookup_by_name(ifname_tmp, vrf_id);
 }
 
 static int ospf_interface_state_up(int command, struct zclient *zclient,
@@ -574,8 +573,7 @@ void ospf_external_del(u_char type, u_short instance)
 
 		listnode_delete(om->external[type], ext);
 		if (!om->external[type]->count) {
-			list_free(om->external[type]);
-			om->external[type] = NULL;
+			list_delete_and_null(&om->external[type]);
 		}
 		XFREE(MTYPE_OSPF_EXTERNAL, ext);
 	}
@@ -633,8 +631,7 @@ void ospf_redist_del(struct ospf *ospf, u_char type, u_short instance)
 	if (red) {
 		listnode_delete(ospf->redist[type], red);
 		if (!ospf->redist[type]->count) {
-			list_free(ospf->redist[type]);
-			ospf->redist[type] = NULL;
+			list_delete_and_null(&ospf->redist[type]);
 		}
 		ospf_routemap_unset(red);
 		XFREE(MTYPE_OSPF_REDISTRIBUTE, red);
@@ -1136,12 +1133,16 @@ void ospf_distribute_list_update(struct ospf *ospf, int type,
 
 	/* External info does not exist. */
 	ext = ospf_external_lookup(type, instance);
-	if (!ext || !(rt = EXTERNAL_INFO(ext)))
+	if (!ext || !(rt = EXTERNAL_INFO(ext))) {
+		XFREE(MTYPE_OSPF_DIST_ARGS, args);
 		return;
+	}
 
 	/* If exists previously invoked thread, then let it continue. */
-	if (ospf->t_distribute_update)
+	if (ospf->t_distribute_update) {
+		XFREE(MTYPE_OSPF_DIST_ARGS, args);
 		return;
+	}
 
 	/* Set timer. */
 	ospf->t_distribute_update = NULL;
@@ -1471,7 +1472,7 @@ void ospf_zebra_init(struct thread_master *master, u_short instance)
 {
 	/* Allocate zebra structure. */
 	zclient = zclient_new(master);
-	zclient_init(zclient, ZEBRA_ROUTE_OSPF, instance);
+	zclient_init(zclient, ZEBRA_ROUTE_OSPF, instance, &ospfd_privs);
 	zclient->zebra_connected = ospf_zebra_connected;
 	zclient->router_id_update = ospf_router_id_update_zebra;
 	zclient->interface_add = ospf_interface_add;

@@ -166,8 +166,7 @@ static int ospf_mpls_te_unregister()
 
 void ospf_mpls_te_term(void)
 {
-	list_delete(OspfMplsTE.iflist);
-	OspfMplsTE.iflist = NULL;
+	list_delete_and_null(&OspfMplsTE.iflist);
 
 	ospf_delete_opaque_functab(OSPF_OPAQUE_AREA_LSA,
 				   OPAQUE_TYPE_TRAFFIC_ENGINEERING_LSA);
@@ -1168,8 +1167,10 @@ static struct ospf_lsa *ospf_mpls_te_lsa_new(struct ospf *ospf,
 		tmp = SET_OPAQUE_LSID(OPAQUE_TYPE_INTER_AS_LSA, lp->instance);
 		lsa_id.s_addr = htonl(tmp);
 
-		if (!ospf)
+		if (!ospf) {
+			stream_free(s);
 			return NULL;
+		}
 
 		lsa_header_set(s, options, lsa_type, lsa_id, ospf->router_id);
 	} else {
@@ -1251,7 +1252,7 @@ static int ospf_mpls_te_lsa_originate1(struct ospf_area *area,
 
 	if (IS_DEBUG_OSPF(lsa, LSA_GENERATE)) {
 		char area_id[INET_ADDRSTRLEN];
-		strcpy(area_id, inet_ntoa(area->area_id));
+		strlcpy(area_id, inet_ntoa(area->area_id), sizeof(area_id));
 		zlog_debug(
 			"LSA[Type%d:%s]: Originate Opaque-LSA/MPLS-TE: Area(%s), Link(%s)",
 			new->data->type, inet_ntoa(new->data->id), area_id,
@@ -2534,9 +2535,10 @@ DEFUN (show_ip_ospf_mpls_te_link,
        "Interface information\n"
        "Interface name\n")
 {
+	struct vrf *vrf;
 	int idx_interface = 5;
 	struct interface *ifp;
-	struct listnode *node, *nnode, *n1;
+	struct listnode *node;
 	char *vrf_name = NULL;
 	bool all_vrf;
 	int inst = 0;
@@ -2551,11 +2553,11 @@ DEFUN (show_ip_ospf_mpls_te_link,
 	/* vrf input is provided could be all or specific vrf*/
 	if (vrf_name) {
 		if (all_vrf) {
-			for (ALL_LIST_ELEMENTS_RO(om->ospf, n1, ospf)) {
+			for (ALL_LIST_ELEMENTS_RO(om->ospf, node, ospf)) {
 				if (!ospf->oi_running)
 					continue;
-				for (ALL_LIST_ELEMENTS(vrf_iflist(ospf->vrf_id),
-						       node, nnode, ifp))
+				vrf = vrf_lookup_by_id(ospf->vrf_id);
+				FOR_ALL_INTERFACES (vrf, ifp)
 					show_mpls_te_link_sub(vty, ifp);
 			}
 			return CMD_SUCCESS;
@@ -2563,18 +2565,18 @@ DEFUN (show_ip_ospf_mpls_te_link,
 		ospf = ospf_lookup_by_inst_name (inst, vrf_name);
 		if (ospf == NULL || !ospf->oi_running)
 			return CMD_SUCCESS;
-		for (ALL_LIST_ELEMENTS(vrf_iflist(ospf->vrf_id), node,
-				       nnode, ifp))
+		vrf = vrf_lookup_by_id(ospf->vrf_id);
+		FOR_ALL_INTERFACES (vrf, ifp)
 			show_mpls_te_link_sub(vty, ifp);
 		return CMD_SUCCESS;
 	}
 	/* Show All Interfaces. */
 	if (argc == 5) {
-		for (ALL_LIST_ELEMENTS_RO(om->ospf, n1, ospf)) {
+		for (ALL_LIST_ELEMENTS_RO(om->ospf, node, ospf)) {
 			if (!ospf->oi_running)
 				continue;
-			for (ALL_LIST_ELEMENTS(vrf_iflist(ospf->vrf_id), node,
-					       nnode, ifp))
+			vrf = vrf_lookup_by_id(ospf->vrf_id);
+			FOR_ALL_INTERFACES (vrf, ifp)
 				show_mpls_te_link_sub(vty, ifp);
 		}
 	}

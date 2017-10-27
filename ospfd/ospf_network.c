@@ -30,8 +30,6 @@
 #include "sockopt.h"
 #include "privs.h"
 
-extern struct zebra_privs_t ospfd_privs;
-
 #include "ospfd/ospfd.h"
 #include "ospfd/ospf_network.h"
 #include "ospfd/ospf_interface.h"
@@ -220,8 +218,10 @@ int ospf_sock_init(struct ospf *ospf)
 	}
 
 	ret = ospf_bind_vrfdevice(ospf, ospf_sock);
-	if (ret < 0)
+	if (ret < 0) {
+		close(ospf_sock);
 		goto out;
+	}
 
 #ifdef IP_HDRINCL
 	/* we will include IP header with packet */
@@ -232,6 +232,7 @@ int ospf_sock_init(struct ospf *ospf)
 
 		zlog_warn("Can't set IP_HDRINCL option for fd %d: %s",
 			  ospf_sock, safe_strerror(save_errno));
+		close(ospf_sock);
 		goto out;
 	}
 #elif defined(IPTOS_PREC_INTERNETCONTROL)

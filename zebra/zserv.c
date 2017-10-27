@@ -40,6 +40,7 @@
 #include "nexthop.h"
 #include "vrf.h"
 #include "libfrr.h"
+#include "sockopt.h"
 
 #include "zebra/zserv.h"
 #include "zebra/zebra_ns.h"
@@ -693,7 +694,7 @@ static int zsend_write_nexthop(struct stream *s, struct nexthop *nexthop)
 }
 
 /* Nexthop register */
-static int zserv_rnh_register(struct zserv *client, int sock, u_short length,
+static int zserv_rnh_register(struct zserv *client, u_short length,
 			      rnh_type_t type, struct zebra_vrf *zvrf)
 {
 	struct rnh *rnh;
@@ -754,7 +755,7 @@ static int zserv_rnh_register(struct zserv *client, int sock, u_short length,
 }
 
 /* Nexthop register */
-static int zserv_rnh_unregister(struct zserv *client, int sock, u_short length,
+static int zserv_rnh_unregister(struct zserv *client, u_short length,
 				rnh_type_t type, struct zebra_vrf *zvrf)
 {
 	struct rnh *rnh;
@@ -798,7 +799,7 @@ static int zserv_rnh_unregister(struct zserv *client, int sock, u_short length,
 #define ZEBRA_MIN_FEC_LENGTH 5
 
 /* FEC register */
-static int zserv_fec_register(struct zserv *client, int sock, u_short length)
+static int zserv_fec_register(struct zserv *client, u_short length)
 {
 	struct stream *s;
 	struct zebra_vrf *zvrf;
@@ -825,6 +826,7 @@ static int zserv_fec_register(struct zserv *client, int sock, u_short length)
 
 	while (l < length) {
 		flags = stream_getw(s);
+		memset(&p, 0, sizeof(p));
 		p.family = stream_getw(s);
 		if (p.family != AF_INET && p.family != AF_INET6) {
 			zlog_err(
@@ -848,7 +850,7 @@ static int zserv_fec_register(struct zserv *client, int sock, u_short length)
 }
 
 /* FEC unregister */
-static int zserv_fec_unregister(struct zserv *client, int sock, u_short length)
+static int zserv_fec_unregister(struct zserv *client, u_short length)
 {
 	struct stream *s;
 	struct zebra_vrf *zvrf;
@@ -875,6 +877,7 @@ static int zserv_fec_unregister(struct zserv *client, int sock, u_short length)
 	while (l < length) {
 		// flags = stream_getw(s);
 		(void)stream_getw(s);
+		memset(&p, 0, sizeof(p));
 		p.family = stream_getw(s);
 		if (p.family != AF_INET && p.family != AF_INET6) {
 			zlog_err(
@@ -998,14 +1001,13 @@ static int zread_interface_add(struct zserv *client, u_short length,
 			       struct zebra_vrf *zvrf)
 {
 	struct vrf *vrf;
-	struct listnode *ifnode, *ifnnode;
 	struct interface *ifp;
 
 	/* Interface information is needed. */
 	vrf_bitmap_set(client->ifinfo, zvrf_id(zvrf));
 
 	RB_FOREACH (vrf, vrf_id_head, &vrfs_by_id) {
-		for (ALL_LIST_ELEMENTS(vrf->iflist, ifnode, ifnnode, ifp)) {
+		FOR_ALL_INTERFACES (vrf, ifp) {
 			/* Skip pseudo interface. */
 			if (!CHECK_FLAG(ifp->status, ZEBRA_INTERFACE_ACTIVE))
 				continue;
@@ -1762,7 +1764,7 @@ static int zread_vrf_unregister(struct zserv *client, u_short length,
 }
 
 static void zread_mpls_labels(int command, struct zserv *client, u_short length,
-			      vrf_id_t vrf_id)
+			      struct zebra_vrf *zvrf)
 {
 	struct stream *s;
 	enum lsp_types_t type;
@@ -1772,11 +1774,6 @@ static void zread_mpls_labels(int command, struct zserv *client, u_short length,
 	ifindex_t ifindex;
 	mpls_label_t in_label, out_label;
 	u_int8_t distance;
-	struct zebra_vrf *zvrf;
-
-	zvrf = vrf_info_lookup(vrf_id);
-	if (!zvrf)
-		return;
 
 	/* Get input stream.  */
 	s = client->ibuf;
@@ -1958,7 +1955,7 @@ static void zread_release_label_chunk(struct zserv *client)
 	release_label_chunk(client->proto, client->instance, start, end);
 }
 static void zread_label_manager_request(int cmd, struct zserv *client,
-					vrf_id_t vrf_id)
+					struct zebra_vrf *zvrf)
 {
 	/* to avoid sending other messages like ZERBA_INTERFACE_UP */
 	if (cmd == ZEBRA_LABEL_MANAGER_CONNECT)
@@ -1966,11 +1963,13 @@ static void zread_label_manager_request(int cmd, struct zserv *client,
 
 	/* external label manager */
 	if (lm_is_external)
-		zread_relay_label_manager_request(cmd, client, vrf_id);
+		zread_relay_label_manager_request(cmd, client,
+						  zvrf_id(zvrf));
 	/* this is a label manager */
 	else {
 		if (cmd == ZEBRA_LABEL_MANAGER_CONNECT)
-			zread_label_manager_connect(client, vrf_id);
+			zread_label_manager_connect(client,
+						    zvrf_id(zvrf));
 		else {
 			/* Sanity: don't allow 'unidentified' requests */
 			if (!client->proto) {
@@ -1979,7 +1978,8 @@ static void zread_label_manager_request(int cmd, struct zserv *client,
 				return;
 			}
 			if (cmd == ZEBRA_GET_LABEL_CHUNK)
-				zread_get_label_chunk(client, vrf_id);
+				zread_get_label_chunk(client,
+						      zvrf_id(zvrf));
 			else if (cmd == ZEBRA_RELEASE_LABEL_CHUNK)
 				zread_release_label_chunk(client);
 		}
@@ -1987,10 +1987,9 @@ static void zread_label_manager_request(int cmd, struct zserv *client,
 }
 
 static int zread_pseudowire(int command, struct zserv *client, u_short length,
-			    vrf_id_t vrf_id)
+			    struct zebra_vrf *zvrf)
 {
 	struct stream *s;
-	struct zebra_vrf *zvrf;
 	char ifname[IF_NAMESIZE];
 	ifindex_t ifindex;
 	int type;
@@ -2002,10 +2001,6 @@ static int zread_pseudowire(int command, struct zserv *client, u_short length,
 	union pw_protocol_fields data;
 	uint8_t protocol;
 	struct zebra_pw *pw;
-
-	zvrf = vrf_info_lookup(vrf_id);
-	if (!zvrf)
-		return -1;
 
 	/* Get input stream.  */
 	s = client->ibuf;
@@ -2209,7 +2204,7 @@ static void zebra_client_create(int sock)
 	zebra_vrf_update_all(client);
 }
 
-static int zread_interface_set_master(struct zserv *client, int sock,
+static int zread_interface_set_master(struct zserv *client,
 				      u_short length)
 {
 	struct interface *master;
@@ -2234,122 +2229,11 @@ static int zread_interface_set_master(struct zserv *client, int sock,
 	return 1;
 }
 
-/* Handler of zebra service request. */
-static int zebra_client_read(struct thread *thread)
+static inline void zserv_handle_commands(struct zserv *client,
+					 uint16_t command,
+					 uint16_t length,
+					 struct zebra_vrf *zvrf)
 {
-	int sock;
-	struct zserv *client;
-	size_t already;
-	uint16_t length, command;
-	uint8_t marker, version;
-	vrf_id_t vrf_id;
-	struct zebra_vrf *zvrf;
-
-	/* Get thread data.  Reset reading thread because I'm running. */
-	sock = THREAD_FD(thread);
-	client = THREAD_ARG(thread);
-	client->t_read = NULL;
-
-	if (client->t_suicide) {
-		zebra_client_close(client);
-		return -1;
-	}
-
-	/* Read length and command (if we don't have it already). */
-	if ((already = stream_get_endp(client->ibuf)) < ZEBRA_HEADER_SIZE) {
-		ssize_t nbyte;
-		if (((nbyte = stream_read_try(client->ibuf, sock,
-					      ZEBRA_HEADER_SIZE - already))
-		     == 0)
-		    || (nbyte == -1)) {
-			if (IS_ZEBRA_DEBUG_EVENT)
-				zlog_debug("connection closed socket [%d]",
-					   sock);
-			zebra_client_close(client);
-			return -1;
-		}
-		if (nbyte != (ssize_t)(ZEBRA_HEADER_SIZE - already)) {
-			/* Try again later. */
-			zebra_event(ZEBRA_READ, sock, client);
-			return 0;
-		}
-		already = ZEBRA_HEADER_SIZE;
-	}
-
-	/* Reset to read from the beginning of the incoming packet. */
-	stream_set_getp(client->ibuf, 0);
-
-	/* Fetch header values */
-	length = stream_getw(client->ibuf);
-	marker = stream_getc(client->ibuf);
-	version = stream_getc(client->ibuf);
-	vrf_id = stream_getw(client->ibuf);
-	command = stream_getw(client->ibuf);
-
-	if (marker != ZEBRA_HEADER_MARKER || version != ZSERV_VERSION) {
-		zlog_err(
-			"%s: socket %d version mismatch, marker %d, version %d",
-			__func__, sock, marker, version);
-		zebra_client_close(client);
-		return -1;
-	}
-	if (length < ZEBRA_HEADER_SIZE) {
-		zlog_warn(
-			"%s: socket %d message length %u is less than header size %d",
-			__func__, sock, length, ZEBRA_HEADER_SIZE);
-		zebra_client_close(client);
-		return -1;
-	}
-	if (length > STREAM_SIZE(client->ibuf)) {
-		zlog_warn(
-			"%s: socket %d message length %u exceeds buffer size %lu",
-			__func__, sock, length,
-			(u_long)STREAM_SIZE(client->ibuf));
-		zebra_client_close(client);
-		return -1;
-	}
-
-	/* Read rest of data. */
-	if (already < length) {
-		ssize_t nbyte;
-		if (((nbyte = stream_read_try(client->ibuf, sock,
-					      length - already))
-		     == 0)
-		    || (nbyte == -1)) {
-			if (IS_ZEBRA_DEBUG_EVENT)
-				zlog_debug(
-					"connection closed [%d] when reading zebra data",
-					sock);
-			zebra_client_close(client);
-			return -1;
-		}
-		if (nbyte != (ssize_t)(length - already)) {
-			/* Try again later. */
-			zebra_event(ZEBRA_READ, sock, client);
-			return 0;
-		}
-	}
-
-	length -= ZEBRA_HEADER_SIZE;
-
-	/* Debug packet information. */
-	if (IS_ZEBRA_DEBUG_EVENT)
-		zlog_debug("zebra message comes from socket [%d]", sock);
-
-	if (IS_ZEBRA_DEBUG_PACKET && IS_ZEBRA_DEBUG_RECV)
-		zlog_debug("zebra message received [%s] %d in VRF %u",
-			   zserv_command_string(command), length, vrf_id);
-
-	client->last_read_time = monotime(NULL);
-	client->last_read_cmd = command;
-
-	zvrf = zebra_vrf_lookup_by_id(vrf_id);
-	if (!zvrf) {
-		if (IS_ZEBRA_DEBUG_PACKET && IS_ZEBRA_DEBUG_RECV)
-			zlog_debug("zebra received unknown VRF[%u]", vrf_id);
-		goto zclient_read_out;
-	}
-
 	switch (command) {
 	case ZEBRA_ROUTER_ID_ADD:
 		zread_router_id_add(client, length, zvrf);
@@ -2404,99 +2288,225 @@ static int zebra_client_read(struct thread *thread)
 		zread_hello(client);
 		break;
 	case ZEBRA_NEXTHOP_REGISTER:
-		zserv_rnh_register(client, sock, length, RNH_NEXTHOP_TYPE,
+		zserv_rnh_register(client, length, RNH_NEXTHOP_TYPE,
 				   zvrf);
 		break;
 	case ZEBRA_NEXTHOP_UNREGISTER:
-		zserv_rnh_unregister(client, sock, length, RNH_NEXTHOP_TYPE,
+		zserv_rnh_unregister(client, length, RNH_NEXTHOP_TYPE,
 				     zvrf);
 		break;
 	case ZEBRA_IMPORT_ROUTE_REGISTER:
-		zserv_rnh_register(client, sock, length, RNH_IMPORT_CHECK_TYPE,
+		zserv_rnh_register(client, length, RNH_IMPORT_CHECK_TYPE,
 				   zvrf);
 		break;
 	case ZEBRA_IMPORT_ROUTE_UNREGISTER:
-		zserv_rnh_unregister(client, sock, length,
+		zserv_rnh_unregister(client, length,
 				     RNH_IMPORT_CHECK_TYPE, zvrf);
 		break;
 	case ZEBRA_BFD_DEST_UPDATE:
 	case ZEBRA_BFD_DEST_REGISTER:
-		zebra_ptm_bfd_dst_register(client, sock, length, command, zvrf);
+		zebra_ptm_bfd_dst_register(client, length, command, zvrf);
 		break;
 	case ZEBRA_BFD_DEST_DEREGISTER:
-		zebra_ptm_bfd_dst_deregister(client, sock, length, zvrf);
+		zebra_ptm_bfd_dst_deregister(client, length, zvrf);
 		break;
 	case ZEBRA_VRF_UNREGISTER:
 		zread_vrf_unregister(client, length, zvrf);
 		break;
 	case ZEBRA_BFD_CLIENT_REGISTER:
-		zebra_ptm_bfd_client_register(client, sock, length);
+		zebra_ptm_bfd_client_register(client, length);
 		break;
 	case ZEBRA_INTERFACE_ENABLE_RADV:
 #if defined(HAVE_RTADV)
-		zebra_interface_radv_set(client, sock, length, zvrf, 1);
+		zebra_interface_radv_set(client, length, zvrf, 1);
 #endif
 		break;
 	case ZEBRA_INTERFACE_DISABLE_RADV:
 #if defined(HAVE_RTADV)
-		zebra_interface_radv_set(client, sock, length, zvrf, 0);
+		zebra_interface_radv_set(client, length, zvrf, 0);
 #endif
 		break;
 	case ZEBRA_MPLS_LABELS_ADD:
 	case ZEBRA_MPLS_LABELS_DELETE:
-		zread_mpls_labels(command, client, length, vrf_id);
+		zread_mpls_labels(command, client, length, zvrf);
 		break;
 	case ZEBRA_IPMR_ROUTE_STATS:
-		zebra_ipmr_route_stats(client, sock, length, zvrf);
+		zebra_ipmr_route_stats(client, length, zvrf);
 		break;
 	case ZEBRA_LABEL_MANAGER_CONNECT:
 	case ZEBRA_GET_LABEL_CHUNK:
 	case ZEBRA_RELEASE_LABEL_CHUNK:
-		zread_label_manager_request(command, client, vrf_id);
+		zread_label_manager_request(command, client, zvrf);
 		break;
 	case ZEBRA_FEC_REGISTER:
-		zserv_fec_register(client, sock, length);
+		zserv_fec_register(client, length);
 		break;
 	case ZEBRA_FEC_UNREGISTER:
-		zserv_fec_unregister(client, sock, length);
+		zserv_fec_unregister(client, length);
 		break;
 	case ZEBRA_ADVERTISE_DEFAULT_GW:
-		zebra_vxlan_advertise_gw_macip(client, sock, length, zvrf);
+		zebra_vxlan_advertise_gw_macip(client, length, zvrf);
 		break;
 	case ZEBRA_ADVERTISE_ALL_VNI:
-		zebra_vxlan_advertise_all_vni(client, sock, length, zvrf);
+		zebra_vxlan_advertise_all_vni(client, length, zvrf);
 		break;
 	case ZEBRA_REMOTE_VTEP_ADD:
-		zebra_vxlan_remote_vtep_add(client, sock, length, zvrf);
+		zebra_vxlan_remote_vtep_add(client, length, zvrf);
 		break;
 	case ZEBRA_REMOTE_VTEP_DEL:
-		zebra_vxlan_remote_vtep_del(client, sock, length, zvrf);
+		zebra_vxlan_remote_vtep_del(client, length, zvrf);
 		break;
 	case ZEBRA_REMOTE_MACIP_ADD:
-		zebra_vxlan_remote_macip_add(client, sock, length, zvrf);
+		zebra_vxlan_remote_macip_add(client, length, zvrf);
 		break;
 	case ZEBRA_REMOTE_MACIP_DEL:
-		zebra_vxlan_remote_macip_del(client, sock, length, zvrf);
+		zebra_vxlan_remote_macip_del(client, length, zvrf);
 		break;
 	case ZEBRA_INTERFACE_SET_MASTER:
-		zread_interface_set_master(client, sock, length);
+		zread_interface_set_master(client, length);
 		break;
 	case ZEBRA_PW_ADD:
 	case ZEBRA_PW_DELETE:
 	case ZEBRA_PW_SET:
 	case ZEBRA_PW_UNSET:
-		zread_pseudowire(command, client, length, vrf_id);
+		zread_pseudowire(command, client, length, zvrf);
 		break;
 	default:
 		zlog_info("Zebra received unknown command %d", command);
 		break;
 	}
+}
+
+/* Handler of zebra service request. */
+static int zebra_client_read(struct thread *thread)
+{
+	int sock;
+	struct zserv *client;
+	size_t already;
+	uint16_t length, command;
+	uint8_t marker, version;
+	vrf_id_t vrf_id;
+	struct zebra_vrf *zvrf;
+	int packets = 10;
+
+	/* Get thread data.  Reset reading thread because I'm running. */
+	sock = THREAD_FD(thread);
+	client = THREAD_ARG(thread);
+	client->t_read = NULL;
 
 	if (client->t_suicide) {
-		/* No need to wait for thread callback, just kill immediately.
-		 */
 		zebra_client_close(client);
 		return -1;
+	}
+
+	while (packets) {
+		/* Read length and command (if we don't have it already). */
+		if ((already = stream_get_endp(client->ibuf))
+		    < ZEBRA_HEADER_SIZE) {
+			ssize_t nbyte;
+			if (((nbyte =
+			      stream_read_try(client->ibuf, sock,
+					      ZEBRA_HEADER_SIZE - already))
+			     == 0)
+			    || (nbyte == -1)) {
+				if (IS_ZEBRA_DEBUG_EVENT)
+					zlog_debug("connection closed socket [%d]",
+						   sock);
+				zebra_client_close(client);
+				return -1;
+			}
+			if (nbyte != (ssize_t)(ZEBRA_HEADER_SIZE - already)) {
+				/* Try again later. */
+				zebra_event(ZEBRA_READ, sock, client);
+				return 0;
+			}
+			already = ZEBRA_HEADER_SIZE;
+		}
+
+		/* Reset to read from the beginning of the incoming packet. */
+		stream_set_getp(client->ibuf, 0);
+
+		/* Fetch header values */
+		length = stream_getw(client->ibuf);
+		marker = stream_getc(client->ibuf);
+		version = stream_getc(client->ibuf);
+		vrf_id = stream_getw(client->ibuf);
+		command = stream_getw(client->ibuf);
+
+		if (marker != ZEBRA_HEADER_MARKER || version != ZSERV_VERSION) {
+			zlog_err(
+				"%s: socket %d version mismatch, marker %d, version %d",
+				__func__, sock, marker, version);
+			zebra_client_close(client);
+			return -1;
+		}
+		if (length < ZEBRA_HEADER_SIZE) {
+			zlog_warn(
+				"%s: socket %d message length %u is less than header size %d",
+				__func__, sock, length, ZEBRA_HEADER_SIZE);
+			zebra_client_close(client);
+			return -1;
+		}
+		if (length > STREAM_SIZE(client->ibuf)) {
+			zlog_warn(
+				"%s: socket %d message length %u exceeds buffer size %lu",
+				__func__, sock, length,
+				(u_long)STREAM_SIZE(client->ibuf));
+			zebra_client_close(client);
+			return -1;
+		}
+
+		/* Read rest of data. */
+		if (already < length) {
+			ssize_t nbyte;
+			if (((nbyte = stream_read_try(client->ibuf, sock,
+						      length - already))
+			     == 0)
+			    || (nbyte == -1)) {
+				if (IS_ZEBRA_DEBUG_EVENT)
+					zlog_debug(
+						"connection closed [%d] when reading zebra data",
+						sock);
+				zebra_client_close(client);
+				return -1;
+			}
+			if (nbyte != (ssize_t)(length - already)) {
+				/* Try again later. */
+				zebra_event(ZEBRA_READ, sock, client);
+				return 0;
+			}
+		}
+
+		length -= ZEBRA_HEADER_SIZE;
+
+		/* Debug packet information. */
+		if (IS_ZEBRA_DEBUG_EVENT)
+			zlog_debug("zebra message comes from socket [%d]", sock);
+
+		if (IS_ZEBRA_DEBUG_PACKET && IS_ZEBRA_DEBUG_RECV)
+			zlog_debug("zebra message received [%s] %d in VRF %u",
+				   zserv_command_string(command), length, vrf_id);
+
+		client->last_read_time = monotime(NULL);
+		client->last_read_cmd = command;
+
+		zvrf = zebra_vrf_lookup_by_id(vrf_id);
+		if (!zvrf) {
+			if (IS_ZEBRA_DEBUG_PACKET && IS_ZEBRA_DEBUG_RECV)
+				zlog_debug("zebra received unknown VRF[%u]", vrf_id);
+			goto zclient_read_out;
+		}
+
+		zserv_handle_commands(client, command, length, zvrf);
+
+		if (client->t_suicide) {
+			/* No need to wait for thread callback, just kill immediately.
+			 */
+			zebra_client_close(client);
+			return -1;
+		}
+		packets -= 1;
+		stream_reset(client->ibuf);
 	}
 
 zclient_read_out:
@@ -2571,6 +2581,11 @@ void zebra_zserv_socket_init(char *path)
 		if (suna->sun_path[0])
 			unlink(suna->sun_path);
 	}
+
+	zserv_privs.change(ZPRIVS_RAISE);
+	setsockopt_so_recvbuf(sock, 1048576);
+	setsockopt_so_sendbuf(sock, 1048576);
+	zserv_privs.change(ZPRIVS_LOWER);
 
 	if (sa.ss_family != AF_UNIX && zserv_privs.change(ZPRIVS_RAISE))
 		zlog_err("Can't raise privileges");
@@ -2785,7 +2800,7 @@ DEFUN (ip_forwarding,
        ip_forwarding_cmd,
        "ip forwarding",
        IP_STR
-       "Turn on IP forwarding")
+       "Turn on IP forwarding\n")
 {
 	int ret;
 
@@ -2806,7 +2821,7 @@ DEFUN (no_ip_forwarding,
        "no ip forwarding",
        NO_STR
        IP_STR
-       "Turn off IP forwarding")
+       "Turn off IP forwarding\n")
 {
 	int ret;
 
@@ -2952,7 +2967,7 @@ DEFUN (ipv6_forwarding,
        ipv6_forwarding_cmd,
        "ipv6 forwarding",
        IPV6_STR
-       "Turn on IPv6 forwarding")
+       "Turn on IPv6 forwarding\n")
 {
 	int ret;
 
@@ -2973,7 +2988,7 @@ DEFUN (no_ipv6_forwarding,
        "no ipv6 forwarding",
        NO_STR
        IPV6_STR
-       "Turn off IPv6 forwarding")
+       "Turn off IPv6 forwarding\n")
 {
 	int ret;
 

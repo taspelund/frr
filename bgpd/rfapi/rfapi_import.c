@@ -3530,7 +3530,10 @@ void rfapiBgpInfoFilteredImportVPN(
 			 * Compare types. Doing so prevents a RFP-originated
 			 * route from matching an imported route, for example.
 			 */
-			assert(bi->type == type);
+			if (VNC_DEBUG(VERBOSE) && bi->type != type)
+				/* should be handled by RDs, but warn for now */
+				zlog_warn("%s: type mismatch! (bi=%d, arg=%d)",
+					  __func__, bi->type, type);
 
 			vnc_zlog_debug_verbose("%s: found matching bi",
 					       __func__);
@@ -3861,6 +3864,20 @@ void rfapiBgpInfoFilteredImportVPN(
 	VNC_ITRCCK;
 }
 
+static void rfapiBgpInfoFilteredImportBadSafi(
+	struct rfapi_import_table *import_table, int action, struct peer *peer,
+	void *rfd, /* set for looped back routes */
+	struct prefix *p,
+	struct prefix *aux_prefix, /* AFI_L2VPN: optional IP */
+	afi_t afi, struct prefix_rd *prd,
+	struct attr *attr, /* part of bgp_info */
+	u_char type,       /* part of bgp_info */
+	u_char sub_type,   /* part of bgp_info */
+	uint32_t *label)   /* part of bgp_info */
+{
+	vnc_zlog_debug_verbose("%s: Error, bad safi", __func__);
+}
+
 static rfapi_bi_filtered_import_f *
 rfapiBgpInfoFilteredImportFunction(safi_t safi)
 {
@@ -3874,7 +3891,7 @@ rfapiBgpInfoFilteredImportFunction(safi_t safi)
 	default:
 		/* not expected */
 		zlog_err("%s: bad safi %d", __func__, safi);
-		return NULL;
+		return rfapiBgpInfoFilteredImportBadSafi;
 	}
 }
 

@@ -89,7 +89,7 @@ static void cpu_record_hash_free(void *a)
 static void vty_out_cpu_thread_history(struct vty *vty,
 				       struct cpu_thread_history *a)
 {
-	vty_out(vty, "%5d %10ld.%03ld %9d %8ld %9ld %8ld %9ld", a->total_active,
+	vty_out(vty, "%5d %10lu.%03lu %9u %8lu %9lu %8lu %9lu", a->total_active,
 		a->cpu.total / 1000, a->cpu.total % 1000, a->total_calls,
 		a->cpu.total / a->total_calls, a->cpu.max,
 		a->real.total / a->total_calls, a->real.max);
@@ -554,8 +554,7 @@ void thread_master_free(struct thread_master *m)
 	{
 		listnode_delete(masters, m);
 		if (masters->count == 0) {
-			list_free(masters);
-			masters = NULL;
+			list_delete_and_null(&masters);
 		}
 	}
 	pthread_mutex_unlock(&masters_mtx);
@@ -570,7 +569,7 @@ void thread_master_free(struct thread_master *m)
 	pthread_cond_destroy(&m->cancel_cond);
 	close(m->io_pipe[0]);
 	close(m->io_pipe[1]);
-	list_delete(m->cancel_req);
+	list_delete_and_null(&m->cancel_req);
 	m->cancel_req = NULL;
 
 	hash_clean(m->cpu_record, cpu_record_hash_free);

@@ -267,7 +267,7 @@ static int netlink_route_change_read_unicast(struct sockaddr_nl *snl,
 	struct rtattr *tb[RTA_MAX + 1];
 	u_char flags = 0;
 	struct prefix p;
-	struct prefix_ipv6 src_p;
+	struct prefix_ipv6 src_p = {};
 	vrf_id_t vrf_id = VRF_DEFAULT;
 
 	char anyaddr[16] = {0};
@@ -845,7 +845,7 @@ static void _netlink_route_build_singlepath(const char *routedesc, int bytelen,
 {
 	struct nexthop_label *nh_label;
 	mpls_lse_t out_lse[MPLS_MAX_LABELS];
-	char label_buf[100];
+	char label_buf[256];
 
 	/*
 	 * label_buf is *only* currently used within debugging.
@@ -876,12 +876,13 @@ static void _netlink_route_build_singlepath(const char *routedesc, int bytelen,
 							     0, 0, bos);
 				if (IS_ZEBRA_DEBUG_KERNEL) {
 					if (!num_labels)
-						sprintf(label_buf, "label %d",
+						sprintf(label_buf, "label %u",
 							nh_label->label[i]);
 					else {
-						sprintf(label_buf1, "/%d",
+						sprintf(label_buf1, "/%u",
 							nh_label->label[i]);
-						strcat(label_buf, label_buf1);
+						strlcat(label_buf, label_buf1,
+							sizeof(label_buf));
 					}
 				}
 				num_labels++;
@@ -1044,7 +1045,7 @@ static void _netlink_route_build_multipath(const char *routedesc, int bytelen,
 {
 	struct nexthop_label *nh_label;
 	mpls_lse_t out_lse[MPLS_MAX_LABELS];
-	char label_buf[100];
+	char label_buf[256];
 
 	rtnh->rtnh_len = sizeof(*rtnh);
 	rtnh->rtnh_flags = 0;
@@ -1080,12 +1081,13 @@ static void _netlink_route_build_multipath(const char *routedesc, int bytelen,
 							     0, 0, bos);
 				if (IS_ZEBRA_DEBUG_KERNEL) {
 					if (!num_labels)
-						sprintf(label_buf, "label %d",
+						sprintf(label_buf, "label %u",
 							nh_label->label[i]);
 					else {
-						sprintf(label_buf1, "/%d",
+						sprintf(label_buf1, "/%u",
 							nh_label->label[i]);
-						strcat(label_buf, label_buf1);
+						strlcat(label_buf, label_buf1,
+							sizeof(label_buf));
 					}
 				}
 				num_labels++;
@@ -2440,7 +2442,6 @@ int netlink_mpls_multipath(int cmd, zebra_lsp_t *lsp)
 
 	memset(&req, 0, sizeof req - NL_PKT_BUF_SIZE);
 
-
 	/*
 	 * Count # nexthops so we can decide whether to use singlepath
 	 * or multipath case.
@@ -2464,10 +2465,8 @@ int netlink_mpls_multipath(int cmd, zebra_lsp_t *lsp)
 		}
 	}
 
-	if (nexthop_num == 0 || !lsp->best_nhlfe) // unexpected
+	if ((nexthop_num == 0) || (!lsp->best_nhlfe && (cmd != RTM_DELROUTE)))
 		return 0;
-
-	route_type = re_type_from_lsp_type(lsp->best_nhlfe->type);
 
 	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
 	req.n.nlmsg_flags = NLM_F_CREATE | NLM_F_REQUEST;
@@ -2477,13 +2476,17 @@ int netlink_mpls_multipath(int cmd, zebra_lsp_t *lsp)
 	req.r.rtm_family = AF_MPLS;
 	req.r.rtm_table = RT_TABLE_MAIN;
 	req.r.rtm_dst_len = MPLS_LABEL_LEN_BITS;
-	req.r.rtm_protocol = zebra2proto(route_type);
 	req.r.rtm_scope = RT_SCOPE_UNIVERSE;
 	req.r.rtm_type = RTN_UNICAST;
 
-	if (cmd == RTM_NEWROUTE)
+	if (cmd == RTM_NEWROUTE) {
 		/* We do a replace to handle update. */
 		req.n.nlmsg_flags |= NLM_F_REPLACE;
+
+		/* set the protocol value if installing */
+		route_type = re_type_from_lsp_type(lsp->best_nhlfe->type);
+		req.r.rtm_protocol = zebra2proto(route_type);
+	}
 
 	/* Fill destination */
 	lse = mpls_lse_encode(lsp->ile.in_label, 0, 0, 1);

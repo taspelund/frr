@@ -123,7 +123,7 @@ int rfapi_get_response_lifetime_default(void *rfp_start_val)
 /*------------------------------------------
  * rfapi_is_vnc_configured
  *
- * Returns if VNC (BGP VPN messaging /VPN & encap SAFIs) are configured
+ * Returns if VNC is configured
  *
  * input:
  *    rfp_start_val     value returned by rfp_start or
@@ -138,7 +138,9 @@ int rfapi_get_response_lifetime_default(void *rfp_start_val)
 int rfapi_is_vnc_configured(void *rfp_start_val)
 {
 	struct bgp *bgp = rfapi_bgp_lookup_by_rfp(rfp_start_val);
-	return bgp_rfapi_is_vnc_configured(bgp);
+	if (bgp_rfapi_is_vnc_configured(bgp) == 0)
+		return 0;
+	return ENXIO;
 }
 
 
@@ -491,7 +493,8 @@ void del_vnc_route(struct rfapi_descriptor *rfd,
 		 * Delete local_nexthops list
 		 */
 		if (bi->extra && bi->extra->vnc.export.local_nexthops) {
-			list_delete(bi->extra->vnc.export.local_nexthops);
+			list_delete_and_null(
+				&bi->extra->vnc.export.local_nexthops);
 		}
 
 		bgp_aggregate_decrement(bgp, p, bi, afi, safi);
@@ -755,7 +758,7 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 
 		encaptlv =
 			XCALLOC(MTYPE_ENCAP_TLV,
-				sizeof(struct bgp_attr_encap_subtlv) - 1 + 4);
+				sizeof(struct bgp_attr_encap_subtlv) + 4);
 		assert(encaptlv);
 		encaptlv->type =
 			BGP_VNC_SUBTLV_TYPE_LIFETIME; /* prefix lifetime */
@@ -799,8 +802,8 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 				 */
 				encaptlv = XCALLOC(
 					MTYPE_ENCAP_TLV,
-					sizeof(struct bgp_attr_encap_subtlv) - 1
-						+ 2 + hop->length);
+					sizeof(struct bgp_attr_encap_subtlv)
+					+ 2 + hop->length);
 				assert(encaptlv);
 				encaptlv->type =
 					BGP_VNC_SUBTLV_TYPE_RFPOPTION; /* RFP

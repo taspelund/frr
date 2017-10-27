@@ -3846,7 +3846,7 @@ DEFUN (neighbor_remove_private_as_all,
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
        "Remove private ASNs in outbound updates\n"
-       "Apply to all AS numbers")
+       "Apply to all AS numbers\n")
 {
 	int idx_peer = 1;
 	return peer_af_flag_set_vty(vty, argv[idx_peer]->arg, bgp_node_afi(vty),
@@ -5785,7 +5785,7 @@ DEFUN (neighbor_maximum_prefix_restart,
        "Maximum number of prefix accept from this peer\n"
        "maximum no. of prefix limit\n"
        "Restart bgp connection after limit is exceeded\n"
-       "Restart interval in minutes")
+       "Restart interval in minutes\n")
 {
 	int idx_peer = 1;
 	int idx_number = 3;
@@ -5803,7 +5803,7 @@ ALIAS_HIDDEN(
 	"Maximum number of prefix accept from this peer\n"
 	"maximum no. of prefix limit\n"
 	"Restart bgp connection after limit is exceeded\n"
-	"Restart interval in minutes")
+	"Restart interval in minutes\n")
 
 DEFUN (neighbor_maximum_prefix_threshold_restart,
        neighbor_maximum_prefix_threshold_restart_cmd,
@@ -6097,7 +6097,13 @@ DEFUN_NOSH (address_family_ipv4_safi,
 {
 
 	if (argc == 3) {
+		VTY_DECLVAR_CONTEXT(bgp, bgp);
 		safi_t safi = bgp_vty_safi_from_str(argv[2]->text);
+		if (bgp->inst_type != BGP_INSTANCE_TYPE_DEFAULT &&
+		    safi != SAFI_UNICAST && safi != SAFI_MULTICAST) {
+			vty_out(vty, "Only Unicast and Multicast SAFIs supported in non-core instances.\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
 		vty->node = bgp_node_type(AFI_IP, safi);
 	} else
 		vty->node = BGP_IPV4_NODE;
@@ -6113,7 +6119,13 @@ DEFUN_NOSH (address_family_ipv6_safi,
        BGP_SAFI_WITH_LABEL_HELP_STR)
 {
 	if (argc == 3) {
+		VTY_DECLVAR_CONTEXT(bgp, bgp);
 		safi_t safi = bgp_vty_safi_from_str(argv[2]->text);
+		if (bgp->inst_type != BGP_INSTANCE_TYPE_DEFAULT &&
+		    safi != SAFI_UNICAST && safi != SAFI_MULTICAST) {
+			vty_out(vty, "Only Unicast and Multicast SAFIs supported in non-core instances.\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
 		vty->node = bgp_node_type(AFI_IP6, safi);
 	} else
 		vty->node = BGP_IPV6_NODE;
@@ -6152,6 +6164,11 @@ DEFUN_NOSH (address_family_evpn,
        "Address Family\n"
        "Address Family modifier\n")
 {
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	if (bgp->inst_type != BGP_INSTANCE_TYPE_DEFAULT) {
+		vty_out(vty, "Only Unicast and Multicast SAFIs supported in non-core instances.\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 	vty->node = BGP_EVPN_NODE;
 	return CMD_SUCCESS;
 }
@@ -7115,7 +7132,7 @@ static int bgp_show_summary(struct vty *vty, struct bgp *bgp, int afi, int safi,
 				vty_out(vty, "%*s", max_neighbor_width - len,
 					" ");
 
-			vty_out(vty, "4 %10u %7d %7d %8" PRIu64 " %4d %4zd %8s",
+			vty_out(vty, "4 %10u %7u %7u %8" PRIu64 " %4d %4zd %8s",
 				peer->as,
 				atomic_load_explicit(&peer->open_in,
 						     memory_order_relaxed)
@@ -10007,17 +10024,13 @@ static int bgp_show_neighbor_vty(struct vty *vty, const char *name,
 /* "show [ip] bgp neighbors" commands.  */
 DEFUN (show_ip_bgp_neighbors,
        show_ip_bgp_neighbors_cmd,
-       "show [ip] bgp [<view|vrf> VIEWVRFNAME] [<ipv4|ipv6|vpnv4 <all|rd ASN:NN_OR_IP-ADDRESS:NN>>] neighbors [<A.B.C.D|X:X::X:X|WORD>] [json]",
+       "show [ip] bgp [<view|vrf> VIEWVRFNAME] [<ipv4|ipv6>] neighbors [<A.B.C.D|X:X::X:X|WORD>] [json]",
        SHOW_STR
        IP_STR
        BGP_STR
        BGP_INSTANCE_HELP_STR
        "Address Family\n"
        "Address Family\n"
-       "Address Family\n"
-       "Display information about all VPNv4 NLRIs\n"
-       "Display information for a route distinguisher\n"
-       "VPN Route Distinguisher\n"
        "Detailed information on TCP and BGP neighbor connections\n"
        "Neighbor to display information about\n"
        "Neighbor to display information about\n"

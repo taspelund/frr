@@ -2459,14 +2459,14 @@ int peer_group_delete(struct peer_group *group)
 			peer_delete(other);
 		}
 	}
-	list_delete(group->peer);
+	list_delete_and_null(&group->peer);
 
 	for (afi = AFI_IP; afi < AFI_MAX; afi++) {
 		for (ALL_LIST_ELEMENTS(group->listen_range[afi], node, nnode,
 				       prefix)) {
 			prefix_free(prefix);
 		}
-		list_delete(group->listen_range[afi]);
+		list_delete_and_null(&group->listen_range[afi]);
 	}
 
 	XFREE(MTYPE_PEER_GROUP_HOST, group->name);
@@ -3222,8 +3222,8 @@ void bgp_free(struct bgp *bgp)
 
 	QOBJ_UNREG(bgp);
 
-	list_delete(bgp->group);
-	list_delete(bgp->peer);
+	list_delete_and_null(&bgp->group);
+	list_delete_and_null(&bgp->peer);
 
 	if (bgp->peerhash) {
 		hash_free(bgp->peerhash);
@@ -7373,13 +7373,13 @@ void bgp_master_init(struct thread_master *master)
  */
 static void bgp_if_finish(struct bgp *bgp)
 {
-	struct listnode *ifnode, *ifnnode;
+	struct vrf *vrf = vrf_lookup_by_id(bgp->vrf_id);
 	struct interface *ifp;
 
-	if (bgp->inst_type == BGP_INSTANCE_TYPE_VIEW)
+	if (bgp->inst_type == BGP_INSTANCE_TYPE_VIEW || !vrf)
 		return;
 
-	for (ALL_LIST_ELEMENTS(vrf_iflist(bgp->vrf_id), ifnode, ifnnode, ifp)) {
+	FOR_ALL_INTERFACES (vrf, ifp) {
 		struct listnode *c_node, *c_nnode;
 		struct connected *c;
 
@@ -7518,8 +7518,7 @@ void bgp_terminate(void)
 	/* reverse bgp_master_init */
 	bgp_close();
 	if (bm->listen_sockets)
-		list_free(bm->listen_sockets);
-	bm->listen_sockets = NULL;
+		list_delete_and_null(&bm->listen_sockets);
 
 	for (ALL_LIST_ELEMENTS(bm->bgp, mnode, mnnode, bgp))
 		for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer))

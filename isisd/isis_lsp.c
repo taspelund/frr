@@ -126,7 +126,7 @@ static void lsp_destroy(struct isis_lsp *lsp)
 	lsp_clear_data(lsp);
 
 	if (LSP_FRAGMENT(lsp->hdr.lsp_id) == 0 && lsp->lspu.frags) {
-		list_delete(lsp->lspu.frags);
+		list_delete_and_null(&lsp->lspu.frags);
 		lsp->lspu.frags = NULL;
 	}
 
@@ -454,17 +454,6 @@ void lsp_update(struct isis_lsp *lsp, struct isis_lsp_hdr *hdr,
 		struct isis_tlvs *tlvs, struct stream *stream,
 		struct isis_area *area, int level, bool confusion)
 {
-	dnode_t *dnode = NULL;
-
-	/* Remove old LSP from database. This is required since the
-	 * lsp_update_data will free the lsp->pdu (which has the key, lsp_id)
-	 * and will update it with the new data in the stream.
-	 * XXX: This doesn't hold true anymore since the header is now a copy.
-	 * keeping the LSP in the dict if it is already present should be possible */
-	dnode = dict_lookup(area->lspdb[level - 1], lsp->hdr.lsp_id);
-	if (dnode)
-		dnode_destroy(dict_delete(area->lspdb[level - 1], dnode));
-
 	if (lsp->own_lsp) {
 		zlog_err(
 			"ISIS-Upd (%s): BUG updating LSP %s still marked as own LSP",
@@ -490,8 +479,8 @@ void lsp_update(struct isis_lsp *lsp, struct isis_lsp_hdr *hdr,
 			lsp_link_fragment(lsp, lsp0);
 	}
 
-	/* insert the lsp back into the database */
-	lsp_insert(lsp, area->lspdb[level - 1]);
+	if (lsp->hdr.seqno)
+		isis_spf_schedule(lsp->area, lsp->level);
 }
 
 /* creation of LSP directly from what we received */
@@ -1143,7 +1132,7 @@ static void lsp_build(struct isis_lsp *lsp, struct isis_area *area)
 		frag->tlvs = tlvs;
 	}
 
-	list_delete(fragments);
+	list_delete_and_null(&fragments);
 	lsp_debug("ISIS (%s): LSP construction is complete. Serializing...",
 		  area->area_tag);
 	return;
@@ -1521,7 +1510,7 @@ static void lsp_build_pseudo(struct isis_lsp *lsp, struct isis_circuit *circuit,
 				LSP_PSEUDO_ID(ne_id));
 		}
 	}
-	list_delete(adj_list);
+	list_delete_and_null(&adj_list);
 	return;
 }
 
@@ -1805,6 +1794,7 @@ int lsp_tick(struct thread *thread)
 	dnode_t *dnode, *dnode_next;
 	int level;
 	u_int16_t rem_lifetime;
+        time_t now = monotime(NULL);
 
 	lsp_list = list_new();
 
@@ -1883,11 +1873,12 @@ int lsp_tick(struct thread *thread)
 					if (!circuit->lsp_queue)
 						continue;
 
-					if (monotime_since(
-						  &circuit->lsp_queue_last_cleared,
-						  NULL) < MIN_LSP_TRANS_INTERVAL) {
+					if (now - circuit->lsp_queue_last_push
+					    < MIN_LSP_RETRANS_INTERVAL) {
 						continue;
 					}
+
+					circuit->lsp_queue_last_push = now;
 
 					for (ALL_LIST_ELEMENTS_RO(
 						     lsp_list, lspnode, lsp)) {
@@ -1905,7 +1896,7 @@ int lsp_tick(struct thread *thread)
 		}
 	}
 
-	list_delete(lsp_list);
+	list_delete_and_null(&lsp_list);
 
 	return ISIS_OK;
 }

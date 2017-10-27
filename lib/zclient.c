@@ -35,6 +35,7 @@
 #include "table.h"
 #include "nexthop.h"
 #include "mpls.h"
+#include "sockopt.h"
 
 DEFINE_MTYPE_STATIC(LIB, ZCLIENT, "Zclient")
 DEFINE_MTYPE_STATIC(LIB, REDIST_INST, "Redistribution instance IDs")
@@ -123,8 +124,7 @@ void redist_del_instance(struct redist_proto *red, u_short instance)
 	XFREE(MTYPE_REDIST_INST, id);
 	if (!red->instances->count) {
 		red->enabled = 0;
-		list_free(red->instances);
-		red->instances = NULL;
+		list_delete_and_null(&red->instances);
 	}
 }
 
@@ -181,7 +181,8 @@ void zclient_reset(struct zclient *zclient)
 			&zclient->mi_redist[afi][zclient->redist_default],
 			zclient->instance);
 
-	zclient_init(zclient, zclient->redist_default, zclient->instance);
+	zclient_init(zclient, zclient->redist_default,
+		     zclient->instance, zclient->privs);
 }
 
 /**
@@ -202,6 +203,10 @@ int zclient_socket_connect(struct zclient *zclient)
 		return -1;
 
 	set_cloexec(sock);
+
+	zclient->privs->change(ZPRIVS_RAISE);
+	setsockopt_so_sendbuf(sock, 1048576);
+	zclient->privs->change(ZPRIVS_LOWER);
 
 	/* Connect to zebra. */
 	ret = connect(sock, (struct sockaddr *)&zclient_addr,
@@ -544,12 +549,14 @@ int zclient_start(struct zclient *zclient)
 
 /* Initialize zebra client.  Argument redist_default is unwanted
    redistribute route type. */
-void zclient_init(struct zclient *zclient, int redist_default, u_short instance)
+void zclient_init(struct zclient *zclient, int redist_default,
+		  u_short instance, struct zebra_privs_t *privs)
 {
 	int afi, i;
 
 	/* Set -1 to the default socket value. */
 	zclient->sock = -1;
+	zclient->privs = privs;
 
 	/* Clear redistribution flags. */
 	for (afi = AFI_IP; afi < AFI_MAX; afi++)
@@ -1231,8 +1238,7 @@ struct interface *zebra_interface_add_read(struct stream *s, vrf_id_t vrf_id)
 	stream_get(ifname_tmp, s, INTERFACE_NAMSIZ);
 
 	/* Lookup/create interface by name. */
-	ifp = if_get_by_name_len(
-		ifname_tmp, strnlen(ifname_tmp, INTERFACE_NAMSIZ), vrf_id, 0);
+	ifp = if_get_by_name(ifname_tmp, vrf_id, 0);
 
 	zebra_interface_if_set_value(s, ifp);
 
@@ -1255,8 +1261,7 @@ struct interface *zebra_interface_state_read(struct stream *s, vrf_id_t vrf_id)
 	stream_get(ifname_tmp, s, INTERFACE_NAMSIZ);
 
 	/* Lookup this by interface index. */
-	ifp = if_lookup_by_name_len(
-		ifname_tmp, strnlen(ifname_tmp, INTERFACE_NAMSIZ), vrf_id);
+	ifp = if_lookup_by_name(ifname_tmp, vrf_id);
 	if (ifp == NULL) {
 		zlog_warn("INTERFACE_STATE: Cannot find IF %s in VRF %d",
 			  ifname_tmp, vrf_id);
@@ -1334,7 +1339,7 @@ void zebra_interface_if_set_value(struct stream *s, struct interface *ifp)
 	u_char link_params_status = 0;
 
 	/* Read interface's index. */
-	ifp->ifindex = stream_getl(s);
+	if_set_index(ifp, stream_getl(s));
 	ifp->status = stream_getc(s);
 
 	/* Read interface's value. */

@@ -502,6 +502,7 @@ extern const int ospf_redistributed_proto_max;
 extern struct zclient *zclient;
 extern struct thread_master *master;
 extern int ospf_zlog;
+extern struct zebra_privs_t ospfd_privs;
 
 /* Prototypes. */
 extern const char *ospf_redist_string(u_int route_type);
@@ -524,7 +525,7 @@ extern int ospf_area_stub_unset(struct ospf *, struct in_addr);
 extern int ospf_area_no_summary_set(struct ospf *, struct in_addr);
 extern int ospf_area_no_summary_unset(struct ospf *, struct in_addr);
 extern int ospf_area_nssa_set(struct ospf *, struct in_addr);
-extern int ospf_area_nssa_unset(struct ospf *, struct in_addr);
+extern int ospf_area_nssa_unset(struct ospf *, struct in_addr, int);
 extern int ospf_area_nssa_translator_role_set(struct ospf *, struct in_addr,
 					      int);
 extern int ospf_area_export_list_set(struct ospf *, struct ospf_area *,
@@ -574,4 +575,6 @@ extern void ospf_vrf_terminate(void);
 extern void ospf_vrf_link(struct ospf *ospf, struct vrf *vrf);
 extern void ospf_vrf_unlink(struct ospf *ospf, struct vrf *vrf);
 const char *ospf_vrf_id_to_name(vrf_id_t vrf_id);
+int ospf_area_nssa_no_summary_set(struct ospf *, struct in_addr);
+
 #endif /* _ZEBRA_OSPFD_H */
