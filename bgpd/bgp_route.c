@@ -6507,28 +6507,38 @@ void route_vty_out(struct vty *vty, struct prefix *p, struct bgp_info *binfo,
 		else
 			vty_out(vty, "\n");
 
-				json_object_string_add(
-					json_nexthop_global, "ip",
-					inet_ntoa(attr->nexthop));
-				json_object_string_add(json_nexthop_global,
-						       "afi", "ipv4");
-				json_object_boolean_true_add(
-					json_nexthop_global, "used");
-			} else
-				vty_out(vty, "%-16s", inet_ntoa(attr->nexthop));
-		} else if (safi == SAFI_EVPN) {
-			if (json_paths) {
-				json_nexthop_global = json_object_new_object();
+		return;
+	}
 
-				json_object_string_add(
-					json_nexthop_global, "ip",
-					inet_ntoa(attr->nexthop));
-				json_object_string_add(json_nexthop_global,
-						       "afi", "ipv4");
-				json_object_boolean_true_add(
-					json_nexthop_global, "used");
-			} else
-				vty_out(vty, "%-16s", inet_ntoa(attr->nexthop));
+	/*
+	 * For ENCAP and EVPN routes, nexthop address family is not
+	 * neccessarily the same as the prefix address family.
+	 * Both SAFI_MPLS_VPN and SAFI_ENCAP use the MP nexthop field
+	 * EVPN routes are also exchanged with a MP nexthop. Currently,
+	 * this
+	 * is only IPv4, the value will be present in either
+	 * attr->nexthop or
+	 * attr->mp_nexthop_global_in
+	 */
+	if ((safi == SAFI_ENCAP) || (safi == SAFI_MPLS_VPN)) {
+		char buf[BUFSIZ];
+		char nexthop[128];
+		int af = NEXTHOP_FAMILY(attr->mp_nexthop_len);
+
+		switch (af) {
+		case AF_INET:
+			sprintf(nexthop, "%s",
+				inet_ntop(af, &attr->mp_nexthop_global_in,
+					  buf, BUFSIZ));
+			break;
+		case AF_INET6:
+			sprintf(nexthop, "%s",
+				inet_ntop(af, &attr->mp_nexthop_global,
+					  buf, BUFSIZ));
+			break;
+		default:
+			sprintf(nexthop, "?");
+			break;
 		}
 
 		if (json_paths) {
