@@ -6180,6 +6180,11 @@ DEFUN_NOSH (address_family_evpn2,
        "Enter Address Family command mode\n"
        "EVPN Address family\n")
 {
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	if (bgp->inst_type != BGP_INSTANCE_TYPE_DEFAULT) {
+		vty_out(vty, "Only Unicast and Multicast SAFIs supported in non-core instances.\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 	vty->node = BGP_EVPN_NODE;
 	return CMD_SUCCESS;
 }
