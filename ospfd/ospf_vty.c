@@ -244,7 +244,6 @@ DEFUN (no_router_ospf,
 		else
 			return CMD_WARNING;
 	}
-	zlog_debug("%s: no router ospf ", __PRETTY_FUNCTION__);
 	ospf_finish(ospf);
 
 	return CMD_SUCCESS;
