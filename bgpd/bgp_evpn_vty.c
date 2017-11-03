@@ -1525,8 +1525,7 @@ static void evpn_configure_vrf_rd(struct bgp *bgp_vrf,
 {
 	/* If we have already advertise type-5 routes with a diffrent RD, we
 	 * have to delete and withdraw them first*/
-	if (is_evpn_prefix_routes_adv_enabled(bgp_vrf))
-		bgp_evpn_handle_vrf_rd_change(bgp_vrf, 1);
+	bgp_evpn_handle_vrf_rd_change(bgp_vrf, 1);
 
 	/* update RD */
 	memcpy(&bgp_vrf->vrf_prd, rd, sizeof(struct prefix_rd));
@@ -1534,9 +1533,7 @@ static void evpn_configure_vrf_rd(struct bgp *bgp_vrf,
 
 	/* We have a new RD for VRF.
 	 * Advertise all type-5 routes again with the new RD */
-	if (is_evpn_prefix_routes_adv_enabled(bgp_vrf))
-		bgp_evpn_handle_vrf_rd_change(bgp_vrf, 0);
-
+	bgp_evpn_handle_vrf_rd_change(bgp_vrf, 0);
 }
 
 /*
@@ -1546,16 +1543,14 @@ static void evpn_unconfigure_vrf_rd(struct bgp *bgp_vrf)
 {
 	/* If we have already advertise type-5 routes with a diffrent RD, we
 	 * have to delete and withdraw them first*/
-	if (is_evpn_prefix_routes_adv_enabled(bgp_vrf))
-		bgp_evpn_handle_vrf_rd_change(bgp_vrf, 1);
+	bgp_evpn_handle_vrf_rd_change(bgp_vrf, 1);
 
 	/* fall back to default RD */
 	bgp_evpn_derive_auto_rd_for_vrf(bgp_vrf);
 
 	/* We have a new RD for VRF.
 	 * Advertise all type-5 routes again with the new RD */
-	if (is_evpn_prefix_routes_adv_enabled(bgp_vrf))
-		bgp_evpn_handle_vrf_rd_change(bgp_vrf, 0);
+	bgp_evpn_handle_vrf_rd_change(bgp_vrf, 0);
 }
 
 /*
