@@ -1,0 +1,232 @@
+From 75401f1bfd83f754581bc4ccd154f4ab54d6bbd6 Mon Sep 17 00:00:00 2001
+From: Mitesh Kanjariya <mitesh@marvel-07.cumulusnetworks.com>
+Date: Mon, 16 Oct 2017 16:51:32 -0700
+Subject: [PATCH] show commands for specific rmac/nh entries
+
+Signed-off-by: Mitesh Kanjariya <mitesh@cumulusnetworks.com>
+---
+ zebra/zebra_vty.c   | 51 +++++++++++++++++++++++++++++
+ zebra/zebra_vxlan.c | 92 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ zebra/zebra_vxlan.h |  4 +++
+ 3 files changed, 147 insertions(+)
+
+diff --git a/zebra/zebra_vty.c b/zebra/zebra_vty.c
+index d1234e2..7b21f5e 100644
+--- a/zebra/zebra_vty.c
++++ b/zebra/zebra_vty.c
+@@ -2533,6 +2533,29 @@ DEFUN (show_evpn_l3vni_vni,
+ 	return CMD_SUCCESS;
+ }
+ 
++DEFUN (show_evpn_rmac_l3vni_mac,
++       show_evpn_rmac_l3vni_mac_cmd,
++       "show evpn rmac l3vni " CMD_VNI_RANGE " mac WORD",
++       SHOW_STR
++       "EVPN\n"
++       "RMAC\n"
++       "L3-VNI\n"
++       "VNI number\n"
++       "MAC\n"
++       "mac-address (e.g. 0a:0a:0a:0a:0a:0a)\n")
++{
++	vni_t l3vni = 0;
++	struct ethaddr mac;
++
++	l3vni = strtoul(argv[4]->arg, NULL, 10);
++	if (!prefix_str2mac(argv[6]->arg, &mac)) {
++		vty_out(vty, "%% Malformed MAC address\n");
++		return CMD_WARNING;
++	}
++	zebra_vxlan_print_specific_rmac_l3vni(vty, l3vni, &mac);
++	return CMD_SUCCESS;
++}
++
+ DEFUN (show_evpn_rmac_l3vni,
+        show_evpn_rmac_l3vni_cmd,
+        "show evpn rmac l3vni " CMD_VNI_RANGE "[json]",
+@@ -2569,6 +2592,32 @@ DEFUN (show_evpn_rmac_l3vni_all,
+ 	return CMD_SUCCESS;
+ }
+ 
++DEFUN (show_evpn_nh_l3vni_ip,
++       show_evpn_nh_l3vni_ip_cmd,
++       "show evpn next-hops l3vni " CMD_VNI_RANGE " ip WORD",
++       SHOW_STR
++       "EVPN\n"
++       "Remote Vteps\n"
++       "L3-VNI\n"
++       "VNI number\n"
++       "Ip address\n"
++       "Host address (ipv4 or ipv6)\n")
++{
++	vni_t l3vni;
++	u_char uj = use_json(argc, argv);
++	struct ipaddr ip;
++
++	l3vni = strtoul(argv[4]->arg, NULL, 10);
++	if (str2ipaddr(argv[6]->arg, &ip) != 0) {
++		if (!uj)
++			vty_out(vty, "%% Malformed Neighbor address\n");
++		return CMD_WARNING;
++	}
++	zebra_vxlan_print_specific_nh_l3vni(vty, l3vni, &ip);
++
++	return CMD_SUCCESS;
++}
++
+ DEFUN (show_evpn_nh_l3vni,
+        show_evpn_nh_l3vni_cmd,
+        "show evpn next-hops l3vni " CMD_VNI_RANGE "[json]",
+@@ -3015,8 +3064,10 @@ void zebra_vty_init(void)
+ 	install_element(VIEW_NODE, &show_evpn_vni_vni_cmd);
+ 	install_element(VIEW_NODE, &show_evpn_l3vni_cmd);
+ 	install_element(VIEW_NODE, &show_evpn_l3vni_vni_cmd);
++	install_element(VIEW_NODE, &show_evpn_rmac_l3vni_mac_cmd);
+ 	install_element(VIEW_NODE, &show_evpn_rmac_l3vni_cmd);
+ 	install_element(VIEW_NODE, &show_evpn_rmac_l3vni_all_cmd);
++	install_element(VIEW_NODE, &show_evpn_nh_l3vni_ip_cmd);
+ 	install_element(VIEW_NODE, &show_evpn_nh_l3vni_cmd);
+ 	install_element(VIEW_NODE, &show_evpn_nh_l3vni_all_cmd);
+ 	install_element(VIEW_NODE, &show_evpn_mac_vni_cmd);
+diff --git a/zebra/zebra_vxlan.c b/zebra/zebra_vxlan.c
+index 07aae3a..84dc631 100644
+--- a/zebra/zebra_vxlan.c
++++ b/zebra/zebra_vxlan.c
+@@ -63,6 +63,8 @@ static void zvni_print_neigh(zebra_neigh_t *n, void *ctxt, json_object *json);
+ static void zvni_print_neigh_hash(struct hash_backet *backet, void *ctxt);
+ static void zvni_print_neigh_hash_all_vni(struct hash_backet *backet,
+ 					  void **args);
++static void zl3vni_print_nh(zebra_neigh_t *n, struct vty *vty);
++static void zl3vni_print_rmac(zebra_mac_t *zrmac, struct vty *vty);
+ static void zvni_print_mac(zebra_mac_t *mac, void *ctxt);
+ static void zvni_print_mac_hash(struct hash_backet *backet, void *ctxt);
+ static void zvni_print_mac_hash_all_vni(struct hash_backet *backet, void *ctxt);
+@@ -425,6 +427,44 @@ static void zvni_print_neigh_hash_all_vni(struct hash_backet *backet,
+ 		json_object_object_add(json, vni_str, json_vni);
+ }
+ 
++/* print a specific next hop for an l3vni */
++static void zl3vni_print_nh(zebra_neigh_t *n,
++			    struct vty *vty)
++{
++	char buf1[ETHER_ADDR_STRLEN];
++	char buf2[INET6_ADDRSTRLEN];
++	struct listnode *node = NULL;
++	struct prefix *p = NULL;
++
++	vty_out(vty, "Ip: %s\n",
++		ipaddr2str(&n->ip, buf1, sizeof(buf1)));
++	vty_out(vty, "  RMAC: %s\n",
++	       prefix_mac2str(&n->emac, buf1, sizeof(buf1)));
++	vty_out(vty, "  Host-List:\n");
++	for (ALL_LIST_ELEMENTS_RO(n->host_list, node, p))
++		vty_out(vty, "    %s\n",
++			prefix2str(p, buf2, sizeof(buf2)));
++}
++
++/* Print a specific RMAC entry */
++static void zl3vni_print_rmac(zebra_mac_t *zrmac,
++			      struct vty *vty)
++{
++	char buf1[ETHER_ADDR_STRLEN];
++	char buf2[PREFIX_STRLEN];
++	struct listnode *node = NULL;
++	struct prefix *p = NULL;
++
++	vty_out(vty, "MAC: %s\n",
++		prefix_mac2str(&zrmac->macaddr, buf1, sizeof(buf1)));
++	vty_out(vty, " Remote VTEP: %s\n",
++		inet_ntoa(zrmac->fwd_info.r_vtep_ip));
++	vty_out(vty, "  Host-List:\n");
++	for (ALL_LIST_ELEMENTS_RO(zrmac->host_list, node, p))
++		vty_out(vty, "    %s\n",
++			prefix2str(p, buf2, sizeof(buf2)));
++}
++
+ /*
+  * Print a specific MAC entry.
+  */
+@@ -3623,6 +3663,32 @@ void zebra_vxlan_evpn_vrf_route_del(vrf_id_t vrf_id,
+ 	zl3vni_remote_rmac_del(zl3vni, rmac, host_prefix);
+ }
+ 
++void zebra_vxlan_print_specific_rmac_l3vni(struct vty *vty,
++					   vni_t l3vni,
++					   struct ethaddr *rmac)
++{
++	zebra_l3vni_t *zl3vni = NULL;
++	zebra_mac_t *zrmac = NULL;
++
++	if (!is_evpn_enabled())
++		return;
++
++	zl3vni = zl3vni_lookup(l3vni);
++	if (!zl3vni) {
++		vty_out(vty, "%% L3-VNI %u doesnt exist\n",
++			l3vni);
++		return;
++	}
++
++	zrmac = zl3vni_rmac_lookup(zl3vni, rmac);
++	if (!zrmac) {
++		vty_out(vty, "%% Requested RMAC doesnt exist in L3-VNI %u",
++			l3vni);
++		return;
++	}
++
++	zl3vni_print_rmac(zrmac, vty);
++}
+ 
+ void zebra_vxlan_print_rmacs_l3vni(struct vty *vty,
+ 				   vni_t l3vni,
+@@ -3710,6 +3776,32 @@ void zebra_vxlan_print_rmacs_all_l3vni(struct vty *vty,
+ 	}
+ }
+ 
++void zebra_vxlan_print_specific_nh_l3vni(struct vty *vty,
++					 vni_t l3vni,
++					 struct ipaddr *ip)
++{
++	zebra_l3vni_t *zl3vni = NULL;
++	zebra_neigh_t *n = NULL;
++
++	if (!is_evpn_enabled())
++		return;
++
++	zl3vni = zl3vni_lookup(l3vni);
++	if (!zl3vni) {
++		vty_out(vty, "%% L3-VNI %u does not exist\n", l3vni);
++		return;
++	}
++
++	n = zl3vni_nh_lookup(zl3vni, ip);
++	if (!n) {
++		vty_out(vty, "%% Requested next-hop not present for L3-VNI %u",
++			l3vni);
++		return;
++	}
++
++	zl3vni_print_nh(n, vty);
++}
++
+ void zebra_vxlan_print_nh_l3vni(struct vty *vty,
+ 				vni_t l3vni,
+ 				u_char use_json)
+diff --git a/zebra/zebra_vxlan.h b/zebra/zebra_vxlan.h
+index 6afca1c..8ec6bb1 100644
+--- a/zebra/zebra_vxlan.h
++++ b/zebra/zebra_vxlan.h
+@@ -53,6 +53,10 @@ is_evpn_enabled()
+ 
+ extern ifindex_t get_l3vni_svi_ifindex(vrf_id_t vrf_id);
+ extern int zebra_vxlan_vrf_delete(struct zebra_vrf *);
++extern void zebra_vxlan_print_specific_nh_l3vni(struct vty *vty, vni_t l3vni,
++						struct ipaddr *ip);
++extern void zebra_vxlan_print_specific_rmac_l3vni(struct vty *vty, vni_t l3vni,
++						  struct ethaddr *rmac);
+ extern void zebra_vxlan_print_macs_vni(struct vty *vty, struct zebra_vrf *zvrf,
+ 				       vni_t vni, u_char use_json);
+ extern void zebra_vxlan_print_macs_all_vni(struct vty *vty,
+-- 
+2.1.4
+
