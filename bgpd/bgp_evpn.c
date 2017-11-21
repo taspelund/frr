@@ -1493,7 +1493,7 @@ static int update_all_type2_routes(struct bgp *bgp, struct bgpevpn *vpn)
 	build_evpn_route_extcomm(vpn, &attr_def_gw, AFI_IP);
 	build_evpn_route_extcomm(vpn, &attr_ip6, AFI_IP6);
 	build_evpn_route_extcomm(vpn, &attr_sticky_ip6, AFI_IP6);
-	build_evpn_route_extcomm(vpn, &attr_def_gw_ip6, AFI_IP);
+	build_evpn_route_extcomm(vpn, &attr_def_gw_ip6, AFI_IP6);
 
 	/* Walk this VNI's route table and update local type-2 routes. For any
 	 * routes updated, update corresponding entry in the global table too.
