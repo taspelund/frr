@@ -6114,6 +6114,11 @@ DEFUN_NOSH (address_family_ipv4_safi,
 	if (argc == 3) {
 		VTY_DECLVAR_CONTEXT(bgp, bgp);
 		safi_t safi = bgp_vty_safi_from_str(argv[2]->text);
+		if (bgp->inst_type != BGP_INSTANCE_TYPE_DEFAULT &&
+		    safi != SAFI_UNICAST && safi != SAFI_MULTICAST) {
+			vty_out(vty, "Only Unicast and Multicast SAFIs supported in non-core instances.\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
 		vty->node = bgp_node_type(AFI_IP, safi);
 	} else
 		vty->node = BGP_IPV4_NODE;
@@ -6131,6 +6136,11 @@ DEFUN_NOSH (address_family_ipv6_safi,
 	if (argc == 3) {
 		VTY_DECLVAR_CONTEXT(bgp, bgp);
 		safi_t safi = bgp_vty_safi_from_str(argv[2]->text);
+		if (bgp->inst_type != BGP_INSTANCE_TYPE_DEFAULT &&
+		    safi != SAFI_UNICAST && safi != SAFI_MULTICAST) {
+			vty_out(vty, "Only Unicast and Multicast SAFIs supported in non-core instances.\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
 		vty->node = bgp_node_type(AFI_IP6, safi);
 	} else
 		vty->node = BGP_IPV6_NODE;
@@ -6170,6 +6180,10 @@ DEFUN_NOSH (address_family_evpn,
        "Address Family modifier\n")
 {
 	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	if (bgp->inst_type != BGP_INSTANCE_TYPE_DEFAULT) {
+		vty_out(vty, "Only Unicast and Multicast SAFIs supported in non-core instances.\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 	vty->node = BGP_EVPN_NODE;
 	return CMD_SUCCESS;
 }
@@ -6182,6 +6196,10 @@ DEFUN_NOSH (address_family_evpn2,
        "EVPN Address family\n")
 {
 	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	if (bgp->inst_type != BGP_INSTANCE_TYPE_DEFAULT) {
+		vty_out(vty, "Only Unicast and Multicast SAFIs supported in non-core instances.\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 	vty->node = BGP_EVPN_NODE;
 	return CMD_SUCCESS;
 }
