@@ -30,7 +30,8 @@ func_frr()
     exec_cmd ospf6.database vtysh -c "show ipv6 ospf6 database"
     exec_cmd ospf6.redistribute vtysh -c "show ipv6 ospf6 redistribute"
     exec_cmd ospf6.spf.tree vtysh -c "show ipv6 ospf6 spf tree"
-    exec_cmd ospf6.database.router vtysh -c "show ipv6 ospf6 database router"
+    exec_cmd ospf6.database.router vtysh -c "show ipv6 ospf6 database router detail"
+    exec_cmd ospf6.route vtysh -c "show ipv6 ospf6 route"
     exec_cmd ospf6.show_running vtysh -c "show running ospf6d"
 
     exec_cmd bgp.show_running vtysh -c "show running bgpd"
