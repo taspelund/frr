@@ -43,6 +43,7 @@ extern int kernel_upd_lsp(zebra_lsp_t *);
 extern int kernel_del_lsp(zebra_lsp_t *);
 extern int mpls_kernel_init(void);
 
+extern uint32_t kernel_get_speed(struct interface *ifp);
 extern int kernel_get_ipmr_sg_stats(struct zebra_vrf *zvrf, void *mroute);
 extern int kernel_add_vtep(vni_t vni, struct interface *ifp,
 			   struct in_addr *vtep_ip);
