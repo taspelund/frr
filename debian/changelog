@@ -1,4 +1,4 @@
-frr (@VERSION@) RELEASED; urgency=medium
+frr (4.0+cl3u1) RELEASED; urgency=medium
 
   * New Enabled: FRR Dev Builds
 
