@@ -37,25 +37,25 @@ else
   $(warning "DEBIAN: SNMP disabled, see README.Debian")
 endif
 
-ifneq ($(WANT_LDP), 0)
+ifneq ($(WANT_LDP), 1)
   USE_LDP=--enable-ldpd
 else
   USE_LDP=--disable-ldpd
 endif
 
-ifneq ($(WANT_PIM), 0)
+ifneq ($(WANT_PIM), 1)
   USE_PIM=--enable-pimd
 else
   USE_PIM=--disable-pimd
 endif
 
-ifneq ($(WANT_OSPFAPI), 0)
+ifneq ($(WANT_OSPFAPI), 1)
   USE_OSPFAPI=--enable-ospfapi=yes
 else
   USE_OSPFAPI=--enable-ospfapi=no
 endif
 
-ifeq ($(WANT_TCP_ZEBRA),1)
+ifeq ($(WANT_TCP_ZEBRA),0)
   USE_TCP_ZEBRA=--enable-tcp-zebra
 endif
 
@@ -79,7 +79,7 @@ else
   USE_FRR_VTY_GROUP=--enable-vty-group=$(WANT_FRR_VTY_GROUP)
 endif
 
-ifneq ($(WANT_MULTIPATH), 0)
+ifneq ($(WANT_MULTIPATH), 1)
   ifdef MULTIPATH
     USE_MULTIPATH=--enable-multipath=$(MULTIPATH)
   else
@@ -126,7 +126,6 @@ override_dh_auto_configure:
 		$(USE_MULTIPATH) \
 		$(USE_LDP) \
 		$(USE_TCP_ZEBRA) \
-		--enable-fpm \
 		$(USE_FRR_USER) $(USE_FRR_GROUP) \
 		$(USE_FRR_VTY_GROUP) \
 		--enable-configfile-mask=0640 \
@@ -134,10 +133,11 @@ override_dh_auto_configure:
 		--enable-werror \
 		--with-libpam \
 		--enable-systemd=yes \
-		--enable-poll=yes \
 		$(USE_CUMULUS) \
 		$(USE_PIM) \
 		--enable-dependency-tracking \
+		--enable-oldvpn-commands=yes \
+		--with-vtysh-pager=cat \
 		$(USE_BGP_VNC) \
 		$(shell dpkg-buildflags --export=configure); \
 	fi
