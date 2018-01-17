@@ -767,11 +767,12 @@ lde_send_change_klabel(struct fec_node *fn, struct fec_nh *fnh)
 		    sizeof(kr));
 		break;
 	case FEC_TYPE_PWID:
-		if (fn->local_label == NO_LABEL ||
+		pw = (struct l2vpn_pw *) fn->data;
+		if (!pw || fn->local_label == NO_LABEL ||
 		    fnh->remote_label == NO_LABEL)
 			return;
 
-		pw = (struct l2vpn_pw *) fn->data;
+		pw->enabled = true;
 		pw2zpw(pw, &zpw);
 		zpw.local_label = fn->local_label;
 		zpw.remote_label = fnh->remote_label;
@@ -818,6 +819,10 @@ lde_send_delete_klabel(struct fec_node *fn, struct fec_nh *fnh)
 		break;
 	case FEC_TYPE_PWID:
 		pw = (struct l2vpn_pw *) fn->data;
+		if (!pw)
+			return;
+
+		pw->enabled = false;
 		pw2zpw(pw, &zpw);
 		zpw.local_label = fn->local_label;
 		zpw.remote_label = fnh->remote_label;
@@ -1618,7 +1623,7 @@ static void
 zclient_sync_init(u_short instance)
 {
 	/* Initialize special zclient for synchronous message exchanges. */
-	zclient_sync = zclient_new(master);
+	zclient_sync = zclient_new_notify(master, &zclient_options_default);
 	zclient_sync->sock = -1;
 	zclient_sync->redist_default = ZEBRA_ROUTE_LDP;
 	zclient_sync->instance = instance;

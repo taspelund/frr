@@ -842,19 +842,7 @@ static inline int zfpm_encode_route(rib_dest_t *dest, struct route_entry *re,
  */
 struct route_entry *zfpm_route_for_update(rib_dest_t *dest)
 {
-	struct route_entry *re;
-
-	RE_DEST_FOREACH_ROUTE (dest, re) {
-		if (!CHECK_FLAG(re->status, ROUTE_ENTRY_SELECTED_FIB))
-			continue;
-
-		return re;
-	}
-
-	/*
-	 * We have no route for this destination.
-	 */
-	return NULL;
+	return dest->selected_fib;
 }
 
 /*
@@ -996,7 +984,7 @@ static int zfpm_write_cb(struct thread *thread)
 			break;
 
 		bytes_written =
-			write(zfpm_g->sock, STREAM_PNT(s), bytes_to_write);
+			write(zfpm_g->sock, stream_pnt(s), bytes_to_write);
 		zfpm_g->stats.write_calls++;
 		num_writes++;
 
@@ -1413,7 +1401,7 @@ DEFUN (show_zebra_fpm_stats,
        show_zebra_fpm_stats_cmd,
        "show zebra fpm stats",
        SHOW_STR
-       "Zebra information\n"
+       ZEBRA_STR
        "Forwarding Path Manager information\n"
        "Statistics\n")
 {
@@ -1428,7 +1416,7 @@ DEFUN (clear_zebra_fpm_stats,
        clear_zebra_fpm_stats_cmd,
        "clear zebra fpm stats",
        CLEAR_STR
-       "Zebra information\n"
+       ZEBRA_STR
        "Clear Forwarding Path Manager information\n"
        "Statistics\n")
 {

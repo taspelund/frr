@@ -49,6 +49,7 @@
 #include "ospfd/ospf_route.h"
 #include "ospfd/ospf_ase.h"
 #include "ospfd/ospf_zebra.h"
+#include "ospfd/ospf_abr.h"
 
 
 u_int32_t get_metric(u_char *metric)
@@ -437,7 +438,7 @@ static char link_info_set(struct stream *s, struct in_addr id,
 		if (ret == OSPF_MAX_LSA_SIZE) {
 			zlog_warn(
 				"%s: Out of space in LSA stream, left %zd, size %zd",
-				__func__, STREAM_REMAIN(s), STREAM_SIZE(s));
+				__func__, STREAM_WRITEABLE(s), STREAM_SIZE(s));
 			return 0;
 		}
 	}
@@ -2503,6 +2504,7 @@ static struct ospf_lsa *ospf_external_lsa_install(struct ospf *ospf,
 			 * abr_task.
 			 */
 			ospf_translated_nssa_refresh(ospf, new, NULL);
+			ospf_schedule_abr_task(ospf);
 		}
 	}
 

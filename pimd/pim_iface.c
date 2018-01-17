@@ -205,6 +205,7 @@ struct pim_interface *pim_if_new(struct interface *ifp, int igmp, int pim)
 	if (!pim_ifp->sec_addr_list) {
 		zlog_err("%s: failure: secondary addresslist",
 			 __PRETTY_FUNCTION__);
+		return if_list_clean(pim_ifp);
 	}
 	pim_ifp->sec_addr_list->del = (void (*)(void *))pim_sec_addr_free;
 	pim_ifp->sec_addr_list->cmp =
@@ -797,7 +798,11 @@ void pim_if_addr_del_all(struct interface *ifp)
 	struct listnode *node;
 	struct listnode *nextnode;
 	struct vrf *vrf = vrf_lookup_by_id(ifp->vrf_id);
-	struct pim_instance *pim = vrf->info;
+	struct pim_instance *pim;
+
+	if (!vrf)
+		return;
+	pim = vrf->info;
 
 	/* PIM/IGMP enabled ? */
 	if (!ifp->info)
@@ -860,11 +865,14 @@ struct in_addr pim_find_primary_addr(struct interface *ifp)
 {
 	struct connected *ifc;
 	struct listnode *node;
-	struct in_addr addr;
+	struct in_addr addr = {0};
 	int v4_addrs = 0;
 	int v6_addrs = 0;
 	struct pim_interface *pim_ifp = ifp->info;
 	struct vrf *vrf = vrf_lookup_by_id(ifp->vrf_id);
+
+	if (!vrf)
+		return addr;
 
 	if (pim_ifp && PIM_INADDR_ISNOT_ANY(pim_ifp->update_source)) {
 		return pim_ifp->update_source;

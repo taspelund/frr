@@ -524,9 +524,10 @@ static int bgp_interface_vrf_update(int command, struct zclient *zclient,
 static int zebra_read_route(int command, struct zclient *zclient,
 			    zebra_size_t length, vrf_id_t vrf_id)
 {
+	enum nexthop_types_t nhtype;
 	struct zapi_route api;
 	union g_addr nexthop;
-	unsigned int ifindex;
+	ifindex_t ifindex;
 	int add, i;
 	struct bgp *bgp;
 
@@ -548,6 +549,7 @@ static int zebra_read_route(int command, struct zclient *zclient,
 
 	nexthop = api.nexthops[0].gate;
 	ifindex = api.nexthops[0].ifindex;
+	nhtype = api.nexthops[0].type;
 
 	add = (command == ZEBRA_REDISTRIBUTE_ROUTE_ADD);
 	if (add) {
@@ -568,8 +570,8 @@ static int zebra_read_route(int command, struct zclient *zclient,
 
 		/* Now perform the add/update. */
 		bgp_redistribute_add(bgp, &api.prefix, &nexthop, ifindex,
-				     api.metric, api.type, api.instance,
-				     api.tag);
+				     nhtype, api.metric, api.type,
+				     api.instance, api.tag);
 	} else {
 		bgp_redistribute_delete(bgp, &api.prefix, api.type,
 					api.instance);
@@ -997,6 +999,7 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 
 	/* Make Zebra API structure. */
 	memset(&api, 0, sizeof(api));
+	memcpy(&api.rmac, &(info->attr->rmac), sizeof(struct ethaddr));
 	api.vrf_id = bgp->vrf_id;
 	api.type = ZEBRA_ROUTE_BGP;
 	api.safi = safi;
@@ -1015,7 +1018,8 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 
 	/* If it is an EVPN route mark as such.
 	 * Currently presence of rmac in attr denotes
-	 * this is an EVPN type-2 route */
+	 * this is an EVPN type-2 route
+	 */
 	if (!is_zero_mac(&(info->attr->rmac)))
 		SET_FLAG(api.flags, ZEBRA_FLAG_EVPN_ROUTE);
 
@@ -1078,7 +1082,8 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 			api_nh->gate.ipv4 = *nexthop;
 
 			/* EVPN type-2 routes are
-			   programmed as onlink on l3-vni SVI */
+			   programmed as onlink on l3-vni SVI
+			 */
 			if (CHECK_FLAG(api.flags, ZEBRA_FLAG_EVPN_ROUTE))
 				api_nh->type = NEXTHOP_TYPE_IPV4_IFINDEX;
 			else
@@ -1257,7 +1262,8 @@ void bgp_zebra_withdraw(struct prefix *p, struct bgp_info *info,
 
 	/* If it is an EVPN route mark as such.
 	 * Currently presence of rmac in attr denotes
-	 * this is an EVPN type-2 route */
+	 * this is an EVPN type-2 route
+	 */
 	if (!is_zero_mac(&(info->attr->rmac)))
 		SET_FLAG(api.flags, ZEBRA_FLAG_EVPN_ROUTE);
 
@@ -1363,12 +1369,14 @@ int bgp_redistribute_set(struct bgp *bgp, afi_t afi, int type, u_short instance)
 		vrf_bitmap_set(zclient->redist[afi][type], bgp->vrf_id);
 	}
 
-	/* Don't try to register if we're not connected to Zebra or Zebra
-	 * doesn't
-	 * know of this instance.
+	/*
+	 * Don't try to register if we're not connected to Zebra or Zebra
+	 * doesn't know of this instance.
+	 *
+	 * When we come up later well resend if needed.
 	 */
 	if (!bgp_install_info_to_zebra(bgp))
-		return CMD_WARNING_CONFIG_FAILED;
+		return CMD_SUCCESS;
 
 	if (BGP_DEBUG(zebra, ZEBRA))
 		zlog_debug("Tx redistribute add VRF %u afi %d %s %d",
@@ -1537,8 +1545,9 @@ void bgp_update_redist_vrf_bitmaps(struct bgp *bgp, vrf_id_t old_vrf_id)
 
 	for (afi = AFI_IP; afi < AFI_MAX; afi++)
 		for (i = 0; i < ZEBRA_ROUTE_MAX; i++)
-			if (vrf_bitmap_check(zclient->redist[afi][i],
-					     old_vrf_id)) {
+			if ((old_vrf_id == VRF_UNKNOWN)
+			    || vrf_bitmap_check(zclient->redist[afi][i],
+						old_vrf_id)) {
 				vrf_bitmap_unset(zclient->redist[afi][i],
 						 old_vrf_id);
 				vrf_bitmap_set(zclient->redist[afi][i],
@@ -1891,7 +1900,7 @@ void bgp_zebra_init(struct thread_master *master)
 	zclient_num_connects = 0;
 
 	/* Set default values. */
-	zclient = zclient_new(master);
+	zclient = zclient_new_notify(master, &zclient_options_default);
 	zclient_init(zclient, ZEBRA_ROUTE_BGP, 0, &bgpd_privs);
 	zclient->zebra_connected = bgp_zebra_connected;
 	zclient->router_id_update = bgp_router_id_update;

@@ -390,7 +390,8 @@ int bgp_dump_attr(struct attr *attr, char *buf, size_t size)
 
 	if (CHECK_FLAG(attr->flag, ATTR_FLAG_BIT(BGP_ATTR_COMMUNITIES)))
 		snprintf(buf + strlen(buf), size - strlen(buf),
-			 ", community %s", community_str(attr->community));
+			 ", community %s", community_str(attr->community,
+							 false));
 
 	if (CHECK_FLAG(attr->flag, ATTR_FLAG_BIT(BGP_ATTR_EXT_COMMUNITIES)))
 		snprintf(buf + strlen(buf), size - strlen(buf),
@@ -2062,14 +2063,14 @@ const char *bgp_debug_rdpfxpath2str(afi_t afi, safi_t safi,
 	}
 
 	if (prd)
-		snprintf(str, size, "RD %s %s%s%s",
+		snprintf(str, size, "RD %s %s%s%s %s %s",
 			 prefix_rd2str(prd, rd_buf, sizeof(rd_buf)),
 			 prefix2str(pu, pfx_buf, sizeof(pfx_buf)), tag_buf,
-			 pathid_buf);
+			 pathid_buf, afi2str(afi), safi2str(safi));
 	else
-		snprintf(str, size, "%s%s%s",
+		snprintf(str, size, "%s%s%s %s %s",
 			 prefix2str(pu, pfx_buf, sizeof(pfx_buf)), tag_buf,
-			 pathid_buf);
+			 pathid_buf, afi2str(afi), safi2str(safi));
 
 	return str;
 }

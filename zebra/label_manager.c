@@ -41,6 +41,8 @@
 
 struct label_manager lbl_mgr;
 
+extern struct zebra_privs_t zserv_privs;
+
 DEFINE_MGROUP(LBL_MGR, "Label Manager");
 DEFINE_MTYPE_STATIC(LBL_MGR, LM_CHUNK, "Label Manager Chunk");
 
@@ -221,7 +223,8 @@ static void lm_zclient_init(char *lm_zserv_path)
 				 lm_zserv_path);
 
 	/* Set default values. */
-	zclient = zclient_new(zebrad.master);
+	zclient = zclient_new_notify(zebrad.master, &zclient_options_default);
+	zclient->privs = &zserv_privs;
 	zclient->sock = -1;
 	zclient->t_connect = NULL;
 	lm_zclient_connect(NULL);

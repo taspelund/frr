@@ -29,6 +29,7 @@
 #include "zebra_ns.h"
 #include "zebra_vrf.h"
 #include "zebra_memory.h"
+#include "rt.h"
 #include "zebra_vxlan.h"
 
 DEFINE_MTYPE(ZEBRA, ZEBRA_NS, "Zebra Name Space")
