@@ -183,7 +183,7 @@ void ospf_router_id_update(struct ospf *ospf)
 			struct route_node *rn;
 			struct ospf_lsa *lsa;
 
-			LSDB_LOOP(EXTERNAL_LSDB(ospf), rn, lsa) {
+			LSDB_LOOP (EXTERNAL_LSDB(ospf), rn, lsa) {
 				/* AdvRouter and Router ID is the same. */
 				if (IPV4_ADDR_SAME(&lsa->data->adv_router,
 						   &ospf->router_id)) {
