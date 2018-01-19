@@ -73,12 +73,13 @@ func_frr()
 
     exec_cmd $jexec evpn.vni vtysh -c "show evpn vni"
     exec_cmd $jexec evpn.mac.vni vtysh -c "show evpn mac vni all"
+    exec_cmd $jexec evpn.mac.vni vtysh -c "show evpn arp-cache vni all"
     exec_cmd $jexec evpn.rmac.vni vtysh -c "show evpn rmac vni all"
     exec_cmd $jexec evpn.nexthop.vni vtysh -c "show evpn next-hops vni all"
-    exec_cmd $jexec bgp.evpn.summary vtysh -c "show bgp evpn summary"
-    exec_cmd $jexec bgp.evpn.vni vtysh -c "show bgp evpn vni"
-    exec_cmd $jexec bgp.evpn.route vtysh -c "show bgp evpn route"
-    exec_cmd $jexec bgp.evpn.route.vni.all vtysh -c "show bgp evpn route vni all"
+    exec_cmd $jexec bgp.evpn.summary vtysh -c "show bgp l2vpn evpn summary"
+    exec_cmd $jexec bgp.evpn.vni vtysh -c "show bgp l2vpn evpn vni"
+    exec_cmd $jexec bgp.evpn.route vtysh -c "show bgp l2vpn evpn route"
+    exec_cmd $jexec bgp.evpn.route.vni.all vtysh -c "show bgp l2vpn evpn route vni all"
     exec_cmd $jexec bgp.evpn.vrfimportrt vtysh -c "show bgp l2vpn evpn vrf-import-rt"
     exec_cmd $jexec bgp.evpn.importrt vtysh -c "show bgp l2vpn evpn import-rt"
 
