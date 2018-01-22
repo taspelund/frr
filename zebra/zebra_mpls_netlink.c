@@ -60,8 +60,6 @@ void kernel_add_lsp(zebra_lsp_t *lsp)
 void kernel_upd_lsp(zebra_lsp_t *lsp)
 {
 	int ret;
-	zebra_nhlfe_t *nhlfe;
-	struct nexthop *nexthop;
 
 	if (!lsp || !lsp->best_nhlfe) { // unexpected
 		kernel_lsp_pass_fail(lsp, SOUTHBOUND_INSTALL_FAILURE);
