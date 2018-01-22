@@ -59,7 +59,7 @@ ifeq ($(WANT_TCP_ZEBRA),0)
   USE_TCP_ZEBRA=--enable-tcp-zebra
 endif
 
-ifneq ($(WANT_BGP_VNC), 0)
+ifneq ($(WANT_BGP_VNC), 1)
   USE_BGP_VNC=--enable-bgp-vnc=yes
 else
   USE_BGP_VNC=--enable-bgp-vnc=no
