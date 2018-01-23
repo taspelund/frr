@@ -1182,7 +1182,7 @@ static int zvni_macip_send_msg_to_client(vni_t vni,
 	s = client->obuf;
 	stream_reset(s);
 
-	zserv_create_header(s, cmd, VRF_DEFAULT);
+	zclient_create_header(s, cmd, VRF_DEFAULT);
 	stream_putl(s, vni);
 	stream_put(s, macaddr->octet, ETH_ALEN);
 	if (ip) {
@@ -2602,7 +2602,7 @@ static int zvni_send_add_to_client(zebra_vni_t *zvni)
 	s = client->obuf;
 	stream_reset(s);
 
-	zserv_create_header(s, ZEBRA_VNI_ADD, VRF_DEFAULT);
+	zclient_create_header(s, ZEBRA_VNI_ADD, VRF_DEFAULT);
 	stream_putl(s, zvni->vni);
 	stream_put_in_addr(s, &zvni->local_vtep_ip);
 	stream_put(s, &zvni->vrf_id, sizeof(vrf_id_t)); /* tenant vrf */
@@ -2636,7 +2636,7 @@ static int zvni_send_del_to_client(vni_t vni)
 	s = client->obuf;
 	stream_reset(s);
 
-	zserv_create_header(s, ZEBRA_VNI_DEL, VRF_DEFAULT);
+	zclient_create_header(s, ZEBRA_VNI_DEL, VRF_DEFAULT);
 	stream_putl(s, vni);
 
 	/* Write packet size. */
@@ -3604,7 +3604,7 @@ static int zl3vni_send_add_to_client(zebra_l3vni_t *zl3vni)
 	s = client->obuf;
 	stream_reset(s);
 
-	zserv_create_header(s, ZEBRA_L3VNI_ADD,
+	zclient_create_header(s, ZEBRA_L3VNI_ADD,
 			    zl3vni_vrf_id(zl3vni));
 	stream_putl(s, zl3vni->vni);
 	stream_put(s, &rmac, sizeof(struct ethaddr));
@@ -3640,7 +3640,7 @@ static int zl3vni_send_del_to_client(zebra_l3vni_t *zl3vni)
 	s = client->obuf;
 	stream_reset(s);
 
-	zserv_create_header(s, ZEBRA_L3VNI_DEL,
+	zclient_create_header(s, ZEBRA_L3VNI_DEL,
 			    zl3vni_vrf_id(zl3vni));
 	stream_putl(s, zl3vni->vni);
 
@@ -3781,7 +3781,7 @@ static int ip_prefix_send_to_client(vrf_id_t vrf_id,
 	s = client->obuf;
 	stream_reset(s);
 
-	zserv_create_header(s, cmd, vrf_id);
+	zclient_create_header(s, cmd, vrf_id);
 	stream_put(s, p, sizeof(struct prefix));
 
 	/* Write packet size. */

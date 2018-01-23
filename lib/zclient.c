@@ -942,6 +942,8 @@ int zapi_route_encode(u_char cmd, struct stream *s, struct zapi_route *api)
 		}
 
 		stream_putw(s, api->nexthop_num);
+		if (api->nexthop_num)
+			stream_putw(s, api->nh_vrf_id);
 
 		for (i = 0; i < api->nexthop_num; i++) {
 			api_nh = &api->nexthops[i];
@@ -1095,6 +1097,9 @@ int zapi_route_decode(struct stream *s, struct zapi_route *api)
 				  __func__, api->nexthop_num);
 			return -1;
 		}
+
+		if (api->nexthop_num)
+			STREAM_GETW(s, api->nh_vrf_id);
 
 		for (i = 0; i < api->nexthop_num; i++) {
 			api_nh = &api->nexthops[i];
