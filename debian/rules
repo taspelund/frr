@@ -29,6 +29,12 @@
 export DH_VERBOSE=1
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export DH_OPTIONS=-v
+export WANT_SNMP=1
+export WANT_PIM=1
+export WANT_LDP=1
+export WANT_CUMULUS_NODE=1
+export WANT_MULTIPATH=1
+export WANT_BGP_VNC=0
 
 ifeq ($(WANT_SNMP), 1)
   USE_SNMP=--enable-snmp
@@ -43,7 +49,7 @@ else
   USE_LDP=--disable-ldpd
 endif
 
-ifneq ($(WANT_PIM), 1)
+ifeq ($(WANT_PIM), 1)
   USE_PIM=--enable-pimd
 else
   USE_PIM=--disable-pimd
@@ -59,7 +65,7 @@ ifeq ($(WANT_TCP_ZEBRA),0)
   USE_TCP_ZEBRA=--enable-tcp-zebra
 endif
 
-ifneq ($(WANT_BGP_VNC), 1)
+ifeq ($(WANT_BGP_VNC), 1)
   USE_BGP_VNC=--enable-bgp-vnc=yes
 else
   USE_BGP_VNC=--enable-bgp-vnc=no
@@ -79,7 +85,7 @@ else
   USE_FRR_VTY_GROUP=--enable-vty-group=$(WANT_FRR_VTY_GROUP)
 endif
 
-ifneq ($(WANT_MULTIPATH), 1)
+ifeq ($(WANT_MULTIPATH), 1)
   ifdef MULTIPATH
     USE_MULTIPATH=--enable-multipath=$(MULTIPATH)
   else
@@ -136,7 +142,6 @@ override_dh_auto_configure:
 		$(USE_CUMULUS) \
 		$(USE_PIM) \
 		--enable-dependency-tracking \
-		--enable-oldvpn-commands=yes \
 		--with-vtysh-pager=cat \
 		$(USE_BGP_VNC) \
 		$(shell dpkg-buildflags --export=configure); \
