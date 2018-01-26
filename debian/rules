@@ -139,6 +139,7 @@ override_dh_auto_configure:
 		--enable-werror \
 		--with-libpam \
 		--enable-systemd=yes \
+		--enable-datacenter=yes \
 		$(USE_CUMULUS) \
 		$(USE_PIM) \
 		--enable-dependency-tracking \
