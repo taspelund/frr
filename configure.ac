@@ -1374,7 +1374,7 @@ AC_SUBST(VTYSH)
 AC_SUBST(CURSES)
 AC_CHECK_LIB(crypt, crypt, [],
 		    [AC_CHECK_LIB(crypto, DES_crypt)])
-AC_CHECK_LIB(resolv, res_init)
+AC_CHECK_LIB(resolv, res_mkquery)
 
 dnl ---------------------------
 dnl check system has PCRE regexp
