@@ -43,7 +43,7 @@ else
   $(warning "DEBIAN: SNMP disabled, see README.Debian")
 endif
 
-ifneq ($(WANT_LDP), 1)
+ifneq ($(WANT_LDP), 0)
   USE_LDP=--enable-ldpd
 else
   USE_LDP=--disable-ldpd
@@ -55,13 +55,13 @@ else
   USE_PIM=--disable-pimd
 endif
 
-ifneq ($(WANT_OSPFAPI), 1)
+ifneq ($(WANT_OSPFAPI), 0)
   USE_OSPFAPI=--enable-ospfapi=yes
 else
   USE_OSPFAPI=--enable-ospfapi=no
 endif
 
-ifeq ($(WANT_TCP_ZEBRA),0)
+ifeq ($(WANT_TCP_ZEBRA),1)
   USE_TCP_ZEBRA=--enable-tcp-zebra
 endif
 
