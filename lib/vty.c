@@ -729,7 +729,6 @@ static void vty_end_config(struct vty *vty)
 	case KEYCHAIN_NODE:
 	case KEYCHAIN_KEY_NODE:
 	case MASC_NODE:
-	case PIM_NODE:
 	case VTY_NODE:
 	case BGP_EVPN_VNI_NODE:
 		vty_config_unlock(vty);
@@ -1127,7 +1126,6 @@ static void vty_stop_input(struct vty *vty)
 	case KEYCHAIN_NODE:
 	case KEYCHAIN_KEY_NODE:
 	case MASC_NODE:
-	case PIM_NODE:
 	case VTY_NODE:
 		vty_config_unlock(vty);
 		vty->node = ENABLE_NODE;
