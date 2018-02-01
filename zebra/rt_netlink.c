@@ -23,6 +23,10 @@
 #ifdef HAVE_NETLINK
 
 #include <net/if_arp.h>
+#include <linux/lwtunnel.h>
+#include <linux/mpls_iptunnel.h>
+#include <linux/neighbour.h>
+#include <linux/rtnetlink.h>
 
 /* Hack for GNU libc version 2. */
 #ifndef MSG_TRUNC
@@ -61,64 +65,9 @@
 #include "zebra/zebra_mroute.h"
 #include "zebra/zebra_vxlan.h"
 
-
-/* TODO - Temporary definitions, need to refine. */
 #ifndef AF_MPLS
 #define AF_MPLS 28
 #endif
-
-#ifndef RTA_VIA
-#define RTA_VIA		18
-#endif
-
-#ifndef RTA_NEWDST
-#define RTA_NEWDST	19
-#endif
-
-#ifndef RTA_ENCAP_TYPE
-#define RTA_ENCAP_TYPE	21
-#endif
-
-#ifndef RTA_ENCAP
-#define RTA_ENCAP	22
-#endif
-
-#ifndef RTA_EXPIRES
-#define RTA_EXPIRES     23
-#endif
-
-#ifndef LWTUNNEL_ENCAP_MPLS
-#define LWTUNNEL_ENCAP_MPLS  1
-#endif
-
-#ifndef MPLS_IPTUNNEL_DST
-#define MPLS_IPTUNNEL_DST  1
-#endif
-
-#ifndef NDA_MASTER
-#define NDA_MASTER   9
-#endif
-
-#ifndef NTF_MASTER
-#define NTF_MASTER   0x04
-#endif
-
-#ifndef NTF_SELF
-#define NTF_SELF     0x02
-#endif
-
-#ifndef NTF_EXT_LEARNED
-#define NTF_EXT_LEARNED 0x10
-#endif
-
-#ifndef NDA_IFINDEX
-#define NDA_IFINDEX  8
-#endif
-
-#ifndef NDA_VLAN
-#define NDA_VLAN     5
-#endif
-/* End of temporary definitions */
 
 static vlanid_t filter_vlan = 0;
 
@@ -149,7 +98,7 @@ static inline int is_selfroute(int proto)
 	    || (proto == RTPROT_ISIS) || (proto == RTPROT_RIPNG)
 	    || (proto == RTPROT_NHRP) || (proto == RTPROT_EIGRP)
 	    || (proto == RTPROT_LDP) || (proto == RTPROT_BABEL)
-	    || (proto == RTPROT_RIP)) {
+	    || (proto == RTPROT_RIP) || (proto == RTPROT_SHARP)) {
 		return 1;
 	}
 
@@ -189,6 +138,9 @@ static inline int zebra2proto(int proto)
 		break;
 	case ZEBRA_ROUTE_LDP:
 		proto = RTPROT_LDP;
+		break;
+	case ZEBRA_ROUTE_SHARP:
+		proto = RTPROT_SHARP;
 		break;
 	default:
 		proto = RTPROT_ZEBRA;
@@ -278,6 +230,7 @@ static int netlink_route_change_read_unicast(struct sockaddr_nl *snl,
 	int metric = 0;
 	u_int32_t mtu = 0;
 	uint8_t distance = 0;
+	route_tag_t tag = 0;
 
 	void *dest = NULL;
 	void *gate = NULL;
@@ -369,6 +322,11 @@ static int netlink_route_change_read_unicast(struct sockaddr_nl *snl,
 	if (tb[RTA_PRIORITY])
 		metric = *(int *)RTA_DATA(tb[RTA_PRIORITY]);
 
+#if defined(SUPPORT_REALMS)
+	if (tb[RTA_FLOW])
+		tag = *(uint32_t *)RTA_DATA(tb[RTA_FLOW]);
+#endif
+
 	if (tb[RTA_METRICS]) {
 		struct rtattr *mxrta[RTAX_MAX + 1];
 
@@ -445,6 +403,9 @@ static int netlink_route_change_read_unicast(struct sockaddr_nl *snl,
 		afi = AFI_IP6;
 
 	if (h->nlmsg_type == RTM_NEWROUTE) {
+		struct interface *ifp;
+		vrf_id_t nh_vrf_id = vrf_id;
+
 		if (!tb[RTA_MULTIPATH]) {
 			struct nexthop nh;
 			size_t sz = (afi == AFI_IP) ? 4 : 16;
@@ -476,8 +437,16 @@ static int netlink_route_change_read_unicast(struct sockaddr_nl *snl,
 			if (gate)
 				memcpy(&nh.gate, gate, sz);
 
-			rib_add(afi, SAFI_UNICAST, vrf_id, proto,
-				0, flags, &p, NULL, &nh, table, metric, mtu, distance);
+			if (index) {
+				ifp = if_lookup_by_index(index,
+							 VRF_UNKNOWN);
+				if (ifp)
+					nh_vrf_id = ifp->vrf_id;
+			}
+
+			rib_add(afi, SAFI_UNICAST, vrf_id, nh_vrf_id, proto,
+				0, flags, &p, NULL, &nh, table, metric,
+				mtu, distance, tag);
 		} else {
 			/* This is a multipath route */
 
@@ -494,9 +463,11 @@ static int netlink_route_change_read_unicast(struct sockaddr_nl *snl,
 			re->metric = metric;
 			re->mtu = mtu;
 			re->vrf_id = vrf_id;
+			re->nh_vrf_id = vrf_id;
 			re->table = table;
 			re->nexthop_num = 0;
 			re->uptime = time(NULL);
+			re->tag = tag;
 
 			for (;;) {
 				if (len < (int)sizeof(*rtnh)
@@ -504,6 +475,18 @@ static int netlink_route_change_read_unicast(struct sockaddr_nl *snl,
 					break;
 
 				index = rtnh->rtnh_ifindex;
+				if (index) {
+					/*
+					 * Yes we are looking this up
+					 * for every nexthop and just
+					 * using the last one looked
+					 * up right now
+					 */
+					ifp = if_lookup_by_index(index,
+								 VRF_UNKNOWN);
+					if (ifp)
+						re->nh_vrf_id = ifp->vrf_id;
+				}
 				gate = 0;
 				if (rtnh->rtnh_len > sizeof(*rtnh)) {
 					memset(tb, 0, sizeof(tb));
@@ -583,13 +566,13 @@ static int netlink_route_change_read_unicast(struct sockaddr_nl *snl,
 				memcpy(&nh.gate, gate, sz);
 			rib_delete(afi, SAFI_UNICAST, vrf_id,
 				   proto, 0, flags, &p, NULL, &nh,
-				   table, metric, true);
+				   table, metric, true, NULL);
 		} else {
 			/* XXX: need to compare the entire list of nexthops
 			 * here for NLM_F_APPEND stupidity */
 			rib_delete(afi, SAFI_UNICAST, vrf_id,
 				   proto, 0, flags, &p, NULL, NULL,
-				   table, metric, true);
+				   table, metric, true, NULL);
 		}
 	}
 
@@ -843,7 +826,7 @@ static void _netlink_route_build_singlepath(const char *routedesc, int bytelen,
 					    struct rtmsg *rtmsg,
 					    size_t req_size, int cmd)
 {
-	struct nexthop_label *nh_label;
+	struct mpls_label_stack *nh_label;
 	mpls_lse_t out_lse[MPLS_MAX_LABELS];
 	char label_buf[256];
 
@@ -980,10 +963,17 @@ static void _netlink_route_build_singlepath(const char *routedesc, int bytelen,
 				routedesc, inet6_ntoa(nexthop->gate.ipv6),
 				label_buf, nexthop->ifindex);
 	}
-	if (nexthop->type == NEXTHOP_TYPE_IFINDEX
-	    || nexthop->type == NEXTHOP_TYPE_IPV4_IFINDEX) {
+
+	/*
+	 * We have the ifindex so we should always send it
+	 * This is especially useful if we are doing route
+	 * leaking.
+	 */
+	if (nexthop->type != NEXTHOP_TYPE_BLACKHOLE)
 		addattr32(nlmsg, req_size, RTA_OIF, nexthop->ifindex);
 
+	if (nexthop->type == NEXTHOP_TYPE_IFINDEX
+	    || nexthop->type == NEXTHOP_TYPE_IPV4_IFINDEX) {
 		if (cmd == RTM_NEWROUTE) {
 			if (nexthop->rmap_src.ipv4.s_addr)
 				addattr_l(nlmsg, req_size, RTA_PREFSRC,
@@ -1001,8 +991,6 @@ static void _netlink_route_build_singlepath(const char *routedesc, int bytelen,
 	}
 
 	if (nexthop->type == NEXTHOP_TYPE_IPV6_IFINDEX) {
-		addattr32(nlmsg, req_size, RTA_OIF, nexthop->ifindex);
-
 		if (cmd == RTM_NEWROUTE) {
 			if (!IN6_IS_ADDR_UNSPECIFIED(&nexthop->rmap_src.ipv6))
 				addattr_l(nlmsg, req_size, RTA_PREFSRC,
@@ -1043,7 +1031,7 @@ static void _netlink_route_build_multipath(const char *routedesc, int bytelen,
 					   struct rtmsg *rtmsg,
 					   union g_addr **src)
 {
-	struct nexthop_label *nh_label;
+	struct mpls_label_stack *nh_label;
 	mpls_lse_t out_lse[MPLS_MAX_LABELS];
 	char label_buf[256];
 
@@ -1181,11 +1169,18 @@ static void _netlink_route_build_multipath(const char *routedesc, int bytelen,
 				routedesc, inet6_ntoa(nexthop->gate.ipv6),
 				label_buf, nexthop->ifindex);
 	}
+
+	/*
+	 * We have figured out the ifindex so we should always send it
+	 * This is especially useful if we are doing route
+	 * leaking.
+	 */
+	if (nexthop->type != NEXTHOP_TYPE_BLACKHOLE)
+		rtnh->rtnh_ifindex = nexthop->ifindex;
+
 	/* ifindex */
 	if (nexthop->type == NEXTHOP_TYPE_IPV4_IFINDEX
 	    || nexthop->type == NEXTHOP_TYPE_IFINDEX) {
-		rtnh->rtnh_ifindex = nexthop->ifindex;
-
 		if (nexthop->rmap_src.ipv4.s_addr)
 			*src = &nexthop->rmap_src;
 		else if (nexthop->src.ipv4.s_addr)
@@ -1197,8 +1192,6 @@ static void _netlink_route_build_multipath(const char *routedesc, int bytelen,
 				"nexthop via if %u",
 				routedesc, nexthop->ifindex);
 	} else if (nexthop->type == NEXTHOP_TYPE_IPV6_IFINDEX) {
-		rtnh->rtnh_ifindex = nexthop->ifindex;
-
 		if (IS_ZEBRA_DEBUG_KERNEL)
 			zlog_debug(
 				"netlink_route_multipath() (%s): "
@@ -1237,75 +1230,6 @@ _netlink_mpls_build_multipath(const char *routedesc, zebra_nhlfe_t *nhlfe,
 	bytelen = (family == AF_INET ? 4 : 16);
 	_netlink_route_build_multipath(routedesc, bytelen, nhlfe->nexthop, rta,
 				       rtnh, rtmsg, src);
-}
-
-/*
- * Compare if two next (first) hops are the same. We cannot use the
- * library function because there seem to be situations when a
- * next hop is of type IPV4 but actually has an 'ifindex' and in
- * such a case, we need to compare it against a next hop of type
- * IPV4_IFINDEX.
- */
-static int are_first_hops_same(struct nexthop *next1, struct nexthop *next2)
-{
-	switch (next1->type) {
-	case NEXTHOP_TYPE_IPV4:
-	case NEXTHOP_TYPE_IPV4_IFINDEX:
-		if (next2->type != NEXTHOP_TYPE_IPV4
-		    && next2->type != NEXTHOP_TYPE_IPV4_IFINDEX)
-			return 0;
-		if (!IPV4_ADDR_SAME(&next1->gate.ipv4, &next2->gate.ipv4))
-			return 0;
-		if (next1->ifindex != next2->ifindex)
-			return 0;
-		break;
-	case NEXTHOP_TYPE_IFINDEX:
-		if (next1->type != next2->type)
-			return 0;
-		if (next1->ifindex != next2->ifindex)
-			return 0;
-		break;
-	case NEXTHOP_TYPE_IPV6:
-	case NEXTHOP_TYPE_IPV6_IFINDEX:
-		if (next2->type != NEXTHOP_TYPE_IPV6
-		    && next2->type != NEXTHOP_TYPE_IPV6_IFINDEX)
-			return 0;
-		if (!IPV6_ADDR_SAME(&next1->gate.ipv6, &next2->gate.ipv6))
-			return 0;
-		if (next1->ifindex != next2->ifindex)
-			return 0;
-		break;
-	default:
-		/* do nothing */
-		break;
-	}
-	return 1;
-}
-
-/*
- * While forming RTA_MULTIPATH, weed out any duplicate next hop.
- */
-static int is_duplicate_first_hop(struct nexthop *nexthop,
-				  struct nexthop **nhops, int nhop_num)
-{
-	int i;
-	char buf[PREFIX_STRLEN];
-	char buf2[PREFIX_STRLEN];
-
-	for (i = 0; i < nhop_num; i++) {
-		/* TODO: To be removed after tests. */
-		if (IS_ZEBRA_DEBUG_KERNEL)
-			zlog_debug("Comparing Nexthop %s to existing %s [%d]",
-				   nexthop2str(nexthop, buf, sizeof(buf)),
-				   nexthop2str(nhops[i], buf2, sizeof(buf2)),
-				   i);
-		if (are_first_hops_same(nexthop, nhops[i]))
-			return 1;
-	}
-
-	/* NOTE: As a side effect, we also update the 'nhops' array. */
-	nhops[nhop_num] = nexthop;
-	return 0;
 }
 
 /* Log debug information for netlink_route_multipath
@@ -1426,7 +1350,10 @@ static int netlink_route_multipath(int cmd, struct prefix *p,
 	 * by the routing protocol and for communicating with protocol peers.
 	 */
 	addattr32(&req.n, sizeof req, RTA_PRIORITY, NL_DEFAULT_ROUTE_METRIC);
-
+#if defined(SUPPORT_REALMS)
+	if (re->tag > 0 && re->tag <= 255)
+		addattr32(&req.n, sizeof req, RTA_FLOW, re->tag);
+#endif
 	/* Table corresponding to this route. */
 	if (re->table < 256)
 		req.r.rtm_table = re->table;
@@ -1564,14 +1491,12 @@ static int netlink_route_multipath(int cmd, struct prefix *p,
 		struct rtattr *rta = (void *)buf;
 		struct rtnexthop *rtnh;
 		union g_addr *src1 = NULL;
-		struct nexthop *nhops[MULTIPATH_NUM];
 
 		rta->rta_type = RTA_MULTIPATH;
 		rta->rta_len = RTA_LENGTH(0);
 		rtnh = RTA_DATA(rta);
 
 		nexthop_num = 0;
-		memset(nhops, 0, sizeof(nhops));
 		for (ALL_NEXTHOPS(re->nexthop, nexthop)) {
 			if (nexthop_num >= multipath_num)
 				break;
@@ -1619,9 +1544,7 @@ static int netlink_route_multipath(int cmd, struct prefix *p,
 			}
 
 			if ((cmd == RTM_NEWROUTE
-			     && NEXTHOP_IS_ACTIVE(nexthop->flags)
-			     && !is_duplicate_first_hop(nexthop, nhops,
-							nexthop_num))
+			     && NEXTHOP_IS_ACTIVE(nexthop->flags))
 			    || (cmd == RTM_DELROUTE
 				&& CHECK_FLAG(nexthop->flags,
 					      NEXTHOP_FLAG_FIB))) {
@@ -1718,17 +1641,52 @@ int kernel_get_ipmr_sg_stats(struct zebra_vrf *zvrf, void *in)
 	return suc;
 }
 
-int kernel_route_rib(struct prefix *p, struct prefix *src_p,
-		     struct route_entry *old, struct route_entry *new)
+void kernel_route_rib(struct route_node *rn, struct prefix *p,
+		      struct prefix *src_p, struct route_entry *old,
+		      struct route_entry *new)
 {
+	int ret = 0;
+
 	assert(old || new);
 
-	if (!old && new)
-		return netlink_route_multipath(RTM_NEWROUTE, p, src_p, new, 0);
-	if (old && !new)
-		return netlink_route_multipath(RTM_DELROUTE, p, src_p, old, 0);
+	if (new) {
+		if (p->family == AF_INET)
+			ret = netlink_route_multipath(RTM_NEWROUTE, p, src_p,
+						      new, (old) ? 1 : 0);
+		else {
+			/*
+			 * So v6 route replace semantics are not in
+			 * the kernel at this point as I understand it.
+			 * So let's do a delete than an add.
+			 * In the future once v6 route replace semantics
+			 * are in we can figure out what to do here to
+			 * allow working with old and new kernels.
+			 *
+			 * I'm also intentionally ignoring the failure case
+			 * of the route delete.  If that happens yeah we're
+			 * screwed.
+			 */
+			if (old)
+				netlink_route_multipath(RTM_DELROUTE, p,
+							src_p, old, 0);
+			ret = netlink_route_multipath(RTM_NEWROUTE, p,
+						      src_p, new, 0);
+		}
+		kernel_route_rib_pass_fail(rn, p, new,
+					   (!ret) ?
+					   SOUTHBOUND_INSTALL_SUCCESS :
+					   SOUTHBOUND_INSTALL_FAILURE);
+		return;
+	}
 
-	return netlink_route_multipath(RTM_NEWROUTE, p, src_p, new, 1);
+	if (old) {
+		ret = netlink_route_multipath(RTM_DELROUTE, p, src_p, old, 0);
+
+		kernel_route_rib_pass_fail(rn, p, old,
+					   (!ret) ?
+					   SOUTHBOUND_DELETE_SUCCESS :
+					   SOUTHBOUND_DELETE_FAILURE);
+	}
 }
 
 int kernel_neigh_update(int add, int ifindex, uint32_t addr, char *lla,
@@ -2518,17 +2476,6 @@ int netlink_mpls_multipath(int cmd, zebra_lsp_t *lsp)
 				_netlink_mpls_build_singlepath(routedesc, nhlfe,
 							       &req.n, &req.r,
 							       sizeof req, cmd);
-				if (cmd == RTM_NEWROUTE) {
-					SET_FLAG(nhlfe->flags,
-						 NHLFE_FLAG_INSTALLED);
-					SET_FLAG(nexthop->flags,
-						 NEXTHOP_FLAG_FIB);
-				} else {
-					UNSET_FLAG(nhlfe->flags,
-						   NHLFE_FLAG_INSTALLED);
-					UNSET_FLAG(nexthop->flags,
-						   NEXTHOP_FLAG_FIB);
-				}
 				nexthop_num++;
 				break;
 			}
@@ -2572,18 +2519,6 @@ int netlink_mpls_multipath(int cmd, zebra_lsp_t *lsp)
 							      rta, rtnh, &req.r,
 							      &src1);
 				rtnh = RTNH_NEXT(rtnh);
-
-				if (cmd == RTM_NEWROUTE) {
-					SET_FLAG(nhlfe->flags,
-						 NHLFE_FLAG_INSTALLED);
-					SET_FLAG(nexthop->flags,
-						 NEXTHOP_FLAG_FIB);
-				} else {
-					UNSET_FLAG(nhlfe->flags,
-						   NHLFE_FLAG_INSTALLED);
-					UNSET_FLAG(nexthop->flags,
-						   NEXTHOP_FLAG_FIB);
-				}
 			}
 		}
 

@@ -256,7 +256,7 @@ DEFUN (show_zebra,
        SHOW_STR
        IPV6_STR
        OSPF6_STR
-       "Zebra information\n")
+       ZEBRA_STR)
 {
 	int i;
 	if (zclient == NULL) {
@@ -337,6 +337,7 @@ static void ospf6_zebra_route_update(int type, struct ospf6_route *request)
 
 	memset(&api, 0, sizeof(api));
 	api.vrf_id = VRF_DEFAULT;
+	api.nh_vrf_id = VRF_DEFAULT;
 	api.type = ZEBRA_ROUTE_OSPF6;
 	api.safi = SAFI_UNICAST;
 	api.prefix = *dest;
@@ -387,6 +388,7 @@ void ospf6_zebra_add_discard(struct ospf6_route *request)
 	if (!CHECK_FLAG(request->flag, OSPF6_ROUTE_BLACKHOLE_ADDED)) {
 		memset(&api, 0, sizeof(api));
 		api.vrf_id = VRF_DEFAULT;
+		api.nh_vrf_id = VRF_DEFAULT;
 		api.type = ZEBRA_ROUTE_OSPF6;
 		api.safi = SAFI_UNICAST;
 		api.prefix = *dest;
@@ -420,6 +422,7 @@ void ospf6_zebra_delete_discard(struct ospf6_route *request)
 	if (CHECK_FLAG(request->flag, OSPF6_ROUTE_BLACKHOLE_ADDED)) {
 		memset(&api, 0, sizeof(api));
 		api.vrf_id = VRF_DEFAULT;
+		api.nh_vrf_id = VRF_DEFAULT;
 		api.type = ZEBRA_ROUTE_OSPF6;
 		api.safi = SAFI_UNICAST;
 		api.prefix = *dest;
@@ -583,7 +586,7 @@ static void ospf6_zebra_connected(struct zclient *zclient)
 void ospf6_zebra_init(struct thread_master *master)
 {
 	/* Allocate zebra structure. */
-	zclient = zclient_new(master);
+	zclient = zclient_new_notify(master, &zclient_options_default);
 	zclient_init(zclient, ZEBRA_ROUTE_OSPF6, 0, &ospf6d_privs);
 	zclient->zebra_connected = ospf6_zebra_connected;
 	zclient->router_id_update = ospf6_router_id_update_zebra;

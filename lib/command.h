@@ -140,6 +140,7 @@ enum node_type {
 	VTY_NODE,		/* Vty node. */
 	LINK_PARAMS_NODE,       /* Link-parameters node */
 	BGP_EVPN_VNI_NODE,      /* BGP EVPN VNI */
+	RPKI_NODE,		/* RPKI node for configuration of RPKI cache server connections.*/
 	NODE_TYPE_MAX,		/* maximum */
 };
 
@@ -189,7 +190,7 @@ struct cmd_node {
 #define CMD_NOT_MY_INSTANCE	14
 
 /* Argc max counts. */
-#define CMD_ARGC_MAX   25
+#define CMD_ARGC_MAX   256
 
 /* Turn off these macros when uisng cpp with extract.pl */
 #ifndef VTYSH_EXTRACT_PL
@@ -358,6 +359,7 @@ struct cmd_node {
 #define PCE_STR "PCE Router Information specific commands\n"
 #define MPLS_STR "MPLS information\n"
 #define WATCHFRR_STR "watchfrr information\n"
+#define ZEBRA_STR "Zebra information\n"
 
 #define CONF_BACKUP_EXT ".sav"
 

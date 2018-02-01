@@ -385,10 +385,13 @@ struct bgp {
 	_Atomic uint32_t wpkt_quanta; // max # packets to write per i/o cycle
 	_Atomic uint32_t rpkt_quanta; // max # packets to read per i/o cycle
 
-	/* Configured coalesce time */
-	uint32_t v_coalesce_time;
+	/* Automatic coalesce adjust on/off */
+	bool heuristic_coalesce;
 	/* Actual coalesce time */
 	uint32_t coalesce_time;
+
+	/* Auto-shutdown new peers */
+	bool autoshutdown;
 
 	u_int32_t addpath_tx_id;
 	int addpath_tx_used[AFI_MAX][SAFI_MAX];
@@ -635,8 +638,8 @@ struct peer {
 	struct stream_fifo *ibuf; // packets waiting to be processed
 	struct stream_fifo *obuf; // packets waiting to be written
 
-	struct stream *ibuf_work; // WiP buffer used by bgp_read() only
-	struct stream *obuf_work; // WiP buffer used to construct packets
+	struct ringbuf *ibuf_work; // WiP buffer used by bgp_read() only
+	struct stream *obuf_work;  // WiP buffer used to construct packets
 
 	struct stream *curr; // the current packet being parsed
 
@@ -752,9 +755,8 @@ struct peer {
 #define PEER_FLAG_DYNAMIC_NEIGHBOR          (1 << 12) /* dynamic neighbor */
 #define PEER_FLAG_CAPABILITY_ENHE           (1 << 13) /* Extended next-hop (rfc 5549)*/
 #define PEER_FLAG_IFPEER_V6ONLY             (1 << 14) /* if-based peer is v6 only */
-#if ENABLE_BGP_VNC
 #define PEER_FLAG_IS_RFAPI_HD		    (1 << 15) /* attached to rfapi HD */
-#endif
+
 	/* outgoing message sent in CEASE_ADMIN_SHUTDOWN notify */
 	char *tx_shutdown_message;
 
@@ -867,6 +869,22 @@ struct peer {
 	/* workqueues */
 	struct work_queue *clear_node_queue;
 
+#define PEER_TOTAL_RX(peer) \
+	atomic_load_explicit(&peer->open_in, memory_order_relaxed) +		\
+	atomic_load_explicit(&peer->update_in, memory_order_relaxed) +		\
+	atomic_load_explicit(&peer->notify_in, memory_order_relaxed) +		\
+	atomic_load_explicit(&peer->refresh_in, memory_order_relaxed) +		\
+	atomic_load_explicit(&peer->keepalive_in, memory_order_relaxed) +	\
+	atomic_load_explicit(&peer->dynamic_cap_in, memory_order_relaxed)
+
+#define PEER_TOTAL_TX(peer) \
+	atomic_load_explicit(&peer->open_out, memory_order_relaxed) +		\
+	atomic_load_explicit(&peer->update_out, memory_order_relaxed) +		\
+	atomic_load_explicit(&peer->notify_out, memory_order_relaxed) +		\
+	atomic_load_explicit(&peer->refresh_out, memory_order_relaxed) +	\
+	atomic_load_explicit(&peer->keepalive_out, memory_order_relaxed) +	\
+	atomic_load_explicit(&peer->dynamic_cap_out, memory_order_relaxed)
+
 	/* Statistics field */
 	_Atomic uint32_t open_in;         /* Open message input count */
 	_Atomic uint32_t open_out;        /* Open message output count */
@@ -900,9 +918,6 @@ struct peer {
 
 	/* Send prefix count. */
 	unsigned long scount[AFI_MAX][SAFI_MAX];
-
-	/* Announcement attribute hash.  */
-	struct hash *hash[AFI_MAX][SAFI_MAX];
 
 	/* Notify data. */
 	struct bgp_notify notify;
@@ -1058,6 +1073,7 @@ struct bgp_nlri {
 #define BGP_ATTR_AS4_PATH                       17
 #define BGP_ATTR_AS4_AGGREGATOR                 18
 #define BGP_ATTR_AS_PATHLIMIT                   21
+#define BGP_ATTR_PMSI_TUNNEL                    22
 #define BGP_ATTR_ENCAP                          23
 #define BGP_ATTR_LARGE_COMMUNITIES              32
 #define BGP_ATTR_PREFIX_SID                     40
@@ -1201,7 +1217,7 @@ enum bgp_clear_type {
 
 /* Macros. */
 #define BGP_INPUT(P)         ((P)->curr)
-#define BGP_INPUT_PNT(P)     (STREAM_PNT(BGP_INPUT(P)))
+#define BGP_INPUT_PNT(P)     (stream_pnt(BGP_INPUT(P)))
 #define BGP_IS_VALID_STATE_FOR_NOTIF(S)                                        \
 	(((S) == OpenSent) || ((S) == OpenConfirm) || ((S) == Established))
 

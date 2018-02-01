@@ -29,6 +29,7 @@
 #include "zebra_ns.h"
 #include "zebra_vrf.h"
 #include "zebra_memory.h"
+#include "rt.h"
 #include "zebra_vxlan.h"
 
 DEFINE_MTYPE(ZEBRA, ZEBRA_NS, "Zebra Name Space")
@@ -84,8 +85,7 @@ int zebra_ns_init(void)
 	/* Register zebra VRF callbacks, create and activate default VRF. */
 	zebra_vrf_init();
 
-	/* Default NS is activated */
-	zebra_ns_enable(0, (void **)&dzns);
+	zebra_ns_enable(NS_DEFAULT, (void **)&dzns);
 
 	return 0;
 }

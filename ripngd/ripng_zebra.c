@@ -48,6 +48,7 @@ static void ripng_zebra_ipv6_send(struct route_node *rp, u_char cmd)
 
 	memset(&api, 0, sizeof(api));
 	api.vrf_id = VRF_DEFAULT;
+	api.nh_vrf_id = VRF_DEFAULT;
 	api.type = ZEBRA_ROUTE_RIPNG;
 	api.safi = SAFI_UNICAST;
 	api.prefix = rp->p;
@@ -413,7 +414,7 @@ static void ripng_zebra_connected(struct zclient *zclient)
 void zebra_init(struct thread_master *master)
 {
 	/* Allocate zebra structure. */
-	zclient = zclient_new(master);
+	zclient = zclient_new_notify(master, &zclient_options_default);
 	zclient_init(zclient, ZEBRA_ROUTE_RIPNG, 0, &ripngd_privs);
 
 	zclient->zebra_connected = ripng_zebra_connected;

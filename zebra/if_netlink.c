@@ -31,6 +31,7 @@
 #define _LINUX_IN6_H
 
 #include <linux/if_bridge.h>
+#include <linux/if_link.h>
 #include <net/if_arp.h>
 #include <linux/sockios.h>
 #include <linux/ethtool.h>
@@ -220,8 +221,10 @@ static enum zebra_link_type netlink_to_zebra_link_type(unsigned int hwt)
 		return ZEBRA_LLT_IEEE802_TR;
 	case ARPHRD_IEEE80211:
 		return ZEBRA_LLT_IEEE80211;
+#ifdef ARPHRD_IEEE802154
 	case ARPHRD_IEEE802154:
 		return ZEBRA_LLT_IEEE802154;
+#endif
 #ifdef ARPHRD_IP6GRE
 	case ARPHRD_IP6GRE:
 		return ZEBRA_LLT_IP6GRE;
@@ -254,47 +257,6 @@ static void netlink_determine_zebra_iftype(char *kind, zebra_iftype_t *zif_type)
 	else if (strcmp(kind, "macvlan") == 0)
 		*zif_type = ZEBRA_IF_MACVLAN;
 }
-
-// Temporary Assignments to compile on older platforms.
-#ifndef IFLA_BR_MAX
-#define IFLA_BR_MAX   39
-#endif
-
-#ifndef IFLA_VXLAN_ID
-#define IFLA_VXLAN_ID 1
-#endif
-
-#ifndef IFLA_VXLAN_LOCAL
-#define IFLA_VXLAN_LOCAL  4
-#endif
-
-#ifndef IFLA_VXLAN_MAX
-#define IFLA_VXLAN_MAX 26
-#endif
-
-#ifndef IFLA_BRIDGE_MAX
-#define IFLA_BRIDGE_MAX   2
-#endif
-
-#ifndef IFLA_BRIDGE_VLAN_INFO
-#define IFLA_BRIDGE_VLAN_INFO 2
-#endif
-
-#ifndef BRIDGE_VLAN_INFO_PVID
-#define BRIDGE_VLAN_INFO_PVID  (1<<1)
-#endif
-
-#ifndef RTEXT_FILTER_BRVLAN
-#define RTEXT_FILTER_BRVLAN    (1<<1)
-#endif
-
-#ifndef NTF_SELF
-#define NTF_SELF   0x02
-#endif
-
-#ifndef IFLA_BR_VLAN_FILTERING
-#define IFLA_BR_VLAN_FILTERING  7
-#endif
 
 #define parse_rtattr_nested(tb, max, rta)                                      \
 	netlink_parse_rtattr((tb), (max), RTA_DATA(rta), RTA_PAYLOAD(rta))
@@ -593,6 +555,7 @@ static int netlink_interface(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	struct interface *ifp;
 	char *name = NULL;
 	char *kind = NULL;
+	char *desc = NULL;
 	char *slave_kind = NULL;
 	struct zebra_ns *zns;
 	vrf_id_t vrf_id = VRF_DEFAULT;
@@ -633,6 +596,9 @@ static int netlink_interface(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	if (tb[IFLA_IFNAME] == NULL)
 		return -1;
 	name = (char *)RTA_DATA(tb[IFLA_IFNAME]);
+
+	if (tb[IFLA_IFALIAS])
+		desc = (char *)RTA_DATA(tb[IFLA_IFALIAS]);
 
 	if (tb[IFLA_LINKINFO]) {
 		parse_rtattr_nested(linkinfo, IFLA_INFO_MAX, tb[IFLA_LINKINFO]);
@@ -680,6 +646,9 @@ static int netlink_interface(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	ifp->metric = 0;
 	ifp->speed = get_iflink_speed(name);
 	ifp->ptm_status = ZEBRA_PTM_STATUS_UNKNOWN;
+
+	if (desc)
+		ifp->desc = XSTRDUP(MTYPE_TMP, desc);
 
 	/* Set zebra interface type */
 	zebra_if_set_ziftype(ifp, zif_type, zif_slave_type);
@@ -874,6 +843,16 @@ int kernel_address_delete_ipv4(struct interface *ifp, struct connected *ifc)
 	return netlink_address(RTM_DELADDR, AF_INET, ifp, ifc);
 }
 
+int kernel_address_add_ipv6 (struct interface *ifp, struct connected *ifc)
+{
+  return netlink_address (RTM_NEWADDR, AF_INET6, ifp, ifc);
+}
+
+int kernel_address_delete_ipv6 (struct interface *ifp, struct connected *ifc)
+{
+  return netlink_address (RTM_DELADDR, AF_INET6, ifp, ifc);
+}
+
 int netlink_interface_addr(struct sockaddr_nl *snl, struct nlmsghdr *h,
 			   ns_id_t ns_id, int startup)
 {
@@ -1025,6 +1004,7 @@ int netlink_link_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	struct interface *ifp;
 	char *name = NULL;
 	char *kind = NULL;
+	char *desc = NULL;
 	char *slave_kind = NULL;
 	struct zebra_ns *zns;
 	vrf_id_t vrf_id = VRF_DEFAULT;
@@ -1089,6 +1069,10 @@ int netlink_link_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	if (tb[IFLA_LINK])
 		link_ifindex = *(ifindex_t *)RTA_DATA(tb[IFLA_LINK]);
 
+	if (tb[IFLA_IFALIAS]) {
+		desc = (char *)RTA_DATA(tb[IFLA_IFALIAS]);
+	}
+
 	/* If VRF, create or update the VRF structure itself. */
 	if (zif_type == ZEBRA_IF_VRF) {
 		netlink_vrf_change(h, tb[IFLA_LINKINFO], name);
@@ -1097,6 +1081,13 @@ int netlink_link_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 
 	/* See if interface is present. */
 	ifp = if_lookup_by_name_per_ns(zns, name);
+
+	if (ifp) {
+		if (ifp->desc)
+			XFREE(MTYPE_TMP, ifp->desc);
+		if (desc)
+			ifp->desc = XSTRDUP(MTYPE_TMP, desc);
+	}
 
 	if (h->nlmsg_type == RTM_NEWLINK) {
 		if (tb[IFLA_MASTER]) {

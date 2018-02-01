@@ -53,6 +53,7 @@
 /* Zebra instance */
 struct zebra_t zebrad = {
 	.rtm_table_default = 0,
+	.packets_to_process = ZEBRA_ZAPI_PACKETS_TO_PROCESS,
 };
 
 /* process id. */
@@ -200,6 +201,9 @@ int main(int argc, char **argv)
 	char *lblmgr_path = NULL;
 	struct sockaddr_storage dummy;
 	socklen_t dummylen;
+#if defined(HANDLE_ZAPI_FUZZING)
+	char *fuzzing = NULL;
+#endif
 
 	frr_preinit(&zebra_di, argc, argv);
 
@@ -207,6 +211,9 @@ int main(int argc, char **argv)
 		"bakz:e:l:r"
 #ifdef HAVE_NETLINK
 		"s:"
+#endif
+#if defined(HANDLE_ZAPI_FUZZING)
+		"c:"
 #endif
 		,
 		longopts,
@@ -220,6 +227,9 @@ int main(int argc, char **argv)
 #ifdef HAVE_NETLINK
 		"  -s, --nl-bufsize   Set netlink receive buffer size\n"
 #endif /* HAVE_NETLINK */
+#if defined(HANDLE_ZAPI_FUZZING)
+		"  -c <file>          Bypass normal startup use this file for tetsting of zapi"
+#endif
 		);
 
 	while (1) {
@@ -270,6 +280,11 @@ int main(int argc, char **argv)
 			nl_rcvbufsize = atoi(optarg);
 			break;
 #endif /* HAVE_NETLINK */
+#if defined(HANDLE_ZAPI_FUZZING)
+		case 'c':
+			fuzzing = optarg;
+			break;
+#endif
 		default:
 			frr_help_exit(1);
 			break;
@@ -280,11 +295,18 @@ int main(int argc, char **argv)
 	zebrad.master = frr_init();
 
 	/* Zebra related initialize. */
-	zebra_init();
+	zserv_init();
 	rib_init();
 	zebra_if_init();
 	zebra_debug_init();
 	router_id_cmd_init();
+
+	/*
+	 * Initialize NS( and implicitly the VRF module), and make kernel
+	 * routing socket. */
+	zebra_ns_init();
+
+	zebra_vty_init();
 	access_list_init();
 	prefix_list_init();
 #if defined(HAVE_RTADV)
@@ -302,13 +324,12 @@ int main(int argc, char **argv)
 	/* For debug purpose. */
 	/* SET_FLAG (zebra_debug_event, ZEBRA_DEBUG_EVENT); */
 
-	/* Initialize NS( and implicitly the VRF module), and make kernel
-	 * routing socket. */
-	zebra_ns_init();
-
-	/* Initialize show/config command after the vrf initialization is
-	 * complete */
-	zebra_vty_init();
+#if defined(HANDLE_ZAPI_FUZZING)
+	if (fuzzing) {
+		zserv_read_file(fuzzing);
+		exit(0);
+	}
+#endif
 
 	/* Process the configuration file. Among other configuration
 	*  directives we can meet those installing static routes. Such

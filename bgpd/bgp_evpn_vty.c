@@ -419,7 +419,7 @@ static void display_l3vni(struct vty *vty, struct bgp *bgp_vrf,
 
 static void display_vni(struct vty *vty, struct bgpevpn *vpn, json_object *json)
 {
-	char buf1[INET6_ADDRSTRLEN];
+	char buf1[RD_ADDRSTRLEN];
 	char *ecom_str;
 	struct listnode *node, *nnode;
 	struct ecommunity *ecom;
@@ -437,7 +437,7 @@ static void display_vni(struct vty *vty, struct bgpevpn *vpn, json_object *json)
 				       is_vni_live(vpn) ? "Yes" : "No");
 		json_object_string_add(
 			json, "rd",
-			prefix_rd2str(&vpn->prd, buf1, RD_ADDRSTRLEN));
+			prefix_rd2str(&vpn->prd, buf1, sizeof(buf1)));
 		json_object_string_add(json, "originatorIp",
 				       inet_ntoa(vpn->originator_ip));
 		json_object_string_add(json, "advertiseGatewayMacip",
@@ -452,7 +452,7 @@ static void display_vni(struct vty *vty, struct bgpevpn *vpn, json_object *json)
 		vty_out(vty, "  Tenant VRF: %s\n",
 			vrf_id_to_name(vpn->tenant_vrf_id));
 		vty_out(vty, "  RD: %s\n",
-			prefix_rd2str(&vpn->prd, buf1, RD_ADDRSTRLEN));
+			prefix_rd2str(&vpn->prd, buf1, sizeof(buf1)));
 		vty_out(vty, "  Originator IP: %s\n",
 			inet_ntoa(vpn->originator_ip));
 		vty_out(vty, "  Advertise-gw-macip : %s\n",
@@ -667,9 +667,9 @@ static void show_vni_routes_hash(struct hash_backet *backet, void *arg)
 static void show_l3vni_entry(struct vty *vty, struct bgp *bgp,
 			   json_object *json)
 {
-	json_object *json_vni;
-	json_object *json_import_rtl;
-	json_object *json_export_rtl;
+	json_object *json_vni = NULL;
+	json_object *json_import_rtl = NULL;
+	json_object *json_export_rtl = NULL;
 	char buf1[10];
 	char buf2[INET6_ADDRSTRLEN];
 	char rt_buf[25];
@@ -772,12 +772,12 @@ static void show_vni_entry(struct hash_backet *backet, void *args[])
 {
 	struct vty *vty;
 	json_object *json;
-	json_object *json_vni;
-	json_object *json_import_rtl;
-	json_object *json_export_rtl;
+	json_object *json_vni = NULL;
+	json_object *json_import_rtl = NULL;
+	json_object *json_export_rtl = NULL;
 	struct bgpevpn *vpn = (struct bgpevpn *)backet->data;
 	char buf1[10];
-	char buf2[INET6_ADDRSTRLEN];
+	char buf2[RD_ADDRSTRLEN];
 	char rt_buf[25];
 	char *ecom_str;
 	struct listnode *node, *nnode;
@@ -805,7 +805,7 @@ static void show_vni_entry(struct hash_backet *backet, void *args[])
 				       inet_ntoa(vpn->originator_ip));
 		json_object_string_add(
 			json_vni, "rd",
-			prefix_rd2str(&vpn->prd, buf2, RD_ADDRSTRLEN));
+			prefix_rd2str(&vpn->prd, buf2, sizeof(buf2)));
 	} else {
 		vty_out(vty, "%-1s %-10u %-4s %-21s",
 			buf1, vpn->vni, "L2",
@@ -1709,7 +1709,8 @@ static void evpn_configure_vrf_rd(struct bgp *bgp_vrf,
 				  struct prefix_rd *rd)
 {
 	/* If we have already advertise type-5 routes with a diffrent RD, we
-	 * have to delete and withdraw them first*/
+	 * have to delete and withdraw them firs
+	 */
 	bgp_evpn_handle_vrf_rd_change(bgp_vrf, 1);
 
 	/* update RD */
@@ -1717,7 +1718,8 @@ static void evpn_configure_vrf_rd(struct bgp *bgp_vrf,
 	SET_FLAG(bgp_vrf->vrf_flags, BGP_VRF_RD_CFGD);
 
 	/* We have a new RD for VRF.
-	 * Advertise all type-5 routes again with the new RD */
+	 * Advertise all type-5 routes again with the new RD
+	 */
 	bgp_evpn_handle_vrf_rd_change(bgp_vrf, 0);
 }
 
@@ -1727,14 +1729,16 @@ static void evpn_configure_vrf_rd(struct bgp *bgp_vrf,
 static void evpn_unconfigure_vrf_rd(struct bgp *bgp_vrf)
 {
 	/* If we have already advertise type-5 routes with a diffrent RD, we
-	 * have to delete and withdraw them first*/
+	 * have to delete and withdraw them firs
+	 */
 	bgp_evpn_handle_vrf_rd_change(bgp_vrf, 1);
 
 	/* fall back to default RD */
 	bgp_evpn_derive_auto_rd_for_vrf(bgp_vrf);
 
 	/* We have a new RD for VRF.
-	 * Advertise all type-5 routes again with the new RD */
+	 * Advertise all type-5 routes again with the new RD
+	 */
 	bgp_evpn_handle_vrf_rd_change(bgp_vrf, 0);
 }
 
@@ -1791,7 +1795,8 @@ static struct bgpevpn *evpn_create_update_vni(struct bgp *bgp, vni_t vni)
 	vpn = bgp_evpn_lookup_vni(bgp, vni);
 	if (!vpn) {
 		/* tenant vrf will be updated when we get local_vni_add from
-		 * zebra */
+		 * zebra
+		 */
 		vpn = bgp_evpn_new(bgp, vni, bgp->router_id, 0);
 		if (!vpn) {
 			zlog_err(
@@ -2546,7 +2551,7 @@ static void evpn_unset_advertise_all_vni(struct bgp *bgp)
 
 static void write_vni_config(struct vty *vty, struct bgpevpn *vpn)
 {
-	char buf1[INET6_ADDRSTRLEN];
+	char buf1[RD_ADDRSTRLEN];
 	char *ecom_str;
 	struct listnode *node, *nnode;
 	struct ecommunity *ecom;
@@ -2555,7 +2560,7 @@ static void write_vni_config(struct vty *vty, struct bgpevpn *vpn)
 		vty_out(vty, "  vni %d\n", vpn->vni);
 		if (is_rd_configured(vpn))
 			vty_out(vty, "   rd %s\n",
-				prefix_rd2str(&vpn->prd, buf1, RD_ADDRSTRLEN));
+				prefix_rd2str(&vpn->prd, buf1, sizeof(buf1)));
 
 		if (is_import_rt_configured(vpn)) {
 			for (ALL_LIST_ELEMENTS(vpn->import_rtl, node, nnode,
@@ -2776,7 +2781,8 @@ DEFUN (bgp_evpn_advertise_type5,
 	if (afi == AFI_IP) {
 
 		/* if we are already advertising ipv4 prefix as type-5
-		 * nothing to do */
+		 * nothing to do
+		 */
 		if (!CHECK_FLAG(bgp_vrf->vrf_flags,
 				BGP_VRF_ADVERTISE_IPV4_IN_EVPN)) {
 			SET_FLAG(bgp_vrf->vrf_flags,
@@ -2786,7 +2792,8 @@ DEFUN (bgp_evpn_advertise_type5,
 	} else {
 
 		/* if we are already advertising ipv6 prefix as type-5
-		 * nothing to do */
+		 * nothing to do
+		 */
 		if (!CHECK_FLAG(bgp_vrf->vrf_flags,
 				BGP_VRF_ADVERTISE_IPV6_IN_EVPN)) {
 			SET_FLAG(bgp_vrf->vrf_flags,
@@ -2829,7 +2836,8 @@ DEFUN (no_bgp_evpn_advertise_type5,
 	if (afi == AFI_IP) {
 
 		/* if we are already advertising ipv4 prefix as type-5
-		 * nothing to do */
+		 * nothing to do
+		 */
 		if (CHECK_FLAG(bgp_vrf->vrf_flags,
 			       BGP_VRF_ADVERTISE_IPV4_IN_EVPN)) {
 			bgp_evpn_withdraw_type5_routes(bgp_vrf, afi, safi);
@@ -2839,7 +2847,8 @@ DEFUN (no_bgp_evpn_advertise_type5,
 	} else {
 
 		/* if we are already advertising ipv6 prefix as type-5
-		 * nothing to do */
+		 * nothing to do
+		 */
 		if (CHECK_FLAG(bgp_vrf->vrf_flags,
 			       BGP_VRF_ADVERTISE_IPV6_IN_EVPN)) {
 			bgp_evpn_withdraw_type5_routes(bgp_vrf, afi, safi);
