@@ -834,7 +834,7 @@ DEFUN_NOSH (router_bgp,
 
 		if (listcount(bm->bgp) > 1) {
 			vty_out(vty,
-				"%% Multiple BGP processes are configured\n");
+				"%% Please specify ASN and VRF\n");
 			return CMD_WARNING_CONFIG_FAILED;
 		}
 	}
@@ -910,7 +910,7 @@ DEFUN (no_router_bgp,
 
 		if (listcount(bm->bgp) > 1) {
 			vty_out(vty,
-				"%% Multiple BGP processes are configured\n");
+				"%% Please specify ASN and VRF\n");
 			return CMD_WARNING_CONFIG_FAILED;
 		}
 
