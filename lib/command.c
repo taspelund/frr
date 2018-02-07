@@ -500,6 +500,9 @@ static int config_write_host(struct vty *vty)
 	if (cmd_hostname_get())
 		vty_out(vty, "hostname %s\n", cmd_hostname_get());
 
+	if (cmd_domainname_get())
+		vty_out(vty, "domainname %s\n", cmd_domainname_get());
+
 	/* The following are all configuration commands that are not sent to
          * watchfrr.  For instance watchfrr is hardcoded to log to syslog so
          * we would always display 'log syslog informational' in the config
