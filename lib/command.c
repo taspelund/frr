@@ -521,6 +521,10 @@ static int config_write_host(struct vty *vty)
 				vty_out(vty, "enable password %s\n", host.enable);
 		}
 
+		if (cmd_domainname_get())
+			vty_out(vty, "domainname %s\n", cmd_domainname_get());
+
+
 		if (zlog_default->default_lvl != LOG_DEBUG) {
 			vty_out(vty, "! N.B. The 'log trap' command is deprecated.\n");
 			vty_out(vty, "log trap %s\n",
