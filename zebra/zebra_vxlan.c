@@ -1125,10 +1125,10 @@ static void zvni_print_hash(struct hash_backet *backet, void *ctxt[])
 	num_macs = num_valid_macs(zvni);
 	num_neigh = hashcount(zvni->neigh_table);
 	if (json == NULL)
-		vty_out(vty, "%-10u %-21s %-15s %-8u %-8u %-15u %-37s\n",
-			zvni->vni,
+		vty_out(vty, "%-10u %-4s %-21s %-8u %-8u %-15u %-37s\n",
+			zvni->vni, "L2",
 			zvni->vxlan_if ? zvni->vxlan_if->name : "unknown",
-			inet_ntoa(zvni->local_vtep_ip), num_macs, num_neigh,
+			num_macs, num_neigh,
 			num_vteps,
 			vrf_id_to_name(zvni->vrf_id));
 	else {
