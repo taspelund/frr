@@ -350,7 +350,6 @@ enum zapi_route_notify_owner {
 };
 
 /* Zebra MAC types */
-#define ZEBRA_MAC_TYPE_STICKY                0x01 /* Sticky MAC*/
 #define ZEBRA_MACIP_TYPE_STICKY                0x01 /* Sticky MAC*/
 #define ZEBRA_MACIP_TYPE_GW                    0x02 /* gateway (SVI) mac*/
 

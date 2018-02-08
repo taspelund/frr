@@ -82,9 +82,6 @@ struct bgp_info_extra {
 	mpls_label_t label[BGP_MAX_LABELS];
 	u_int32_t num_labels;
 
-	/* MPLS label - L3-VNI */
-	mpls_label_t label2;
-
 #if ENABLE_BGP_VNC
 	union {
 

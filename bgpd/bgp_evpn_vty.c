@@ -449,7 +449,7 @@ static void display_vni(struct vty *vty, struct bgpevpn *vpn, json_object *json)
 		vty_out(vty, "\n");
 
 		vty_out(vty, "  Type: %s\n", "L2");
-		vty_out(vty, "  Tenant VRF: %s\n",
+		vty_out(vty, "  Tenant-Vrf: %s\n",
 			vrf_id_to_name(vpn->tenant_vrf_id));
 		vty_out(vty, "  RD: %s\n",
 			prefix_rd2str(&vpn->prd, buf1, sizeof(buf1)));
@@ -801,6 +801,8 @@ static void show_vni_entry(struct hash_backet *backet, void *args[])
 		json_object_string_add(json_vni, "type", "L2");
 		json_object_string_add(json_vni, "inKernel",
 				       is_vni_live(vpn) ? "True" : "False");
+		json_object_string_add(json_vni, "originatorIp",
+				       inet_ntoa(vpn->originator_ip));
 		json_object_string_add(json_vni, "originatorIp",
 				       inet_ntoa(vpn->originator_ip));
 		json_object_string_add(
@@ -3015,7 +3017,6 @@ DEFUN(show_bgp_l2vpn_evpn_route,
 					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
-
 	return CMD_SUCCESS;
 }
 
