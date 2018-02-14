@@ -1125,11 +1125,11 @@ static void zvni_print_hash(struct hash_backet *backet, void *ctxt[])
 	num_macs = num_valid_macs(zvni);
 	num_neigh = hashcount(zvni->neigh_table);
 	if (json == NULL)
-		vty_out(vty, "%-10u %-4s %-21s %-8u %-8u %-15u %-37s\n",
+		vty_out(vty,
+			"%-10u %-4s %-21s %-8u %-8u %-15u %-37s\n",
 			zvni->vni, "L2",
 			zvni->vxlan_if ? zvni->vxlan_if->name : "unknown",
-			num_macs, num_neigh,
-			num_vteps,
+			num_macs, num_neigh, num_vteps,
 			vrf_id_to_name(zvni->vrf_id));
 	else {
 		char vni_str[VNI_STR_LEN];
@@ -3822,6 +3822,25 @@ static int zebra_vxlan_readd_remote_rmac(zebra_l3vni_t *zl3vni,
 
 /* Public functions */
 
+/* handle evpn route in vrf table */
+void zebra_vxlan_evpn_vrf_route_add(vrf_id_t vrf_id,
+                                   struct ethaddr *rmac,
+                                   struct ipaddr *vtep_ip,
+                                   struct prefix *host_prefix)
+{
+        zebra_l3vni_t *zl3vni = NULL;
+
+        zl3vni = zl3vni_from_vrf(vrf_id);
+        if (!zl3vni || !is_l3vni_oper_up(zl3vni))
+                return;
+
+        /* add the next hop neighbor */
+        zl3vni_remote_nh_add(zl3vni, vtep_ip, rmac, host_prefix);
+
+        /* add the rmac */
+        zl3vni_remote_rmac_add(zl3vni, rmac, vtep_ip, host_prefix);
+}
+
 /* handle evpn vrf route delete */
 void zebra_vxlan_evpn_vrf_route_del(vrf_id_t vrf_id,
 				    struct ipaddr *vtep_ip,
@@ -4183,76 +4202,6 @@ void zebra_vxlan_print_vrf_vni(struct vty *vty, struct zebra_vrf *zvrf,
 				       zl3vni_rmac2str(zl3vni, buf,
 						       sizeof(buf)));
 		json_object_array_add(json_vrfs, json_vrf);
-	}
-}
-
-/* Public functions */
-
-/* handle evpn route in vrf table */
-void zebra_vxlan_evpn_vrf_route_add(vrf_id_t vrf_id,
-				   struct ethaddr *rmac,
-				   struct ipaddr *vtep_ip,
-				   struct prefix *host_prefix)
-{
-	zebra_l3vni_t *zl3vni = NULL;
-
-	zl3vni = zl3vni_from_vrf(vrf_id);
-	if (!zl3vni || !is_l3vni_oper_up(zl3vni))
-		return;
-
-	/* add the next hop neighbor */
-	zl3vni_remote_nh_add(zl3vni, vtep_ip, rmac, host_prefix);
-
-	/* add the rmac */
-	zl3vni_remote_rmac_add(zl3vni, rmac, vtep_ip, host_prefix);
-}
-
-/*
- * Display L3 VNI hash table (VTY command handler).
- */
-void zebra_vxlan_print_l3vnis(struct vty *vty, u_char use_json)
-{
-	u_int32_t num_vnis;
-	void *args[2];
-	json_object *json = NULL;
-	struct zebra_ns *zns = NULL;
-
-	if (!is_evpn_enabled()) {
-		if (use_json)
-			vty_out(vty, "{}\n");
-		return;
-	}
-
-	zns = zebra_ns_lookup(NS_DEFAULT);
-	assert(zns);
-
-	num_vnis = hashcount(zns->l3vni_table);
-	if (!num_vnis) {
-		if (use_json)
-			vty_out(vty, "{}\n");
-		return;
-	}
-
-	if (use_json) {
-		json = json_object_new_object();
-		json_object_int_add(json, "numVnis", num_vnis);
-	} else {
-		vty_out(vty, "Number of L3 VNIs: %u\n", num_vnis);
-		vty_out(vty, "%-10s %-15s %-20s %-20s %-5s %-37s %-18s\n",
-			"VNI", "Local-ip", "Vx-intf", "L3-SVI", "State",
-			"VRF", "Rmac");
-	}
-
-	args[0] = vty;
-	args[1] = json;
-	hash_iterate(zns->l3vni_table,
-		     (void (*)(struct hash_backet *, void *))zl3vni_print_hash,
-		     args);
-
-	if (use_json) {
-		vty_out(vty, "%s\n", json_object_to_json_string_ext(
-					     json, JSON_C_TO_STRING_PRETTY));
-		json_object_free(json);
 	}
 }
 
@@ -6748,9 +6697,9 @@ int zebra_vxlan_advertise_subnet(struct zserv *client, u_short length,
 
 	zif = ifp->info;
 
-        /* If down or not mapped to a bridge, we're done. */
-        if (!if_is_operative(ifp) || !zif->brslave_info.br_if)
-                return 0;
+	/* If down or not mapped to a bridge, we're done. */
+	if (!if_is_operative(ifp) || !zif->brslave_info.br_if)
+		return 0;
 
 	zl2_info = zif->l2info.vxl;
 

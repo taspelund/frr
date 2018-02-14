@@ -350,7 +350,6 @@ enum zapi_route_notify_owner {
 };
 
 /* Zebra MAC types */
-#define ZEBRA_MAC_TYPE_STICKY                0x01 /* Sticky MAC*/
 #define ZEBRA_MACIP_TYPE_STICKY                0x01 /* Sticky MAC*/
 #define ZEBRA_MACIP_TYPE_GW                    0x02 /* gateway (SVI) mac*/
 
@@ -499,6 +498,9 @@ extern int zapi_route_encode(u_char, struct stream *, struct zapi_route *);
 extern int zapi_route_decode(struct stream *, struct zapi_route *);
 bool zapi_route_notify_decode(struct stream *s, struct prefix *p,
 			      enum zapi_route_notify_owner *note);
+extern struct nexthop *nexthop_from_zapi_nexthop(struct zapi_nexthop *znh);
+extern bool zapi_nexthop_update_decode(struct stream *s,
+				       struct zapi_route *nhr);
 
 static inline void zapi_route_set_blackhole(struct zapi_route *api,
 					    enum blackhole_type bh_type)

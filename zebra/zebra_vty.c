@@ -243,11 +243,9 @@ static int zebra_static_route_leak(struct vty *vty,
 		static_add_route(afi, safi, type, &p, src_p, gatep, ifname,
 				 bh_type, tag, distance, zvrf, nh_zvrf,
 				 &snh_label);
-
 		/* Mark as having FRR configuration */
 		vrf_set_user_cfged(zvrf->vrf);
-	}
-	else {
+	} else {
 		static_delete_route(afi, safi, type, &p, src_p, gatep, ifname,
 				    tag, distance, zvrf, &snh_label);
 		/* If no other FRR config for this VRF, mark accordingly. */
@@ -296,7 +294,6 @@ static int zebra_static_route(struct vty *vty, afi_t afi, safi_t safi,
 		/* Mark as having FRR configuration */
 		vrf_set_user_cfged(vrf);
 	}
-
 	return zebra_static_route_leak(vty, zvrf, zvrf, afi, safi,
 				       negate, dest_str, mask_str, src_str,
 				       gate_str, ifname, flag_str, tag_str,

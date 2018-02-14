@@ -1252,10 +1252,10 @@ static int update_evpn_route(struct bgp *bgp, struct bgpevpn *vpn,
 	attr.nexthop = vpn->originator_ip;
 	attr.mp_nexthop_global_in = vpn->originator_ip;
 	attr.mp_nexthop_len = BGP_ATTR_NHLEN_IPV4;
-	attr.sticky = CHECK_FLAG(flags, ZEBRA_MAC_TYPE_STICKY) ? 1 : 0;
+	attr.sticky = CHECK_FLAG(flags, ZEBRA_MACIP_TYPE_STICKY) ? 1 : 0;
 	attr.default_gw = CHECK_FLAG(flags, ZEBRA_MACIP_TYPE_GW) ? 1 : 0;
-	bgpevpn_get_rmac(vpn, &attr.rmac);
 	attr.flag |= ATTR_FLAG_BIT(BGP_ATTR_PMSI_TUNNEL);
+	bgpevpn_get_rmac(vpn, &attr.rmac);
 	vni2label(vpn->vni, &(attr.label));
 
 	/* Set up RT and ENCAP extended community. */
@@ -2854,13 +2854,16 @@ static int process_type2_route(struct peer *peer, afi_t afi, safi_t safi,
 	num_labels++;
 	memset(label, 0, sizeof(label));
 	memcpy(&label[0], pfx, BGP_LABEL_BYTES);
-	pfx += 3;
+	pfx += BGP_LABEL_BYTES;
 	psize -= (33 + ipaddr_len);
 	/* Do we have a second VNI? */
 	if (psize) {
 		num_labels++;
 		memcpy(&label[1], pfx, BGP_LABEL_BYTES);
-		pfx += 3;
+		/*
+		 * If in future, we are required to access additional fields,
+		 * we MUST increment pfx by BGP_LABEL_BYTES in before reading the next field
+		 */
 	}
 
 	/* Process the route. */
@@ -3016,7 +3019,11 @@ static int process_type5_route(struct peer *peer, afi_t afi, safi_t safi,
 	/* Get the VNI (in MPLS label field). Stored as bytes here. */
 	memset(&label, 0, sizeof(label));
 	memcpy(&label, pfx, BGP_LABEL_BYTES);
-	pfx += 3;
+
+	/*
+	 * If in future, we are required to access additional fields,
+	 * we MUST increment pfx by BGP_LABEL_BYTES in before reading the next field
+	 */
 
 	/* Process the route. */
 	if (!withdraw)
@@ -3503,7 +3510,6 @@ int bgp_evpn_uninstall_routes(struct bgp *bgp, struct bgpevpn *vpn)
 
 /*
  * Function to display "label" in route as a VNI.
- * TODO: Hardcoded for a maximum of 2 VNIs right now
  */
 char *bgp_evpn_label2str(mpls_label_t *label, u_int32_t num_labels,
 			 char *buf, int len)
@@ -4187,7 +4193,7 @@ int bgp_evpn_local_macip_add(struct bgp *bgp, vni_t vni, struct ethaddr *mac,
 		zlog_err(
 			"%u:Failed to create Type-2 route, VNI %u %s MAC %s IP %s (flags: 0x%x)",
 			bgp->vrf_id, vpn->vni,
-			CHECK_FLAG(flags, ZEBRA_MAC_TYPE_STICKY) ? "sticky gateway"
+			CHECK_FLAG(flags, ZEBRA_MACIP_TYPE_STICKY) ? "sticky gateway"
 								 : "",
 			prefix_mac2str(mac, buf, sizeof(buf)),
 			ipaddr2str(ip, buf2, sizeof(buf2)),
