@@ -1209,12 +1209,12 @@ static int zread_route_add(struct zserv *client, u_short length,
 			switch (api_nh->type) {
 			case NEXTHOP_TYPE_IFINDEX:
 				nexthop = route_entry_nexthop_ifindex_add(
-					re, api_nh->ifindex, re->vrf_id);
+					re, api_nh->ifindex, api_nh->vrf_id);
 				break;
 			case NEXTHOP_TYPE_IPV4:
 				nexthop = route_entry_nexthop_ipv4_add(
 					re, &api_nh->gate.ipv4, NULL,
-					re->vrf_id);
+					api_nh->vrf_id);
 				break;
 			case NEXTHOP_TYPE_IPV4_IFINDEX:
 
@@ -1249,7 +1249,7 @@ static int zread_route_add(struct zserv *client, u_short length,
 				break;
 			case NEXTHOP_TYPE_IPV6:
 				nexthop = route_entry_nexthop_ipv6_add(
-					re, &api_nh->gate.ipv6, re->vrf_id);
+					re, &api_nh->gate.ipv6, api_nh->vrf_id);
 				break;
 			case NEXTHOP_TYPE_IPV6_IFINDEX:
 				memset(&vtep_ip, 0, sizeof(struct ipaddr));
