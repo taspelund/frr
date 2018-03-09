@@ -2945,6 +2945,11 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 	}
 #endif /* ENABLE_BGP_VNC */
 
+	for (afi = AFI_IP; afi < AFI_MAX; afi++) {
+		bgp->vpn_policy[afi].tovpn_label = MPLS_LABEL_NONE;
+		bgp->vpn_policy[afi].tovpn_zebra_vrf_label_last_sent =
+			MPLS_LABEL_NONE;
+	}
 	if (name) {
 		bgp->name = XSTRDUP(MTYPE_BGP, name);
 	} else {
@@ -7137,6 +7142,12 @@ static void bgp_config_write_family(struct vty *vty, struct bgp *bgp, afi_t afi,
 	if (safi == SAFI_EVPN)
 		bgp_config_write_evpn_info(vty, bgp, afi, safi);
 
+	if (CHECK_FLAG(bgp->af_flags[afi][safi],
+		       BGP_CONFIG_VRF_TO_MPLSVPN_EXPORT)) {
+
+		vty_out(vty, "  export vpn\n");
+	}
+
 	vty_endframe(vty, " exit-address-family\n");
 }
 
@@ -7402,6 +7413,8 @@ int bgp_config_write(struct vty *vty)
 		/* No auto-summary */
 		if (bgp_option_check(BGP_OPT_CONFIG_CISCO))
 			vty_out(vty, " no auto-summary\n");
+
+		bgp_vpn_policy_config_write(vty, bgp);
 
 		/* IPv4 unicast configuration.  */
 		bgp_config_write_family(vty, bgp, AFI_IP, SAFI_UNICAST);
