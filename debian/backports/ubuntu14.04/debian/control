@@ -13,7 +13,7 @@ Package: frr
 Architecture: any
 Depends: ${shlibs:Depends}, logrotate (>= 3.2-11), ${misc:Depends}, python (>= 2.7), python-ipaddr
 Pre-Depends: adduser
-Conflicts: zebra, zebra-pj, frr-pythontools
+Conflicts: zebra, zebra-pj, frr-pythontools, quagga
 Replaces: zebra, zebra-pj, frr-pythontools
 Suggests: snmpd
 Description: BGP/OSPF/RIP/RIPng/ISIS/PIM/LDP routing daemon forked from Quagga

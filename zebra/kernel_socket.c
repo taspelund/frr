@@ -907,6 +907,8 @@ void rtm_read(struct rt_msghdr *rtm)
 		SET_FLAG(zebra_flags, ZEBRA_FLAG_STATIC);
 
 	memset(&nh, 0, sizeof(nh));
+
+	nh.vrf_id = VRF_DEFAULT;
 	/* This is a reject or blackhole route */
 	if (flags & RTF_REJECT) {
 		nh.type = NEXTHOP_TYPE_BLACKHOLE;
@@ -1049,7 +1051,7 @@ void rtm_read(struct rt_msghdr *rtm)
 
 		if (rtm->rtm_type == RTM_GET || rtm->rtm_type == RTM_ADD
 		    || rtm->rtm_type == RTM_CHANGE)
-			rib_add(AFI_IP, SAFI_UNICAST, VRF_DEFAULT, VRF_DEFAULT,
+			rib_add(AFI_IP, SAFI_UNICAST, VRF_DEFAULT,
 				ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
 				&nh, 0, 0, 0, 0, 0);
 		else
@@ -1097,7 +1099,7 @@ void rtm_read(struct rt_msghdr *rtm)
 
 		if (rtm->rtm_type == RTM_GET || rtm->rtm_type == RTM_ADD
 		    || rtm->rtm_type == RTM_CHANGE)
-			rib_add(AFI_IP6, SAFI_UNICAST, VRF_DEFAULT, VRF_DEFAULT,
+			rib_add(AFI_IP6, SAFI_UNICAST, VRF_DEFAULT,
 				ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
 				&nh, 0, 0, 0, 0, 0);
 		else
@@ -1195,7 +1197,7 @@ int rtm_write(int message, union sockunion *dest, union sockunion *mask,
 		msg.rtm.rtm_flags |= RTF_MPLS;
 
 		if (mpls->smpls.smpls_label
-		    != htonl(MPLS_IMP_NULL_LABEL << MPLS_LABEL_OFFSET))
+		    != htonl(MPLS_LABEL_IMPLICIT_NULL << MPLS_LABEL_OFFSET))
 			msg.rtm.rtm_mpls = MPLS_OP_PUSH;
 	}
 #endif
@@ -1382,7 +1384,8 @@ static void routing_socket(struct zebra_ns *zns)
 	if (zserv_privs.change(ZPRIVS_RAISE))
 		zlog_err("routing_socket: Can't raise privileges");
 
-	routing_sock = socket(AF_ROUTE, SOCK_RAW, 0);
+	routing_sock = ns_socket(AF_ROUTE, SOCK_RAW,
+				 0, (ns_id_t)zns->ns->ns_id);
 
 	if (routing_sock < 0) {
 		if (zserv_privs.change(ZPRIVS_LOWER))

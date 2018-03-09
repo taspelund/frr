@@ -363,6 +363,22 @@ static int zebra_hello_send(struct zclient *zclient)
 	return 0;
 }
 
+void zclient_send_vrf_label(struct zclient *zclient, vrf_id_t vrf_id, afi_t afi,
+			    mpls_label_t label, enum lsp_types_t ltype)
+{
+	struct stream *s;
+
+	s = zclient->obuf;
+	stream_reset(s);
+
+	zclient_create_header(s, ZEBRA_VRF_LABEL, vrf_id);
+	stream_putl(s, label);
+	stream_putc(s, afi);
+	stream_putc(s, ltype);
+	stream_putw_at(s, 0, stream_get_endp(s));
+	zclient_send_message(zclient);
+}
+
 /* Send register requests to zebra daemon for the information in a VRF. */
 void zclient_send_reg_requests(struct zclient *zclient, vrf_id_t vrf_id)
 {
@@ -975,12 +991,11 @@ int zapi_route_encode(u_char cmd, struct stream *s, struct zapi_route *api)
 		}
 
 		stream_putw(s, api->nexthop_num);
-		if (api->nexthop_num)
-			stream_putl(s, api->nh_vrf_id);
 
 		for (i = 0; i < api->nexthop_num; i++) {
 			api_nh = &api->nexthops[i];
 
+			stream_putl(s, api_nh->vrf_id);
 			stream_putc(s, api_nh->type);
 			switch (api_nh->type) {
 			case NEXTHOP_TYPE_BLACKHOLE:
@@ -1131,12 +1146,10 @@ int zapi_route_decode(struct stream *s, struct zapi_route *api)
 			return -1;
 		}
 
-		if (api->nexthop_num)
-			STREAM_GETL(s, api->nh_vrf_id);
-
 		for (i = 0; i < api->nexthop_num; i++) {
 			api_nh = &api->nexthops[i];
 
+			STREAM_GETL(s, api_nh->vrf_id);
 			STREAM_GETC(s, api_nh->type);
 			switch (api_nh->type) {
 			case NEXTHOP_TYPE_BLACKHOLE:
@@ -1207,14 +1220,20 @@ stream_failure:
 }
 
 bool zapi_route_notify_decode(struct stream *s, struct prefix *p,
+			      uint32_t *tableid,
 			      enum zapi_route_notify_owner *note)
 {
+	uint32_t t;
+
 	STREAM_GET(note, s, sizeof(*note));
 
 	STREAM_GETC(s, p->family);
 	STREAM_GETC(s, p->prefixlen);
 	STREAM_GET(&p->u.prefix, s,
-		   PSIZE(p->prefixlen));
+		   prefix_blen(p));
+	STREAM_GETL(s, t);
+
+	*tableid = t;
 
 	return true;
 
@@ -1227,6 +1246,7 @@ struct nexthop *nexthop_from_zapi_nexthop(struct zapi_nexthop *znh)
 	struct nexthop *n = nexthop_new();
 
 	n->type = znh->type;
+	n->vrf_id = znh->vrf_id;
 	n->ifindex = znh->ifindex;
 	n->gate = znh->gate;
 
@@ -1398,8 +1418,8 @@ static void zclient_vrf_add(struct zclient *zclient, vrf_id_t vrf_id)
 
 	/* Lookup/create vrf by vrf_id. */
 	vrf = vrf_get(vrf_id, vrfname_tmp);
-	vrf->data = data;
-
+	vrf->data.l.table_id = data.l.table_id;
+	memcpy(vrf->data.l.netns_name, data.l.netns_name, NS_NAMSIZ);
 	vrf_enable(vrf);
 }
 
@@ -1989,8 +2009,8 @@ int lm_get_label_chunk(struct zclient *zclient, u_char keep,
 			__func__, *start, *end, keep, response_keep);
 	}
 	/* sanity */
-	if (*start > *end || *start < MPLS_MIN_UNRESERVED_LABEL
-	    || *end > MPLS_MAX_UNRESERVED_LABEL) {
+	if (*start > *end || *start < MPLS_LABEL_UNRESERVED_MIN
+	    || *end > MPLS_LABEL_UNRESERVED_MAX) {
 		zlog_err("%s: Invalid Label chunk: %u - %u", __func__, *start,
 			 *end);
 		return -1;
@@ -2359,9 +2379,9 @@ static int zclient_read(struct thread *thread)
 						     vrf_id);
 		break;
 	case ZEBRA_ROUTE_NOTIFY_OWNER:
-		if (zclient->notify_owner)
-			(*zclient->notify_owner)(command, zclient,
-						 length, vrf_id);
+		if (zclient->route_notify_owner)
+			(*zclient->route_notify_owner)(command, zclient, length,
+						       vrf_id);
 		break;
 	default:
 		break;

@@ -187,7 +187,7 @@ void vtysh_config_parse_line(void *arg, const char *line)
 				config->index = INTERFACE_NODE;
 			} else if (config->index == RMAP_NODE
 				   || config->index == INTERFACE_NODE
-				   || config->index == NS_NODE
+				   || config->index == LOGICALROUTER_NODE
 				   || config->index == VTY_NODE
 				   || config->index == VRF_NODE)
 				config_add_line_uniq(config->line, line);
@@ -202,7 +202,7 @@ void vtysh_config_parse_line(void *arg, const char *line)
 		else if (strncmp(line, "pseudowire", strlen("pseudowire")) == 0)
 			config = config_get(PW_NODE, line);
 		else if (strncmp(line, "logical-router", strlen("ns")) == 0)
-			config = config_get(NS_NODE, line);
+			config = config_get(LOGICALROUTER_NODE, line);
 		else if (strncmp(line, "vrf", strlen("vrf")) == 0)
 			config = config_get(VRF_NODE, line);
 		else if (strncmp(line, "router-id", strlen("router-id")) == 0)
@@ -398,7 +398,7 @@ static int vtysh_read_file(FILE *confp)
 	int ret;
 
 	vty = vty_new();
-	vty->fd = 0; /* stdout */
+	vty->wfd = STDERR_FILENO;
 	vty->type = VTY_TERM;
 	vty->node = CONFIG_NODE;
 

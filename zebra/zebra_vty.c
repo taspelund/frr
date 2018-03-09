@@ -173,8 +173,8 @@ static int zebra_static_route_leak(struct vty *vty,
 			case -2:
 				vty_out(vty,
 					"%% Cannot use reserved label(s) (%d-%d)\n",
-					MPLS_MIN_RESERVED_LABEL,
-					MPLS_MAX_RESERVED_LABEL);
+					MPLS_LABEL_RESERVED_MIN,
+					MPLS_LABEL_RESERVED_MAX);
 				break;
 			case -3:
 				vty_out(vty,
@@ -466,6 +466,12 @@ DEFPY(ip_route_blackhole_vrf,
 	VTY_DECLVAR_CONTEXT(vrf, vrf);
 	struct zebra_vrf *zvrf = vrf->info;
 
+	/*
+	 * Coverity is complaining that prefix could
+	 * be dereferenced, but we know that prefix will
+	 * valid.  Add an assert to make it happy
+	 */
+	assert(prefix);
 	return zebra_static_route_leak(vty, zvrf, zvrf,
 				       AFI_IP, SAFI_UNICAST, no, prefix,
 				       mask_str, NULL, NULL, NULL, flag,
@@ -569,7 +575,11 @@ DEFPY(ip_route_address_interface_vrf,
 		ifname = NULL;
 	}
 
-	nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+	if (nexthop_vrf)
+		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+	else
+		nh_zvrf = zvrf;
+
 	if (!nh_zvrf) {
 		vty_out(vty, "%% nexthop vrf %s is not defined\n",
 			nexthop_vrf);
@@ -676,7 +686,11 @@ DEFPY(ip_route_vrf,
 		ifname = NULL;
 	}
 
-	nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+	if (nexthop_vrf)
+		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+	else
+		nh_zvrf = zvrf;
+
 	if (!nh_zvrf) {
 		vty_out(vty, "%% nexthop vrf %s is not defined\n",
 			nexthop_vrf);
@@ -770,8 +784,9 @@ static void vty_show_ip_route_detail(struct vty *vty, struct route_node *rn,
 					inet_ntoa(nexthop->gate.ipv4));
 				if (nexthop->ifindex)
 					vty_out(vty, ", via %s",
-						ifindex2ifname(nexthop->ifindex,
-							       re->nh_vrf_id));
+						ifindex2ifname(
+							nexthop->ifindex,
+							nexthop->vrf_id));
 				break;
 			case NEXTHOP_TYPE_IPV6:
 			case NEXTHOP_TYPE_IPV6_IFINDEX:
@@ -780,13 +795,14 @@ static void vty_show_ip_route_detail(struct vty *vty, struct route_node *rn,
 						  buf, sizeof buf));
 				if (nexthop->ifindex)
 					vty_out(vty, ", via %s",
-						ifindex2ifname(nexthop->ifindex,
-							       re->nh_vrf_id));
+						ifindex2ifname(
+							nexthop->ifindex,
+							nexthop->vrf_id));
 				break;
 			case NEXTHOP_TYPE_IFINDEX:
 				vty_out(vty, " directly connected, %s",
 					ifindex2ifname(nexthop->ifindex,
-						       re->nh_vrf_id));
+						       nexthop->vrf_id));
 				break;
 			case NEXTHOP_TYPE_BLACKHOLE:
 				vty_out(vty, " unreachable");
@@ -809,9 +825,9 @@ static void vty_show_ip_route_detail(struct vty *vty, struct route_node *rn,
 				break;
 			}
 
-			if (re->vrf_id != re->nh_vrf_id) {
+			if (re->vrf_id != nexthop->vrf_id) {
 				struct vrf *vrf =
-					vrf_lookup_by_id(re->nh_vrf_id);
+					vrf_lookup_by_id(nexthop->vrf_id);
 
 				vty_out(vty, "(vrf %s)", vrf->name);
 			}
@@ -954,8 +970,9 @@ static void vty_show_ip_route(struct vty *vty, struct route_node *rn,
 							    nexthop->ifindex);
 					json_object_string_add(
 						json_nexthop, "interfaceName",
-						ifindex2ifname(nexthop->ifindex,
-							       re->nh_vrf_id));
+						ifindex2ifname(
+							nexthop->ifindex,
+							nexthop->vrf_id));
 				}
 				break;
 			case NEXTHOP_TYPE_IPV6:
@@ -973,8 +990,9 @@ static void vty_show_ip_route(struct vty *vty, struct route_node *rn,
 							    nexthop->ifindex);
 					json_object_string_add(
 						json_nexthop, "interfaceName",
-						ifindex2ifname(nexthop->ifindex,
-							       re->nh_vrf_id));
+						ifindex2ifname(
+							nexthop->ifindex,
+							nexthop->vrf_id));
 				}
 				break;
 
@@ -987,7 +1005,7 @@ static void vty_show_ip_route(struct vty *vty, struct route_node *rn,
 				json_object_string_add(
 					json_nexthop, "interfaceName",
 					ifindex2ifname(nexthop->ifindex,
-						       re->nh_vrf_id));
+						       nexthop->vrf_id));
 				break;
 			case NEXTHOP_TYPE_BLACKHOLE:
 				json_object_boolean_true_add(json_nexthop,
@@ -1014,9 +1032,9 @@ static void vty_show_ip_route(struct vty *vty, struct route_node *rn,
 				break;
 			}
 
-			if (re->nh_vrf_id != re->vrf_id) {
+			if (nexthop->vrf_id != re->vrf_id) {
 				struct vrf *vrf =
-					vrf_lookup_by_id(re->nh_vrf_id);
+					vrf_lookup_by_id(nexthop->vrf_id);
 
 				json_object_string_add(json_nexthop,
 						       "vrf",
@@ -1129,7 +1147,7 @@ static void vty_show_ip_route(struct vty *vty, struct route_node *rn,
 			if (nexthop->ifindex)
 				vty_out(vty, ", %s",
 					ifindex2ifname(nexthop->ifindex,
-						       re->nh_vrf_id));
+						       nexthop->vrf_id));
 			break;
 		case NEXTHOP_TYPE_IPV6:
 		case NEXTHOP_TYPE_IPV6_IFINDEX:
@@ -1139,13 +1157,13 @@ static void vty_show_ip_route(struct vty *vty, struct route_node *rn,
 			if (nexthop->ifindex)
 				vty_out(vty, ", %s",
 					ifindex2ifname(nexthop->ifindex,
-						       re->nh_vrf_id));
+						       nexthop->vrf_id));
 			break;
 
 		case NEXTHOP_TYPE_IFINDEX:
 			vty_out(vty, " is directly connected, %s",
 				ifindex2ifname(nexthop->ifindex,
-					       re->nh_vrf_id));
+					       nexthop->vrf_id));
 			break;
 		case NEXTHOP_TYPE_BLACKHOLE:
 			vty_out(vty, " unreachable");
@@ -1167,9 +1185,8 @@ static void vty_show_ip_route(struct vty *vty, struct route_node *rn,
 			break;
 		}
 
-		if (re->nh_vrf_id != re->vrf_id) {
-			struct vrf *vrf =
-				vrf_lookup_by_id(re->nh_vrf_id);
+		if (nexthop->vrf_id != re->vrf_id) {
+			struct vrf *vrf = vrf_lookup_by_id(nexthop->vrf_id);
 
 			vty_out(vty, "(vrf %s)", vrf->name);
 		}
@@ -1226,46 +1243,21 @@ static void vty_show_ip_route(struct vty *vty, struct route_node *rn,
 	}
 }
 
-static int do_show_ip_route(struct vty *vty, const char *vrf_name, afi_t afi,
-			    safi_t safi, bool use_fib, u_char use_json,
-			    route_tag_t tag,
-			    const struct prefix *longer_prefix_p,
-			    bool supernets_only, int type,
-			    u_short ospf_instance_id)
+static void do_show_route_helper(struct vty *vty, struct zebra_vrf *zvrf,
+				 struct route_table *table, afi_t afi,
+				 bool use_fib, route_tag_t tag,
+				 const struct prefix *longer_prefix_p,
+				 bool supernets_only, int type,
+				 u_short ospf_instance_id, u_char use_json)
 {
-	struct route_table *table;
-	rib_dest_t *dest;
 	struct route_node *rn;
 	struct route_entry *re;
 	int first = 1;
-	struct zebra_vrf *zvrf = NULL;
-	char buf[BUFSIZ];
+	rib_dest_t *dest;
 	json_object *json = NULL;
 	json_object *json_prefix = NULL;
-	u_int32_t addr;
-
-	if (!(zvrf = zebra_vrf_lookup_by_name(vrf_name))) {
-		if (use_json)
-			vty_out(vty, "{}\n");
-		else
-			vty_out(vty, "vrf %s not defined\n", vrf_name);
-		return CMD_SUCCESS;
-	}
-
-	if (zvrf_id(zvrf) == VRF_UNKNOWN) {
-		if (use_json)
-			vty_out(vty, "{}\n");
-		else
-			vty_out(vty, "vrf %s inactive\n", vrf_name);
-		return CMD_SUCCESS;
-	}
-
-	table = zebra_vrf_table(afi, safi, zvrf_id(zvrf));
-	if (!table) {
-		if (use_json)
-			vty_out(vty, "{}\n");
-		return CMD_SUCCESS;
-	}
+	uint32_t addr;
+	char buf[BUFSIZ];
 
 	if (use_json)
 		json = json_object_new_object();
@@ -1343,6 +1335,67 @@ static int do_show_ip_route(struct vty *vty, const char *vrf_name, afi_t afi,
 					     json, JSON_C_TO_STRING_PRETTY));
 		json_object_free(json);
 	}
+}
+
+static int do_show_ip_route(struct vty *vty, const char *vrf_name, afi_t afi,
+			    safi_t safi, bool use_fib, u_char use_json,
+			    route_tag_t tag,
+			    const struct prefix *longer_prefix_p,
+			    bool supernets_only, int type,
+			    u_short ospf_instance_id)
+{
+	struct route_table *table;
+	struct zebra_vrf *zvrf = NULL;
+
+	if (!(zvrf = zebra_vrf_lookup_by_name(vrf_name))) {
+		if (use_json)
+			vty_out(vty, "{}\n");
+		else
+			vty_out(vty, "vrf %s not defined\n", vrf_name);
+		return CMD_SUCCESS;
+	}
+
+	if (zvrf_id(zvrf) == VRF_UNKNOWN) {
+		if (use_json)
+			vty_out(vty, "{}\n");
+		else
+			vty_out(vty, "vrf %s inactive\n", vrf_name);
+		return CMD_SUCCESS;
+	}
+
+	table = zebra_vrf_table(afi, safi, zvrf_id(zvrf));
+	if (!table) {
+		if (use_json)
+			vty_out(vty, "{}\n");
+		return CMD_SUCCESS;
+	}
+
+	do_show_route_helper(vty, zvrf, table, afi, use_fib, tag,
+			     longer_prefix_p, supernets_only, type,
+			     ospf_instance_id, use_json);
+
+	return CMD_SUCCESS;
+}
+
+DEFPY (show_route_table,
+       show_route_table_cmd,
+       "show <ip$ipv4|ipv6$ipv6> route table (1-4294967295)$table [json$json]",
+       SHOW_STR
+       IP_STR
+       IP6_STR
+       "IP routing table\n"
+       "Table to display\n"
+       "The table number to display, if available\n"
+       JSON_STR)
+{
+	afi_t afi = ipv4 ? AFI_IP : AFI_IP6;
+	struct zebra_vrf *zvrf = zebra_vrf_lookup_by_id(VRF_DEFAULT);
+	struct route_table *t;
+
+	t = zebra_ns_find_table(zvrf->zns, table, afi);
+	if (t)
+		do_show_route_helper(vty, zvrf, t, afi, false, 0, false, false,
+				     0, 0, !!json);
 
 	return CMD_SUCCESS;
 }
@@ -2011,6 +2064,12 @@ DEFPY(ipv6_route_blackhole_vrf,
 	VTY_DECLVAR_CONTEXT(vrf, vrf);
 	struct zebra_vrf *zvrf = vrf->info;
 
+	/*
+	 * Coverity is complaining that prefix could
+	 * be dereferenced, but we know that prefix will
+	 * valid.  Add an assert to make it happy
+	 */
+	assert(prefix);
 	return zebra_static_route_leak(vty, zvrf, zvrf,
 				       AFI_IP6, SAFI_UNICAST, no, prefix_str,
 				       NULL, from_str, NULL, NULL, flag,
@@ -2100,7 +2159,11 @@ DEFPY(ipv6_route_address_interface_vrf,
 	struct zebra_vrf *zvrf = vrf->info;
 	struct zebra_vrf *nh_zvrf;
 
-	nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+	if (nexthop_vrf)
+		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+	else
+		nh_zvrf = zvrf;
+
 	if (!nh_zvrf) {
 		vty_out(vty, "%% nexthop vrf %s is not defined\n",
 			nexthop_vrf);
@@ -2194,7 +2257,11 @@ DEFPY(ipv6_route_vrf,
 	struct zebra_vrf *zvrf = vrf->info;
 	struct zebra_vrf *nh_zvrf;
 
-	nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+	if (nexthop_vrf)
+		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+	else
+		nh_zvrf = zvrf;
+
 	if (!nh_zvrf) {
 		vty_out(vty, "%% nexthop vrf %s is not defined\n",
 			nexthop_vrf);
@@ -2315,8 +2382,12 @@ DEFUN (show_vrf,
 			continue;
 
 		vty_out(vty, "vrf %s ", zvrf_name(zvrf));
-		if (zvrf_id(zvrf) == VRF_UNKNOWN)
+		if (zvrf_id(zvrf) == VRF_UNKNOWN
+		    || !zvrf_is_active(zvrf))
 			vty_out(vty, "inactive");
+		else if (zvrf_ns_name(zvrf))
+			vty_out(vty, "id %u netns %s",
+				zvrf_id(zvrf), zvrf_ns_name(zvrf));
 		else
 			vty_out(vty, "id %u table %u", zvrf_id(zvrf),
 				zvrf->table_id);
@@ -2330,20 +2401,26 @@ DEFUN (show_vrf,
 
 DEFUN (default_vrf_vni_mapping,
        default_vrf_vni_mapping_cmd,
-       "vni " CMD_VNI_RANGE,
+       "vni " CMD_VNI_RANGE "[prefix-routes-only]",
        "VNI corresponding to the DEFAULT VRF\n"
-       "VNI-ID\n")
+       "VNI-ID\n"
+       "Prefix routes only \n")
 {
 	int ret = 0;
 	char err[ERR_STR_SZ];
 	struct zebra_vrf *zvrf = NULL;
 	vni_t vni = strtoul(argv[1]->arg, NULL, 10);
+	int filter = 0;
 
 	zvrf = vrf_info_lookup(VRF_DEFAULT);
 	if (!zvrf)
 		return CMD_WARNING;
 
-	ret = zebra_vxlan_process_vrf_vni_cmd(zvrf, vni, err, 1);
+	if (argc == 3)
+		filter = 1;
+
+	ret = zebra_vxlan_process_vrf_vni_cmd(zvrf, vni, err, ERR_STR_SZ,
+					      filter, 1);
 	if (ret != 0) {
 		vty_out(vty, "%s\n", err);
 		return CMD_WARNING;
@@ -2368,7 +2445,7 @@ DEFUN (no_default_vrf_vni_mapping,
 	if (!zvrf)
 		return CMD_WARNING;
 
-	ret = zebra_vxlan_process_vrf_vni_cmd(zvrf, vni, err, 0);
+	ret = zebra_vxlan_process_vrf_vni_cmd(zvrf, vni, err, ERR_STR_SZ, 0, 0);
 	if (ret != 0) {
 		vty_out(vty, "%s\n", err);
 		return CMD_WARNING;
@@ -2379,11 +2456,13 @@ DEFUN (no_default_vrf_vni_mapping,
 
 DEFUN (vrf_vni_mapping,
        vrf_vni_mapping_cmd,
-       "vni " CMD_VNI_RANGE,
+       "vni " CMD_VNI_RANGE "[prefix-routes-only]",
        "VNI corresponding to tenant VRF\n"
-       "VNI-ID\n")
+       "VNI-ID\n"
+       "prefix-routes-only\n")
 {
 	int ret = 0;
+	int filter = 0;
 
 	ZEBRA_DECLVAR_CONTEXT(vrf, zvrf);
 	vni_t vni = strtoul(argv[1]->arg, NULL, 10);
@@ -2392,9 +2471,13 @@ DEFUN (vrf_vni_mapping,
 	assert(vrf);
 	assert(zvrf);
 
+	if (argc == 3)
+		filter = 1;
+
 	/* Mark as having FRR configuration */
 	vrf_set_user_cfged(vrf);
-	ret = zebra_vxlan_process_vrf_vni_cmd(zvrf, vni, err, 1);
+	ret = zebra_vxlan_process_vrf_vni_cmd(zvrf, vni, err, ERR_STR_SZ,
+					      filter, 1);
 	if (ret != 0) {
 		vty_out(vty, "%s\n", err);
 		return CMD_WARNING;
@@ -2419,7 +2502,7 @@ DEFUN (no_vrf_vni_mapping,
 	assert(vrf);
 	assert(zvrf);
 
-	ret = zebra_vxlan_process_vrf_vni_cmd(zvrf, vni, err, 0);
+	ret = zebra_vxlan_process_vrf_vni_cmd(zvrf, vni, err, ERR_STR_SZ, 0, 0);
 	if (ret != 0) {
 		vty_out(vty, "%s\n", err);
 		return CMD_WARNING;
@@ -3319,6 +3402,7 @@ void zebra_vty_init(void)
 	install_element(VIEW_NODE, &show_vrf_cmd);
 	install_element(VIEW_NODE, &show_vrf_vni_cmd);
 	install_element(VIEW_NODE, &show_route_cmd);
+	install_element(VIEW_NODE, &show_route_table_cmd);
 	install_element(VIEW_NODE, &show_route_detail_cmd);
 	install_element(VIEW_NODE, &show_route_summary_cmd);
 	install_element(VIEW_NODE, &show_ip_nht_cmd);
