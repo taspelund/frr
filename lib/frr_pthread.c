@@ -133,7 +133,19 @@ void frr_pthread_destroy(struct frr_pthread *fpt)
 	XFREE(MTYPE_FRR_PTHREAD, fpt);
 }
 
-struct frr_pthread *frr_pthread_get(unsigned int id)
+void frr_pthread_set_name(struct frr_pthread *fpt, const char *name)
+{
+	pthread_mutex_lock(&fpt->mtx);
+	{
+		if (fpt->name)
+			XFREE(MTYPE_FRR_PTHREAD, fpt->name);
+		fpt->name = XSTRDUP(MTYPE_FRR_PTHREAD, name);
+	}
+	pthread_mutex_unlock(&fpt->mtx);
+	thread_master_set_name(fpt->master, name);
+}
+
+struct frr_pthread *frr_pthread_get(uint32_t id)
 {
 	static struct frr_pthread holder = {0};
 	struct frr_pthread *fpt;
@@ -213,8 +225,8 @@ void frr_pthread_stop_all()
 unsigned int frr_pthread_get_id()
 {
 	/* just a sanity check, this should never happen */
-	assert(next_id <= INT_MAX - 1);
-	return next_id++;
+	assert(nxid <= (UINT32_MAX - 1));
+	return nxid;
 }
 
 void frr_pthread_yield(void)
