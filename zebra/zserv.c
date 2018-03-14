@@ -1229,7 +1229,7 @@ static int zread_route_add(struct zserv *client, u_short length,
 
 				nexthop = route_entry_nexthop_ipv4_ifindex_add(
 					re, &api_nh->gate.ipv4, NULL, ifindex,
-					re->vrf_id);
+					api_nh->vrf_id);
 
 				/* if this an EVPN route entry,
 				 * program the nh as neigh
@@ -1243,10 +1243,8 @@ static int zread_route_add(struct zserv *client, u_short length,
 					       &(api_nh->gate.ipv4),
 					       sizeof(struct in_addr));
 					zebra_vxlan_evpn_vrf_route_add(
-								vrf_id,
-								&api_nh->rmac,
-								&vtep_ip,
-								&api.prefix);
+						vrf_id, &api_nh->rmac, &vtep_ip,
+						&api.prefix);
 				}
 				break;
 			case NEXTHOP_TYPE_IPV6:
@@ -1265,7 +1263,7 @@ static int zread_route_add(struct zserv *client, u_short length,
 
 				nexthop = route_entry_nexthop_ipv6_ifindex_add(
 					re, &api_nh->gate.ipv6, ifindex,
-					re->vrf_id);
+					api_nh->vrf_id);
 
 				/* if this an EVPN route entry,
 				 * program the nh as neigh
@@ -1279,10 +1277,8 @@ static int zread_route_add(struct zserv *client, u_short length,
 					       &(api_nh->gate.ipv6),
 					       sizeof(struct in6_addr));
 					zebra_vxlan_evpn_vrf_route_add(
-								vrf_id,
-								&api.rmac,
-								&vtep_ip,
-								&api.prefix);
+						vrf_id, &api_nh->rmac, &vtep_ip,
+						&api.prefix);
 				}
 				break;
 			case NEXTHOP_TYPE_BLACKHOLE:
