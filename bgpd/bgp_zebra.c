@@ -1183,10 +1183,10 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 		int i;
 
 		prefix2str(&api.prefix, prefix_buf, sizeof(prefix_buf));
-		zlog_debug("Tx route %s VRF %u %s metric %u flags 0x%x tag %" ROUTE_TAG_PRI
+		zlog_debug("Tx route %s VRF %u %s metric %u tag %" ROUTE_TAG_PRI
 			   " count %d",
 			   valid_nh_count ? "add" : "delete", bgp->vrf_id,
-			   prefix_buf, api.metric, api.flags, api.tag, api.nexthop_num);
+			   prefix_buf, api.metric, api.tag, api.nexthop_num);
 		for (i = 0; i < api.nexthop_num; i++) {
 			api_nh = &api.nexthops[i];
 
@@ -1202,8 +1202,8 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 			    && !CHECK_FLAG(api.flags, ZEBRA_FLAG_EVPN_ROUTE))
 				sprintf(label_buf, "label %u",
 					api_nh->labels[0]);
-			zlog_debug("  nhop [%d]: %s type %d %s", i + 1, nh_buf,
-				   api_nh->type, label_buf);
+			zlog_debug("  nhop [%d]: %s %s", i + 1, nh_buf,
+				   label_buf);
 		}
 	}
 
