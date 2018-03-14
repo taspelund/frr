@@ -502,6 +502,34 @@ static int zebra_static_route_leak(struct vty *vty,
 	return CMD_SUCCESS;
 }
 
+static struct zebra_vrf *zebra_vty_get_unknown_vrf(struct vty *vty,
+						   const char *vrf_name)
+{
+	struct zebra_vrf *zvrf;
+	struct vrf *vrf;
+
+	zvrf = zebra_vrf_lookup_by_name(vrf_name);
+
+	if (zvrf)
+		return zvrf;
+
+	vrf = vrf_get(VRF_UNKNOWN, vrf_name);
+	if (!vrf) {
+		vty_out(vty, "%% Could not create vrf %s\n", vrf_name);
+		return NULL;
+	}
+	zvrf = vrf->info;
+	if (!zvrf) {
+		vty_out(vty, "%% Could not create vrf-info %s\n",
+			vrf_name);
+		return NULL;
+	}
+	/* Mark as having FRR configuration */
+	vrf_set_user_cfged(vrf);
+
+	return zvrf;
+}
+
 static int zebra_static_route(struct vty *vty, afi_t afi, safi_t safi,
                              const char *negate, const char *dest_str,
                              const char *mask_str, const char *src_str,
@@ -511,7 +539,6 @@ static int zebra_static_route(struct vty *vty, afi_t afi, safi_t safi,
                              const char *label_str)
 {
 	struct zebra_vrf *zvrf;
-	struct vrf *vrf;
 
 	/* VRF id */
 	zvrf = zebra_vrf_lookup_by_name(vrf_name);
@@ -526,19 +553,9 @@ static int zebra_static_route(struct vty *vty, afi_t afi, safi_t safi,
 	 * Note: The VRF isn't active until we hear about it from the kernel.
 	 */
 	if (!zvrf) {
-		vrf = vrf_get(VRF_UNKNOWN, vrf_name);
-		if (!vrf) {
-			vty_out(vty, "%% Could not create vrf %s\n", vrf_name);
+		zvrf = zebra_vty_get_unknown_vrf(vty, vrf_name);
+		if (!zvrf)
 			return CMD_WARNING_CONFIG_FAILED;
-		}
-		zvrf = vrf->info;
-		if (!zvrf) {
-			vty_out(vty, "%% Could not create vrf-info %s\n",
-				vrf_name);
-			return CMD_WARNING_CONFIG_FAILED;
-		}
-		/* Mark as having FRR configuration */
-		vrf_set_user_cfged(vrf);
 	}
 	return zebra_static_route_leak(vty, zvrf, zvrf, afi, safi,
 				       negate, dest_str, mask_str, src_str,
@@ -800,7 +817,7 @@ DEFPY(ip_route_address_interface,
 	}
 
 	if (nexthop_vrf)
-		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+		nh_zvrf = zebra_vty_get_unknown_vrf(vty, nexthop_vrf);
 	else
 		nh_zvrf = zvrf;
 
@@ -853,7 +870,7 @@ DEFPY(ip_route_address_interface_vrf,
 	}
 
 	if (nexthop_vrf)
-		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+		nh_zvrf = zebra_vty_get_unknown_vrf(vty, nexthop_vrf);
 	else
 		nh_zvrf = zvrf;
 
@@ -912,7 +929,7 @@ DEFPY(ip_route,
 	}
 
 	if (nexthop_vrf)
-		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+		nh_zvrf = zebra_vty_get_unknown_vrf(vty, nexthop_vrf);
 	else
 		nh_zvrf = zvrf;
 
@@ -964,7 +981,7 @@ DEFPY(ip_route_vrf,
 	}
 
 	if (nexthop_vrf)
-		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+		nh_zvrf = zebra_vty_get_unknown_vrf(vty, nexthop_vrf);
 	else
 		nh_zvrf = zvrf;
 
@@ -2427,7 +2444,7 @@ DEFPY(ipv6_route_address_interface,
 	}
 
 	if (nexthop_vrf)
-		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+		nh_zvrf = zebra_vty_get_unknown_vrf(vty, nexthop_vrf);
 	else
 		nh_zvrf = zvrf;
 
@@ -2473,7 +2490,7 @@ DEFPY(ipv6_route_address_interface_vrf,
 	struct zebra_vrf *nh_zvrf;
 
 	if (nexthop_vrf)
-		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+		nh_zvrf = zebra_vty_get_unknown_vrf(vty, nexthop_vrf);
 	else
 		nh_zvrf = zvrf;
 
@@ -2526,7 +2543,7 @@ DEFPY(ipv6_route,
 	}
 
 	if (nexthop_vrf)
-		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+		nh_zvrf = zebra_vty_get_unknown_vrf(vty, nexthop_vrf);
 	else
 		nh_zvrf = zvrf;
 
@@ -2571,7 +2588,7 @@ DEFPY(ipv6_route_vrf,
 	struct zebra_vrf *nh_zvrf;
 
 	if (nexthop_vrf)
-		nh_zvrf = zebra_vrf_lookup_by_name(nexthop_vrf);
+		nh_zvrf = zebra_vty_get_unknown_vrf(vty, nexthop_vrf);
 	else
 		nh_zvrf = zvrf;
 
