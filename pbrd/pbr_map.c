@@ -45,8 +45,8 @@ DEFINE_MTYPE_STATIC(PBRD, PBR_MAP_INTERFACE, "PBR Map Interface")
 
 static uint32_t pbr_map_sequence_unique;
 
-static __inline int pbr_map_compare(const struct pbr_map *pbrmap1,
-				    const struct pbr_map *pbrmap2);
+static inline int pbr_map_compare(const struct pbr_map *pbrmap1,
+				  const struct pbr_map *pbrmap2);
 
 RB_GENERATE(pbr_map_entry_head, pbr_map, pbr_map_entry, pbr_map_compare)
 
@@ -54,8 +54,8 @@ struct pbr_map_entry_head pbr_maps = RB_INITIALIZER(&pbr_maps);
 
 DEFINE_QOBJ_TYPE(pbr_map_sequence)
 
-static __inline int pbr_map_compare(const struct pbr_map *pbrmap1,
-				    const struct pbr_map *pbrmap2)
+static inline int pbr_map_compare(const struct pbr_map *pbrmap1,
+				  const struct pbr_map *pbrmap2)
 {
 	return strcmp(pbrmap1->name, pbrmap2->name);
 }
@@ -207,8 +207,8 @@ extern void pbr_map_delete(const char *name, uint32_t seqno)
 	}
 }
 
-extern struct pbr_map_sequence *pbrms_lookup_unique(uint32_t unique,
-						    ifindex_t ifindex)
+struct pbr_map_sequence *pbrms_lookup_unique(uint32_t unique,
+					     ifindex_t ifindex)
 {
 	struct pbr_map_sequence *pbrms;
 	struct listnode *snode, *inode;
@@ -489,8 +489,6 @@ extern void pbr_map_check_nh_group_change(const char *nh_group)
 
 			if (found_name) {
 				bool original = pbrm->valid;
-				zlog_warn("*** %s pbrm->valid is %u ***",
-					  __func__, pbrm->valid);
 
 				pbr_map_check_valid_internal(pbrm);
 
@@ -591,7 +589,7 @@ extern void pbr_map_add_interfaces(const char *name)
 	}
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
-                FOR_ALL_INTERFACES (vrf, ifp) {
+		FOR_ALL_INTERFACES (vrf, ifp) {
 			if (ifp->info) {
 				pbr_ifp = ifp->info;
 				if (strcmp(name, pbr_ifp->mapname) == 0)

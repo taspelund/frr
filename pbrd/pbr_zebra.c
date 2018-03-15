@@ -435,7 +435,7 @@ void pbr_send_rnh(struct nexthop *nhop, bool reg)
 		ZEBRA_NEXTHOP_REGISTER : ZEBRA_NEXTHOP_UNREGISTER;
 
 	memset(&p, 0, sizeof(p));
-	switch(nhop->type) {
+	switch (nhop->type) {
 	case NEXTHOP_TYPE_IFINDEX:
 	case NEXTHOP_TYPE_BLACKHOLE:
 		return;
