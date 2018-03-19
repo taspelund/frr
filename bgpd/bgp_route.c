@@ -2333,8 +2333,22 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 		if (safi == SAFI_UNICAST &&
 		    (bgp->inst_type == BGP_INSTANCE_TYPE_VRF ||
 		     bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)) {
-			vpn_leak_from_vrf_withdraw(bgp_get_default(),
-						   bgp, old_select);
+			char *vrf_name;
+			struct listnode *node;
+			struct bgp *vrf_bgp;
+
+			vrf_bgp = bgp_get_default();
+			vpn_leak_from_vrf_withdraw(vrf_bgp, bgp, old_select);
+
+			for (ALL_LIST_ELEMENTS_RO(
+				     bgp->vpn_policy[afi].export_vrf, node,
+				     vrf_name)) {
+				vrf_bgp = bgp_lookup_by_name(vrf_name);
+				if (!vrf_bgp)
+					continue;
+				vpn_leak_from_vrf_withdraw(vrf_bgp, bgp,
+							   old_select);
+			}
 		}
 	}
 
