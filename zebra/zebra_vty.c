@@ -157,7 +157,7 @@ static int static_list_compare(void *arg1, void *arg2)
 	if (ret)
 		return ret;
 
-	ret = strcmp(shr2->nhvrf_name, shr2->nhvrf_name);
+	ret = strcmp(shr1->nhvrf_name, shr2->nhvrf_name);
 	if (ret)
 		return ret;
 
