@@ -2457,6 +2457,48 @@ static void evpn_unset_advertise_default_gw(struct bgp *bgp,
 /*
  * evpn - enable advertisement of default g/w
  */
+static void evpn_process_default_originate_cmd(struct bgp *bgp_vrf,
+					       afi_t afi, int add)
+{
+	struct prefix ip_prefix;
+	safi_t safi = SAFI_UNICAST; /* ipv4/ipv6 unicast */
+
+	/* form the default prefix 0.0.0.0/0 */
+	memset(&ip_prefix, 0, sizeof(struct prefix));
+	ip_prefix.family = afi2family(afi);
+	ip_prefix.prefixlen = 0;
+
+	if (add) {
+		/* bail if we are already advertising default route */
+		if (evpn_default_originate_set(bgp_vrf, afi, safi))
+			return;
+
+		if (afi == AFI_IP)
+			SET_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+				 BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV4);
+		else if (afi == AFI_IP6)
+			SET_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+				 BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV6);
+		bgp_evpn_advertise_type5_route(bgp_vrf, &ip_prefix,
+					       NULL, afi, safi);
+	} else {
+		/* bail out if we havent advertised the default route */
+		if (!evpn_default_originate_set(bgp_vrf, afi, safi))
+			return;
+		if (afi == AFI_IP)
+			UNSET_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+				   BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV4);
+		else if (afi == AFI_IP6)
+			UNSET_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+				   BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV6);
+		bgp_evpn_withdraw_type5_route(bgp_vrf, &ip_prefix,
+					      afi, safi);
+	}
+}
+
+/*
+ * evpn - enable advertisement of default g/w
+ */
 static void evpn_set_advertise_subnet(struct bgp *bgp,
 				      struct bgpevpn *vpn)
 {
@@ -2652,10 +2694,47 @@ DEFUN (no_bgp_evpn_advertise_all_vni,
 	return CMD_SUCCESS;
 }
 
-DEFUN (bgp_evpn_advertise_vni_subnet,
-       bgp_evpn_advertise_vni_subnet_cmd,
-       "advertise-subnet",
-       "Advertise the subnet corresponding to VNI\n")
+DEFUN (bgp_evpn_default_originate,
+       bgp_evpn_default_originate_cmd,
+       "default-originate <ipv4 | ipv6>",
+       "originate a default route\n"
+       "ipv4 address family\n"
+       "ipv6 address family\n")
+{
+	afi_t afi = 0;
+	int idx_afi = 0;
+	struct bgp *bgp_vrf = VTY_GET_CONTEXT(bgp);
+
+	if (!bgp_vrf)
+		return CMD_WARNING;
+	argv_find_and_parse_afi(argv, argc, &idx_afi, &afi);
+	evpn_process_default_originate_cmd(bgp_vrf, afi, 1);
+	return CMD_SUCCESS;
+}
+
+DEFUN (no_bgp_evpn_default_originate,
+       no_bgp_evpn_default_originate_cmd,
+       "no default-originate <ipv4 | ipv6>",
+       NO_STR
+       "withdraw a default route\n"
+       "ipv4 address family\n"
+       "ipv6 address family\n")
+{
+	afi_t afi = 0;
+	int idx_afi = 0;
+	struct bgp *bgp_vrf = VTY_GET_CONTEXT(bgp);
+
+	if (!bgp_vrf)
+		return CMD_WARNING;
+	argv_find_and_parse_afi(argv, argc, &idx_afi, &afi);
+	evpn_process_default_originate_cmd(bgp_vrf, afi, 0);
+	return CMD_SUCCESS;
+}
+
+DEFUN_HIDDEN (bgp_evpn_advertise_vni_subnet,
+	      bgp_evpn_advertise_vni_subnet_cmd,
+	      "advertise-subnet",
+	      "Advertise the subnet corresponding to VNI\n")
 {
 	struct bgp *bgp_vrf = NULL;
 	struct bgp *bgp = VTY_GET_CONTEXT(bgp);
@@ -2671,23 +2750,15 @@ DEFUN (bgp_evpn_advertise_vni_subnet,
 	if (!bgp_vrf)
 		return CMD_WARNING;
 
-	if (!(advertise_type5_routes(bgp_vrf, AFI_IP) ||
-	      advertise_type5_routes(bgp_vrf, AFI_IP6))) {
-		vty_out(vty,
-			"%%Please enable ip prefix advertisement under l2vpn evpn in %s",
-			vrf_id_to_name(bgp_vrf->vrf_id));
-		return CMD_WARNING;
-	}
-
 	evpn_set_advertise_subnet(bgp, vpn);
 	return CMD_SUCCESS;
 }
 
-DEFUN (no_bgp_evpn_advertise_vni_subnet,
-       no_bgp_evpn_advertise_vni_subnet_cmd,
-       "no advertise-subnet",
-       NO_STR
-       "Advertise All local VNIs\n")
+DEFUN_HIDDEN (no_bgp_evpn_advertise_vni_subnet,
+	      no_bgp_evpn_advertise_vni_subnet_cmd,
+	      "no advertise-subnet",
+	      NO_STR
+	      "Advertise All local VNIs\n")
 {
 	struct bgp *bgp = VTY_GET_CONTEXT(bgp);
 	VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
@@ -2733,7 +2804,7 @@ DEFUN (bgp_evpn_advertise_type5,
 		rmap_changed = 1;
 	}
 
-	if (!(afi == AFI_IP) || (afi == AFI_IP6)) {
+	if (!(afi == AFI_IP || afi == AFI_IP6)) {
 		vty_out(vty,
 			"%%only ipv4 or ipv6 address families are supported");
 		return CMD_WARNING;
@@ -2750,21 +2821,23 @@ DEFUN (bgp_evpn_advertise_type5,
 		/* if we are already advertising ipv4 prefix as type-5
 		 * nothing to do
 		 */
-		if (!rmap_changed && CHECK_FLAG(bgp_vrf->vrf_flags,
-						BGP_VRF_ADVERTISE_IPV4_IN_EVPN))
+		if (!rmap_changed &&
+		    CHECK_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+			       BGP_L2VPN_EVPN_ADVERTISE_IPV4_UNICAST))
 			return CMD_WARNING;
-		SET_FLAG(bgp_vrf->vrf_flags,
-			 BGP_VRF_ADVERTISE_IPV4_IN_EVPN);
+		SET_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+			 BGP_L2VPN_EVPN_ADVERTISE_IPV4_UNICAST);
 	} else {
 
 		/* if we are already advertising ipv6 prefix as type-5
 		 * nothing to do
 		 */
-		if (!rmap_changed && CHECK_FLAG(bgp_vrf->vrf_flags,
-						BGP_VRF_ADVERTISE_IPV6_IN_EVPN))
+		if (!rmap_changed &&
+		    CHECK_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+			       BGP_L2VPN_EVPN_ADVERTISE_IPV6_UNICAST))
 			return CMD_WARNING;
-		SET_FLAG(bgp_vrf->vrf_flags,
-			 BGP_VRF_ADVERTISE_IPV6_IN_EVPN);
+		SET_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+			 BGP_L2VPN_EVPN_ADVERTISE_IPV6_UNICAST);
 	}
 
 	if (rmap_changed) {
@@ -2808,7 +2881,7 @@ DEFUN (no_bgp_evpn_advertise_type5,
 	argv_find_and_parse_afi(argv, argc, &idx_afi, &afi);
 	argv_find_and_parse_safi(argv, argc, &idx_safi, &safi);
 
-	if (!(afi == AFI_IP) || (afi == AFI_IP6)) {
+	if (!(afi == AFI_IP || afi == AFI_IP6)) {
 		vty_out(vty,
 			"%%only ipv4 or ipv6 address families are supported");
 		return CMD_WARNING;
@@ -2822,25 +2895,25 @@ DEFUN (no_bgp_evpn_advertise_type5,
 
 	if (afi == AFI_IP) {
 
-		/* if we are already advertising ipv4 prefix as type-5
+		/* if we are not advertising ipv4 prefix as type-5
 		 * nothing to do
 		 */
-		if (CHECK_FLAG(bgp_vrf->vrf_flags,
-			       BGP_VRF_ADVERTISE_IPV4_IN_EVPN)) {
+		if (CHECK_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+			       BGP_L2VPN_EVPN_ADVERTISE_IPV4_UNICAST)) {
 			bgp_evpn_withdraw_type5_routes(bgp_vrf, afi, safi);
-			UNSET_FLAG(bgp_vrf->vrf_flags,
-				   BGP_VRF_ADVERTISE_IPV4_IN_EVPN);
+			UNSET_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+				   BGP_L2VPN_EVPN_ADVERTISE_IPV4_UNICAST);
 		}
 	} else {
 
-		/* if we are already advertising ipv6 prefix as type-5
+		/* if we are not advertising ipv6 prefix as type-5
 		 * nothing to do
 		 */
-		if (CHECK_FLAG(bgp_vrf->vrf_flags,
-			       BGP_VRF_ADVERTISE_IPV6_IN_EVPN)) {
+		if (CHECK_FLAG(bgp_vrf->af_flags[AFI_L2VPN][SAFI_EVPN],
+			       BGP_L2VPN_EVPN_ADVERTISE_IPV6_UNICAST)) {
 			bgp_evpn_withdraw_type5_routes(bgp_vrf, afi, safi);
 			UNSET_FLAG(bgp_vrf->vrf_flags,
-				   BGP_VRF_ADVERTISE_IPV6_IN_EVPN);
+				   BGP_L2VPN_EVPN_ADVERTISE_IPV6_UNICAST);
 		}
 	}
 
@@ -4351,10 +4424,12 @@ void bgp_config_write_evpn_info(struct vty *vty, struct bgp *bgp, afi_t afi,
 	if (bgp->advertise_gw_macip)
 		vty_out(vty, "  advertise-default-gw\n");
 
-	if (CHECK_FLAG(bgp->vrf_flags, BGP_VRF_ADVERTISE_IPV4_IN_EVPN))
+	if (CHECK_FLAG(bgp->af_flags[AFI_L2VPN][SAFI_EVPN],
+		       BGP_L2VPN_EVPN_ADVERTISE_IPV4_UNICAST))
 		vty_out(vty, "  advertise ipv4 unicast\n");
 
-	if (CHECK_FLAG(bgp->vrf_flags, BGP_VRF_ADVERTISE_IPV6_IN_EVPN))
+	if (CHECK_FLAG(bgp->af_flags[AFI_L2VPN][SAFI_EVPN],
+		       BGP_L2VPN_EVPN_ADVERTISE_IPV6_UNICAST))
 		vty_out(vty, "  advertise ipv6 unicast\n");
 
 	if (CHECK_FLAG(bgp->vrf_flags, BGP_VRF_RD_CFGD))
@@ -4392,6 +4467,14 @@ void bgp_config_write_evpn_info(struct vty *vty, struct bgp *bgp, afi_t afi,
 			XFREE(MTYPE_ECOMMUNITY_STR, ecom_str);
 		}
 	}
+
+	if (CHECK_FLAG(bgp->af_flags[AFI_L2VPN][SAFI_EVPN],
+		       BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV4))
+		vty_out(vty, "  default-originate ipv4\n");
+
+	if (CHECK_FLAG(bgp->af_flags[AFI_L2VPN][SAFI_EVPN],
+		       BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV6))
+		vty_out(vty, "  default-originate ipv6\n");
 }
 
 void bgp_ethernetvpn_init(void)
@@ -4420,6 +4503,8 @@ void bgp_ethernetvpn_init(void)
 	install_element(BGP_EVPN_NODE, &no_bgp_evpn_advertise_default_gw_cmd);
 	install_element(BGP_EVPN_NODE, &bgp_evpn_advertise_type5_cmd);
 	install_element(BGP_EVPN_NODE, &no_bgp_evpn_advertise_type5_cmd);
+	install_element(BGP_EVPN_NODE, &bgp_evpn_default_originate_cmd);
+	install_element(BGP_EVPN_NODE, &no_bgp_evpn_default_originate_cmd);
 
 	/* "show bgp l2vpn evpn" commands. */
 	install_element(VIEW_NODE, &show_bgp_l2vpn_evpn_vni_cmd);

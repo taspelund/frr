@@ -1399,7 +1399,7 @@ static int netlink_route_multipath(int cmd, struct prefix *p,
 	/* Count overall nexthops so we can decide whether to use singlepath
 	 * or multipath case. */
 	nexthop_num = 0;
-	for (ALL_NEXTHOPS(re->nexthop, nexthop)) {
+	for (ALL_NEXTHOPS(re->ng, nexthop)) {
 		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_RECURSIVE))
 			continue;
 		if (cmd == RTM_NEWROUTE
@@ -1415,7 +1415,7 @@ static int netlink_route_multipath(int cmd, struct prefix *p,
 	/* Singlepath case. */
 	if (nexthop_num == 1 || multipath_num == 1) {
 		nexthop_num = 0;
-		for (ALL_NEXTHOPS(re->nexthop, nexthop)) {
+		for (ALL_NEXTHOPS(re->ng, nexthop)) {
 			/*
 			 * So we want to cover 2 types of blackhole
 			 * routes here:
@@ -1515,7 +1515,7 @@ static int netlink_route_multipath(int cmd, struct prefix *p,
 		rtnh = RTA_DATA(rta);
 
 		nexthop_num = 0;
-		for (ALL_NEXTHOPS(re->nexthop, nexthop)) {
+		for (ALL_NEXTHOPS(re->ng, nexthop)) {
 			if (nexthop_num >= multipath_num)
 				break;
 
@@ -2396,7 +2396,7 @@ int kernel_del_mac(struct interface *ifp, vlanid_t vid, struct ethaddr *mac,
 int kernel_add_neigh(struct interface *ifp, struct ipaddr *ip,
 		     struct ethaddr *mac)
 {
-	return netlink_neigh_update2(ifp, ip, mac, NUD_REACHABLE, RTM_NEWNEIGH);
+	return netlink_neigh_update2(ifp, ip, mac, NUD_NOARP, RTM_NEWNEIGH);
 }
 
 int kernel_del_neigh(struct interface *ifp, struct ipaddr *ip)

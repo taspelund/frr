@@ -29,6 +29,7 @@
 #include "table.h"
 #include "queue.h"
 #include "nexthop.h"
+#include "nexthop_group.h"
 #include "vrf.h"
 #include "if.h"
 #include "mpls.h"
@@ -43,7 +44,7 @@ struct route_entry {
 	struct route_entry *prev;
 
 	/* Nexthop structure */
-	struct nexthop *nexthop;
+	struct nexthop_group ng;
 
 	/* Tag */
 	route_tag_t tag;
@@ -323,11 +324,13 @@ extern struct route_entry *rib_match_ipv4_multicast(vrf_id_t vrf_id,
 extern struct route_entry *rib_lookup_ipv4(struct prefix_ipv4 *, vrf_id_t);
 
 extern void rib_update(vrf_id_t, rib_update_event_t);
-extern void rib_weed_tables(void);
 extern void rib_sweep_route(void);
+extern void rib_sweep_table(struct route_table *);
 extern void rib_close_table(struct route_table *);
 extern void rib_init(void);
 extern unsigned long rib_score_proto(u_char proto, u_short instance);
+extern unsigned long rib_score_proto_table(u_char proto, u_short instance,
+					   struct route_table *table);
 extern void rib_queue_add(struct route_node *rn);
 extern void meta_queue_free(struct meta_queue *mq);
 extern int zebra_rib_labeled_unicast(struct route_entry *re);
@@ -446,6 +449,8 @@ DECLARE_HOOK(rib_update, (struct route_node * rn, const char *reason),
 extern void zebra_vty_init(void);
 extern int static_config(struct vty *vty, struct zebra_vrf *zvrf,
 			 afi_t afi, safi_t safi, const char *cmd);
+extern void static_config_install_delayed_routes(struct zebra_vrf *zvrf);
+
 extern pid_t pid;
 
 #endif /*_ZEBRA_RIB_H */

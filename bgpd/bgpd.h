@@ -161,6 +161,12 @@ struct bgp_redist {
 	struct bgp_rmap rmap;
 };
 
+typedef enum {
+	BGP_VPN_POLICY_DIR_FROMVPN = 0,
+	BGP_VPN_POLICY_DIR_TOVPN = 1,
+	BGP_VPN_POLICY_DIR_MAX = 2
+} vpn_policy_direction_t;
+
 /*
  * Type of 'struct bgp'.
  * - Default: The default instance
@@ -319,6 +325,14 @@ struct bgp {
 	/* BGP Per AF flags */
 	u_int16_t af_flags[AFI_MAX][SAFI_MAX];
 #define BGP_CONFIG_DAMPENING              (1 << 0)
+#define BGP_CONFIG_VRF_TO_MPLSVPN_EXPORT  (1 << 1)
+
+/* l2vpn evpn flags - 1 << 0 is used for DAMPENNG */
+#define BGP_L2VPN_EVPN_ADVERTISE_IPV4_UNICAST      (1 << 1)
+#define BGP_L2VPN_EVPN_ADVERTISE_IPV6_UNICAST      (1 << 2)
+#define BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV4	   (1 << 3)
+#define BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV6	   (1 << 4)
+
 
 	/* Route table for next-hop lookup cache. */
 	struct bgp_table *nexthop_cache_table[AFI_MAX];
@@ -431,12 +445,10 @@ struct bgp {
 	/* vrf flags */
 	uint32_t vrf_flags;
 #define BGP_VRF_AUTO                        (1 << 0)
-#define BGP_VRF_ADVERTISE_IPV4_IN_EVPN      (1 << 1)
-#define BGP_VRF_ADVERTISE_IPV6_IN_EVPN      (1 << 2)
-#define BGP_VRF_IMPORT_RT_CFGD              (1 << 3)
-#define BGP_VRF_EXPORT_RT_CFGD              (1 << 4)
-#define BGP_VRF_RD_CFGD                     (1 << 5)
-#define BGP_VRF_L3VNI_PREFIX_ROUTES_ONLY    (1 << 6)
+#define BGP_VRF_IMPORT_RT_CFGD              (1 << 1)
+#define BGP_VRF_EXPORT_RT_CFGD              (1 << 2)
+#define BGP_VRF_RD_CFGD                     (1 << 3)
+#define BGP_VRF_L3VNI_PREFIX_ROUTES_ONLY    (1 << 4)
 
 	/* unique ID for auto derivation of RD for this vrf */
 	uint16_t vrf_rd_id;
@@ -455,6 +467,22 @@ struct bgp {
 
 	/* route map for advertise ipv4/ipv6 unicast (type-5 routes) */
 	struct bgp_rmap adv_cmd_rmap[AFI_MAX][SAFI_MAX];
+
+	/* vpn-policy */
+	struct {
+		struct ecommunity *rtlist[BGP_VPN_POLICY_DIR_MAX];
+		char *rmap_name[BGP_VPN_POLICY_DIR_MAX];
+		struct route_map *rmap[BGP_VPN_POLICY_DIR_MAX];
+
+		/* should be mpls_label_t? */
+		uint32_t tovpn_label; /* may be MPLS_LABEL_NONE */
+		uint32_t tovpn_zebra_vrf_label_last_sent;
+		struct prefix_rd tovpn_rd;
+		struct prefix tovpn_nexthop; /* unset => set to router id */
+		uint32_t flags;
+#define BGP_VPN_POLICY_TOVPN_RD_SET            0x00000004
+#define BGP_VPN_POLICY_TOVPN_NEXTHOP_SET       0x00000008
+	} vpn_policy[AFI_MAX];
 
 	QOBJ_FIELDS
 };

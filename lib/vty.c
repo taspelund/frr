@@ -716,6 +716,7 @@ static void vty_end_config(struct vty *vty)
 	case BGP_EVPN_NODE:
 	case BGP_IPV6L_NODE:
 	case RMAP_NODE:
+	case PBRMAP_NODE:
 	case OSPF_NODE:
 	case OSPF6_NODE:
 	case LDP_NODE:
@@ -1113,6 +1114,7 @@ static void vty_stop_input(struct vty *vty)
 	case EIGRP_NODE:
 	case BGP_NODE:
 	case RMAP_NODE:
+	case PBRMAP_NODE:
 	case OSPF_NODE:
 	case OSPF6_NODE:
 	case LDP_NODE:

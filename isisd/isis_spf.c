@@ -332,12 +332,12 @@ static void remove_excess_adjs(struct list *adjs)
 		if (comp < 0)
 			continue;
 
-		if (candidate->circuit->circuit_id > adj->circuit->circuit_id) {
+		if (candidate->circuit->idx > adj->circuit->idx) {
 			excess = node;
 			continue;
 		}
 
-		if (candidate->circuit->circuit_id < adj->circuit->circuit_id)
+		if (candidate->circuit->idx < adj->circuit->idx)
 			continue;
 
 		comp = memcmp(candidate->snpa, adj->snpa, ETH_ALEN);
@@ -1149,7 +1149,7 @@ static int isis_spf_preload_tent(struct isis_spftree *spftree,
 				root_sysid, parent);
 		} else if (circuit->circ_type == CIRCUIT_T_P2P) {
 			adj = circuit->u.p2p.neighbor;
-			if (!adj)
+			if (!adj || adj->adj_state != ISIS_ADJ_UP)
 				continue;
 			if (!adj_has_mt(adj, spftree->mtid))
 				continue;

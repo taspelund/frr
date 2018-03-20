@@ -65,6 +65,7 @@ const char *node_names[] = {
 	"logical-router",	    // LOGICALROUTER_NODE,
 	"vrf",			    // VRF_NODE,
 	"interface",		    // INTERFACE_NODE,
+	"nexthop-group",            // NH_GROUP_NODE,
 	"zebra",		    // ZEBRA_NODE,
 	"table",		    // TABLE_NODE,
 	"rip",			    // RIP_NODE,
@@ -86,6 +87,8 @@ const char *node_names[] = {
 	"bgp vnc l2",		    // BGP_VNC_L2_GROUP_NODE,
 	"rfp defaults",		    // RFP_DEFAULTS_NODE,
 	"bgp evpn",		    // BGP_EVPN_NODE,
+	"bgp vpn policy ipv4",      // BGP_VPNPOLICY_IPV4_NODE
+	"bgp vpn policy ipv6",      // BGP_VPNPOLICY_IPV6_NODE
 	"ospf",			    // OSPF_NODE,
 	"ospf6",		    // OSPF6_NODE,
 	"ldp",			    // LDP_NODE,
@@ -107,6 +110,7 @@ const char *node_names[] = {
 	"as list",		    // AS_LIST_NODE,
 	"community list",	    // COMMUNITY_LIST_NODE,
 	"routemap",		    // RMAP_NODE,
+	"pbr-map",		    // PBRMAP_NODE,
 	"smux",			    // SMUX_NODE,
 	"dump",			    // DUMP_NODE,
 	"forwarding",		    // FORWARDING_NODE,
@@ -522,6 +526,10 @@ static int config_write_host(struct vty *vty)
 			if (host.enable)
 				vty_out(vty, "enable password %s\n", host.enable);
 		}
+
+		if (cmd_domainname_get())
+			vty_out(vty, "domainname %s\n", cmd_domainname_get());
+
 
 		if (zlog_default->default_lvl != LOG_DEBUG) {
 			vty_out(vty, "! N.B. The 'log trap' command is deprecated.\n");
@@ -957,6 +965,8 @@ enum node_type node_parent(enum node_type node)
 	case BGP_VPNV4_NODE:
 	case BGP_VPNV6_NODE:
 	case BGP_VRF_POLICY_NODE:
+	case BGP_VPNPOLICY_IPV4_NODE:
+	case BGP_VPNPOLICY_IPV6_NODE:
 	case BGP_VNC_DEFAULTS_NODE:
 	case BGP_VNC_NVE_GROUP_NODE:
 	case BGP_VNC_L2_GROUP_NODE:
@@ -1304,6 +1314,7 @@ void cmd_exit(struct vty *vty)
 	case PW_NODE:
 	case LOGICALROUTER_NODE:
 	case VRF_NODE:
+	case NH_GROUP_NODE:
 	case ZEBRA_NODE:
 	case BGP_NODE:
 	case RIP_NODE:
@@ -1318,6 +1329,7 @@ void cmd_exit(struct vty *vty)
 	case KEYCHAIN_NODE:
 	case MASC_NODE:
 	case RMAP_NODE:
+	case PBRMAP_NODE:
 	case VTY_NODE:
 		vty->node = CONFIG_NODE;
 		break;
@@ -1327,6 +1339,8 @@ void cmd_exit(struct vty *vty)
 	case BGP_VPNV4_NODE:
 	case BGP_VPNV6_NODE:
 	case BGP_VRF_POLICY_NODE:
+	case BGP_VPNPOLICY_IPV4_NODE:
+	case BGP_VPNPOLICY_IPV6_NODE:
 	case BGP_VNC_DEFAULTS_NODE:
 	case BGP_VNC_NVE_GROUP_NODE:
 	case BGP_VNC_L2_GROUP_NODE:
@@ -1389,6 +1403,7 @@ DEFUN (config_end,
 	case PW_NODE:
 	case LOGICALROUTER_NODE:
 	case VRF_NODE:
+	case NH_GROUP_NODE:
 	case ZEBRA_NODE:
 	case RIP_NODE:
 	case RIPNG_NODE:
@@ -1396,6 +1411,8 @@ DEFUN (config_end,
 	case BABEL_NODE:
 	case BGP_NODE:
 	case BGP_VRF_POLICY_NODE:
+	case BGP_VPNPOLICY_IPV4_NODE:
+	case BGP_VPNPOLICY_IPV6_NODE:
 	case BGP_VNC_DEFAULTS_NODE:
 	case BGP_VNC_NVE_GROUP_NODE:
 	case BGP_VNC_L2_GROUP_NODE:
@@ -1410,6 +1427,7 @@ DEFUN (config_end,
 	case BGP_EVPN_VNI_NODE:
 	case BGP_IPV6L_NODE:
 	case RMAP_NODE:
+	case PBRMAP_NODE:
 	case OSPF_NODE:
 	case OSPF6_NODE:
 	case LDP_NODE:

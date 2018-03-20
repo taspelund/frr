@@ -161,6 +161,12 @@ static int zebra_vrf_enable(struct vrf *vrf)
 				}
 		}
 
+	/*
+	 * We may have static routes that are now possible to
+	 * insert into the appropriate tables
+	 */
+	static_config_install_delayed_routes(zvrf);
+
 	/* Kick off any VxLAN-EVPN processing. */
 	zebra_vxlan_vrf_enable(zvrf);
 
@@ -565,7 +571,6 @@ static int vrf_config_write(struct vty *vty)
 					is_l3vni_for_prefix_routes_only(zvrf->l3vni) ?
 					" prefix-routes-only" :"");
 			zebra_ns_config_write(vty, (struct ns *)vrf->ns_ctxt);
-			vty_out(vty, "!\n");
 		}
 
 		static_config(vty, zvrf, AFI_IP, SAFI_UNICAST, "ip route");

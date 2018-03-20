@@ -83,6 +83,9 @@ func_frr()
     exec_cmd $jexec bgp.evpn.vrfimportrt vtysh -c "show bgp l2vpn evpn vrf-import-rt"
     exec_cmd $jexec bgp.evpn.importrt vtysh -c "show bgp l2vpn evpn import-rt"
 
+    exec_cmd $jexec pbr.map vtysh -c "show pbr map"
+    exec_cmd $jexec pbr.intf vtysh -c "show pbr interface"
+    exec_cmd $jexec pbr.nhop.group vtysh -c "show pbr nexthop-groups"
 
     [ $SUP_SECURE -eq 0 ] && {
         [ $SUP_VERBOSE -eq 1 ] &&
