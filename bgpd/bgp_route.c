@@ -2341,6 +2341,27 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 		}
 	}
 
+	/*
+	 * We need to withdraw/update the route to the vpn leaking
+	 * subsystem or from vrf <-> vrf leaking.
+	 *
+	 * Currently I am only handling the withdrawal case
+	 * as that I am not sure what we need to do for the
+	 * install or change case here( if it is even possible
+	 * in this code path ).
+	 */
+	if (old_select && !new_select) {
+		if (safi == SAFI_UNICAST &&
+		    (bgp->inst_type == BGP_INSTANCE_TYPE_VRF ||
+		     bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)) {
+			struct bgp_info *ri;
+
+			for (ri = rn->info; ri; ri = ri->next)
+				vpn_leak_from_vrf_withdraw(bgp_get_default(),
+							   bgp, ri);
+		}
+	}
+
 	/* advertise/withdraw type-5 routes */
 	if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) {
 		if (advertise_type5_routes(bgp, afi) && new_select &&
