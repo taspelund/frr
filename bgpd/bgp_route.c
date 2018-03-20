@@ -2333,11 +2333,8 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 		if (safi == SAFI_UNICAST &&
 		    (bgp->inst_type == BGP_INSTANCE_TYPE_VRF ||
 		     bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)) {
-			struct bgp_info *ri;
-
-			for (ri = rn->info; ri; ri = ri->next)
-				vpn_leak_from_vrf_withdraw(bgp_get_default(),
-							   bgp, ri);
+			vpn_leak_from_vrf_withdraw(bgp_get_default(),
+						   bgp, old_select);
 		}
 	}
 
