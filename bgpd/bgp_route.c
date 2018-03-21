@@ -2320,70 +2320,6 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 		}
 	}
 
-	/*
-	 * We need to withdraw/update the route to the vpn leaking
-	 * subsystem or from vrf <-> vrf leaking.
-	 *
-	 * Currently I am only handling the withdrawal case
-	 * as that I am not sure what we need to do for the
-	 * install or change case here( if it is even possible
-	 * in this code path ).
-	 */
-	if (old_select && !new_select) {
-		if (safi == SAFI_UNICAST &&
-		    (bgp->inst_type == BGP_INSTANCE_TYPE_VRF ||
-		     bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)) {
-			char *vrf_name;
-			struct listnode *node;
-			struct bgp *vrf_bgp;
-
-			vrf_bgp = bgp_get_default();
-			vpn_leak_from_vrf_withdraw(vrf_bgp, bgp, old_select);
-
-			for (ALL_LIST_ELEMENTS_RO(
-				     bgp->vpn_policy[afi].export_vrf, node,
-				     vrf_name)) {
-				vrf_bgp = bgp_lookup_by_name(vrf_name);
-				if (!vrf_bgp)
-					continue;
-				vpn_leak_from_vrf_withdraw(vrf_bgp, bgp,
-							   old_select);
-			}
-		}
-	}
-
-	/*
-	 * We need to withdraw/update the route to the vpn leaking
-	 * subsystem or from vrf <-> vrf leaking.
-	 *
-	 * Currently I am only handling the withdrawal case
-	 * as that I am not sure what we need to do for the
-	 * install or change case here( if it is even possible
-	 * in this code path ).
-	 */
-	if (old_select && !new_select) {
-		if (safi == SAFI_UNICAST &&
-		    (bgp->inst_type == BGP_INSTANCE_TYPE_VRF ||
-		     bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)) {
-			struct bgp_info *ri;
-
-			for (ri = rn->info; ri; ri = ri->next)
-				vpn_leak_from_vrf_withdraw(bgp_get_default(),
-							   bgp, ri);
-		}
-	}
-
-	/* advertise/withdraw type-5 routes */
-	if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) {
-		if (advertise_type5_routes(bgp, afi) && new_select &&
-		    (!new_select->extra || !new_select->extra->parent))
-			bgp_evpn_advertise_type5_route(
-				bgp, &rn->p, new_select->attr, afi, safi);
-		else if (advertise_type5_routes(bgp, afi) && old_select &&
-		         (!old_select->extra || !old_select->extra->parent))
-			bgp_evpn_withdraw_type5_route(bgp, &rn->p, afi, safi);
-	}
-
 	/* Clear any route change flags. */
 	bgp_zebra_clear_route_change_flags(rn);
 
@@ -3737,10 +3673,12 @@ static wq_item_status bgp_clear_route_node(struct work_queue *wq, void *data)
 	struct bgp_node *rn = cnq->rn;
 	struct peer *peer = wq->spec.data;
 	struct bgp_info *ri;
+	struct bgp *bgp;
 	afi_t afi = bgp_node_table(rn)->afi;
 	safi_t safi = bgp_node_table(rn)->safi;
 
 	assert(rn && peer);
+	bgp = peer->bgp;
 
 	/* It is possible that we have multiple paths for a prefix from a peer
 	 * if that peer is using AddPath.
@@ -3759,8 +3697,18 @@ static wq_item_status bgp_clear_route_node(struct work_queue *wq, void *data)
 			/* If this is an EVPN route, process for
 			 * un-import. */
 			if (safi == SAFI_EVPN)
-				bgp_evpn_unimport_route(peer->bgp, afi, safi,
+				bgp_evpn_unimport_route(bgp, afi, safi,
 							&rn->p, ri);
+			/* Handle withdraw for VRF route-leaking and L3VPN */
+			if (SAFI_UNICAST == safi
+			    && (bgp->inst_type == BGP_INSTANCE_TYPE_VRF ||
+				bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT))
+				vpn_leak_from_vrf_withdraw(bgp_get_default(),
+							   bgp, ri);
+			if (SAFI_MPLS_VPN == safi &&
+			    bgp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)
+				vpn_leak_to_vrf_withdraw(bgp, ri);
+
 			bgp_rib_remove(rn, ri, peer, afi, safi);
 		}
 	}
