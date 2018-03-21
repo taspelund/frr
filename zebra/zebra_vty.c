@@ -165,7 +165,7 @@ static int static_list_compare(void *arg1, void *arg2)
 	if (ret)
 		return ret;
 
-	ret = shr1->safi - shr2->afi;
+	ret = shr1->safi - shr2->safi;
 	if (ret)
 		return ret;
 
@@ -268,7 +268,8 @@ static int zebra_static_route_holdem(struct zebra_vrf *zvrf,
 		return CMD_SUCCESS;
 	}
 
-	listnode_add_sort(static_list, shr);
+	if (!negate)
+		listnode_add_sort(static_list, shr);
 
 	return CMD_SUCCESS;
 }
