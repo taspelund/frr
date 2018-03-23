@@ -1098,6 +1098,7 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 	int nh_othervrf = 0;
 	bool is_evpn = false;
 	int nh_updated;
+	char buf_prefix[PREFIX_STRLEN];	/* filled in if we are debugging */
 
 	/* Don't try to install if we're not connected to Zebra or Zebra doesn't
 	 * know of this instance.
@@ -1107,6 +1108,9 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 
 	if (bgp->main_zebra_update_hold)
 		return;
+
+	if (bgp_debug_zebra(p))
+		prefix2str(&api.prefix, buf_prefix, sizeof(buf_prefix));
 
 	/*
 	 * vrf leaking support (will have only one nexthop)
@@ -1176,9 +1180,6 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 					     : bgp->vrf_id;
 		if (nh_family == AF_INET) {
 			if (bgp_debug_zebra(&api.prefix)) {
-				char buf_prefix[PREFIX_STRLEN];
-				prefix2str(&api.prefix, buf_prefix,
-					   sizeof(buf_prefix));
 				if (mpinfo->extra) {
 					zlog_debug(
 						"%s: p=%s, bgp_is_valid_label: %d",
@@ -1337,6 +1338,16 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 		}
 	}
 
+	if (bgp_debug_zebra(p)) {
+		int recursion_flag = 0;
+
+		if (CHECK_FLAG(api.flags, ZEBRA_FLAG_ALLOW_RECURSION))
+			recursion_flag = 1;
+
+		zlog_debug("%s: %s: announcing to zebra (recursion %sset)",
+			__func__, buf_prefix,
+			(recursion_flag ? "" : "NOT "));
+	}
 	zclient_route_send(valid_nh_count ? ZEBRA_ROUTE_ADD
 					  : ZEBRA_ROUTE_DELETE,
 			   zclient, &api);
