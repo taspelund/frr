@@ -74,16 +74,22 @@ static inline int advertise_type5_routes(struct bgp *bgp_vrf,
 	return 0;
 }
 
-/* Flag if the parent route is a EVPN route. */
+/* Flag if the route's parent is a EVPN route. */
 static inline int is_route_parent_evpn(struct bgp_info *ri)
 {
+	struct bgp_info *parent_ri;
 	struct bgp_table *table;
 	struct bgp_node *rn;
 
-	if (ri->sub_type != BGP_ROUTE_IMPORTED)
+	/* If not imported (or doesn't have a parent), bail. */
+	if (ri->sub_type != BGP_ROUTE_IMPORTED ||
+	    !ri->extra ||
+	    !ri->extra->parent)
 		return 0;
 
-	rn = ri->net;
+	/* See if the parent is of family L2VPN/EVPN */
+	parent_ri = (struct bgp_info *)ri->extra->parent;
+	rn = parent_ri->net;
 	if (!rn)
 		return 0;
 	table = bgp_node_table(rn);
