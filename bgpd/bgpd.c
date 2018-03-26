@@ -2867,6 +2867,7 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 	}
 
 	bgp_lock(bgp);
+	bgp->heuristic_coalesce = true;
 	bgp->inst_type = inst_type;
 	bgp->vrf_id = (inst_type == BGP_INSTANCE_TYPE_DEFAULT) ? VRF_DEFAULT
 							       : VRF_UNKNOWN;
@@ -2949,6 +2950,9 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 		bgp->vpn_policy[afi].tovpn_label = MPLS_LABEL_NONE;
 		bgp->vpn_policy[afi].tovpn_zebra_vrf_label_last_sent =
 			MPLS_LABEL_NONE;
+
+		bgp->vpn_policy[afi].import_vrf = list_new();
+		bgp->vpn_policy[afi].export_vrf = list_new();
 	}
 	if (name) {
 		bgp->name = XSTRDUP(MTYPE_BGP, name);
@@ -7142,10 +7146,28 @@ static void bgp_config_write_family(struct vty *vty, struct bgp *bgp, afi_t afi,
 	if (safi == SAFI_EVPN)
 		bgp_config_write_evpn_info(vty, bgp, afi, safi);
 
-	if (CHECK_FLAG(bgp->af_flags[afi][safi],
-		       BGP_CONFIG_VRF_TO_MPLSVPN_EXPORT)) {
+	if (safi == SAFI_UNICAST) {
+		bgp_vpn_policy_config_write_afi(vty, bgp, afi);
+		if (CHECK_FLAG(bgp->af_flags[afi][safi],
+			       BGP_CONFIG_VRF_TO_MPLSVPN_EXPORT)) {
 
-		vty_out(vty, "  export vpn\n");
+			vty_out(vty, "  export vpn\n");
+		}
+		if (CHECK_FLAG(bgp->af_flags[afi][safi],
+			       BGP_CONFIG_MPLSVPN_TO_VRF_IMPORT)) {
+
+			vty_out(vty, "  import vpn\n");
+		}
+		if (CHECK_FLAG(bgp->af_flags[afi][safi],
+			       BGP_CONFIG_VRF_TO_VRF_IMPORT)) {
+			struct listnode *node;
+			char *name;
+
+			for (ALL_LIST_ELEMENTS_RO(
+				     bgp->vpn_policy[afi].import_vrf, node,
+				     name))
+				vty_out(vty, "  import vrf %s\n", name);
+		}
 	}
 
 	vty_endframe(vty, " exit-address-family\n");
@@ -7413,8 +7435,6 @@ int bgp_config_write(struct vty *vty)
 		/* No auto-summary */
 		if (bgp_option_check(BGP_OPT_CONFIG_CISCO))
 			vty_out(vty, " no auto-summary\n");
-
-		bgp_vpn_policy_config_write(vty, bgp);
 
 		/* IPv4 unicast configuration.  */
 		bgp_config_write_family(vty, bgp, AFI_IP, SAFI_UNICAST);

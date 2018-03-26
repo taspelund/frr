@@ -324,14 +324,18 @@ struct bgp {
 
 	/* BGP Per AF flags */
 	u_int16_t af_flags[AFI_MAX][SAFI_MAX];
-#define BGP_CONFIG_DAMPENING              (1 << 0)
-#define BGP_CONFIG_VRF_TO_MPLSVPN_EXPORT  (1 << 1)
-
+#define BGP_CONFIG_DAMPENING				(1 << 0)
 /* l2vpn evpn flags - 1 << 0 is used for DAMPENNG */
-#define BGP_L2VPN_EVPN_ADVERTISE_IPV4_UNICAST      (1 << 1)
-#define BGP_L2VPN_EVPN_ADVERTISE_IPV6_UNICAST      (1 << 2)
-#define BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV4	   (1 << 3)
-#define BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV6	   (1 << 4)
+#define BGP_L2VPN_EVPN_ADVERTISE_IPV4_UNICAST		(1 << 1)
+#define BGP_L2VPN_EVPN_ADVERTISE_IPV6_UNICAST		(1 << 2)
+#define BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV4		(1 << 3)
+#define BGP_L2VPN_EVPN_DEFAULT_ORIGINATE_IPV6		(1 << 4)
+/* import/export between address families */
+#define BGP_CONFIG_VRF_TO_MPLSVPN_EXPORT		(1 << 5)
+#define BGP_CONFIG_MPLSVPN_TO_VRF_IMPORT		(1 << 6)
+/* vrf-route leaking flags */
+#define BGP_CONFIG_VRF_TO_VRF_IMPORT			(1 << 7)
+#define BGP_CONFIG_VRF_TO_VRF_EXPORT			(1 << 8)
 
 
 	/* Route table for next-hop lookup cache. */
@@ -478,10 +482,14 @@ struct bgp {
 		uint32_t tovpn_label; /* may be MPLS_LABEL_NONE */
 		uint32_t tovpn_zebra_vrf_label_last_sent;
 		struct prefix_rd tovpn_rd;
-		struct prefix tovpn_nexthop; /* unset => set to router id */
+		struct prefix tovpn_nexthop; /* unset => set to 0 */
 		uint32_t flags;
 #define BGP_VPN_POLICY_TOVPN_RD_SET            0x00000004
 #define BGP_VPN_POLICY_TOVPN_NEXTHOP_SET       0x00000008
+
+		/* If we are importing a vrf -> vrf keep alist of vrf names */
+		struct list *import_vrf;
+		struct list *export_vrf;
 	} vpn_policy[AFI_MAX];
 
 	QOBJ_FIELDS
