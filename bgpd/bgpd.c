@@ -45,6 +45,7 @@
 #include "lib/json.h"
 #include "vxlan.h"
 #include "frr_pthread.h"
+#include "bitfield.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_table.h"
@@ -2972,6 +2973,10 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 	QOBJ_REG(bgp, bgp);
 
 	update_bgp_group_init(bgp);
+
+	/* assign a unique rd id for auto derivation of vrf's RD */
+	bf_assign_index(bm->rd_idspace, bgp->vrf_rd_id);
+
 	bgp_evpn_init(bgp);
 	return bgp;
 }
@@ -3346,6 +3351,9 @@ void bgp_free(struct bgp *bgp)
 	bgp_scan_finish(bgp);
 	bgp_address_destroy(bgp);
 	bgp_tip_hash_destroy(bgp);
+
+	/* release the auto RD id */
+	bf_release_index(bm->rd_idspace, bgp->vrf_rd_id);
 
 	bgp_evpn_cleanup(bgp);
 
