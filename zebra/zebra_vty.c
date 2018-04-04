@@ -100,6 +100,9 @@ struct static_hold_route {
 	char *tag_str;
 	char *distance_str;
 	char *label_str;
+
+	/* processed & masked destination, used for config display */
+	struct prefix dest;
 };
 
 static struct list *static_list;
@@ -169,11 +172,7 @@ static int static_list_compare(void *arg1, void *arg2)
 	if (ret)
 		return ret;
 
-	ret = static_list_compare_helper(shr1->dest_str, shr2->dest_str);
-	if (ret)
-		return ret;
-
-	ret = static_list_compare_helper(shr1->mask_str, shr2->mask_str);
+	ret = prefix_cmp(&shr1->dest, &shr2->dest);
 	if (ret)
 		return ret;
 
@@ -207,15 +206,12 @@ static int static_list_compare(void *arg1, void *arg2)
 
 
 /* General function for static route. */
-static int zebra_static_route_holdem(struct zebra_vrf *zvrf,
-				     struct zebra_vrf *nh_zvrf,
-				     afi_t afi, safi_t safi,
-				     const char *negate, const char *dest_str,
-				     const char *mask_str, const char *src_str,
-				     const char *gate_str, const char *ifname,
-				     const char *flag_str, const char *tag_str,
-				     const char *distance_str,
-				     const char *label_str)
+static int zebra_static_route_holdem(
+	struct zebra_vrf *zvrf, struct zebra_vrf *nh_zvrf, afi_t afi,
+	safi_t safi, const char *negate, struct prefix *dest,
+	const char *dest_str, const char *mask_str, const char *src_str,
+	const char *gate_str, const char *ifname, const char *flag_str,
+	const char *tag_str, const char *distance_str, const char *label_str)
 {
 	struct static_hold_route *shr, *lookup;
 	struct listnode *node;
@@ -225,6 +221,8 @@ static int zebra_static_route_holdem(struct zebra_vrf *zvrf,
 	shr->nhvrf_name = XSTRDUP(MTYPE_STATIC_ROUTE, nh_zvrf->vrf->name);
 	shr->afi = afi;
 	shr->safi = safi;
+	if (dest)
+		prefix_copy(&shr->dest, dest);
 	if (dest_str)
 		shr->dest_str = XSTRDUP(MTYPE_STATIC_ROUTE, dest_str);
 	if (mask_str)
@@ -306,14 +304,6 @@ static int zebra_static_route_leak(struct vty *vty,
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	if (zvrf->vrf->vrf_id == VRF_UNKNOWN
-	    || nh_zvrf->vrf->vrf_id == VRF_UNKNOWN) {
-		vrf_set_user_cfged(zvrf->vrf);
-		return zebra_static_route_holdem(
-			zvrf, nh_zvrf, afi, safi, negate, dest_str, mask_str,
-			src_str, gate_str, ifname, flag_str, tag_str,
-			distance_str, label_str);
-	}
 	switch (afi) {
 	case AFI_IP:
 		/* Cisco like mask notation. */
@@ -354,6 +344,15 @@ static int zebra_static_route_leak(struct vty *vty,
 
 	/* Apply mask for given prefix. */
 	apply_mask(&p);
+
+	if (zvrf->vrf->vrf_id == VRF_UNKNOWN
+	    || nh_zvrf->vrf->vrf_id == VRF_UNKNOWN) {
+		vrf_set_user_cfged(zvrf->vrf);
+		return zebra_static_route_holdem(
+			zvrf, nh_zvrf, afi, safi, negate, &p, dest_str,
+			mask_str, src_str, gate_str, ifname, flag_str, tag_str,
+			distance_str, label_str);
+	}
 
 	/* Administrative distance. */
 	if (distance_str)
@@ -2249,11 +2248,12 @@ int static_config(struct vty *vty, struct zebra_vrf *zvrf,
 		if (strcmp(zvrf->vrf->name, shr->vrf_name) != 0)
 			continue;
 
+		char dest_str[PREFIX_STRLEN];
+		prefix2str(&shr->dest, dest_str, sizeof(dest_str));
+
 		vty_out(vty, "%s ", spacing);
 		if (shr->dest_str)
-			vty_out(vty, "%s ", shr->dest_str);
-		if (shr->mask_str)
-			vty_out(vty, "%s ", shr->mask_str);
+			vty_out(vty, "%s ", dest_str);
 		if (shr->src_str)
 			vty_out(vty, "from %s ", shr->src_str);
 		if (shr->gate_str)
