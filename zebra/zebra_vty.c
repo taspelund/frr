@@ -2330,16 +2330,16 @@ int static_config(struct vty *vty, struct zebra_vrf *zvrf,
 			    != ZEBRA_STATIC_DISTANCE_DEFAULT)
 				vty_out(vty, " %d", si->distance);
 
-			if (si->nh_vrf_id != si->vrf_id) {
-				vty_out(vty, " nexthop-vrf %s", si->nh_vrfname);
-			}
-
 			/* Label information */
 			if (si->snh_label.num_labels)
 				vty_out(vty, " label %s",
 					mpls_label2str(si->snh_label.num_labels,
-						       si->snh_label.label,
-						       buf, sizeof buf, 0));
+						       si->snh_label.label, buf,
+						       sizeof buf, 0));
+
+			if (si->nh_vrf_id != si->vrf_id) {
+				vty_out(vty, " nexthop-vrf %s", si->nh_vrfname);
+			}
 
 			vty_out(vty, "\n");
 
