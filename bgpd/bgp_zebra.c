@@ -1196,8 +1196,12 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 
 			api_nh->gate.ipv6 = *nexthop;
 			api_nh->ifindex = ifindex;
-			api_nh->type = ifindex ? NEXTHOP_TYPE_IPV6_IFINDEX
-					       : NEXTHOP_TYPE_IPV6;
+
+			if (ifindex ||
+			    (CHECK_FLAG(api.flags, ZEBRA_FLAG_EVPN_ROUTE)))
+				api_nh->type = NEXTHOP_TYPE_IPV6_IFINDEX;
+			else
+				api_nh->type = NEXTHOP_TYPE_IPV6;
 		}
 
 		if (mpinfo->extra
