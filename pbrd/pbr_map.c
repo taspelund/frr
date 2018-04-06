@@ -154,6 +154,7 @@ void pbr_map_add_interface(struct pbr_map *pbrm, struct interface *ifp_add)
 	pmi->pbrm = pbrm;
 	listnode_add_sort(pbrm->incoming, pmi);
 
+	bf_assign_index(pbrm->ifi_bitfield, pmi->install_bit);
 	pbr_map_check_valid(pbrm->name);
 	if (pbrm->valid && !pbrm->installed)
 		pbr_map_install(pbrm);
@@ -195,6 +196,8 @@ extern void pbr_map_delete(struct pbr_map_sequence *pbrms)
 
 	if (pbrm->seqnumbers->count == 0) {
 		RB_REMOVE(pbr_map_entry_head, &pbr_maps, pbrm);
+
+		bf_free(pbrm->ifi_bitfield);
 		XFREE(MTYPE_PBR_MAP, pbrm);
 	}
 }
@@ -212,13 +215,12 @@ void pbr_map_delete_nexthop_group(struct pbr_map_sequence *pbrms)
 
 	pbrm->valid = false;
 	pbrms->nhs_installed = false;
-	pbrms->installed = false;
 	pbrms->reason |= PBR_MAP_INVALID_NO_NEXTHOPS;
 	pbrms->nhgrp_name = NULL;
 }
 
-struct pbr_map_sequence *pbrms_lookup_unique(uint32_t unique,
-					     ifindex_t ifindex)
+struct pbr_map_sequence *pbrms_lookup_unique(uint32_t unique, ifindex_t ifindex,
+					     struct pbr_map_interface **ppmi)
 {
 	struct pbr_map_sequence *pbrms;
 	struct listnode *snode, *inode;
@@ -229,6 +231,9 @@ struct pbr_map_sequence *pbrms_lookup_unique(uint32_t unique,
 		for (ALL_LIST_ELEMENTS_RO(pbrm->incoming, inode, pmi)) {
 			if (pmi->ifp->ifindex != ifindex)
 				continue;
+
+			if (ppmi)
+				*ppmi = pmi;
 
 			for (ALL_LIST_ELEMENTS_RO(pbrm->seqnumbers, snode,
 						  pbrms)) {
@@ -286,6 +291,7 @@ struct pbr_map_sequence *pbrms_get(const char *name, uint32_t seqno)
 
 		RB_INSERT(pbr_map_entry_head, &pbr_maps, pbrm);
 
+		bf_init(pbrm->ifi_bitfield, 64);
 		pbr_map_add_interfaces(pbrm);
 	}
 
@@ -465,6 +471,8 @@ void pbr_map_policy_delete(struct pbr_map *pbrm, struct pbr_map_interface *pmi)
 
 	listnode_delete(pbrm->incoming, pmi);
 	pmi->pbrm = NULL;
+
+	bf_release_index(pbrm->ifi_bitfield, pmi->install_bit);
 	XFREE(MTYPE_PBR_MAP_INTERFACE, pmi);
 }
 
@@ -551,9 +559,7 @@ void pbr_map_check(struct pbr_map_sequence *pbrms)
 	}
 
 	for (ALL_LIST_ELEMENTS_RO(pbrm->incoming, inode, pmi)) {
-		if ((install && !pbrms->installed) ||
-		    (!install && pbrms->installed))
-			pbr_send_pbr_map(pbrms, pmi, install);
+		pbr_send_pbr_map(pbrms, pmi, install);
 	}
 }
 
