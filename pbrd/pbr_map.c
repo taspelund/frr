@@ -156,7 +156,7 @@ void pbr_map_add_interface(struct pbr_map *pbrm, struct interface *ifp_add)
 
 	bf_assign_index(pbrm->ifi_bitfield, pmi->install_bit);
 	pbr_map_check_valid(pbrm->name);
-	if (pbrm->valid && !pbrm->installed)
+	if (pbrm->valid)
 		pbr_map_install(pbrm);
 }
 
@@ -313,8 +313,6 @@ struct pbr_map_sequence *pbrms_get(const char *name, uint32_t seqno)
 
 		QOBJ_REG(pbrms, pbr_map_sequence);
 		listnode_add_sort(pbrm->seqnumbers, pbrms);
-
-		pbrm->installed = false;
 	}
 
 	return pbrms;
@@ -568,8 +566,6 @@ void pbr_map_install(struct pbr_map *pbrm)
 	for (ALL_LIST_ELEMENTS_RO(pbrm->seqnumbers, node, pbrms))
 		for (ALL_LIST_ELEMENTS_RO(pbrm->incoming, inode, pmi))
 			pbr_send_pbr_map(pbrms, pmi, true);
-
-	pbrm->installed = true;
 }
 
 extern void pbr_map_init(void)
