@@ -6455,16 +6455,16 @@ ALIAS (af_rt_vpn_imexport,
        "For routes leaked from current address-family to vpn\n"
        "both import and export\n")
 
-DEFPY (af_route_map_vpn_imexport,
-       af_route_map_vpn_imexport_cmd,
+DEFPY_HIDDEN (af_route_map_vpn_imexport,
+	      af_route_map_vpn_imexport_cmd,
 /* future: "route-map <vpn|evpn|vrf NAME> <import|export> RMAP" */
-       "[no] route-map vpn <import|export>$direction_str RMAP$rmap_str",
-       NO_STR
-       "Specify route map\n"
-       "Between current address-family and vpn\n"
-       "For routes leaked from vpn to current address-family\n"
-       "For routes leaked from current address-family to vpn\n"
-       "name of route-map\n")
+	      "[no] route-map vpn <import|export>$direction_str RMAP$rmap_str",
+	      NO_STR
+	      "Specify route map\n"
+	      "Between current address-family and vpn\n"
+	      "For routes leaked from vpn to current address-family\n"
+	      "For routes leaked from current address-family to vpn\n"
+	      "name of route-map\n")
 {
 	VTY_DECLVAR_CONTEXT(bgp, bgp);
 	int ret;
@@ -6520,14 +6520,14 @@ DEFPY (af_route_map_vpn_imexport,
 	return CMD_SUCCESS;
 }
 
-ALIAS (af_route_map_vpn_imexport,
-       af_no_route_map_vpn_imexport_cmd,
-       "no route-map vpn <import|export>$direction_str",
-       NO_STR
-       "Specify route map\n"
-       "Between current address-family and vpn\n"
-       "For routes leaked from vpn to current address-family\n"
-       "For routes leaked from current address-family to vpn\n")
+ALIAS_HIDDEN (af_route_map_vpn_imexport,
+	      af_no_route_map_vpn_imexport_cmd,
+	      "no route-map vpn <import|export>$direction_str",
+	      NO_STR
+	      "Specify route map\n"
+	      "Between current address-family and vpn\n"
+	      "For routes leaked from vpn to current address-family\n"
+	      "For routes leaked from current address-family to vpn\n")
 
 DEFPY(af_import_vrf_route_map, af_import_vrf_route_map_cmd,
       "[no] import vrf route-map RMAP$rmap_str",
