@@ -403,7 +403,7 @@ end
                 self.save_contexts(ctx_keys, current_context_lines)
                 new_ctx = True
 
-            elif line in ("end", "exit-vrf"):
+            elif line == "end":
                 self.save_contexts(ctx_keys, current_context_lines)
                 log.debug('LINE %-50s: exiting old context, %-50s', line, ctx_keys)
 
