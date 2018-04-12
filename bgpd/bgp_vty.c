@@ -6520,6 +6520,7 @@ DEFPY_HIDDEN (af_route_map_vpn_imexport,
 	return CMD_SUCCESS;
 }
 
+#if 0
 ALIAS_HIDDEN (af_route_map_vpn_imexport,
 	      af_no_route_map_vpn_imexport_cmd,
 	      "no route-map vpn <import|export>$direction_str",
@@ -6528,6 +6529,7 @@ ALIAS_HIDDEN (af_route_map_vpn_imexport,
 	      "Between current address-family and vpn\n"
 	      "For routes leaked from vpn to current address-family\n"
 	      "For routes leaked from current address-family to vpn\n")
+#endif
 
 DEFPY(af_import_vrf_route_map, af_import_vrf_route_map_cmd,
       "[no] import vrf route-map RMAP$rmap_str",
@@ -13220,8 +13222,10 @@ void bgp_vty_init(void)
 	install_element(BGP_IPV6_NODE, &af_no_nexthop_vpn_export_cmd);
 	install_element(BGP_IPV4_NODE, &af_no_rt_vpn_imexport_cmd);
 	install_element(BGP_IPV6_NODE, &af_no_rt_vpn_imexport_cmd);
+#if 0
 	install_element(BGP_IPV4_NODE, &af_no_route_map_vpn_imexport_cmd);
 	install_element(BGP_IPV6_NODE, &af_no_route_map_vpn_imexport_cmd);
+#endif
 	install_element(BGP_IPV4_NODE, &af_no_import_vrf_route_map_cmd);
 	install_element(BGP_IPV6_NODE, &af_no_import_vrf_route_map_cmd);
 }
