@@ -6685,13 +6685,13 @@ DEFPY (bgp_imexport_vrf,
 }
 
 /* This command is valid only in a bgp vrf instance or the default instance */
-DEFPY (bgp_imexport_vpn,
-       bgp_imexport_vpn_cmd,
-       "[no] <import|export>$direction_str vpn",
-       NO_STR
-       "Import routes to this address-family\n"
-       "Export routes from this address-family\n"
-       "to/from default instance VPN RIB\n")
+DEFPY_HIDDEN (bgp_imexport_vpn,
+	      bgp_imexport_vpn_cmd,
+	      "[no] <import|export>$direction_str vpn",
+	      NO_STR
+	      "Import routes to this address-family\n"
+	      "Export routes from this address-family\n"
+	      "to/from default instance VPN RIB\n")
 {
 	VTY_DECLVAR_CONTEXT(bgp, bgp);
 	int previous_state;
