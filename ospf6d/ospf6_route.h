@@ -89,8 +89,11 @@ struct ospf6_path {
 	u_char subtype; /* only used for redistribute i.e ZEBRA_ROUTE_XXX */
 
 	/* Cost */
-	u_int8_t metric_type;
-	u_int32_t cost;
+	uint8_t metric_type;
+	uint32_t cost;
+
+	struct prefix ls_prefix;
+
 	union {
 		u_int32_t cost_e2;
 		u_int32_t cost_config;
