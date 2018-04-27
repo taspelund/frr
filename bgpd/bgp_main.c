@@ -41,7 +41,6 @@
 #include "vrf.h"
 #include "bfd.h"
 #include "libfrr.h"
-#include "vxlan.h"
 #include "ns.h"
 
 #include "bgpd/bgpd.h"
@@ -106,9 +105,8 @@ static struct quagga_signal_t bgp_signals[] = {
 static int retain_mode = 0;
 
 /* privileges */
-static zebra_capabilities_t _caps_p[] = {
-	ZCAP_BIND, ZCAP_NET_RAW, ZCAP_NET_ADMIN,
-};
+static zebra_capabilities_t _caps_p[] = {ZCAP_BIND, ZCAP_NET_RAW,
+					 ZCAP_NET_ADMIN, ZCAP_SYS_ADMIN};
 
 struct zebra_privs_t bgpd_privs = {
 #if defined(FRR_USER) && defined(FRR_GROUP)
@@ -339,7 +337,7 @@ int main(int argc, char **argv)
 	frr_preinit(&bgpd_di, argc, argv);
 	frr_opt_add(
 		"p:l:rSne:", longopts,
-		"  -p, --bgp_port     Set bgp protocol's port number\n"
+		"  -p, --bgp_port     Set BGP listen port number (0 means do not listen).\n"
 		"  -l, --listenon     Listen on specified address (implies -n)\n"
 		"  -r, --retain       When program terminates, retain added route by bgpd.\n"
 		"  -n, --no_kernel    Do not install route to kernel.\n"
@@ -358,7 +356,7 @@ int main(int argc, char **argv)
 			break;
 		case 'p':
 			tmp_port = atoi(optarg);
-			if (tmp_port <= 0 || tmp_port > 0xffff)
+			if (tmp_port < 0 || tmp_port > 0xffff)
 				bgp_port = BGP_PORT_DEFAULT;
 			else
 				bgp_port = tmp_port;
@@ -397,6 +395,8 @@ int main(int argc, char **argv)
 	/* BGP master init. */
 	bgp_master_init(frr_init());
 	bm->port = bgp_port;
+	if (bgp_port == 0)
+		bgp_option_set(BGP_OPT_NO_LISTEN);
 	bm->address = bgp_address;
 	if (no_fib_flag)
 		bgp_option_set(BGP_OPT_NO_FIB);

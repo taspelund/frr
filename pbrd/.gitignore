@@ -11,6 +11,5 @@ TAGS
 *.libs
 .arch-inventory
 .arch-ids
-*clippy.c
 *~
 *.loT

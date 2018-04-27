@@ -40,7 +40,7 @@
 #include "zebra/rtadv.h"
 #include "zebra/debug.h"
 #include "zebra/rib.h"
-#include "zebra/zserv.h"
+#include "zebra/zapi_msg.h"
 #include "zebra/zebra_ns.h"
 #include "zebra/zebra_vrf.h"
 
@@ -95,7 +95,7 @@ static int rtadv_increment_received(struct zebra_ns *zns, ifindex_t *ifindex)
 	return ret;
 }
 
-static int rtadv_recv_packet(struct zebra_ns *zns, int sock, u_char *buf,
+static int rtadv_recv_packet(struct zebra_ns *zns, int sock, uint8_t *buf,
 			     int buflen, struct sockaddr_in6 *from,
 			     ifindex_t *ifindex, int *hoplimit)
 {
@@ -164,10 +164,10 @@ static void rtadv_send_packet(int sock, struct interface *ifp)
 	int len = 0;
 	struct zebra_if *zif;
 	struct rtadv_prefix *rprefix;
-	u_char all_nodes_addr[] = {0xff, 0x02, 0, 0, 0, 0, 0, 0,
-				   0,    0,    0, 0, 0, 0, 0, 1};
+	uint8_t all_nodes_addr[] = {0xff, 0x02, 0, 0, 0, 0, 0, 0,
+				    0,    0,    0, 0, 0, 0, 0, 1};
 	struct listnode *node;
-	u_int16_t pkt_RouterLifetime;
+	uint16_t pkt_RouterLifetime;
 
 	/*
 	 * Allocate control message bufffer.  This is dynamic because
@@ -315,7 +315,7 @@ static void rtadv_send_packet(int sock, struct interface *ifp)
 
 #ifdef DEBUG
 		{
-			u_char buf[INET6_ADDRSTRLEN];
+			uint8_t buf[INET6_ADDRSTRLEN];
 
 			zlog_debug("DEBUG %s",
 				   inet_ntop(AF_INET6, &pinfo->nd_opt_pi_prefix,
@@ -452,7 +452,7 @@ static void rtadv_process_solicit(struct interface *ifp)
 	rtadv_send_packet(zns->rtadv.sock, ifp);
 }
 
-static void rtadv_process_advert(u_char *msg, unsigned int len,
+static void rtadv_process_advert(uint8_t *msg, unsigned int len,
 				 struct interface *ifp,
 				 struct sockaddr_in6 *addr)
 {
@@ -526,7 +526,7 @@ static void rtadv_process_advert(u_char *msg, unsigned int len,
 }
 
 
-static void rtadv_process_packet(u_char *buf, unsigned int len,
+static void rtadv_process_packet(uint8_t *buf, unsigned int len,
 				 ifindex_t ifindex, int hoplimit,
 				 struct sockaddr_in6 *from,
 				 struct zebra_ns *zns)
@@ -596,7 +596,7 @@ static int rtadv_read(struct thread *thread)
 {
 	int sock;
 	int len;
-	u_char buf[RTADV_MSG_SIZE];
+	uint8_t buf[RTADV_MSG_SIZE];
 	struct sockaddr_in6 from;
 	ifindex_t ifindex = 0;
 	int hoplimit = -1;
@@ -801,8 +801,7 @@ static void ipv6_nd_suppress_ra_set(struct interface *ifp,
  * if the operator has explicitly enabled RA. The enable request can also
  * specify a RA interval (in seconds).
  */
-void zebra_interface_radv_set(struct zserv *client, u_short length,
-			      struct zebra_vrf *zvrf, int enable)
+static void zebra_interface_radv_set(ZAPI_HANDLER_ARGS, int enable)
 {
 	struct stream *s;
 	ifindex_t ifindex;
@@ -810,7 +809,7 @@ void zebra_interface_radv_set(struct zserv *client, u_short length,
 	struct zebra_if *zif;
 	int ra_interval;
 
-	s = client->ibuf;
+	s = msg;
 
 	/* Get interface index and RA interval. */
 	STREAM_GETL(s, ifindex);
@@ -842,9 +841,9 @@ void zebra_interface_radv_set(struct zserv *client, u_short length,
 		SET_FLAG(zif->rtadv.ra_configured, BGP_RA_CONFIGURED);
 		ipv6_nd_suppress_ra_set(ifp, RA_ENABLE);
 		if (ra_interval
-			&& (ra_interval * 1000) < zif->rtadv.MaxRtrAdvInterval
-			&& !CHECK_FLAG(zif->rtadv.ra_configured,
-				VTY_RA_INTERVAL_CONFIGURED))
+		    && (ra_interval * 1000) < zif->rtadv.MaxRtrAdvInterval
+		    && !CHECK_FLAG(zif->rtadv.ra_configured,
+				   VTY_RA_INTERVAL_CONFIGURED))
 			zif->rtadv.MaxRtrAdvInterval = ra_interval * 1000;
 	} else {
 		UNSET_FLAG(zif->rtadv.ra_configured, BGP_RA_CONFIGURED);
@@ -857,6 +856,15 @@ void zebra_interface_radv_set(struct zserv *client, u_short length,
 	}
 stream_failure:
 	return;
+}
+
+void zebra_interface_radv_disable(ZAPI_HANDLER_ARGS)
+{
+	zebra_interface_radv_set(client, hdr, msg, zvrf, 0);
+}
+void zebra_interface_radv_enable(ZAPI_HANDLER_ARGS)
+{
+	zebra_interface_radv_set(client, hdr, msg, zvrf, 1);
 }
 
 DEFUN (ipv6_nd_suppress_ra,

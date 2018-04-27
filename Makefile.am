@@ -6,7 +6,8 @@ include common.am
 AM_CPPFLAGS = -I$(top_srcdir) -I$(top_srcdir)/include -I$(top_srcdir)/lib \
 	      -I$(top_builddir) -I$(top_builddir)/include -I$(top_builddir)/lib
 AM_CFLAGS = $(WERROR)
-DEFS = @DEFS@ -DSYSCONFDIR=\"$(sysconfdir)/\" -DCONFDATE=$(CONFDATE)
+VERSION_TYPE := $(shell if echo $(VERSION) | grep -q '^[0-9\.]*$$'; then echo RELEASE ; else echo DEV ; fi)
+DEFS = @DEFS@ -DSYSCONFDIR=\"$(sysconfdir)/\" -DCONFDATE=$(CONFDATE) -DVERSION_TYPE_$(VERSION_TYPE)
 LIBCAP = @LIBCAP@
 
 EXTRA_DIST =
@@ -115,3 +116,6 @@ EXTRA_DIST += \
 ACLOCAL_AMFLAGS = -I m4
 
 noinst_HEADERS += defaults.h
+
+indent:
+	tools/indent.py `find sharpd bgpd eigrpd include isisd lib nhrpd ospf6d ospfd pimd qpb ripd vtysh zebra -name '*.[ch]' | grep -v include/linux`

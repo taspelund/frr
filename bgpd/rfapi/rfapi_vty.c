@@ -46,6 +46,7 @@
 #include "bgpd/bgp_aspath.h"
 #include "bgpd/bgp_community.h"
 #include "bgpd/bgp_vnc_types.h"
+#include "bgpd/bgp_label.h"
 
 #include "bgpd/rfapi/rfapi_import.h"
 #include "bgpd/rfapi/rfapi_private.h"
@@ -431,8 +432,13 @@ void rfapi_vty_out_vncinfo(struct vty *vty, struct prefix *p,
 		XFREE(MTYPE_ECOMMUNITY_STR, s);
 	}
 
-	if (bi->extra != NULL)
-		vty_out(vty, " label=%u", decode_label(&bi->extra->label[0]));
+	if (bi->extra != NULL) {
+		if (bi->extra->label[0] == BGP_PREVENT_VRF_2_VRF_LEAK)
+			vty_out(vty, " label=VRF2VRF");
+		else
+			vty_out(vty, " label=%u",
+				decode_label(&bi->extra->label[0]));
+	}
 
 	if (!rfapiGetVncLifetime(bi->attr, &lifetime)) {
 		vty_out(vty, " life=%d", lifetime);
@@ -1068,7 +1074,7 @@ static int rfapiPrintRemoteRegBi(struct bgp *bgp, void *stream,
 			 inet_ntop(pfx_vn.family, &pfx_vn.u.prefix, buf_ntop,
 				   BUFSIZ));
 		if (bi->extra) {
-			u_int32_t l = decode_label(&bi->extra->label[0]);
+			uint32_t l = decode_label(&bi->extra->label[0]);
 			snprintf(buf_vn, BUFSIZ, "Label: %d", l);
 		} else /* should never happen */
 		{
@@ -1163,8 +1169,7 @@ static int rfapiPrintRemoteRegBi(struct bgp *bgp, void *stream,
 		 * print that on the next line
 		 */
 
-		if (bi->extra
-		    && bi->extra->vnc.import.aux_prefix.family) {
+		if (bi->extra && bi->extra->vnc.import.aux_prefix.family) {
 			const char *sp;
 
 			sp = rfapi_ntop(
@@ -1181,7 +1186,7 @@ static int rfapiPrintRemoteRegBi(struct bgp *bgp, void *stream,
 		}
 	}
 	if (tun_type != BGP_ENCAP_TYPE_MPLS && bi->extra) {
-		u_int32_t l = decode_label(&bi->extra->label[0]);
+		uint32_t l = decode_label(&bi->extra->label[0]);
 		if (!MPLS_LABEL_IS_NULL(l)) {
 			fp(out, "  Label: %d", l);
 			if (nlines == 1)
@@ -1632,7 +1637,7 @@ void rfapiPrintDescriptor(struct vty *vty, struct rfapi_descriptor *rfd)
 	}
 
 	for (afi = AFI_IP; afi < AFI_MAX; ++afi) {
-		u_char family;
+		uint8_t family;
 
 		family = afi2family(afi);
 		if (!family)
@@ -4630,7 +4635,7 @@ notcfg:
  ************************************************************************/
 void vnc_add_vrf_opener(struct bgp *bgp, struct rfapi_nve_group_cfg *rfg)
 {
-	if (rfg->rfd == NULL) {	/* need new rfapi_handle */
+	if (rfg->rfd == NULL) { /* need new rfapi_handle */
 		/* based on rfapi_open */
 		struct rfapi_descriptor *rfd;
 

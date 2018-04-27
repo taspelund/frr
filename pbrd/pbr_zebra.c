@@ -1,9 +1,7 @@
 /*
  * Zebra connect code.
- * Copyright (C) Cumulus Networks, Inc.
+ * Copyright (C) 2018 Cumulus Networks, Inc.
  *               Donald Sharp
- *
- * This file is part of FRR.
  *
  * FRR is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -45,10 +43,7 @@
 DEFINE_MTYPE_STATIC(PBRD, PBR_INTERFACE, "PBR Interface")
 
 /* Zebra structure to hold current status. */
-struct zclient *zclient = NULL;
-
-/* For registering threads. */
-extern struct thread_master *master;
+struct zclient *zclient;
 
 struct pbr_interface *pbr_if_new(struct interface *ifp)
 {
@@ -65,7 +60,8 @@ struct pbr_interface *pbr_if_new(struct interface *ifp)
 		return 0;
 	}
 
-	return (pbr_ifp);
+	ifp->info = pbr_ifp;
+	return pbr_ifp;
 }
 
 /* Inteface addition message from zebra. */
@@ -79,12 +75,8 @@ static int interface_add(int command, struct zclient *zclient,
 	if (!ifp)
 		return 0;
 
-	if (!ifp->info) {
-		struct pbr_interface *pbr_ifp;
-
-		pbr_ifp = pbr_if_new(ifp);
-		ifp->info = pbr_ifp;
-	}
+	if (!ifp->info)
+		pbr_if_new(ifp);
 
 	return 0;
 }
@@ -365,8 +357,6 @@ void route_delete(struct pbr_nexthop_group_cache *pnhgc, afi_t afi)
 		       __PRETTY_FUNCTION__);
 		break;
 	}
-
-	return;
 }
 
 static int pbr_zebra_nexthop_update(int command, struct zclient *zclient,
@@ -457,7 +447,7 @@ void pbr_send_rnh(struct nexthop *nhop, bool reg)
 
 static void pbr_encode_pbr_map_sequence_prefix(struct stream *s,
 					       struct prefix *p,
-					       u_char family)
+					       unsigned char  family)
 {
 	struct prefix any;
 
@@ -476,7 +466,7 @@ static void pbr_encode_pbr_map_sequence(struct stream *s,
 					struct pbr_map_sequence *pbrms,
 					struct interface *ifp)
 {
-	u_char family;
+	unsigned char family;
 
 	family = AF_INET;
 	if (pbrms->family)
@@ -501,7 +491,7 @@ void pbr_send_pbr_map(struct pbr_map_sequence *pbrms,
 {
 	struct pbr_map *pbrm = pbrms->parent;
 	struct stream *s;
-	uint64_t is_installed = 1 << pmi->install_bit;
+	uint64_t is_installed = (uint64_t)1 << pmi->install_bit;
 
 	is_installed &= pbrms->installed;
 

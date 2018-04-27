@@ -1,6 +1,6 @@
 Building your own FRRouting Debian Package
 ==========================================
-(Tested on Ubuntu 12.04, 14.04, 16.04, 17.10, Debian 8 and 9)
+(Tested on Ubuntu 12.04, 14.04, 16.04, 17.10, 18.04, Debian 8 and 9)
 
 **Note:**  If you try to build for a different distro, then it will most likely
 fail because of the missing backport. See debianpkg/backports/README about
@@ -11,7 +11,13 @@ adding a new backport.
 
 2. Install the following additional packages:
 
+   on Ubuntu 12.04, 14.04, 16.04, 17.10, Debian 8 and 9:
+
         apt-get install realpath equivs groff fakeroot debhelper devscripts
+
+   on Ubuntu 18.04: (realpath is now part of preinstalled by coreutils)
+
+        apt-get install equivs groff fakeroot debhelper devscripts
 
 3. Checkout FRR under a **unpriviledged** user account
 
@@ -71,10 +77,15 @@ adding a new backport.
     Or change some options:
     (see `rules` file for available options)
 
-        export WANT_BGP_VNC=1
-        export WANT_CUMULUS_MODE=1
-        debuild -b -uc -us
+        debuild --set-envvar=WANT_BGP_VNC=1 --set-envvar=WANT_CUMULUS_MODE=1 -b -uc -us
 
+    To build with RPKI, download the librtr packages from
+	https://ci1.netdef.org/browse/RPKI-RTRLIB/latestSuccessful/artifact
+    install librtr-dev on the build server and build the packages as
+        debuild --set-envvar=WANT_RPKI=1 -b -uc -us
+    RPKI packages have an additonal dependency of librtr0 which can be
+    found at the same URL
+    
 DONE.
 
 If all works correctly, then you should end up with the Debian packages under 
@@ -97,7 +108,7 @@ allowed.
 
             sudo update-rc.d frr defaults
 
-    - On `systemd` based systems (Debian 8, 9, Ubuntu 14.04, 16.04, 17.10)
+    - On `systemd` based systems (Debian 8 and later, Ubuntu 14.04 and later)
 
             sudo systemctl enable frr
 
@@ -107,7 +118,7 @@ allowed.
 
             sudo invoke-rc.d frr start
 
-    - on `systemd` based systems (Debian 8, 9, Ubuntu 14.04, 16.04, 17.10)
+    - on `systemd` based systems (Debian 8 and later, Ubuntu 14.04 and later)
 
             sudo systemctl start frr
 

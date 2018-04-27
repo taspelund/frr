@@ -122,7 +122,7 @@ static char *ospf6_route_table_name(struct ospf6_route_table *table)
 	return name;
 }
 
-void ospf6_linkstate_prefix(u_int32_t adv_router, u_int32_t id,
+void ospf6_linkstate_prefix(uint32_t adv_router, uint32_t id,
 			    struct prefix *prefix)
 {
 	memset(prefix, 0, sizeof(struct prefix));
@@ -134,7 +134,7 @@ void ospf6_linkstate_prefix(u_int32_t adv_router, u_int32_t id,
 
 void ospf6_linkstate_prefix2str(struct prefix *prefix, char *buf, int size)
 {
-	u_int32_t adv_router, id;
+	uint32_t adv_router, id;
 	char adv_router_str[16], id_str[16];
 	memcpy(&adv_router, &prefix->u.prefix6.s6_addr[0], 4);
 	memcpy(&id, &prefix->u.prefix6.s6_addr[4], 4);
@@ -377,7 +377,7 @@ struct ospf6_path *ospf6_path_dup(struct ospf6_path *path)
 	memcpy(new, path, sizeof(struct ospf6_path));
 	new->nh_list = list_new();
 	new->nh_list->cmp = (int (*)(void *, void *))ospf6_nexthop_cmp;
-	new->nh_list->del = (void (*) (void *))ospf6_nexthop_delete;
+	new->nh_list->del = (void (*)(void *))ospf6_nexthop_delete;
 
 	return new;
 }
@@ -402,10 +402,10 @@ struct ospf6_route *ospf6_route_create(void)
 	route = XCALLOC(MTYPE_OSPF6_ROUTE, sizeof(struct ospf6_route));
 	route->nh_list = list_new();
 	route->nh_list->cmp = (int (*)(void *, void *))ospf6_nexthop_cmp;
-	route->nh_list->del = (void (*) (void *))ospf6_nexthop_delete;
+	route->nh_list->del = (void (*)(void *))ospf6_nexthop_delete;
 	route->paths = list_new();
 	route->paths->cmp = (int (*)(void *, void *))ospf6_path_cmp;
-	route->paths->del =  (void (*)(void *))ospf6_path_free;
+	route->paths->del = (void (*)(void *))ospf6_path_free;
 	return route;
 }
 
@@ -517,13 +517,14 @@ ospf6_route_lookup_identical(struct ospf6_route *route,
 
 	for (target = ospf6_route_lookup(&route->prefix, table); target;
 	     target = target->next) {
-		if (target->type == route->type &&
-		    (memcmp(&target->prefix, &route->prefix,
-			   sizeof(struct prefix)) == 0) &&
-		    target->path.type == route->path.type &&
-		    target->path.cost == route->path.cost &&
-		    target->path.u.cost_e2 == route->path.u.cost_e2 &&
-		    ospf6_route_cmp_nexthops(target, route) == 0)
+		if (target->type == route->type
+		    && (memcmp(&target->prefix, &route->prefix,
+			       sizeof(struct prefix))
+			== 0)
+		    && target->path.type == route->path.type
+		    && target->path.cost == route->path.cost
+		    && target->path.u.cost_e2 == route->path.u.cost_e2
+		    && ospf6_route_cmp_nexthops(target, route) == 0)
 			return target;
 	}
 	return NULL;
@@ -1260,7 +1261,7 @@ static void ospf6_route_show_table_match(struct vty *vty, int detail,
 }
 
 static void ospf6_route_show_table_type(struct vty *vty, int detail,
-					u_char type,
+					uint8_t type,
 					struct ospf6_route_table *table)
 {
 	struct ospf6_route *route;
@@ -1303,7 +1304,7 @@ int ospf6_route_table_show(struct vty *vty, int argc_start, int argc,
 	int isprefix = 0;
 	int i, ret;
 	struct prefix prefix;
-	u_char type = 0;
+	uint8_t type = 0;
 
 	memset(&prefix, 0, sizeof(struct prefix));
 
@@ -1390,7 +1391,7 @@ static void ospf6_linkstate_show_header(struct vty *vty)
 
 static void ospf6_linkstate_show(struct vty *vty, struct ospf6_route *route)
 {
-	u_int32_t router, id;
+	uint32_t router, id;
 	char routername[16], idname[16], rbits[16], options[16];
 
 	router = ospf6_linkstate_prefix_adv_router(&route->prefix);
@@ -1516,7 +1517,7 @@ void ospf6_brouter_show_header(struct vty *vty)
 
 void ospf6_brouter_show(struct vty *vty, struct ospf6_route *route)
 {
-	u_int32_t adv_router;
+	uint32_t adv_router;
 	char adv[16], rbits[16], options[16], area[16];
 
 	adv_router = ospf6_linkstate_prefix_adv_router(&route->prefix);

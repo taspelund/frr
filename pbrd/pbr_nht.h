@@ -3,8 +3,6 @@
  * Copyright (C) 2018 Cumulus Networks, Inc.
  *               Donald Sharp
  *
- * This file is part of FRR.
- *
  * FRR is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2, or (at your option) any
@@ -28,7 +26,7 @@
 #include "pbr_map.h"
 
 struct pbr_nexthop_group_cache {
-	char name[100];
+	char name[PBR_MAP_NAMELEN];
 
 	uint32_t table_id;
 
@@ -103,7 +101,7 @@ extern uint32_t pbr_nht_get_table(const char *name);
 
 extern bool pbr_nht_get_installed(const char *name);
 
-extern char *pbr_nht_nexthop_make_name(char *name, uint32_t seqno,
+extern char *pbr_nht_nexthop_make_name(char *name, size_t l, uint32_t seqno,
 				       char *buffer);
 
 extern void pbr_nht_show_nexthop_group(struct vty *vty, const char *name);

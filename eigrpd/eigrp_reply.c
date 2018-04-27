@@ -63,7 +63,7 @@
 void eigrp_send_reply(struct eigrp_neighbor *nbr, struct eigrp_prefix_entry *pe)
 {
 	struct eigrp_packet *ep;
-	u_int16_t length = EIGRP_HEADER_LEN;
+	uint16_t length = EIGRP_HEADER_LEN;
 	struct eigrp_interface *ei = nbr->ei;
 	struct eigrp *eigrp = ei->eigrp;
 	struct eigrp_prefix_entry *pe2;
@@ -75,12 +75,10 @@ void eigrp_send_reply(struct eigrp_neighbor *nbr, struct eigrp_prefix_entry *pe)
 		      sizeof(struct eigrp_prefix_entry));
 	memcpy(pe2, pe, sizeof(struct eigrp_prefix_entry));
 
-	if (eigrp_update_prefix_apply(eigrp, ei,
-				      EIGRP_FILTER_OUT,
+	if (eigrp_update_prefix_apply(eigrp, ei, EIGRP_FILTER_OUT,
 				      pe2->destination)) {
 		zlog_info("REPLY SEND: Setting Metric to max");
 		pe2->reported_metric.delay = EIGRP_MAX_METRIC;
-
 	}
 
 	/*
@@ -134,7 +132,7 @@ void eigrp_reply_receive(struct eigrp *eigrp, struct ip *iph,
 	struct eigrp_neighbor *nbr;
 	struct TLV_IPv4_Internal_type *tlv;
 
-	u_int16_t type;
+	uint16_t type;
 
 	/* increment statistics. */
 	ei->reply_in++;
@@ -155,7 +153,7 @@ void eigrp_reply_receive(struct eigrp *eigrp, struct ip *iph,
 
 		struct prefix dest_addr;
 
-		stream_set_getp(s, s->getp - sizeof(u_int16_t));
+		stream_set_getp(s, s->getp - sizeof(uint16_t));
 
 		tlv = eigrp_read_ipv4_tlv(s);
 
@@ -163,17 +161,18 @@ void eigrp_reply_receive(struct eigrp *eigrp, struct ip *iph,
 		dest_addr.u.prefix4 = tlv->destination;
 		dest_addr.prefixlen = tlv->prefix_length;
 		struct eigrp_prefix_entry *dest =
-			eigrp_topology_table_lookup_ipv4(
-				eigrp->topology_table, &dest_addr);
+			eigrp_topology_table_lookup_ipv4(eigrp->topology_table,
+							 &dest_addr);
 		/*
 		 * Destination must exists
 		 */
 		if (!dest) {
 			char buf[PREFIX_STRLEN];
 
-			zlog_err("%s: Received prefix %s which we do not know about",
-				 __PRETTY_FUNCTION__,
-				 prefix2str(&dest_addr, buf, sizeof(buf)));
+			zlog_err(
+				"%s: Received prefix %s which we do not know about",
+				__PRETTY_FUNCTION__,
+				prefix2str(&dest_addr, buf, sizeof(buf)));
 			eigrp_IPv4_InternalTLV_free(tlv);
 			continue;
 		}
@@ -182,8 +181,7 @@ void eigrp_reply_receive(struct eigrp *eigrp, struct ip *iph,
 		struct eigrp_nexthop_entry *entry =
 			eigrp_prefix_entry_lookup(dest->entries, nbr);
 
-		if (eigrp_update_prefix_apply(eigrp, ei,
-					      EIGRP_FILTER_IN,
+		if (eigrp_update_prefix_apply(eigrp, ei, EIGRP_FILTER_IN,
 					      &dest_addr)) {
 			tlv->metric.delay = EIGRP_MAX_METRIC;
 		}

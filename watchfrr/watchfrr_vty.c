@@ -36,7 +36,7 @@ DEFUN(config_write_integrated,
       config_write_integrated_cmd,
       "write integrated",
       "Write running configuration to memory, network, or terminal\n"
-      "Write integrated all-daemon configuration file\n")
+      "Write integrated all-daemon frr.conf file\n")
 {
 	pid_t child;
 	sigset_t oldmask, sigmask;

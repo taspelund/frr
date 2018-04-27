@@ -166,8 +166,8 @@ static struct peer *peer_xfer_conn(struct peer *from_peer)
 			zlog_err(
 				"[%s] Dropping pending packet on connection transfer:",
 				peer->host);
-			u_int16_t type = stream_getc_from(peer->curr,
-							  BGP_MARKER_SIZE + 2);
+			uint16_t type = stream_getc_from(peer->curr,
+							 BGP_MARKER_SIZE + 2);
 			bgp_dump_packet(peer, type, peer->curr);
 			stream_free(peer->curr);
 			peer->curr = NULL;
@@ -265,6 +265,7 @@ static struct peer *peer_xfer_conn(struct peer *from_peer)
 			from_peer = NULL;
 		}
 	}
+
 
 	// Note: peer_xfer_stats() must be called with I/O turned OFF
 	if (from_peer)
@@ -762,8 +763,8 @@ int bgp_maxmed_onstartup_active(struct bgp *bgp)
 
 void bgp_maxmed_update(struct bgp *bgp)
 {
-	u_char maxmed_active;
-	u_int32_t maxmed_value;
+	uint8_t maxmed_active;
+	uint32_t maxmed_value;
 
 	if (bgp->v_maxmed_admin) {
 		maxmed_active = 1;
@@ -1055,8 +1056,8 @@ int bgp_stop(struct peer *peer)
 			UNSET_FLAG(peer->sflags, PEER_STATUS_NSF_MODE);
 
 			for (afi = AFI_IP; afi < AFI_MAX; afi++)
-				for (safi = SAFI_UNICAST;
-				     safi <= SAFI_MPLS_VPN; safi++)
+				for (safi = SAFI_UNICAST; safi <= SAFI_MPLS_VPN;
+				     safi++)
 					peer->nsf[afi][safi] = 0;
 		}
 
@@ -1198,7 +1199,8 @@ static int bgp_stop_with_error(struct peer *peer)
 
 
 /* something went wrong, send notify and tear down */
-static int bgp_stop_with_notify(struct peer *peer, u_char code, u_char sub_code)
+static int bgp_stop_with_notify(struct peer *peer, uint8_t code,
+				uint8_t sub_code)
 {
 	/* Send notify to remote peer */
 	bgp_notify_send(peer, code, sub_code);
@@ -1376,12 +1378,11 @@ int bgp_start(struct peer *peer)
 		return 0;
 	}
 
-	if (peer->bgp &&
-	    peer->bgp->vrf_id == VRF_UNKNOWN) {
+	if (peer->bgp->vrf_id == VRF_UNKNOWN) {
 		if (bgp_debug_neighbor_events(peer))
 			zlog_err(
-				 "%s [FSM] In a VRF that is not initialised yet",
-				 peer->host);
+				"%s [FSM] In a VRF that is not initialised yet",
+				peer->host);
 		return -1;
 	}
 
@@ -1393,7 +1394,7 @@ int bgp_start(struct peer *peer)
 	else
 		connected = 0;
 
-	if (!bgp_find_or_add_nexthop(peer->bgp,
+	if (!bgp_find_or_add_nexthop(peer->bgp, peer->bgp,
 				     family2afi(peer->su.sa.sa_family), NULL,
 				     peer, connected)) {
 #if defined(HAVE_CUMULUS)
@@ -1517,9 +1518,8 @@ static int bgp_establish(struct peer *peer)
 	}
 
 	if (other == peer)
-		ret =
-			1; /* bgp_establish specific code when xfer_conn
-			      happens. */
+		ret = 1; /* bgp_establish specific code when xfer_conn
+			    happens. */
 
 	/* Reset capability open status flag. */
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_CAPABILITY_OPEN))

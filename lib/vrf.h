@@ -73,7 +73,7 @@ struct vrf {
 	char name[VRF_NAMSIZ + 1];
 
 	/* Zebra internal VRF status */
-	u_char status;
+	uint8_t status;
 #define VRF_ACTIVE     (1 << 0) /* VRF is up in kernel */
 #define VRF_CONFIGURED (1 << 1) /* VRF has some FRR configuration */
 
@@ -206,19 +206,18 @@ extern void vrf_terminate(void);
  */
 
 /* Create a socket serving for the given VRF */
-extern int vrf_socket(int domain, int type,
-		      int protocol, vrf_id_t vrf_id,
+extern int vrf_socket(int domain, int type, int protocol, vrf_id_t vrf_id,
 		      char *name);
 
-extern int vrf_sockunion_socket(const union sockunion *su,
-				vrf_id_t vrf_id, char *name);
+extern int vrf_sockunion_socket(const union sockunion *su, vrf_id_t vrf_id,
+				char *name);
 
 extern int vrf_bind(vrf_id_t vrf_id, int fd, char *name);
 
 /* VRF ioctl operations */
 extern int vrf_getaddrinfo(const char *node, const char *service,
-		    const struct addrinfo *hints,
-		    struct addrinfo **res, vrf_id_t vrf_id);
+			   const struct addrinfo *hints, struct addrinfo **res,
+			   vrf_id_t vrf_id);
 
 extern int vrf_ioctl(vrf_id_t vrf_id, int d, unsigned long request, char *args);
 
@@ -243,7 +242,8 @@ extern int vrf_switchback_to_initial(void);
 
 /* VRF vty command initialisation
  */
-extern void vrf_cmd_init(int (*writefunc)(struct vty *vty));
+extern void vrf_cmd_init(int (*writefunc)(struct vty *vty),
+			 struct zebra_privs_t *daemon_priv);
 
 /* VRF vty debugging
  */
@@ -264,8 +264,7 @@ extern int vrf_is_backend_netns(void);
 /* API to create a VRF. either from vty
  * or through discovery
  */
-extern int vrf_handler_create(struct vty *vty,
-			      const char *name,
+extern int vrf_handler_create(struct vty *vty, const char *name,
 			      struct vrf **vrf);
 
 /* API to associate a VRF with a NETNS.
@@ -273,12 +272,14 @@ extern int vrf_handler_create(struct vty *vty,
  * should be called from zebra only
  */
 extern int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf,
-			     char *pathname, ns_id_t ns_id);
+				    char *pathname, ns_id_t ext_ns_id,
+				    ns_id_t ns_id);
 
 /* used internally to enable or disable VRF.
  * Notify a change in the VRF ID of the VRF
  */
 extern void vrf_disable(struct vrf *vrf);
 extern int vrf_enable(struct vrf *vrf);
+extern void vrf_delete(struct vrf *vrf);
 
 #endif /*_ZEBRA_VRF_H*/

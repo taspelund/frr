@@ -36,6 +36,7 @@
 #include "vrf.h"
 #include "logicalrouter.h"
 #include "libfrr.h"
+#include "routemap.h"
 
 #include "zebra/rib.h"
 #include "zebra/zserv.h"
@@ -49,6 +50,7 @@
 #include "zebra/zebra_mpls.h"
 #include "zebra/label_manager.h"
 #include "zebra/zebra_netns_notify.h"
+#include "zebra/zebra_rnh.h"
 
 #define ZEBRA_PTM_SUPPORT
 
@@ -75,7 +77,7 @@ int keep_kernel_mode = 0;
 
 #ifdef HAVE_NETLINK
 /* Receive buffer size for netlink socket */
-u_int32_t nl_rcvbufsize = 4194304;
+uint32_t nl_rcvbufsize = 4194304;
 #endif /* HAVE_NETLINK */
 
 /* Command line options. */
@@ -208,8 +210,7 @@ int main(int argc, char **argv)
 #endif
 
 	vrf_configure_backend(VRF_BACKEND_VRF_LITE);
-	logicalrouter_configure_backend(
-			 LOGICALROUTER_BACKEND_NETNS);
+	logicalrouter_configure_backend(LOGICALROUTER_BACKEND_NETNS);
 
 	frr_preinit(&zebra_di, argc, argv);
 
@@ -289,7 +290,7 @@ int main(int argc, char **argv)
 		case 'n':
 			vrf_configure_backend(VRF_BACKEND_NETNS);
 			logicalrouter_configure_backend(
-					LOGICALROUTER_BACKEND_OFF);
+				LOGICALROUTER_BACKEND_OFF);
 			break;
 #endif /* HAVE_NETLINK */
 #if defined(HANDLE_ZAPI_FUZZING)
@@ -333,8 +334,8 @@ int main(int argc, char **argv)
 	zebra_mpls_vty_init();
 	zebra_pw_vty_init();
 
-	/* For debug purpose. */
-	/* SET_FLAG (zebra_debug_event, ZEBRA_DEBUG_EVENT); */
+/* For debug purpose. */
+/* SET_FLAG (zebra_debug_event, ZEBRA_DEBUG_EVENT); */
 
 #if defined(HANDLE_ZAPI_FUZZING)
 	if (fuzzing) {
@@ -371,6 +372,9 @@ int main(int argc, char **argv)
 
 	/* Init label manager */
 	label_manager_init(lblmgr_path);
+
+	/* RNH init */
+	zebra_rnh_init();
 
 	frr_run(zebrad.master);
 

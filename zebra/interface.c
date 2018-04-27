@@ -52,10 +52,10 @@
 
 #define ZEBRA_PTM_SUPPORT
 
-DEFINE_HOOK(zebra_if_extra_info, (struct vty *vty, struct interface *ifp),
-				 (vty, ifp))
-DEFINE_HOOK(zebra_if_config_wr, (struct vty *vty, struct interface *ifp),
-				(vty, ifp))
+DEFINE_HOOK(zebra_if_extra_info, (struct vty * vty, struct interface *ifp),
+	    (vty, ifp))
+DEFINE_HOOK(zebra_if_config_wr, (struct vty * vty, struct interface *ifp),
+	    (vty, ifp))
 
 
 static void if_down_del_nbr_connected(struct interface *ifp);
@@ -71,8 +71,8 @@ static int if_zebra_speed_update(struct thread *thread)
 	new_speed = kernel_get_speed(ifp);
 	if (new_speed != ifp->speed) {
 		zlog_info("%s: %s old speed: %u new speed: %u",
-			  __PRETTY_FUNCTION__, ifp->name,
-			  ifp->speed, new_speed);
+			  __PRETTY_FUNCTION__, ifp->name, ifp->speed,
+			  new_speed);
 		ifp->speed = new_speed;
 		if_add_update(ifp);
 	}
@@ -148,8 +148,8 @@ static int if_zebra_new_hook(struct interface *ifp)
 	 * of seconds and ask again.  Hopefully it's all settled
 	 * down upon startup.
 	 */
-	thread_add_timer(zebrad.master, if_zebra_speed_update,
-			 ifp, 15, &zebra_if->speed_update);
+	thread_add_timer(zebrad.master, if_zebra_speed_update, ifp, 15,
+			 &zebra_if->speed_update);
 	return 0;
 }
 
@@ -181,7 +181,7 @@ static int if_zebra_delete_hook(struct interface *ifp)
 }
 
 /* Build the table key */
-static void if_build_key(u_int32_t ifindex, struct prefix *p)
+static void if_build_key(uint32_t ifindex, struct prefix *p)
 {
 	p->family = AF_INET;
 	p->prefixlen = IPV4_MAX_BITLEN;
@@ -221,7 +221,7 @@ void if_unlink_per_ns(struct interface *ifp)
 
 /* Look up an interface by identifier within a NS */
 struct interface *if_lookup_by_index_per_ns(struct zebra_ns *ns,
-					    u_int32_t ifindex)
+					    uint32_t ifindex)
 {
 	struct prefix p;
 	struct route_node *rn;
@@ -249,6 +249,30 @@ struct interface *if_lookup_by_name_per_ns(struct zebra_ns *ns,
 			return (ifp);
 	}
 
+	return NULL;
+}
+
+/* this function must be used only if the vrf backend
+ * is a netns backend
+ */
+struct interface *if_lookup_by_name_not_ns(ns_id_t ns_id,
+					   const char *ifname)
+{
+	struct interface *ifp;
+	struct ns *ns;
+
+	RB_FOREACH (ns, ns_head, &ns_tree) {
+		if (ns->ns_id == ns_id)
+			continue;
+		/* if_delete_update has removed interface
+		 * from zns->if_table
+		 * so to look for interface, use the vrf list
+		 */
+		ifp = if_lookup_by_name(ifname, (vrf_id_t)ns->ns_id);
+		if (!ifp)
+			continue;
+		return ifp;
+	}
 	return NULL;
 }
 
@@ -608,16 +632,14 @@ static void if_delete_connected(struct interface *ifp)
 	if (!ifp->connected)
 		return;
 
-	while ((node = (last ? last->next
-			: listhead(ifp->connected)))) {
+	while ((node = (last ? last->next : listhead(ifp->connected)))) {
 		ifc = listgetdata(node);
 
 		cp = *CONNECTED_PREFIX(ifc);
 		apply_mask(&cp);
 
 		if (cp.family == AF_INET
-		    && (rn = route_node_lookup(zebra_if->ipv4_subnets,
-					       &cp))) {
+		    && (rn = route_node_lookup(zebra_if->ipv4_subnets, &cp))) {
 			struct listnode *anode;
 			struct listnode *next;
 			struct listnode *first;
@@ -789,7 +811,7 @@ void if_handle_vrf_change(struct interface *ifp, vrf_id_t vrf_id)
 	rib_update(ifp->vrf_id, RIB_UPDATE_IF_CHANGE);
 }
 
-static void ipv6_ll_address_to_mac(struct in6_addr *address, u_char *mac)
+static void ipv6_ll_address_to_mac(struct in6_addr *address, uint8_t *mac)
 {
 	mac[0] = address->s6_addr[8] ^ 0x02;
 	mac[1] = address->s6_addr[9];
@@ -811,7 +833,7 @@ void if_nbr_ipv6ll_to_ipv4ll_neigh_update(struct interface *ifp,
 
 	inet_pton(AF_INET, buf, &ipv4_ll);
 
-	ipv6_ll_address_to_mac(address, (u_char *)mac);
+	ipv6_ll_address_to_mac(address, (uint8_t *)mac);
 	ns_id = zvrf->zns->ns_id;
 
 	/*
@@ -880,6 +902,7 @@ void if_up(struct interface *ifp)
 {
 	struct zebra_if *zif;
 	struct interface *link_if;
+	struct zebra_vrf *zvrf = vrf_info_lookup(ifp->vrf_id);
 
 	zif = ifp->info;
 	zif->up_count++;
@@ -922,7 +945,7 @@ void if_up(struct interface *ifp)
 		link_if = ifp;
 		zebra_vxlan_svi_up(ifp, link_if);
 	} else if (IS_ZEBRA_IF_VLAN(ifp)) {
-		link_if = if_lookup_by_index_per_ns(zebra_ns_lookup(NS_DEFAULT),
+		link_if = if_lookup_by_index_per_ns(zvrf->zns,
 						    zif->link_ifindex);
 		if (link_if)
 			zebra_vxlan_svi_up(ifp, link_if);
@@ -935,6 +958,7 @@ void if_down(struct interface *ifp)
 {
 	struct zebra_if *zif;
 	struct interface *link_if;
+	struct zebra_vrf *zvrf = vrf_info_lookup(ifp->vrf_id);
 
 	zif = ifp->info;
 	zif->down_count++;
@@ -951,7 +975,7 @@ void if_down(struct interface *ifp)
 		link_if = ifp;
 		zebra_vxlan_svi_down(ifp, link_if);
 	} else if (IS_ZEBRA_IF_VLAN(ifp)) {
-		link_if = if_lookup_by_index_per_ns(zebra_ns_lookup(NS_DEFAULT),
+		link_if = if_lookup_by_index_per_ns(zvrf->zns,
 						    zif->link_ifindex);
 		if (link_if)
 			zebra_vxlan_svi_down(ifp, link_if);
@@ -1545,7 +1569,7 @@ DEFUN (show_interface_desc_vrf_all,
 	struct vrf *vrf;
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
-		if (!RB_EMPTY (if_name_head, &vrf->ifaces_by_name)) {
+		if (!RB_EMPTY(if_name_head, &vrf->ifaces_by_name)) {
 			vty_out(vty, "\n\tVRF %u\n\n", vrf->vrf_id);
 			if_show_description(vty, vrf->vrf_id);
 		}
@@ -1873,7 +1897,7 @@ DEFUN (link_params_metric,
 	int idx_number = 1;
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	struct if_link_params *iflp = if_link_params_get(ifp);
-	u_int32_t metric;
+	uint32_t metric;
 
 	metric = strtoul(argv[idx_number]->arg, NULL, 10);
 
@@ -2061,7 +2085,7 @@ DEFUN (link_params_inter_as,
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	struct if_link_params *iflp = if_link_params_get(ifp);
 	struct in_addr addr;
-	u_int32_t as;
+	uint32_t as;
 
 	if (!inet_aton(argv[idx_ipv4]->arg, &addr)) {
 		vty_out(vty, "Please specify Router-Addr by A.B.C.D\n");
@@ -2120,7 +2144,7 @@ DEFUN (link_params_delay,
        "Maximum delay in micro-second as decimal (0...16777215)\n")
 {
 	/* Get and Check new delay values */
-	u_int32_t delay = 0, low = 0, high = 0;
+	uint32_t delay = 0, low = 0, high = 0;
 	delay = strtoul(argv[1]->arg, NULL, 10);
 	if (argc == 6) {
 		low = strtoul(argv[3]->arg, NULL, 10);
@@ -2129,7 +2153,7 @@ DEFUN (link_params_delay,
 
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	struct if_link_params *iflp = if_link_params_get(ifp);
-	u_int8_t update = 0;
+	uint8_t update = 0;
 
 	if (argc == 2) {
 		/* Check new delay value against old Min and Max delays if set
@@ -2215,7 +2239,7 @@ DEFUN (link_params_delay_var,
 	int idx_number = 1;
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	struct if_link_params *iflp = if_link_params_get(ifp);
-	u_int32_t value;
+	uint32_t value;
 
 	value = strtoul(argv[idx_number]->arg, NULL, 10);
 

@@ -38,23 +38,22 @@
 #include "zebra_netns_id.h"
 #include "zebra_pbr.h"
 #include "rib.h"
+#include "table_manager.h"
 
 extern struct zebra_privs_t zserv_privs;
 
 DEFINE_MTYPE(ZEBRA, ZEBRA_NS, "Zebra Name Space")
 
-static inline int
-zebra_ns_table_entry_compare(const struct zebra_ns_table *e1,
-			     const struct zebra_ns_table *e2);
+static inline int zebra_ns_table_entry_compare(const struct zebra_ns_table *e1,
+					       const struct zebra_ns_table *e2);
 
 RB_GENERATE(zebra_ns_table_head, zebra_ns_table, zebra_ns_table_entry,
 	    zebra_ns_table_entry_compare);
 
 static struct zebra_ns *dzns;
 
-static inline int
-zebra_ns_table_entry_compare(const struct zebra_ns_table *e1,
-			     const struct zebra_ns_table *e2)
+static inline int zebra_ns_table_entry_compare(const struct zebra_ns_table *e1,
+					       const struct zebra_ns_table *e2)
 {
 	if (e1->tableid == e2->tableid)
 		return (e1->afi - e2->afi);
@@ -98,7 +97,7 @@ static int zebra_ns_new(struct ns *ns)
 
 static int zebra_ns_delete(struct ns *ns)
 {
-	struct zebra_ns *zns = (struct zebra_ns *) ns->info;
+	struct zebra_ns *zns = (struct zebra_ns *)ns->info;
 
 	if (IS_ZEBRA_DEBUG_EVENT)
 		zlog_info("ZNS %s with id %u (deleted)", ns->name, ns->ns_id);
@@ -137,6 +136,24 @@ int zebra_ns_enable(ns_id_t ns_id, void **info)
 
 	zns->ns_id = ns_id;
 
+	zns->rules_hash =
+		hash_create_size(8, zebra_pbr_rules_hash_key,
+				 zebra_pbr_rules_hash_equal, "Rules Hash");
+
+	zns->ipset_hash =
+		hash_create_size(8, zebra_pbr_ipset_hash_key,
+				 zebra_pbr_ipset_hash_equal, "IPset Hash");
+
+	zns->ipset_entry_hash =
+		hash_create_size(8, zebra_pbr_ipset_entry_hash_key,
+				 zebra_pbr_ipset_entry_hash_equal,
+				 "IPset Hash Entry");
+
+	zns->iptable_hash =
+		hash_create_size(8, zebra_pbr_iptable_hash_key,
+				 zebra_pbr_iptable_hash_equal,
+				 "IPtable Hash Entry");
+
 #if defined(HAVE_RTADV)
 	rtadv_init(zns);
 #endif
@@ -145,11 +162,14 @@ int zebra_ns_enable(ns_id_t ns_id, void **info)
 	interface_list(zns);
 	route_read(zns);
 
+	/* Initiate Table Manager per ZNS */
+	table_manager_enable(ns_id);
+
 	return 0;
 }
 
-struct route_table *zebra_ns_find_table(struct zebra_ns *zns,
-					uint32_t tableid, afi_t afi)
+struct route_table *zebra_ns_find_table(struct zebra_ns *zns, uint32_t tableid,
+					afi_t afi)
 {
 	struct zebra_ns_table finder;
 	struct zebra_ns_table *znst;
@@ -165,7 +185,7 @@ struct route_table *zebra_ns_find_table(struct zebra_ns *zns,
 		return NULL;
 }
 
-unsigned long zebra_ns_score_proto(u_char proto, u_short instance)
+unsigned long zebra_ns_score_proto(uint8_t proto, unsigned short instance)
 {
 	struct zebra_ns *zns;
 	struct zebra_ns_table *znst;
@@ -242,6 +262,15 @@ int zebra_ns_disable(ns_id_t ns_id, void **info)
 
 	hash_clean(zns->rules_hash, zebra_pbr_rules_free);
 	hash_free(zns->rules_hash);
+	hash_clean(zns->ipset_hash, zebra_pbr_ipset_free);
+	hash_free(zns->ipset_hash);
+	hash_clean(zns->ipset_entry_hash,
+		   zebra_pbr_ipset_entry_free),
+	hash_free(zns->ipset_entry_hash);
+	hash_clean(zns->iptable_hash,
+		   zebra_pbr_iptable_free);
+	hash_free(zns->iptable_hash);
+
 	while (!RB_EMPTY(zebra_ns_table_head, &zns->ns_tables)) {
 		znst = RB_ROOT(zebra_ns_table_head, &zns->ns_tables);
 
@@ -257,6 +286,8 @@ int zebra_ns_disable(ns_id_t ns_id, void **info)
 
 	kernel_terminate(zns);
 
+	table_manager_disable(zns->ns_id);
+
 	zns->ns_id = NS_DEFAULT;
 
 	return 0;
@@ -266,6 +297,7 @@ int zebra_ns_disable(ns_id_t ns_id, void **info)
 int zebra_ns_init(void)
 {
 	ns_id_t ns_id;
+	ns_id_t ns_id_external;
 
 	dzns = zebra_ns_alloc();
 
@@ -274,8 +306,8 @@ int zebra_ns_init(void)
 	ns_id = zebra_ns_id_get_default();
 	if (zserv_privs.change(ZPRIVS_LOWER))
 		zlog_err("Can't lower privileges");
-
-	ns_init_management(ns_id);
+	ns_id_external = ns_map_nsid_with_external(ns_id, true);
+	ns_init_management(ns_id_external, ns_id);
 
 	logicalrouter_init(logicalrouter_config_write);
 
@@ -287,11 +319,8 @@ int zebra_ns_init(void)
 	zebra_vrf_init();
 
 	/* Default NS is activated */
-	zebra_ns_enable(ns_id, (void **)&dzns);
+	zebra_ns_enable(ns_id_external, (void **)&dzns);
 
-	dzns->rules_hash =
-		hash_create_size(8, zebra_pbr_rules_hash_key,
-				 zebra_pbr_rules_hash_equal, "Rules Hash");
 	if (vrf_is_backend_netns()) {
 		ns_add_hook(NS_NEW_HOOK, zebra_ns_new);
 		ns_add_hook(NS_ENABLE_HOOK, zebra_ns_enabled);
@@ -308,7 +337,7 @@ static int logicalrouter_config_write(struct vty *vty)
 	struct ns *ns;
 	int write = 0;
 
-	RB_FOREACH(ns, ns_head, &ns_tree) {
+	RB_FOREACH (ns, ns_head, &ns_tree) {
 		if (ns->ns_id == NS_DEFAULT || ns->name == NULL)
 			continue;
 		vty_out(vty, "logical-router %u netns %s\n", ns->ns_id,

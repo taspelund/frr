@@ -59,6 +59,9 @@ static char history_file[MAXPATHLEN];
 /* Flag for indicate executing child command. */
 int execute_flag = 0;
 
+/* Flag to indicate if in user/unprivileged mode. */
+int user_mode;
+
 /* For sigsetjmp() & siglongjmp(). */
 static sigjmp_buf jmpbuf;
 
@@ -150,6 +153,7 @@ static void usage(int status)
 		       "    --config_dir         Override config directory path\n"
 		       "-q  --quagga             Use existing configs in /etc/quagga\n"
 		       "-N  --pathspace          Insert prefix into config & socket paths\n"
+		       "-u  --user               Run as an unprivileged user\n"
 		       "-w, --writeconfig        Write integrated config (frr.conf) and exit\n"
 		       "-h, --help               Display this help and exit\n\n"
 		       "Note that multiple commands may be executed from the command\n"
@@ -181,6 +185,7 @@ struct option longopts[] = {
 	{"quagga", no_argument, NULL, 'q'},
 	{"writeconfig", no_argument, NULL, 'w'},
 	{"pathspace", required_argument, NULL, 'N'},
+	{"user", no_argument, NULL, 'u'},
 	{0}};
 
 /* Read a string, and return a pointer to it.  Returns NULL on EOF. */
@@ -302,6 +307,7 @@ int main(int argc, char **argv, char **env)
 	char *homedir = NULL;
 	int ditch_suid = 0;
 	char sysconfdir[MAXPATHLEN];
+	const char *pathspace_arg = NULL;
 	char pathspace[MAXPATHLEN] = "";
 	bool quagga_compat = false;
 
@@ -312,6 +318,8 @@ int main(int argc, char **argv, char **env)
 	realgid = getgid();
 	suid_off();
 
+	user_mode = 0;		/* may be set in options processing */
+
 	/* Preserve name of myself. */
 	progname = ((p = strrchr(argv[0], '/')) ? ++p : argv[0]);
 
@@ -320,7 +328,8 @@ int main(int argc, char **argv, char **env)
 
 	/* Option handling. */
 	while (1) {
-		opt = getopt_long(argc, argv, "be:c:d:nf:mEhCqwN:", longopts, 0);
+		opt = getopt_long(argc, argv, "be:c:d:nf:mEhCqwN:u",
+				  longopts, 0);
 
 		if (opt == EOF)
 			break;
@@ -357,7 +366,8 @@ int main(int argc, char **argv, char **env)
 					"slashes or dots are not permitted in the --pathspace option.\n");
 				exit(1);
 			}
-			snprintf(pathspace, sizeof(pathspace), "/%s", optarg);
+			pathspace_arg = optarg;
+			snprintf(pathspace, sizeof(pathspace), "%s/", optarg);
 			break;
 		case 'd':
 			daemon_name = optarg;
@@ -378,8 +388,12 @@ int main(int argc, char **argv, char **env)
 			dryrun = 1;
 			break;
 		case 'q':
-			snprintf(sysconfdir, sizeof(sysconfdir), QUAGGA_CONFDIR);
+			snprintf(sysconfdir, sizeof(sysconfdir),
+				 QUAGGA_CONFDIR);
 			quagga_compat = true;
+			break;
+		case 'u':
+			user_mode = 1;
 			break;
 		case 'w':
 			writeconfig = 1;
@@ -410,11 +424,15 @@ int main(int argc, char **argv, char **env)
 			"NOT SUPPORTED since its\nresults are inconsistent!\n");
 	}
 
-	snprintf(vtysh_config, sizeof(vtysh_config), "%s%s%s",
-		 sysconfdir, pathspace, VTYSH_CONFIG_NAME);
+	snprintf(vtysh_config, sizeof(vtysh_config), "%s%s%s", sysconfdir,
+		 pathspace, VTYSH_CONFIG_NAME);
 	snprintf(frr_config, sizeof(frr_config), "%s%s/%s", sysconfdir,
 		 pathspace, quagga_compat ? QUAGGA_INTCONF : FRR_INTCONF);
-	strlcat(vtydir, pathspace, sizeof(vtydir));
+
+	if (pathspace_arg) {
+		strlcat(vtydir, "/", sizeof(vtydir));
+		strlcat(vtydir, pathspace_arg, sizeof(vtydir));
+	}
 
 	/* Initialize user input buffer. */
 	line_read = NULL;
@@ -431,11 +449,13 @@ int main(int argc, char **argv, char **env)
 
 	vty_init_vtysh();
 
-	/* Read vtysh configuration file before connecting to daemons.
-	 * (file may not be readable to calling user in SUID mode) */
-	suid_on();
-	vtysh_read_config(vtysh_config);
-	suid_off();
+	if (!user_mode) {
+		/* Read vtysh configuration file before connecting to daemons.
+		 * (file may not be readable to calling user in SUID mode) */
+		suid_on();
+		vtysh_read_config(vtysh_config);
+		suid_off();
+	}
 
 	if (markfile) {
 		if (!inputfile) {
@@ -532,8 +552,8 @@ int main(int argc, char **argv, char **env)
 	 */
 	homedir = vtysh_get_home();
 	if (homedir) {
-		snprintf(history_file, sizeof(history_file),
-			 "%s/.history_frr", homedir);
+		snprintf(history_file, sizeof(history_file), "%s/.history_frr",
+			 homedir);
 		if (read_history(history_file) != 0) {
 			int fp;
 

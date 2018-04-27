@@ -44,7 +44,7 @@ struct config {
 	struct config *config;
 
 	/* Index of this config. */
-	u_int32_t index;
+	uint32_t index;
 };
 
 struct list *config_top;
@@ -175,9 +175,9 @@ void vtysh_config_parse_line(void *arg, const char *line)
 			    == 0) {
 				config_add_line(config->line, line);
 				config->index = LINK_PARAMS_NODE;
-			} else if (strncmp(line,
-					   " ip multicast boundary",
-					   strlen(" ip multicast boundary")) == 0) {
+			} else if (strncmp(line, " ip multicast boundary",
+					   strlen(" ip multicast boundary"))
+				   == 0) {
 				config_add_line_end(config->line, line);
 			} else if (config->index == LINK_PARAMS_NODE
 				   && strncmp(line, "  exit-link-params",
@@ -207,7 +207,7 @@ void vtysh_config_parse_line(void *arg, const char *line)
 			config = config_get(INTERFACE_NODE, line);
 		else if (strncmp(line, "pseudowire", strlen("pseudowire")) == 0)
 			config = config_get(PW_NODE, line);
-		else if (strncmp(line, "logical-router", strlen("ns")) == 0)
+		else if (strncmp(line, "logical-router", strlen("logical-router")) == 0)
 			config = config_get(LOGICALROUTER_NODE, line);
 		else if (strncmp(line, "vrf", strlen("vrf")) == 0)
 			config = config_get(VRF_NODE, line);
@@ -274,10 +274,10 @@ void vtysh_config_parse_line(void *arg, const char *line)
 				 == 0
 			 || strncmp(line, "ip extcommunity-list",
 				    strlen("ip extcommunity-list"))
-				 == 0
+				    == 0
 			 || strncmp(line, "ip large-community-list",
 				    strlen("ip large-community-list"))
-				 == 0)
+				    == 0)
 			config = config_get(COMMUNITY_LIST_NODE, line);
 		else if (strncmp(line, "ip route", strlen("ip route")) == 0)
 			config = config_get(IP_NODE, line);
@@ -294,8 +294,6 @@ void vtysh_config_parse_line(void *arg, const char *line)
 				     strlen("ip forwarding"))
 			     == 0))
 			config = config_get(FORWARDING_NODE, line);
-		else if (strncmp(line, "service", strlen("service")) == 0)
-			config = config_get(SERVICE_NODE, line);
 		else if (strncmp(line, "debug vrf", strlen("debug vrf")) == 0)
 			config = config_get(VRF_DEBUG_NODE, line);
 		else if (strncmp(line, "debug", strlen("debug")) == 0)
@@ -339,9 +337,9 @@ void vtysh_config_parse_line(void *arg, const char *line)
 	((I) == ACCESS_NODE || (I) == PREFIX_NODE || (I) == IP_NODE            \
 	 || (I) == AS_LIST_NODE || (I) == COMMUNITY_LIST_NODE                  \
 	 || (I) == ACCESS_IPV6_NODE || (I) == ACCESS_MAC_NODE                  \
-	 || (I) == PREFIX_IPV6_NODE || (I) == SERVICE_NODE                     \
-	 || (I) == FORWARDING_NODE || (I) == DEBUG_NODE || (I) == AAA_NODE     \
-	 || (I) == VRF_DEBUG_NODE || (I) == MPLS_NODE)
+	 || (I) == PREFIX_IPV6_NODE || (I) == FORWARDING_NODE                  \
+	 || (I) == DEBUG_NODE || (I) == AAA_NODE || (I) == VRF_DEBUG_NODE      \
+	 || (I) == MPLS_NODE)
 
 /* Display configuration to file pointer. */
 void vtysh_config_dump(FILE *fp)

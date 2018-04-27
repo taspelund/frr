@@ -55,7 +55,7 @@ void community_free(struct community *com)
 }
 
 /* Add one community value to the community. */
-static void community_add_val(struct community *com, u_int32_t val)
+static void community_add_val(struct community *com, uint32_t val)
 {
 	com->size++;
 	if (com->val)
@@ -65,11 +65,11 @@ static void community_add_val(struct community *com, u_int32_t val)
 		com->val = XMALLOC(MTYPE_COMMUNITY_VAL, com_length(com));
 
 	val = htonl(val);
-	memcpy(com_lastval(com), &val, sizeof(u_int32_t));
+	memcpy(com_lastval(com), &val, sizeof(uint32_t));
 }
 
 /* Delete one community. */
-void community_del_val(struct community *com, u_int32_t *val)
+void community_del_val(struct community *com, uint32_t *val)
 {
 	int i = 0;
 	int c = 0;
@@ -78,7 +78,7 @@ void community_del_val(struct community *com, u_int32_t *val)
 		return;
 
 	while (i < com->size) {
-		if (memcmp(com->val + i, val, sizeof(u_int32_t)) == 0) {
+		if (memcmp(com->val + i, val, sizeof(uint32_t)) == 0) {
 			c = com->size - i - 1;
 
 			if (c > 0)
@@ -117,11 +117,11 @@ struct community *community_delete(struct community *com1,
 /* Callback function from qsort(). */
 static int community_compare(const void *a1, const void *a2)
 {
-	u_int32_t v1;
-	u_int32_t v2;
+	uint32_t v1;
+	uint32_t v2;
 
-	memcpy(&v1, a1, sizeof(u_int32_t));
-	memcpy(&v2, a2, sizeof(u_int32_t));
+	memcpy(&v1, a1, sizeof(uint32_t));
+	memcpy(&v2, a2, sizeof(uint32_t));
 	v1 = ntohl(v1);
 	v2 = ntohl(v2);
 
@@ -132,28 +132,28 @@ static int community_compare(const void *a1, const void *a2)
 	return 0;
 }
 
-int community_include(struct community *com, u_int32_t val)
+int community_include(struct community *com, uint32_t val)
 {
 	int i;
 
 	val = htonl(val);
 
 	for (i = 0; i < com->size; i++)
-		if (memcmp(&val, com_nthval(com, i), sizeof(u_int32_t)) == 0)
+		if (memcmp(&val, com_nthval(com, i), sizeof(uint32_t)) == 0)
 			return 1;
 
 	return 0;
 }
 
-u_int32_t community_val_get(struct community *com, int i)
+uint32_t community_val_get(struct community *com, int i)
 {
-	u_char *p;
-	u_int32_t val;
+	uint8_t *p;
+	uint32_t val;
 
-	p = (u_char *)com->val;
+	p = (uint8_t *)com->val;
 	p += (i * 4);
 
-	memcpy(&val, p, sizeof(u_int32_t));
+	memcpy(&val, p, sizeof(uint32_t));
 
 	return ntohl(val);
 }
@@ -163,7 +163,7 @@ struct community *community_uniq_sort(struct community *com)
 {
 	int i;
 	struct community *new;
-	u_int32_t val;
+	uint32_t val;
 
 	if (!com)
 		return NULL;
@@ -178,7 +178,7 @@ struct community *community_uniq_sort(struct community *com)
 			community_add_val(new, val);
 	}
 
-	qsort(new->val, new->size, sizeof(u_int32_t), community_compare);
+	qsort(new->val, new->size, sizeof(uint32_t), community_compare);
 
 	return new;
 }
@@ -201,9 +201,9 @@ static void set_community_string(struct community *com, bool make_json)
 	char *pnt;
 	int len;
 	int first;
-	u_int32_t comval;
-	u_int16_t as;
-	u_int16_t val;
+	uint32_t comval;
+	uint16_t as;
+	uint16_t val;
 	json_object *json_community_list = NULL;
 	json_object *json_string = NULL;
 
@@ -222,7 +222,8 @@ static void set_community_string(struct community *com, bool make_json)
 
 		if (make_json) {
 			json_object_string_add(com->json, "string", "");
-			json_object_object_add(com->json, "list", json_community_list);
+			json_object_object_add(com->json, "list",
+					       json_community_list);
 		}
 		com->str = str;
 		return;
@@ -233,7 +234,7 @@ static void set_community_string(struct community *com, bool make_json)
 	len = 0;
 
 	for (i = 0; i < com->size; i++) {
-		memcpy(&comval, com_nthval(com, i), sizeof(u_int32_t));
+		memcpy(&comval, com_nthval(com, i), sizeof(uint32_t));
 		comval = ntohl(comval);
 
 		switch (comval) {
@@ -264,7 +265,7 @@ static void set_community_string(struct community *com, bool make_json)
 
 	/* Fill in string.  */
 	for (i = 0; i < com->size; i++) {
-		memcpy(&comval, com_nthval(com, i), sizeof(u_int32_t));
+		memcpy(&comval, com_nthval(com, i), sizeof(uint32_t));
 		comval = ntohl(comval);
 
 		if (first)
@@ -277,24 +278,30 @@ static void set_community_string(struct community *com, bool make_json)
 			strcpy(pnt, "internet");
 			pnt += strlen("internet");
 			if (make_json) {
-				json_string = json_object_new_string("internet");
-				json_object_array_add(json_community_list, json_string);
+				json_string =
+					json_object_new_string("internet");
+				json_object_array_add(json_community_list,
+						      json_string);
 			}
 			break;
 		case COMMUNITY_NO_EXPORT:
 			strcpy(pnt, "no-export");
 			pnt += strlen("no-export");
 			if (make_json) {
-				json_string = json_object_new_string("noExport");
-				json_object_array_add(json_community_list, json_string);
+				json_string =
+					json_object_new_string("noExport");
+				json_object_array_add(json_community_list,
+						      json_string);
 			}
 			break;
 		case COMMUNITY_NO_ADVERTISE:
 			strcpy(pnt, "no-advertise");
 			pnt += strlen("no-advertise");
 			if (make_json) {
-				json_string = json_object_new_string("noAdvertise");
-				json_object_array_add(json_community_list, json_string);
+				json_string =
+					json_object_new_string("noAdvertise");
+				json_object_array_add(json_community_list,
+						      json_string);
 			}
 			break;
 		case COMMUNITY_LOCAL_AS:
@@ -302,15 +309,18 @@ static void set_community_string(struct community *com, bool make_json)
 			pnt += strlen("local-AS");
 			if (make_json) {
 				json_string = json_object_new_string("localAs");
-				json_object_array_add(json_community_list, json_string);
+				json_object_array_add(json_community_list,
+						      json_string);
 			}
 			break;
 		case COMMUNITY_GSHUT:
 			strcpy(pnt, "graceful-shutdown");
 			pnt += strlen("graceful-shutdown");
 			if (make_json) {
-				json_string = json_object_new_string("gracefulShutdown");
-				json_object_array_add(json_community_list, json_string);
+				json_string = json_object_new_string(
+					"gracefulShutdown");
+				json_object_array_add(json_community_list,
+						      json_string);
 			}
 			break;
 		default:
@@ -319,7 +329,8 @@ static void set_community_string(struct community *com, bool make_json)
 			sprintf(pnt, "%u:%d", as, val);
 			if (make_json) {
 				json_string = json_object_new_string(pnt);
-				json_object_array_add(json_community_list, json_string);
+				json_object_array_add(json_community_list,
+						      json_string);
 			}
 			pnt += strlen(pnt);
 			break;
@@ -380,7 +391,7 @@ void community_unintern(struct community **com)
 }
 
 /* Create new community attribute. */
-struct community *community_parse(u_int32_t *pnt, u_short length)
+struct community *community_parse(uint32_t *pnt, unsigned short length)
 {
 	struct community tmp;
 	struct community *new;
@@ -430,7 +441,7 @@ char *community_str(struct community *com, bool make_json)
    hash package.*/
 unsigned int community_hash_make(struct community *com)
 {
-	u_int32_t *pnt = (u_int32_t *)com->val;
+	uint32_t *pnt = (uint32_t *)com->val;
 
 	return jhash2(pnt, com->size, 0x43ea96c1);
 }
@@ -451,8 +462,7 @@ int community_match(const struct community *com1, const struct community *com2)
 
 	/* Every community on com2 needs to be on com1 for this to match */
 	while (i < com1->size && j < com2->size) {
-		if (memcmp(com1->val + i, com2->val + j, sizeof(u_int32_t))
-		    == 0)
+		if (memcmp(com1->val + i, com2->val + j, sizeof(uint32_t)) == 0)
 			j++;
 		i++;
 	}
@@ -507,7 +517,7 @@ enum community_token {
 
 /* Get next community token from string. */
 static const char *
-community_gettoken(const char *buf, enum community_token *token, u_int32_t *val)
+community_gettoken(const char *buf, enum community_token *token, uint32_t *val)
 {
 	const char *p = buf;
 
@@ -545,7 +555,8 @@ community_gettoken(const char *buf, enum community_token *token, u_int32_t *val)
 			p += strlen("local-AS");
 			return p;
 		}
-		if (strncmp(p, "graceful-shutdown", strlen("graceful-shutdown")) == 0) {
+		if (strncmp(p, "graceful-shutdown", strlen("graceful-shutdown"))
+		    == 0) {
 			*val = COMMUNITY_GSHUT;
 			*token = community_token_gshut;
 			p += strlen("graceful-shutdown");
@@ -561,8 +572,8 @@ community_gettoken(const char *buf, enum community_token *token, u_int32_t *val)
 	if (isdigit((int)*p)) {
 		int separator = 0;
 		int digit = 0;
-		u_int32_t community_low = 0;
-		u_int32_t community_high = 0;
+		uint32_t community_low = 0;
+		uint32_t community_high = 0;
 
 		while (isdigit((int)*p) || *p == ':') {
 			if (*p == ':') {
@@ -612,7 +623,7 @@ struct community *community_str2com(const char *str)
 {
 	struct community *com = NULL;
 	struct community *com_sort = NULL;
-	u_int32_t val = 0;
+	uint32_t val = 0;
 	enum community_token token = community_token_unknown;
 
 	do {
@@ -662,10 +673,10 @@ struct hash *community_hash(void)
 /* Initialize comminity related hash. */
 void community_init(void)
 {
-	comhash = hash_create(
-		(unsigned int (*)(void *))community_hash_make,
-		(int (*)(const void *, const void *))community_cmp,
-		"BGP Community Hash");
+	comhash =
+		hash_create((unsigned int (*)(void *))community_hash_make,
+			    (int (*)(const void *, const void *))community_cmp,
+			    "BGP Community Hash");
 }
 
 void community_finish(void)

@@ -48,7 +48,7 @@ void ifreq_set_name(struct ifreq *ifreq, struct interface *ifp)
 }
 
 /* call ioctl system call */
-int if_ioctl(u_long request, caddr_t buffer)
+int if_ioctl(unsigned long request, caddr_t buffer)
 {
 	int sock;
 	int ret;
@@ -80,7 +80,7 @@ int if_ioctl(u_long request, caddr_t buffer)
 }
 
 /* call ioctl system call */
-int vrf_if_ioctl(u_long request, caddr_t buffer, vrf_id_t vrf_id)
+int vrf_if_ioctl(unsigned long request, caddr_t buffer, vrf_id_t vrf_id)
 {
 	int sock;
 	int ret;
@@ -113,7 +113,7 @@ int vrf_if_ioctl(u_long request, caddr_t buffer, vrf_id_t vrf_id)
 }
 
 #ifndef HAVE_NETLINK
-static int if_ioctl_ipv6(u_long request, caddr_t buffer)
+static int if_ioctl_ipv6(unsigned long request, caddr_t buffer)
 {
 	int sock;
 	int ret;
@@ -493,7 +493,7 @@ int if_unset_flags(struct interface *ifp, uint64_t flags)
 /* linux/include/net/ipv6.h */
 struct in6_ifreq {
 	struct in6_addr ifr6_addr;
-	u_int32_t ifr6_prefixlen;
+	uint32_t ifr6_prefixlen;
 	int ifr6_ifindex;
 };
 #endif /* _LINUX_IN6_H */
@@ -501,14 +501,14 @@ struct in6_ifreq {
 int if_prefix_add_ipv6(struct interface *ifp, struct connected *ifc)
 {
 #ifdef HAVE_NETLINK
-	return kernel_address_add_ipv6 (ifp, ifc);
+	return kernel_address_add_ipv6(ifp, ifc);
 #endif /* HAVE_NETLINK */
 }
 
 int if_prefix_delete_ipv6(struct interface *ifp, struct connected *ifc)
 {
 #ifdef HAVE_NETLINK
-	return kernel_address_delete_ipv6 (ifp, ifc);
+	return kernel_address_delete_ipv6(ifp, ifc);
 #endif /* HAVE_NETLINK */
 }
 #else /* LINUX_IPV6 */

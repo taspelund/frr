@@ -41,6 +41,7 @@ lib_libfrr_la_SOURCES = \
 	lib/memory.c \
 	lib/memory_vty.c \
 	lib/module.c \
+	lib/mpls.c \
 	lib/network.c \
 	lib/nexthop.c \
 	lib/netns_linux.c \
@@ -167,7 +168,9 @@ pkginclude_HEADERS += \
 	lib/zclient.h \
 	lib/zebra.h \
 	lib/logicalrouter.h \
+	lib/pbr.h \
 	# end
+
 
 nodist_pkginclude_HEADERS += \
 	lib/route_types.h \
@@ -230,7 +233,7 @@ lib_grammar_sandbox_SOURCES = \
 lib_grammar_sandbox_LDADD = \
 	lib/libfrr.la
 
-lib_clippy_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE
+lib_clippy_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE -DBUILDING_CLIPPY
 lib_clippy_CFLAGS = $(PYTHON_CFLAGS)
 lib_clippy_LDADD = $(PYTHON_LIBS)
 lib_clippy_SOURCES = \

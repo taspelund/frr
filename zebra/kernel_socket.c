@@ -168,7 +168,7 @@ static inline void rta_copy(union sockunion *dest, caddr_t src)
 
 #define RTA_NAME_GET(DEST, RTA, RTMADDRS, PNT, LEN)                            \
 	if ((RTMADDRS) & (RTA)) {                                              \
-		u_char *pdest = (u_char *)(DEST);                              \
+		uint8_t *pdest = (uint8_t *)(DEST);                            \
 		int len = SAROUNDUP((PNT));                                    \
 		struct sockaddr_dl *sdl = (struct sockaddr_dl *)(PNT);         \
 		if (IS_ZEBRA_DEBUG_KERNEL)                                     \
@@ -771,10 +771,11 @@ int ifam_read(struct ifa_msghdr *ifam)
 
 		if (ifam->ifam_type == RTM_NEWADDR)
 			connected_add_ipv6(ifp, flags, &addr.sin6.sin6_addr,
+					   NULL,
 					   ip6_masklen(mask.sin6.sin6_addr),
 					   (isalias ? ifname : NULL));
 		else
-			connected_delete_ipv6(ifp, &addr.sin6.sin6_addr,
+			connected_delete_ipv6(ifp, &addr.sin6.sin6_addr, NULL,
 					      ip6_masklen(mask.sin6.sin6_addr));
 		break;
 	default:
@@ -864,7 +865,7 @@ static int rtm_read_mesg(struct rt_msghdr *rtm, union sockunion *dest,
 void rtm_read(struct rt_msghdr *rtm)
 {
 	int flags;
-	u_char zebra_flags;
+	uint8_t zebra_flags;
 	union sockunion dest, mask, gate;
 	char ifname[INTERFACE_NAMSIZ + 1];
 	short ifnlen = 0;
@@ -1042,7 +1043,7 @@ void rtm_read(struct rt_msghdr *rtm)
 		if (rtm->rtm_type == RTM_CHANGE)
 			rib_delete(AFI_IP, SAFI_UNICAST, VRF_DEFAULT,
 				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				   NULL, 0, 0, true, NULL);
+				   NULL, 0, 0, true);
 
 		if (!nh.type) {
 			nh.type = NEXTHOP_TYPE_IPV4;
@@ -1057,7 +1058,7 @@ void rtm_read(struct rt_msghdr *rtm)
 		else
 			rib_delete(AFI_IP, SAFI_UNICAST, VRF_DEFAULT,
 				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				   &nh, 0, 0, true, NULL);
+				   &nh, 0, 0, true);
 	}
 	if (dest.sa.sa_family == AF_INET6) {
 		/* One day we might have a debug section here like one in the
@@ -1088,7 +1089,7 @@ void rtm_read(struct rt_msghdr *rtm)
 		if (rtm->rtm_type == RTM_CHANGE)
 			rib_delete(AFI_IP6, SAFI_UNICAST, VRF_DEFAULT,
 				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				   NULL, 0, 0, true, NULL);
+				   NULL, 0, 0, true);
 
 		if (!nh.type) {
 			nh.type = ifindex ? NEXTHOP_TYPE_IPV6_IFINDEX
@@ -1105,7 +1106,7 @@ void rtm_read(struct rt_msghdr *rtm)
 		else
 			rib_delete(AFI_IP6, SAFI_UNICAST, VRF_DEFAULT,
 				   ZEBRA_ROUTE_KERNEL, 0, zebra_flags, &p, NULL,
-				   &nh, 0, 0, true, NULL);
+				   &nh, 0, 0, true);
 	}
 }
 
@@ -1384,8 +1385,8 @@ static void routing_socket(struct zebra_ns *zns)
 	if (zserv_privs.change(ZPRIVS_RAISE))
 		zlog_err("routing_socket: Can't raise privileges");
 
-	routing_sock = ns_socket(AF_ROUTE, SOCK_RAW,
-				 0, (ns_id_t)zns->ns->ns_id);
+	routing_sock =
+		ns_socket(AF_ROUTE, SOCK_RAW, 0, (ns_id_t)zns->ns->ns_id);
 
 	if (routing_sock < 0) {
 		if (zserv_privs.change(ZPRIVS_LOWER))

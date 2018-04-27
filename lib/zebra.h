@@ -25,11 +25,13 @@
 #include "config.h"
 #endif /* HAVE_CONFIG_H */
 
+#include "compiler.h"
+
 #ifdef SUNOS_5
 #define _XPG4_2
-typedef unsigned int u_int32_t;
-typedef unsigned short u_int16_t;
-typedef unsigned char u_int8_t;
+typedef unsigned int uint32_t;
+typedef unsigned short uint16_t;
+typedef unsigned char uint8_t;
 #endif /* SUNOS_5 */
 
 #include <unistd.h>
@@ -127,10 +129,10 @@ typedef unsigned char u_int8_t;
 #endif
 
 #ifndef HAVE_LIBCRYPT
-#   ifdef HAVE_LIBCRYPTO
-#      include <openssl/des.h>
+#ifdef HAVE_LIBCRYPTO
+#include <openssl/des.h>
 #      define crypt DES_crypt
-#   endif
+#endif
 #endif
 
 #include "openbsd-tree.h"
@@ -232,10 +234,12 @@ typedef unsigned char u_int8_t;
 #include "zassert.h"
 
 #ifndef HAVE_STRLCAT
-size_t strlcat(char *__restrict dest, const char *__restrict src, size_t size);
+size_t strlcat(char *__restrict dest,
+	       const char *__restrict src, size_t destsize);
 #endif
 #ifndef HAVE_STRLCPY
-size_t strlcpy(char *__restrict dest, const char *__restrict src, size_t size);
+size_t strlcpy(char *__restrict dest,
+	       const char *__restrict src, size_t destsize);
 #endif
 
 #ifdef HAVE_BROKEN_CMSG_FIRSTHDR
@@ -431,7 +435,8 @@ typedef enum {
 	SAFI_ENCAP = 4,
 	SAFI_EVPN = 5,
 	SAFI_LABELED_UNICAST = 6,
-	SAFI_MAX = 7
+	SAFI_FLOWSPEC = 7,
+	SAFI_MAX = 8
 } safi_t;
 
 /*
@@ -459,7 +464,8 @@ typedef enum {
 	IANA_SAFI_LABELED_UNICAST = 4,
 	IANA_SAFI_ENCAP = 7,
 	IANA_SAFI_EVPN = 70,
-	IANA_SAFI_MPLS_VPN = 128
+	IANA_SAFI_MPLS_VPN = 128,
+	IANA_SAFI_FLOWSPEC = 133
 } iana_safi_t;
 
 /* Default Administrative Distance of each protocol. */
@@ -492,8 +498,8 @@ typedef enum {
 	((atomic_store_explicit(PV, 0, memory_order_seq_cst)))
 
 /* Zebra types. Used in Zserv message header. */
-typedef u_int16_t zebra_size_t;
-typedef u_int16_t zebra_command_t;
+typedef uint16_t zebra_size_t;
+typedef uint16_t zebra_command_t;
 
 /* VRF ID type. */
 typedef uint32_t vrf_id_t;
@@ -545,6 +551,8 @@ static inline safi_t safi_iana2int(iana_safi_t safi)
 		return SAFI_EVPN;
 	case IANA_SAFI_LABELED_UNICAST:
 		return SAFI_LABELED_UNICAST;
+	case IANA_SAFI_FLOWSPEC:
+		return SAFI_FLOWSPEC;
 	default:
 		return SAFI_MAX;
 	}
@@ -565,6 +573,8 @@ static inline iana_safi_t safi_int2iana(safi_t safi)
 		return IANA_SAFI_EVPN;
 	case SAFI_LABELED_UNICAST:
 		return IANA_SAFI_LABELED_UNICAST;
+	case SAFI_FLOWSPEC:
+		return IANA_SAFI_FLOWSPEC;
 	default:
 		return IANA_SAFI_RESERVED;
 	}

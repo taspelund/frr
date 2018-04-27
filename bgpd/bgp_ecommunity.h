@@ -27,10 +27,20 @@
 #define ECOMMUNITY_ENCODE_AS4               0x02
 #define ECOMMUNITY_ENCODE_OPAQUE            0x03
 #define ECOMMUNITY_ENCODE_EVPN              0x06
+#define ECOMMUNITY_ENCODE_TRANS_EXP         0x80 /* Flow Spec */
+#define ECOMMUNITY_ENCODE_REDIRECT_IP_NH    0x08 /* Flow Spec */
+/* RFC7674 */
+#define ECOMMUNITY_EXTENDED_COMMUNITY_PART_2 0x81
+#define ECOMMUNITY_EXTENDED_COMMUNITY_PART_3 0x82
 
 /* Low-order octet of the Extended Communities type field.  */
 #define ECOMMUNITY_ROUTE_TARGET             0x02
 #define ECOMMUNITY_SITE_ORIGIN              0x03
+#define ECOMMUNITY_TRAFFIC_RATE             0x06 /* Flow Spec */
+#define ECOMMUNITY_TRAFFIC_ACTION           0x07
+#define ECOMMUNITY_REDIRECT_VRF             0x08
+#define ECOMMUNITY_TRAFFIC_MARKING          0x09
+#define ECOMMUNITY_REDIRECT_IP_NH           0x00
 
 /* Low-order octet of the Extended Communities type field for EVPN types */
 #define ECOMMUNITY_EVPN_SUBTYPE_MACMOBILITY  0x00
@@ -53,7 +63,7 @@
 #define ECOMMUNITY_SIZE                        8
 
 /* Extended Communities type flag.  */
-#define ECOMMUNITY_FLAG_NON_TRANSITIVE      0x40  
+#define ECOMMUNITY_FLAG_NON_TRANSITIVE      0x40
 
 /* Extended Communities attribute.  */
 struct ecommunity {
@@ -64,7 +74,7 @@ struct ecommunity {
 	int size;
 
 	/* Extended Communities value.  */
-	u_int8_t *val;
+	uint8_t *val;
 
 	/* Human readable format string.  */
 	char *str;
@@ -90,7 +100,7 @@ struct ecommunity_val {
 /*
  * Encode BGP Route Target AS:nn.
  */
-static inline void encode_route_target_as(as_t as, u_int32_t val,
+static inline void encode_route_target_as(as_t as, uint32_t val,
 					  struct ecommunity_val *eval)
 {
 	eval->val[0] = ECOMMUNITY_ENCODE_AS;
@@ -106,7 +116,7 @@ static inline void encode_route_target_as(as_t as, u_int32_t val,
 /*
  * Encode BGP Route Target IP:nn.
  */
-static inline void encode_route_target_ip(struct in_addr ip, u_int16_t val,
+static inline void encode_route_target_ip(struct in_addr ip, uint16_t val,
 					  struct ecommunity_val *eval)
 {
 	eval->val[0] = ECOMMUNITY_ENCODE_IP;
@@ -119,7 +129,7 @@ static inline void encode_route_target_ip(struct in_addr ip, u_int16_t val,
 /*
  * Encode BGP Route Target AS4:nn.
  */
-static inline void encode_route_target_as4(as_t as, u_int16_t val,
+static inline void encode_route_target_as4(as_t as, uint16_t val,
 					   struct ecommunity_val *eval)
 {
 	eval->val[0] = ECOMMUNITY_ENCODE_AS4;
@@ -135,7 +145,7 @@ static inline void encode_route_target_as4(as_t as, u_int16_t val,
 extern void ecommunity_init(void);
 extern void ecommunity_finish(void);
 extern void ecommunity_free(struct ecommunity **);
-extern struct ecommunity *ecommunity_parse(u_int8_t *, u_short);
+extern struct ecommunity *ecommunity_parse(uint8_t *, unsigned short);
 extern struct ecommunity *ecommunity_dup(struct ecommunity *);
 extern struct ecommunity *ecommunity_merge(struct ecommunity *,
 					   struct ecommunity *);

@@ -1230,8 +1230,8 @@ static int vty_show_prefix_list_prefix(struct vty *vty, afi_t afi,
 				match = 1;
 
 		if (type == longer_display) {
-			if ((p.family == pentry->prefix.family) &&
-			    (prefix_match(&p, &pentry->prefix)))
+			if ((p.family == pentry->prefix.family)
+			    && (prefix_match(&p, &pentry->prefix)))
 				match = 1;
 		}
 
@@ -1310,8 +1310,8 @@ static int vty_clear_prefix_list(struct vty *vty, afi_t afi, const char *name,
 
 		for (pentry = plist->head; pentry; pentry = pentry->next) {
 			if (prefix) {
-				if (pentry->prefix.family == p.family &&
-				    prefix_match(&pentry->prefix, &p))
+				if (pentry->prefix.family == p.family
+				    && prefix_match(&pentry->prefix, &p))
 					pentry->hitcnt = 0;
 			} else
 				pentry->hitcnt = 0;
@@ -1812,8 +1812,8 @@ static int config_write_prefix_afi(afi_t afi, struct vty *vty)
 }
 
 struct stream *prefix_bgp_orf_entry(struct stream *s, struct prefix_list *plist,
-				    u_char init_flag, u_char permit_flag,
-				    u_char deny_flag)
+				    uint8_t init_flag, uint8_t permit_flag,
+				    uint8_t deny_flag)
 {
 	struct prefix_list_entry *pentry;
 
@@ -1821,15 +1821,15 @@ struct stream *prefix_bgp_orf_entry(struct stream *s, struct prefix_list *plist,
 		return s;
 
 	for (pentry = plist->head; pentry; pentry = pentry->next) {
-		u_char flag = init_flag;
+		uint8_t flag = init_flag;
 		struct prefix *p = &pentry->prefix;
 
 		flag |= (pentry->type == PREFIX_PERMIT ? permit_flag
 						       : deny_flag);
 		stream_putc(s, flag);
-		stream_putl(s, (u_int32_t)pentry->seq);
-		stream_putc(s, (u_char)pentry->ge);
-		stream_putc(s, (u_char)pentry->le);
+		stream_putl(s, (uint32_t)pentry->seq);
+		stream_putc(s, (uint8_t)pentry->ge);
+		stream_putc(s, (uint8_t)pentry->le);
 		stream_put_prefix(s, p);
 	}
 
@@ -1893,7 +1893,7 @@ void prefix_bgp_orf_remove_all(afi_t afi, char *name)
 
 /* return prefix count */
 int prefix_bgp_show_prefix_list(struct vty *vty, afi_t afi, char *name,
-				u_char use_json)
+				uint8_t use_json)
 {
 	struct prefix_list *plist;
 	struct prefix_list_entry *pentry;

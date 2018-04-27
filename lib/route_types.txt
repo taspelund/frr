@@ -71,7 +71,7 @@ ZEBRA_ROUTE_LDP,        ldp,       ldpd,   'L', 0, 0, 0,     "LDP"
 #vnc when sent to zebra 
 ZEBRA_ROUTE_VNC,        vnc,       NULL,   'v', 1, 1, 1,     "VNC"
 # vnc when sent to bgp
-ZEBRA_ROUTE_VNC_DIRECT, vnc-direct,NULL,   'V', 1, 1, 0,     "VNC-Direct", bgpd
+ZEBRA_ROUTE_VNC_DIRECT, vnc-direct,NULL,   'V', 1, 1, 1,     "VNC-Direct", bgpd
 # vnc when sent to bgp (resolve NVE mode)
 ZEBRA_ROUTE_VNC_DIRECT_RH, vnc-rn, NULL,   'V', 0, 0, 0,     "VNC-RN"
 #  bgp unicast -> vnc 

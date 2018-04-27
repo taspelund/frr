@@ -29,7 +29,7 @@
 #include "vty.h"
 
 #include "zebra/debug.h"
-#include "zebra/zserv.h"
+#include "zebra/zapi_msg.h"
 #include "zebra/rib.h"
 #include "zebra/zebra_vrf.h"
 #include "zebra/zebra_rnh.h"
@@ -39,6 +39,7 @@
 #include "zebra/interface.h"
 #include "zebra/zebra_mpls.h"
 #include "zebra/zebra_vxlan.h"
+#include "zebra/zebra_netns_notify.h"
 
 extern struct zebra_t zebrad;
 
@@ -107,8 +108,8 @@ static int zebra_vrf_enable(struct vrf *vrf)
 
 	assert(zvrf);
 	if (IS_ZEBRA_DEBUG_EVENT)
-		zlog_debug("VRF %s id %u is now active",
-			   zvrf_name(zvrf), zvrf_id(zvrf));
+		zlog_debug("VRF %s id %u is now active", zvrf_name(zvrf),
+			   zvrf_id(zvrf));
 
 	if (vrf_is_backend_netns())
 		zvrf->zns = zebra_ns_lookup((ns_id_t)vrf->vrf_id);
@@ -117,8 +118,8 @@ static int zebra_vrf_enable(struct vrf *vrf)
 	/* Inform clients that the VRF is now active. This is an
 	 * add for the clients.
 	 */
-	zebra_vrf_add_update(zvrf);
 
+	zebra_vrf_add_update(zvrf);
 	/* Allocate tables */
 	for (afi = AFI_IP; afi <= AFI_IP6; afi++) {
 		for (safi = SAFI_UNICAST; safi <= SAFI_MULTICAST; safi++)
@@ -159,8 +160,8 @@ static int zebra_vrf_disable(struct vrf *vrf)
 
 	assert(zvrf);
 	if (IS_ZEBRA_DEBUG_EVENT)
-		zlog_debug("VRF %s id %u is now inactive",
-			   zvrf_name(zvrf), zvrf_id(zvrf));
+		zlog_debug("VRF %s id %u is now inactive", zvrf_name(zvrf),
+			   zvrf_id(zvrf));
 
 	static_cleanup_vrf_ids(zvrf);
 
@@ -187,7 +188,8 @@ static int zebra_vrf_disable(struct vrf *vrf)
 	zebra_mpls_cleanup_tables(zvrf);
 	zebra_pw_exit(zvrf);
 
-	/* Remove link-local IPv4 addresses created for BGP unnumbered peering. */
+	/* Remove link-local IPv4 addresses created for BGP unnumbered peering.
+	 */
 	FOR_ALL_INTERFACES (vrf, ifp)
 		if_nbr_ipv6ll_to_ipv4ll_neigh_del_all(ifp);
 
@@ -197,8 +199,8 @@ static int zebra_vrf_disable(struct vrf *vrf)
 		struct route_node *rnode;
 		rib_dest_t *dest;
 
-		for (ALL_LIST_ELEMENTS(zebrad.mq->subq[i],
-				       lnode, nnode, rnode)) {
+		for (ALL_LIST_ELEMENTS(zebrad.mq->subq[i], lnode, nnode,
+				       rnode)) {
 			dest = rib_dest_from_rnode(rnode);
 			if (dest && rib_dest_vrf(dest) == zvrf) {
 				route_unlock_node(rnode);
@@ -239,8 +241,8 @@ static int zebra_vrf_delete(struct vrf *vrf)
 
 	assert(zvrf);
 	if (IS_ZEBRA_DEBUG_EVENT)
-		zlog_debug("VRF %s id %u deleted",
-			   zvrf_name(zvrf), zvrf_id(zvrf));
+		zlog_debug("VRF %s id %u deleted", zvrf_name(zvrf),
+			   zvrf_id(zvrf));
 
 	/* clean-up work queues */
 	for (i = 0; i < MQ_SIZE; i++) {
@@ -248,7 +250,8 @@ static int zebra_vrf_delete(struct vrf *vrf)
 		struct route_node *rnode;
 		rib_dest_t *dest;
 
-		for (ALL_LIST_ELEMENTS(zebrad.mq->subq[i], lnode, nnode, rnode)) {
+		for (ALL_LIST_ELEMENTS(zebrad.mq->subq[i], lnode, nnode,
+				       rnode)) {
 			dest = rib_dest_from_rnode(rnode);
 			if (dest && rib_dest_vrf(dest) == zvrf) {
 				route_unlock_node(rnode);
@@ -329,7 +332,7 @@ int zebra_vrf_has_config(struct zebra_vrf *zvrf)
  */
 struct route_table *zebra_vrf_table_with_table_id(afi_t afi, safi_t safi,
 						  vrf_id_t vrf_id,
-						  u_int32_t table_id)
+						  uint32_t table_id)
 {
 	struct route_table *table = NULL;
 
@@ -483,7 +486,7 @@ struct route_table *zebra_vrf_static_table(afi_t afi, safi_t safi,
 	return zvrf->stable[afi][safi];
 }
 
-struct route_table *zebra_vrf_other_route_table(afi_t afi, u_int32_t table_id,
+struct route_table *zebra_vrf_other_route_table(afi_t afi, uint32_t table_id,
 						vrf_id_t vrf_id)
 {
 	struct zebra_vrf *zvrf;
@@ -525,7 +528,8 @@ static int vrf_config_write(struct vty *vty)
 			vty_frame(vty, "vrf %s\n", zvrf_name(zvrf));
 			if (zvrf->l3vni)
 				vty_out(vty, " vni %u%s\n", zvrf->l3vni,
-					is_l3vni_for_prefix_routes_only(zvrf->l3vni)
+					is_l3vni_for_prefix_routes_only(
+						zvrf->l3vni)
 						? " prefix-routes-only"
 						: "");
 			zebra_ns_config_write(vty, (struct ns *)vrf->ns_ctxt);
@@ -545,8 +549,8 @@ static int vrf_config_write(struct vty *vty)
 /* Zebra VRF initialization. */
 void zebra_vrf_init(void)
 {
-	vrf_init(zebra_vrf_new, zebra_vrf_enable,
-		 zebra_vrf_disable, zebra_vrf_delete);
+	vrf_init(zebra_vrf_new, zebra_vrf_enable, zebra_vrf_disable,
+		 zebra_vrf_delete);
 
-	vrf_cmd_init(vrf_config_write);
+	vrf_cmd_init(vrf_config_write, &zserv_privs);
 }

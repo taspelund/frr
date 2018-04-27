@@ -127,13 +127,6 @@ static int ospf6_zebra_if_del(int command, struct zclient *zclient,
 		zlog_debug("Zebra Interface delete: %s index %d mtu %d",
 			   ifp->name, ifp->ifindex, ifp->mtu6);
 
-#if 0
-  /* XXX: ospf6_interface_if_del is not the right way to handle this,
-   * because among other thinkable issues, it will also clear all
-   * settings as they are contained in the struct ospf6_interface. */
-  ospf6_interface_if_del (ifp);
-#endif /*0*/
-
 	if_set_index(ifp, IFINDEX_INTERNAL);
 	return 0;
 }
@@ -468,7 +461,7 @@ int ospf6_distance_set(struct vty *vty, struct ospf6 *o,
 {
 	int ret;
 	struct prefix_ipv6 p;
-	u_char distance;
+	uint8_t distance;
 	struct route_node *rn;
 	struct ospf6_distance *odistance;
 
@@ -553,7 +546,7 @@ void ospf6_distance_reset(struct ospf6 *o)
 		}
 }
 
-u_char ospf6_distance_apply(struct prefix_ipv6 *p, struct ospf6_route * or)
+uint8_t ospf6_distance_apply(struct prefix_ipv6 *p, struct ospf6_route * or)
 {
 	struct ospf6 *o;
 

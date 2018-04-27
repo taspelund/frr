@@ -28,6 +28,10 @@
 #undef MPLS_LABEL_MAX
 #endif
 
+#define MPLS_LABEL_HELPSTR                                                     \
+	"Specify label(s) for this route\nOne or more "                        \
+	"labels in the range (16-1048575) separated by '/'\n"
+
 /* Well-known MPLS label values (RFC 3032 etc). */
 #define MPLS_LABEL_IPV4_EXPLICIT_NULL  0       /* [RFC3032] */
 #define MPLS_LABEL_ROUTER_ALERT        1       /* [RFC3032] */
@@ -124,8 +128,8 @@ enum lsp_types_t {
 /* Encode a label stack entry from fields; convert to network byte-order as
  * the Netlink interface expects MPLS labels to be in this format.
  */
-static inline mpls_lse_t mpls_lse_encode(mpls_label_t label, u_int32_t ttl,
-					 u_int32_t exp, u_int32_t bos)
+static inline mpls_lse_t mpls_lse_encode(mpls_label_t label, uint32_t ttl,
+					 uint32_t exp, uint32_t bos)
 {
 	mpls_lse_t lse;
 	lse = htonl((label << MPLS_LS_LABEL_SHIFT) | (exp << MPLS_LS_EXP_SHIFT)
@@ -139,8 +143,7 @@ static inline mpls_lse_t mpls_lse_encode(mpls_label_t label, u_int32_t ttl,
  * Netlink interface.
  */
 static inline void mpls_lse_decode(mpls_lse_t lse, mpls_label_t *label,
-				   u_int32_t *ttl, u_int32_t *exp,
-				   u_int32_t *bos)
+				   uint32_t *ttl, uint32_t *exp, uint32_t *bos)
 {
 	mpls_lse_t local_lse;
 
@@ -193,5 +196,16 @@ static inline char *label2str(mpls_label_t label, char *buf, size_t len)
 	}
 }
 
+/*
+ * String to label conversion, labels separated by '/'.
+ */
+int mpls_str2label(const char *label_str, uint8_t *num_labels,
+		   mpls_label_t *labels);
+
+/*
+ * Label to string conversion, labels in string separated by '/'.
+ */
+char *mpls_label2str(uint8_t num_labels, mpls_label_t *labels, char *buf,
+		     int len, int pretty);
 
 #endif

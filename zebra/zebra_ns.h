@@ -25,6 +25,9 @@
 #include <lib/ns.h>
 #include <lib/vrf.h>
 
+#include "zebra/rib.h"
+#include "zebra/zebra_vrf.h"
+
 #ifdef HAVE_NETLINK
 /* Socket interface to kernel */
 struct nlsock {
@@ -73,6 +76,12 @@ struct zebra_ns {
 
 	struct hash *rules_hash;
 
+	struct hash *ipset_hash;
+
+	struct hash *ipset_entry_hash;
+
+	struct hash *iptable_hash;
+
 	/* Back pointer */
 	struct ns *ns;
 };
@@ -91,6 +100,6 @@ extern struct route_table *zebra_ns_get_table(struct zebra_ns *zns,
 					      uint32_t tableid, afi_t afi);
 int zebra_ns_config_write(struct vty *vty, struct ns *ns);
 
-unsigned long zebra_ns_score_proto(u_char proto, u_short instance);
+unsigned long zebra_ns_score_proto(uint8_t proto, unsigned short instance);
 void zebra_ns_sweep_route(void);
 #endif

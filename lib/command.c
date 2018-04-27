@@ -49,20 +49,42 @@ DEFINE_MTYPE(LIB, HOST, "Host config")
 DEFINE_MTYPE(LIB, STRVEC, "String vector")
 DEFINE_MTYPE(LIB, COMPLETION, "Completion item")
 
+#define item(x)                                                                \
+	{                                                                      \
+		x, #x                                                          \
+	}
+
+/* clang-format off */
+const struct message tokennames[] = {
+	item(WORD_TKN),
+	item(VARIABLE_TKN),
+	item(RANGE_TKN),
+	item(IPV4_TKN),
+	item(IPV4_PREFIX_TKN),
+	item(IPV6_TKN),
+	item(IPV6_PREFIX_TKN),
+	item(MAC_TKN),
+	item(MAC_PREFIX_TKN),
+	item(FORK_TKN),
+	item(JOIN_TKN),
+	item(START_TKN),
+	item(END_TKN),
+	{0},
+};
+
 const char *node_names[] = {
 	"auth",			    // AUTH_NODE,
 	"view",			    // VIEW_NODE,
 	"auth enable",		    // AUTH_ENABLE_NODE,
 	"enable",		    // ENABLE_NODE,
 	"config",		    // CONFIG_NODE,
-	"service",		    // SERVICE_NODE,
 	"debug",		    // DEBUG_NODE,
 	"vrf debug",		    // VRF_DEBUG_NODE,
 	"vnc debug",		    // DEBUG_VNC_NODE,
 	"aaa",			    // AAA_NODE,
 	"keychain",		    // KEYCHAIN_NODE,
 	"keychain key",		    // KEYCHAIN_KEY_NODE,
-	"logical-router",	    // LOGICALROUTER_NODE,
+	"logical-router",	   // LOGICALROUTER_NODE,
 	"static ip",		    // IP_NODE,
 	"vrf",			    // VRF_NODE,
 	"interface",		    // INTERFACE_NODE,
@@ -76,14 +98,14 @@ const char *node_names[] = {
 	"bgp",			    // BGP_NODE,
 	"bgp vpnv4",		    // BGP_VPNV4_NODE,
 	"bgp vpnv6",		    // BGP_VPNV6_NODE,
-	"bgp ipv4 unicast",         // BGP_IPV4_NODE,
+	"bgp ipv4 unicast",	 // BGP_IPV4_NODE,
 	"bgp ipv4 multicast",       // BGP_IPV4M_NODE,
 	"bgp ipv4 labeled unicast", // BGP_IPV4L_NODE,
 	"bgp ipv6",		    // BGP_IPV6_NODE,
 	"bgp ipv6 multicast",       // BGP_IPV6M_NODE,
 	"bgp ipv6 labeled unicast", // BGP_IPV6L_NODE,
-	"bgp vrf policy",	    // BGP_VRF_POLICY_NODE,
-	"bgp vnc defaults",         // BGP_VNC_DEFAULTS_NODE,
+	"bgp vrf policy",	   // BGP_VRF_POLICY_NODE,
+	"bgp vnc defaults",	 // BGP_VNC_DEFAULTS_NODE,
 	"bgp vnc nve",		    // BGP_VNC_NVE_GROUP_NODE,
 	"bgp vnc l2",		    // BGP_VNC_L2_GROUP_NODE,
 	"rfp defaults",		    // RFP_DEFAULTS_NODE,
@@ -98,15 +120,13 @@ const char *node_names[] = {
 	"ldp l2vpn",		    // LDP_L2VPN_NODE,
 	"ldp",			    // LDP_PSEUDOWIRE_NODE,
 	"isis",			    // ISIS_NODE,
-	"masc",			    // MASC_NODE,
-	"irdp",			    // IRDP_NODE,
-	"ipv4 access list",         // ACCESS_NODE,
-	"ipv4 prefix list",         // PREFIX_NODE,
-	"ipv6 access list",         // ACCESS_IPV6_NODE,
-	"MAC access list",          // ACCESS_MAC_NODE,
-	"ipv6 prefix list",         // PREFIX_IPV6_NODE,
+	"ipv4 access list",	 // ACCESS_NODE,
+	"ipv4 prefix list",	 // PREFIX_NODE,
+	"ipv6 access list",	 // ACCESS_IPV6_NODE,
+	"MAC access list",	  // ACCESS_MAC_NODE,
+	"ipv6 prefix list",	 // PREFIX_IPV6_NODE,
 	"as list",		    // AS_LIST_NODE,
-	"community list",	    // COMMUNITY_LIST_NODE,
+	"community list",	   // COMMUNITY_LIST_NODE,
 	"routemap",		    // RMAP_NODE,
 	"pbr-map",		    // PBRMAP_NODE,
 	"smux",			    // SMUX_NODE,
@@ -119,7 +139,12 @@ const char *node_names[] = {
 	"link-params",		    // LINK_PARAMS_NODE,
 	"bgp evpn vni",		    // BGP_EVPN_VNI_NODE,
 	"rpki",			    // RPKI_NODE
+	"bgp ipv4 flowspec",	    /* BGP_FLOWSPECV4_NODE
+				     */
+	"bgp ipv6 flowspec",	    /* BGP_FLOWSPECV6_NODE
+				     */
 };
+/* clang-format on */
 
 /* Command vector which includes some level of command lists. Normally
    each daemon maintains each own cmdvec. */
@@ -303,8 +328,7 @@ void install_node(struct cmd_node *node, int (*func)(struct vty *))
 		cmd_token_new(START_TKN, CMD_ATTR_NORMAL, NULL, NULL);
 	graph_new_node(node->cmdgraph, token,
 		       (void (*)(void *)) & cmd_token_del);
-	node->cmd_hash = hash_create_size(16, cmd_hash_key,
-					  cmd_hash_cmp,
+	node->cmd_hash = hash_create_size(16, cmd_hash_key, cmd_hash_cmp,
 					  "Command Hash");
 }
 
@@ -502,6 +526,9 @@ static int config_write_host(struct vty *vty)
 	if (cmd_hostname_get())
 		vty_out(vty, "hostname %s\n", cmd_hostname_get());
 
+	if (cmd_domainname_get())
+		vty_out(vty, "domainname %s\n", cmd_domainname_get());
+
 	/* The following are all configuration commands that are not sent to
          * watchfrr.  For instance watchfrr is hardcoded to log to syslog so
          * we would always display 'log syslog informational' in the config
@@ -521,10 +548,6 @@ static int config_write_host(struct vty *vty)
 			if (host.enable)
 				vty_out(vty, "enable password %s\n", host.enable);
 		}
-
-		if (cmd_domainname_get())
-			vty_out(vty, "domainname %s\n", cmd_domainname_get());
-
 
 		if (zlog_default->default_lvl != LOG_DEBUG) {
 			vty_out(vty, "! N.B. The 'log trap' command is deprecated.\n");
@@ -959,6 +982,8 @@ enum node_type node_parent(enum node_type node)
 	switch (node) {
 	case BGP_VPNV4_NODE:
 	case BGP_VPNV6_NODE:
+	case BGP_FLOWSPECV4_NODE:
+	case BGP_FLOWSPECV6_NODE:
 	case BGP_VRF_POLICY_NODE:
 	case BGP_VNC_DEFAULTS_NODE:
 	case BGP_VNC_NVE_GROUP_NODE:
@@ -1181,8 +1206,7 @@ int command_config_read_one_line(struct vty *vty,
 	if (!(use_daemon && ret == CMD_SUCCESS_DAEMON)
 	    && !(!use_daemon && ret == CMD_ERR_NOTHING_TODO)
 	    && ret != CMD_SUCCESS && ret != CMD_WARNING
-	    && ret != CMD_NOT_MY_INSTANCE
-	    && ret != CMD_WARNING_CONFIG_FAILED
+	    && ret != CMD_NOT_MY_INSTANCE && ret != CMD_WARNING_CONFIG_FAILED
 	    && vty->node != CONFIG_NODE) {
 
 		saved_node = vty->node;
@@ -1320,7 +1344,6 @@ void cmd_exit(struct vty *vty)
 	case LDP_L2VPN_NODE:
 	case ISIS_NODE:
 	case KEYCHAIN_NODE:
-	case MASC_NODE:
 	case RMAP_NODE:
 	case PBRMAP_NODE:
 	case VTY_NODE:
@@ -1331,6 +1354,8 @@ void cmd_exit(struct vty *vty)
 	case BGP_IPV4L_NODE:
 	case BGP_VPNV4_NODE:
 	case BGP_VPNV6_NODE:
+	case BGP_FLOWSPECV4_NODE:
+	case BGP_FLOWSPECV6_NODE:
 	case BGP_VRF_POLICY_NODE:
 	case BGP_VNC_DEFAULTS_NODE:
 	case BGP_VNC_NVE_GROUP_NODE:
@@ -1407,6 +1432,8 @@ DEFUN (config_end,
 	case BGP_VNC_L2_GROUP_NODE:
 	case BGP_VPNV4_NODE:
 	case BGP_VPNV6_NODE:
+	case BGP_FLOWSPECV4_NODE:
+	case BGP_FLOWSPECV6_NODE:
 	case BGP_IPV4_NODE:
 	case BGP_IPV4M_NODE:
 	case BGP_IPV4L_NODE:
@@ -1429,7 +1456,6 @@ DEFUN (config_end,
 	case ISIS_NODE:
 	case KEYCHAIN_NODE:
 	case KEYCHAIN_KEY_NODE:
-	case MASC_NODE:
 	case VTY_NODE:
 	case LINK_PARAMS_NODE:
 		vty_config_unlock(vty);
@@ -1570,6 +1596,21 @@ DEFUN (show_commandtree,
        "Permutations that we are interested in\n")
 {
 	return cmd_list_cmds(vty, argc == 3);
+}
+
+DEFUN_HIDDEN(show_cli_graph,
+             show_cli_graph_cmd,
+             "show cli graph",
+             SHOW_STR
+             "CLI reflection\n"
+             "Dump current command space as DOT graph\n")
+{
+	struct cmd_node *cn = vector_slot(cmdvec, vty->node);
+	char *dot = cmd_graph_dump_dot(cn->cmdgraph);
+
+	vty_out(vty, "%s\n", dot);
+	XFREE(MTYPE_TMP, dot);
+	return CMD_SUCCESS;
 }
 
 static int vty_write_config(struct vty *vty)
@@ -2586,6 +2627,7 @@ void install_default(enum node_type node)
 	install_element(node, &config_end_cmd);
 	install_element(node, &config_help_cmd);
 	install_element(node, &config_list_cmd);
+	install_element(node, &show_cli_graph_cmd);
 	install_element(node, &find_cmd);
 
 	install_element(node, &config_write_cmd);

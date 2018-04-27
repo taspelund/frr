@@ -44,6 +44,7 @@
 #include "bgpd/bgp_ecommunity.h"
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_nexthop.h"
+#include "bgpd/bgp_nht.h"
 
 #if ENABLE_BGP_VNC
 #include "bgpd/rfapi/rfapi_backend.h"
@@ -70,22 +71,26 @@ extern int argv_find_and_parse_vpnvx(struct cmd_token **argv, int argc,
 	return ret;
 }
 
-u_int32_t decode_label(mpls_label_t *label_pnt)
+uint32_t decode_label(mpls_label_t *label_pnt)
 {
-	u_int32_t l;
-	u_char *pnt = (u_char *)label_pnt;
+	uint32_t l;
+	uint8_t *pnt = (uint8_t *)label_pnt;
 
-	l = ((u_int32_t)*pnt++ << 12);
-	l |= (u_int32_t)*pnt++ << 4;
-	l |= (u_int32_t)((*pnt & 0xf0) >> 4);
+	l = ((uint32_t)*pnt++ << 12);
+	l |= (uint32_t)*pnt++ << 4;
+	l |= (uint32_t)((*pnt & 0xf0) >> 4);
 	return l;
 }
 
 void encode_label(mpls_label_t label, mpls_label_t *label_pnt)
 {
-	u_char *pnt = (u_char *)label_pnt;
+	uint8_t *pnt = (uint8_t *)label_pnt;
 	if (pnt == NULL)
 		return;
+	if (label == BGP_PREVENT_VRF_2_VRF_LEAK) {
+		*label_pnt = label;
+		return;
+	}
 	*pnt++ = (label >> 12) & 0xff;
 	*pnt++ = (label >> 4) & 0xff;
 	*pnt++ = ((label << 4) + 1) & 0xff; /* S=1 */
@@ -94,12 +99,12 @@ void encode_label(mpls_label_t label, mpls_label_t *label_pnt)
 int bgp_nlri_parse_vpn(struct peer *peer, struct attr *attr,
 		       struct bgp_nlri *packet)
 {
-	u_char *pnt;
-	u_char *lim;
+	uint8_t *pnt;
+	uint8_t *lim;
 	struct prefix p;
 	int psize = 0;
 	int prefixlen;
-	u_int16_t type;
+	uint16_t type;
 	struct rd_as rd_as;
 	struct rd_ip rd_ip;
 	struct prefix_rd prd;
@@ -107,11 +112,7 @@ int bgp_nlri_parse_vpn(struct peer *peer, struct attr *attr,
 	afi_t afi;
 	safi_t safi;
 	int addpath_encoded;
-	u_int32_t addpath_id;
-
-	/* Check peer status. */
-	if (peer->status != Established)
-		return 0;
+	uint32_t addpath_id;
 
 	/* Make prefix_rd */
 	prd.family = AF_UNSPEC;
@@ -260,19 +261,14 @@ int bgp_nlri_parse_vpn(struct peer *peer, struct attr *attr,
 void vpn_leak_zebra_vrf_label_update(struct bgp *bgp, afi_t afi)
 {
 	mpls_label_t label = MPLS_LABEL_NONE;
-	const char *name = "default";
 	int debug = BGP_DEBUG(vpn, VPN_LEAK_LABEL);
-
-	if (debug && (bgp->inst_type != BGP_INSTANCE_TYPE_DEFAULT)) {
-		name = bgp->name;
-	}
 
 	if (bgp->vrf_id == VRF_UNKNOWN) {
 		if (debug) {
 			zlog_debug(
 				"%s: vrf %s: afi %s: vrf_id not set, "
 				"can't set zebra vrf label",
-				__func__, name, afi2str(afi));
+				__func__, bgp->name_pretty, afi2str(afi));
 		}
 		return;
 	}
@@ -283,7 +279,8 @@ void vpn_leak_zebra_vrf_label_update(struct bgp *bgp, afi_t afi)
 
 	if (debug) {
 		zlog_debug("%s: vrf %s: afi %s: setting label %d for vrf id %d",
-			   __func__, name, afi2str(afi), label, bgp->vrf_id);
+			   __func__, bgp->name_pretty, afi2str(afi), label,
+			   bgp->vrf_id);
 	}
 
 	zclient_send_vrf_label(zclient, bgp->vrf_id, afi, label, ZEBRA_LSP_BGP);
@@ -310,11 +307,70 @@ void vpn_leak_zebra_vrf_label_withdraw(struct bgp *bgp, afi_t afi)
 
 	if (debug) {
 		zlog_debug("%s: deleting label for vrf %s (id=%d)", __func__,
-			   (bgp->name ? bgp->name : "default"), bgp->vrf_id);
+			   bgp->name_pretty, bgp->vrf_id);
 	}
 
 	zclient_send_vrf_label(zclient, bgp->vrf_id, afi, label, ZEBRA_LSP_BGP);
 	bgp->vpn_policy[afi].tovpn_zebra_vrf_label_last_sent = label;
+}
+
+int vpn_leak_label_callback(
+	mpls_label_t label,
+	void *labelid,
+	bool allocated)
+{
+	struct vpn_policy *vp = (struct vpn_policy *)labelid;
+	int debug = BGP_DEBUG(vpn, VPN_LEAK_LABEL);
+
+	if (debug)
+		zlog_debug("%s: label=%u, allocated=%d",
+			__func__, label, allocated);
+
+	if (!allocated) {
+		/*
+		 * previously-allocated label is now invalid
+		 */
+		if (CHECK_FLAG(vp->flags, BGP_VPN_POLICY_TOVPN_LABEL_AUTO) &&
+			(vp->tovpn_label != MPLS_LABEL_NONE)) {
+
+			vpn_leak_prechange(BGP_VPN_POLICY_DIR_TOVPN,
+				vp->afi, bgp_get_default(), vp->bgp);
+			vp->tovpn_label = MPLS_LABEL_NONE;
+			vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN,
+				vp->afi, bgp_get_default(), vp->bgp);
+		}
+		return 0;
+	}
+
+	/*
+	 * New label allocation
+	 */
+	if (!CHECK_FLAG(vp->flags, BGP_VPN_POLICY_TOVPN_LABEL_AUTO)) {
+
+		/*
+		 * not currently configured for auto label, reject allocation
+		 */
+		return -1;
+	}
+
+	if (vp->tovpn_label != MPLS_LABEL_NONE) {
+		if (label == vp->tovpn_label) {
+			/* already have same label, accept but do nothing */
+			return 0;
+		}
+		/* Shouldn't happen: different label allocation */
+		zlog_err("%s: %s had label %u but got new assignment %u",
+			__func__, vp->bgp->name_pretty, vp->tovpn_label, label);
+		/* use new one */
+	}
+
+	vpn_leak_prechange(BGP_VPN_POLICY_DIR_TOVPN,
+		vp->afi, bgp_get_default(), vp->bgp);
+	vp->tovpn_label = label;
+	vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN,
+		vp->afi, bgp_get_default(), vp->bgp);
+
+	return 0;
 }
 
 static int ecom_intersect(struct ecommunity *e1, struct ecommunity *e2)
@@ -338,26 +394,86 @@ static int ecom_intersect(struct ecommunity *e1, struct ecommunity *e2)
 	return 0;
 }
 
+static bool labels_same(struct bgp_info *bi, mpls_label_t *label, uint32_t n)
+{
+	uint32_t i;
+
+	if (!bi->extra) {
+		if (!n)
+			return true;
+		else
+			return false;
+	}
+
+	if (n != bi->extra->num_labels)
+		return false;
+
+	for (i = 0; i < n; ++i) {
+		if (label[i] != bi->extra->label[i])
+			return false;
+	}
+	return true;
+}
+
+/*
+ * make encoded route labels match specified encoded label set
+ */
+static void setlabels(
+	struct bgp_info *bi,
+	mpls_label_t *label,		/* array of labels */
+	uint32_t num_labels)
+{
+	if (num_labels)
+		assert(label);
+	assert(num_labels <= BGP_MAX_LABELS);
+
+	if (!num_labels) {
+		if (bi->extra)
+			bi->extra->num_labels = 0;
+		return;
+	}
+
+	struct bgp_info_extra *extra = bgp_info_extra_get(bi);
+	uint32_t i;
+
+	for (i = 0; i < num_labels; ++i) {
+		extra->label[i] = label[i];
+		if (!bgp_is_valid_label(&label[i])) {
+			bgp_set_valid_label(&extra->label[i]);
+		}
+	}
+	extra->num_labels = num_labels;
+}
+
 /*
  * returns pointer to new bgp_info upon success
  */
 static struct bgp_info *
-leak_update(struct bgp *bgp, /* destination bgp instance */
-	    struct bgp_node *bn, struct attr *new_attr, /* already interned */
-	    afi_t afi, safi_t safi, struct bgp_info *source_bi, u_char type,
-	    u_char sub_type, mpls_label_t *label, int num_labels, void *parent,
-	    struct bgp *bgp_orig, struct prefix *nexthop_orig, int debug)
+leak_update(
+	struct bgp	*bgp,		/* destination bgp instance */
+	struct bgp_node *bn,
+	struct attr	*new_attr,	/* already interned */
+	afi_t		afi,
+	safi_t		safi,
+	struct bgp_info	*source_bi,
+	mpls_label_t	*label,
+	uint32_t	num_labels,
+	void		*parent,
+	struct bgp	*bgp_orig,
+	struct prefix	*nexthop_orig,
+	int		nexthop_self_flag,
+	int		debug)
 {
 	struct prefix *p = &bn->p;
 	struct bgp_info *bi;
 	struct bgp_info *new;
 	char buf_prefix[PREFIX_STRLEN];
-	const char *pDestInstanceName = "default";
 
 	if (debug) {
 		prefix2str(&bn->p, buf_prefix, sizeof(buf_prefix));
-		if (bgp->name)
-			pDestInstanceName = bgp->name;
+		zlog_debug("%s: entry: leak-to=%s, p=%s, type=%d, sub_type=%d",
+			__func__, bgp->name_pretty, buf_prefix,
+			source_bi->type, source_bi->sub_type);
 	}
 
 	/*
@@ -369,14 +485,17 @@ leak_update(struct bgp *bgp, /* destination bgp instance */
 	}
 
 	if (bi) {
+		bool labelssame = labels_same(bi, label, num_labels);
+
 		if (attrhash_cmp(bi->attr, new_attr)
+		    && labelssame
 		    && !CHECK_FLAG(bi->flags, BGP_INFO_REMOVED)) {
 
 			bgp_attr_unintern(&new_attr);
 			if (debug)
 				zlog_debug(
 					"%s: ->%s: %s: Found route, no change",
-					__func__, pDestInstanceName,
+					__func__, bgp->name_pretty,
 					buf_prefix);
 			return NULL;
 		}
@@ -393,6 +512,41 @@ leak_update(struct bgp *bgp, /* destination bgp instance */
 		bi->attr = new_attr;
 		bi->uptime = bgp_clock();
 
+		/*
+		 * rewrite labels
+		 */
+		if (!labelssame)
+			setlabels(bi, label, num_labels);
+
+		if (nexthop_self_flag)
+			bgp_info_set_flag(bn, bi, BGP_INFO_ANNC_NH_SELF);
+
+		struct bgp *bgp_nexthop = bgp;
+		int nh_valid;
+
+		if (bi->extra && bi->extra->bgp_orig)
+			bgp_nexthop = bi->extra->bgp_orig;
+
+		/* No nexthop tracking for redistributed routes */
+		if (source_bi->sub_type == BGP_ROUTE_REDISTRIBUTE)
+			nh_valid = 1;
+		else
+			/*
+			 * TBD do we need to do anything about the
+			 * 'connected' parameter?
+			 */
+			nh_valid = bgp_find_or_add_nexthop(
+						bgp, bgp_nexthop,
+						afi, bi, NULL, 0);
+
+		if (debug)
+			zlog_debug("%s: nexthop is %svalid (in vrf %s)",
+				__func__, (nh_valid ? "" : "not "),
+				bgp_nexthop->name_pretty);
+
+		if (nh_valid)
+			bgp_info_set_flag(bn, bi, BGP_INFO_VALID);
+
 		/* Process change. */
 		bgp_aggregate_increment(bgp, p, bi, afi, safi);
 		bgp_process(bgp, bn, afi, safi);
@@ -400,37 +554,58 @@ leak_update(struct bgp *bgp, /* destination bgp instance */
 
 		if (debug)
 			zlog_debug("%s: ->%s: %s Found route, changed attr",
-				   __func__, pDestInstanceName, buf_prefix);
+				   __func__, bgp->name_pretty, buf_prefix);
 
 		return NULL;
 	}
 
-	new = info_make(type, sub_type, 0, bgp->peer_self, new_attr, bn);
-	SET_FLAG(new->flags, BGP_INFO_VALID);
+	new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_IMPORTED, 0,
+		bgp->peer_self, new_attr, bn);
+
+	if (nexthop_self_flag)
+		bgp_info_set_flag(bn, new, BGP_INFO_ANNC_NH_SELF);
+
+	if (num_labels)
+		setlabels(new, label, num_labels);
 
 	bgp_info_extra_get(new);
-	if (label) {
-		int i;
-
-		for (i = 0; i < num_labels; ++i) {
-			new->extra->label[i] = label[i];
-			if (!bgp_is_valid_label(&label[i])) {
-				if (debug) {
-					zlog_debug(
-						"%s: %s: marking label %d valid",
-						__func__, buf_prefix, i);
-				}
-				bgp_set_valid_label(&new->extra->label[i]);
-			}
-		}
-		new->extra->num_labels = num_labels;
-	}
 	new->extra->parent = parent;
 
 	if (bgp_orig)
 		new->extra->bgp_orig = bgp_orig;
 	if (nexthop_orig)
 		new->extra->nexthop_orig = *nexthop_orig;
+
+	/*
+	 * nexthop tracking for unicast routes
+	 */
+	struct bgp *bgp_nexthop = bgp;
+	int nh_valid;
+
+	if (new->extra && new->extra->bgp_orig)
+		bgp_nexthop = new->extra->bgp_orig;
+
+	/*
+	 * No nexthop tracking for redistributed routes because
+	 * their originating protocols will do the tracking and
+	 * withdraw those routes if the nexthops become unreachable
+	 */
+	if (source_bi->sub_type == BGP_ROUTE_REDISTRIBUTE)
+		nh_valid = 1;
+	else
+		/*
+		 * TBD do we need to do anything about the
+		 * 'connected' parameter?
+		 */
+		nh_valid = bgp_find_or_add_nexthop(bgp, bgp_nexthop,
+						afi, new, NULL, 0);
+
+	if (debug)
+		zlog_debug("%s: nexthop is %svalid (in vrf %s)",
+			__func__, (nh_valid ? "" : "not "),
+			bgp_nexthop->name_pretty);
+	if (nh_valid)
+		bgp_info_set_flag(bn, new, BGP_INFO_VALID);
 
 	bgp_aggregate_increment(bgp, p, new, afi, safi);
 	bgp_info_add(bn, new);
@@ -440,7 +615,7 @@ leak_update(struct bgp *bgp, /* destination bgp instance */
 
 	if (debug)
 		zlog_debug("%s: ->%s: %s: Added new route", __func__,
-			   pDestInstanceName, buf_prefix);
+			   bgp->name_pretty, buf_prefix);
 
 	return new;
 }
@@ -460,6 +635,10 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,       /* to */
 	mpls_label_t label;
 	struct bgp_node *bn;
 	const char *debugmsg;
+	int nexthop_self_flag = 0;
+
+	if (debug)
+		zlog_debug("%s: from vrf %s", __func__, bgp_vrf->name_pretty);
 
 	if (debug && info_vrf->attr->ecommunity) {
 		char *s = ecommunity_ecom2str(info_vrf->attr->ecommunity,
@@ -511,7 +690,7 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,       /* to */
 			if (debug)
 				zlog_debug(
 					"%s: vrf %s route map \"%s\" says DENY, returning",
-					__func__, bgp_vrf->name,
+					__func__, bgp_vrf->name_pretty,
 					bgp_vrf->vpn_policy[afi]
 						.rmap[BGP_VPN_POLICY_DIR_TOVPN]
 						->name);
@@ -587,23 +766,20 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,       /* to */
 	} else {
 		if (!CHECK_FLAG(bgp_vrf->af_flags[afi][SAFI_UNICAST],
 				BGP_CONFIG_VRF_TO_VRF_EXPORT)) {
-			switch (afi) {
-			case AFI_IP:
-			default:
-				/* Clear ipv4 */
-				static_attr.mp_nexthop_global_in.s_addr = 0;
+			if (afi == AFI_IP) {
+				/*
+				 * For ipv4, copy to multiprotocol
+				 * nexthop field
+				 */
+				static_attr.mp_nexthop_global_in =
+					static_attr.nexthop;
 				static_attr.mp_nexthop_len = 4;
-				static_attr.nexthop.s_addr = 0; /* self */
-				static_attr.flag |=
-					ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP);
-				break;
-
-			case AFI_IP6:
-				/* Clear ipv6 */
-				memset(&static_attr.mp_nexthop_global, 0,
-				       sizeof(static_attr.mp_nexthop_global));
-				static_attr.mp_nexthop_len = 16; /* bytes */
-				break;
+				/*
+				 * XXX Leave static_attr.nexthop
+				 * intact for NHT
+				 */
+				static_attr.flag &=
+					~ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP);
 			}
 		} else {
 			/* Update based on next-hop family to account for
@@ -621,12 +797,12 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,       /* to */
 					ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP);
 			}
 		}
+		nexthop_self_flag = 1;
 	}
 
 	label_val = bgp_vrf->vpn_policy[afi].tovpn_label;
 	if (label_val == MPLS_LABEL_NONE) {
-		/* TBD get from label manager */
-		label = MPLS_LABEL_IMPLICIT_NULL;
+		encode_label(MPLS_LABEL_IMPLICIT_NULL, &label);
 	} else {
 		encode_label(label_val, &label);
 	}
@@ -640,14 +816,12 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,       /* to */
 		&static_attr);	/* hashed refcounted everything */
 	bgp_attr_flush(&static_attr); /* free locally-allocated parts */
 
-	if (debug) {
-		const char *s = "";
+	if (debug && new_attr->ecommunity) {
+		char *s = ecommunity_ecom2str(new_attr->ecommunity,
+					      ECOMMUNITY_FORMAT_ROUTE_MAP, 0);
 
-		if (new_attr->ecommunity) {
-			s = ecommunity_ecom2str(new_attr->ecommunity,
-						ECOMMUNITY_FORMAT_ROUTE_MAP, 0);
-		}
 		zlog_debug("%s: new_attr->ecommunity{%s}", __func__, s);
+		XFREE(MTYPE_ECOMMUNITY_STR, s);
 	}
 
 	/* Now new_attr is an allocated interned attr */
@@ -658,8 +832,8 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,       /* to */
 	struct bgp_info *new_info;
 
 	new_info = leak_update(bgp_vpn, bn, new_attr, afi, safi, info_vrf,
-			       ZEBRA_ROUTE_BGP, BGP_ROUTE_IMPORTED, &label, 1,
-			       info_vrf, bgp_vrf, NULL, debug);
+			       &label, 1, info_vrf, bgp_vrf, NULL,
+			       nexthop_self_flag, debug);
 
 	/*
 	 * Routes actually installed in the vpn RIB must also be
@@ -671,7 +845,7 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,       /* to */
 	 * because of loop checking.
 	 */
 	if (new_info)
-		vpn_leak_to_vrf_update(bgp_vpn, new_info);
+		vpn_leak_to_vrf_update(bgp_vrf, new_info);
 }
 
 void vpn_leak_from_vrf_withdraw(struct bgp *bgp_vpn,       /* to */
@@ -685,6 +859,15 @@ void vpn_leak_from_vrf_withdraw(struct bgp *bgp_vpn,       /* to */
 	struct bgp_info *bi;
 	struct bgp_node *bn;
 	const char *debugmsg;
+	char buf_prefix[PREFIX_STRLEN];
+
+	if (debug) {
+		prefix2str(p, buf_prefix, sizeof(buf_prefix));
+		zlog_debug(
+			"%s: entry: leak-from=%s, p=%s, type=%d, sub_type=%d",
+			__func__, bgp_vrf->name_pretty, buf_prefix,
+			info_vrf->type, info_vrf->sub_type);
+	}
 
 	if (info_vrf->sub_type != BGP_ROUTE_NORMAL
 	    && info_vrf->sub_type != BGP_ROUTE_STATIC
@@ -806,7 +989,7 @@ void vpn_leak_from_vrf_update_all(struct bgp *bgp_vpn, /* to */
 
 	if (debug)
 		zlog_debug("%s: entry, afi=%d, vrf=%s", __func__, afi,
-			   bgp_vrf->name);
+			   bgp_vrf->name_pretty);
 
 	for (bn = bgp_table_top(bgp_vrf->rib[afi][SAFI_UNICAST]); bn;
 	     bn = bgp_route_next(bn)) {
@@ -838,7 +1021,10 @@ static void vpn_leak_to_vrf_update_onevrf(struct bgp *bgp_vrf,       /* to */
 	const char *debugmsg;
 	struct prefix nexthop_orig;
 	mpls_label_t *pLabels = NULL;
-	int num_labels = 0;
+	uint32_t num_labels = 0;
+	int nexthop_self_flag = 1;
+	struct bgp_info *bi_ultimate = NULL;
+	int origin_local = 0;
 	struct bgp *src_vrf;
 
 	int debug = BGP_DEBUG(vpn, VPN_LEAK_TO_VRF);
@@ -858,7 +1044,8 @@ static void vpn_leak_to_vrf_update_onevrf(struct bgp *bgp_vrf,       /* to */
 	}
 
 	if (debug)
-		zlog_debug("%s: updating to vrf %s", __func__, bgp_vrf->name);
+		zlog_debug("%s: updating to vrf %s", __func__,
+				bgp_vrf->name_pretty);
 
 	bgp_attr_dup(&static_attr, info_vpn->attr); /* shallow copy */
 
@@ -889,8 +1076,7 @@ static void vpn_leak_to_vrf_update_onevrf(struct bgp *bgp_vrf,       /* to */
 				info_vpn->attr->mp_nexthop_global_in;
 			static_attr.mp_nexthop_len =
 				info_vpn->attr->mp_nexthop_len;
-		} else
-			static_attr.nexthop.s_addr = 0; /* self */
+		}
 		static_attr.flag |= ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP);
 		break;
 	case AF_INET6:
@@ -901,10 +1087,6 @@ static void vpn_leak_to_vrf_update_onevrf(struct bgp *bgp_vrf,       /* to */
 		if (CHECK_FLAG(bgp_vrf->af_flags[afi][safi],
 			       BGP_CONFIG_VRF_TO_VRF_IMPORT)) {
 			static_attr.mp_nexthop_global = nexthop_orig.u.prefix6;
-		} else {
-			memset(&static_attr.mp_nexthop_global, 0,
-			       sizeof(static_attr.mp_nexthop_global));
-			static_attr.mp_nexthop_len = 16;       /* bytes */
 		}
 		break;
 	}
@@ -927,12 +1109,18 @@ static void vpn_leak_to_vrf_update_onevrf(struct bgp *bgp_vrf,       /* to */
 			if (debug)
 				zlog_debug(
 					"%s: vrf %s vpn-policy route map \"%s\" says DENY, returning",
-					__func__, bgp_vrf->name,
+					__func__, bgp_vrf->name_pretty,
 					bgp_vrf->vpn_policy[afi]
 						.rmap[BGP_VPN_POLICY_DIR_FROMVPN]
 						->name);
 			return;
 		}
+		/*
+		 * if route-map changed nexthop, don't nexthop-self on output
+		 */
+		if (!CHECK_FLAG(static_attr.rmap_change_flags,
+						BATTR_RMAP_NEXTHOP_UNCHANGED))
+			nexthop_self_flag = 0;
 	}
 
 	new_attr = bgp_attr_intern(&static_attr);
@@ -942,16 +1130,46 @@ static void vpn_leak_to_vrf_update_onevrf(struct bgp *bgp_vrf,       /* to */
 
 	/*
 	 * ensure labels are copied
+	 *
+	 * However, there is a special case: if the route originated in
+	 * another local VRF (as opposed to arriving via VPN), then the
+	 * nexthop is reached by hairpinning through this router (me)
+	 * using IP forwarding only (no LSP). Therefore, the route
+	 * imported to the VRF should not have labels attached. Note
+	 * that nexthop tracking is also involved: eliminating the
+	 * labels for these routes enables the non-labeled nexthops
+	 * from the originating VRF to be considered valid for this route.
 	 */
 	if (!CHECK_FLAG(bgp_vrf->af_flags[afi][safi],
 			BGP_CONFIG_VRF_TO_VRF_IMPORT)) {
-		if (info_vpn->extra && info_vpn->extra->num_labels) {
+		/* work back to original route */
+		for (bi_ultimate = info_vpn;
+		     bi_ultimate->extra && bi_ultimate->extra->parent;
+		     bi_ultimate = bi_ultimate->extra->parent)
+			;
+
+		/*
+		 * if original route was unicast,
+		 * then it did not arrive over vpn
+		 */
+		if (bi_ultimate->net) {
+			struct bgp_table *table;
+
+			table = bgp_node_table(bi_ultimate->net);
+			if (table && (table->safi == SAFI_UNICAST))
+				origin_local = 1;
+		}
+
+		/* copy labels */
+		if (!origin_local &&
+		    info_vpn->extra && info_vpn->extra->num_labels) {
 			num_labels = info_vpn->extra->num_labels;
 			if (num_labels > BGP_MAX_LABELS)
 				num_labels = BGP_MAX_LABELS;
 			pLabels = info_vpn->extra->label;
 		}
 	}
+
 	if (debug) {
 		char buf_prefix[PREFIX_STRLEN];
 		prefix2str(p, buf_prefix, sizeof(buf_prefix));
@@ -959,18 +1177,19 @@ static void vpn_leak_to_vrf_update_onevrf(struct bgp *bgp_vrf,       /* to */
 			   num_labels);
 	}
 
-	/* For VRF route-leaking, the source will be the originating VRF. */
-	if (CHECK_FLAG(bgp_vrf->af_flags[afi][safi],
-		       BGP_CONFIG_VRF_TO_VRF_IMPORT) &&
-	    info_vpn->extra)
+	/*
+	 * For VRF-2-VRF route-leaking,
+	 * the source will be the originating VRF.
+	 */
+	if (info_vpn->extra && info_vpn->extra->bgp_orig)
 		src_vrf = info_vpn->extra->bgp_orig;
 	else
 		src_vrf = bgp_vpn;
 
-	leak_update(bgp_vrf, bn, new_attr, afi, safi, info_vpn, ZEBRA_ROUTE_BGP,
-		    BGP_ROUTE_IMPORTED, pLabels, num_labels,
-		    info_vpn, /* parent */
-		    src_vrf, &nexthop_orig, debug);
+	leak_update(bgp_vrf, bn, new_attr, afi, safi, info_vpn,
+		pLabels, num_labels,
+		info_vpn, /* parent */
+		src_vrf, &nexthop_orig, nexthop_self_flag, debug);
 }
 
 void vpn_leak_to_vrf_update(struct bgp *bgp_vpn,       /* from */
@@ -1005,8 +1224,16 @@ void vpn_leak_to_vrf_withdraw(struct bgp *bgp_vpn,       /* from */
 	struct bgp_node *bn;
 	struct bgp_info *bi;
 	const char *debugmsg;
+	char buf_prefix[PREFIX_STRLEN];
 
 	int debug = BGP_DEBUG(vpn, VPN_LEAK_TO_VRF);
+
+	if (debug) {
+		prefix2str(&info_vpn->net->p, buf_prefix, sizeof(buf_prefix));
+		zlog_debug("%s: entry: p=%s, type=%d, sub_type=%d",
+			__func__, buf_prefix,
+			info_vpn->type, info_vpn->sub_type);
+	}
 
 	if (debug)
 		zlog_debug("%s: start (info_vpn=%p)", __func__, info_vpn);
@@ -1048,7 +1275,7 @@ void vpn_leak_to_vrf_withdraw(struct bgp *bgp_vpn,       /* from */
 
 		if (debug)
 			zlog_debug("%s: withdrawing from vrf %s", __func__,
-				   bgp->name);
+				   bgp->name_pretty);
 
 		bn = bgp_afi_node_get(bgp->rib[afi][safi], afi, safi, p, NULL);
 		for (bi = (bn ? bn->info : NULL); bi; bi = bi->next) {
@@ -1142,6 +1369,9 @@ void vpn_leak_to_vrf_update_all(struct bgp *bgp_vrf, /* to */
 	}
 }
 
+/*
+ * This function is called for definition/deletion/change to a route-map
+ */
 static void vpn_policy_routemap_update(struct bgp *bgp, const char *rmap_name)
 {
 	int debug = BGP_DEBUG(vpn, VPN_LEAK_RMAP_EVENT);
@@ -1158,9 +1388,8 @@ static void vpn_policy_routemap_update(struct bgp *bgp, const char *rmap_name)
 
 	for (afi = 0; afi < AFI_MAX; ++afi) {
 
-		if (vpn_leak_to_vpn_active(bgp, afi, NULL)
-		    && bgp->vpn_policy[afi].rmap_name[BGP_VPN_POLICY_DIR_TOVPN]
-		    && !strcmp(rmap_name,
+		if (bgp->vpn_policy[afi].rmap_name[BGP_VPN_POLICY_DIR_TOVPN]
+			&& !strcmp(rmap_name,
 			       bgp->vpn_policy[afi]
 				       .rmap_name[BGP_VPN_POLICY_DIR_TOVPN])) {
 
@@ -1176,30 +1405,22 @@ static void vpn_policy_routemap_update(struct bgp *bgp, const char *rmap_name)
 				zlog_debug("%s: after vpn_leak_prechange",
 					   __func__);
 
-			if (!rmap)
-				bgp->vpn_policy[afi]
-					.rmap[BGP_VPN_POLICY_DIR_TOVPN] = NULL;
+			/* in case of definition/deletion */
+			bgp->vpn_policy[afi].rmap[BGP_VPN_POLICY_DIR_TOVPN] =
+				rmap;
 
 			vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN, afi,
 					    bgp_get_default(), bgp);
+
 			if (debug)
 				zlog_debug("%s: after vpn_leak_postchange",
 					   __func__);
 		}
 
-		char *mapname = bgp->vpn_policy[afi]
-			.rmap_name[BGP_VPN_POLICY_DIR_FROMVPN];
-
-		if (mapname && (strcmp(mapname, rmap_name) == 0)
-		     && (!bgp->vpn_policy[afi].
-			       rmap[BGP_VPN_POLICY_DIR_FROMVPN]))
-			bgp->vpn_policy[afi].
-			     rmap[BGP_VPN_POLICY_DIR_FROMVPN] =
-				route_map_lookup_by_name(rmap_name);
-
-		if (vpn_leak_from_vpn_active(bgp, afi, NULL) &&
-			mapname &&
-			!strcmp(rmap_name, mapname))  {
+		if (bgp->vpn_policy[afi].rmap_name[BGP_VPN_POLICY_DIR_FROMVPN]
+			&& !strcmp(rmap_name,
+				bgp->vpn_policy[afi]
+				.rmap_name[BGP_VPN_POLICY_DIR_FROMVPN]))  {
 
 			if (debug) {
 				zlog_debug("%s: rmap \"%s\" matches vrf-policy fromvpn for as %d afi %s",
@@ -1210,14 +1431,12 @@ static void vpn_policy_routemap_update(struct bgp *bgp, const char *rmap_name)
 			vpn_leak_prechange(BGP_VPN_POLICY_DIR_FROMVPN, afi,
 					   bgp_get_default(), bgp);
 
-			if (!rmap) {
-				bgp->vpn_policy[afi]
-					.rmap[BGP_VPN_POLICY_DIR_FROMVPN] =
-					NULL;
-			} else
-				vpn_leak_postchange(BGP_VPN_POLICY_DIR_FROMVPN,
-						    afi, bgp_get_default(),
-						    bgp);
+			/* in case of definition/deletion */
+			bgp->vpn_policy[afi].rmap[BGP_VPN_POLICY_DIR_FROMVPN] =
+					rmap;
+
+			vpn_leak_postchange(BGP_VPN_POLICY_DIR_FROMVPN, afi,
+					    bgp_get_default(), bgp);
 		}
 	}
 }
@@ -1238,7 +1457,7 @@ void vpn_policy_routemap_event(const char *rmap_name)
 		vpn_policy_routemap_update(bgp, rmap_name);
 }
 
-void vrf_import_from_vrf(struct bgp *bgp, struct bgp *vrf_bgp,
+void vrf_import_from_vrf(struct bgp *to_bgp, struct bgp *from_bgp,
 			 afi_t afi, safi_t safi)
 {
 	const char *export_name;
@@ -1248,61 +1467,63 @@ void vrf_import_from_vrf(struct bgp *bgp, struct bgp *vrf_bgp,
 	struct ecommunity *ecom;
 	bool first_export = false;
 
-	export_name = bgp->name ? bgp->name : BGP_DEFAULT_NAME;
+	export_name = to_bgp->name ? to_bgp->name : BGP_DEFAULT_NAME;
 	idir = BGP_VPN_POLICY_DIR_FROMVPN;
 	edir = BGP_VPN_POLICY_DIR_TOVPN;
 
-
-	/* Cross-ref both VRFs. Also, note if this is the first time
+	/*
+	 * Cross-ref both VRFs. Also, note if this is the first time
 	 * any VRF is importing from "import_vrf".
 	 */
-	vname = (vrf_bgp->name ? XSTRDUP(MTYPE_TMP, vrf_bgp->name)
+	vname = (from_bgp->name ? XSTRDUP(MTYPE_TMP, from_bgp->name)
 			       : XSTRDUP(MTYPE_TMP, BGP_DEFAULT_NAME));
 
-	listnode_add(bgp->vpn_policy[afi].import_vrf, vname);
+	listnode_add(to_bgp->vpn_policy[afi].import_vrf, vname);
 
-	if (!listcount(vrf_bgp->vpn_policy[afi].export_vrf))
+	if (!listcount(from_bgp->vpn_policy[afi].export_vrf))
 		first_export = true;
 	vname = XSTRDUP(MTYPE_TMP, export_name);
-	listnode_add(vrf_bgp->vpn_policy[afi].export_vrf, vname);
+	listnode_add(from_bgp->vpn_policy[afi].export_vrf, vname);
 
 	/* Update import RT for current VRF using export RT of the VRF we're
 	 * importing from. First though, make sure "import_vrf" has that
 	 * set.
 	 */
 	if (first_export) {
-		form_auto_rd(vrf_bgp->router_id, vrf_bgp->vrf_rd_id,
-			     &vrf_bgp->vrf_prd_auto);
-		vrf_bgp->vpn_policy[afi].tovpn_rd = vrf_bgp->vrf_prd_auto;
-		SET_FLAG(vrf_bgp->vpn_policy[afi].flags,
+		form_auto_rd(from_bgp->router_id, from_bgp->vrf_rd_id,
+			     &from_bgp->vrf_prd_auto);
+		from_bgp->vpn_policy[afi].tovpn_rd = from_bgp->vrf_prd_auto;
+		SET_FLAG(from_bgp->vpn_policy[afi].flags,
 			 BGP_VPN_POLICY_TOVPN_RD_SET);
-		prefix_rd2str(&vrf_bgp->vpn_policy[afi].tovpn_rd,
+		prefix_rd2str(&from_bgp->vpn_policy[afi].tovpn_rd,
 			      buf, sizeof(buf));
-		vrf_bgp->vpn_policy[afi].rtlist[edir] =
+		from_bgp->vpn_policy[afi].rtlist[edir] =
 			ecommunity_str2com(buf, ECOMMUNITY_ROUTE_TARGET, 0);
-		SET_FLAG(vrf_bgp->af_flags[afi][safi],
+		SET_FLAG(from_bgp->af_flags[afi][safi],
 			 BGP_CONFIG_VRF_TO_VRF_EXPORT);
+		from_bgp->vpn_policy[afi].tovpn_label =
+			BGP_PREVENT_VRF_2_VRF_LEAK;
 	}
-	ecom = vrf_bgp->vpn_policy[afi].rtlist[edir];
-	if (bgp->vpn_policy[afi].rtlist[idir])
-		bgp->vpn_policy[afi].rtlist[idir] =
-			ecommunity_merge(bgp->vpn_policy[afi]
+	ecom = from_bgp->vpn_policy[afi].rtlist[edir];
+	if (to_bgp->vpn_policy[afi].rtlist[idir])
+		to_bgp->vpn_policy[afi].rtlist[idir] =
+			ecommunity_merge(to_bgp->vpn_policy[afi]
 					 .rtlist[idir], ecom);
 	else
-		bgp->vpn_policy[afi].rtlist[idir] = ecommunity_dup(ecom);
-	SET_FLAG(bgp->af_flags[afi][safi], BGP_CONFIG_VRF_TO_VRF_IMPORT);
+		to_bgp->vpn_policy[afi].rtlist[idir] = ecommunity_dup(ecom);
+	SET_FLAG(to_bgp->af_flags[afi][safi], BGP_CONFIG_VRF_TO_VRF_IMPORT);
 
 	/* Does "import_vrf" first need to export its routes or that
 	 * is already done and we just need to import those routes
 	 * from the global table?
 	 */
 	if (first_export)
-		vpn_leak_postchange(edir, afi, bgp_get_default(), vrf_bgp);
+		vpn_leak_postchange(edir, afi, bgp_get_default(), from_bgp);
 	else
-		vpn_leak_postchange(idir, afi, bgp_get_default(), bgp);
+		vpn_leak_postchange(idir, afi, bgp_get_default(), to_bgp);
 }
 
-void vrf_unimport_from_vrf(struct bgp *bgp, struct bgp *vrf_bgp,
+void vrf_unimport_from_vrf(struct bgp *to_bgp, struct bgp *from_bgp,
 			   afi_t afi, safi_t safi)
 {
 	const char *export_name, *tmp_name;
@@ -1311,62 +1532,94 @@ void vrf_unimport_from_vrf(struct bgp *bgp, struct bgp *vrf_bgp,
 	struct ecommunity *ecom;
 	struct listnode *node;
 
-	export_name = bgp->name ? bgp->name : BGP_DEFAULT_NAME;
-	tmp_name = vrf_bgp->name ? vrf_bgp->name : BGP_DEFAULT_NAME;
+	export_name = to_bgp->name ? to_bgp->name : BGP_DEFAULT_NAME;
+	tmp_name = from_bgp->name ? from_bgp->name : BGP_DEFAULT_NAME;
 	idir = BGP_VPN_POLICY_DIR_FROMVPN;
 	edir = BGP_VPN_POLICY_DIR_TOVPN;
 
 	/* Were we importing from "import_vrf"? */
-	for (ALL_LIST_ELEMENTS_RO(bgp->vpn_policy[afi].import_vrf, node,
-					  vname)) {
+	for (ALL_LIST_ELEMENTS_RO(to_bgp->vpn_policy[afi].import_vrf, node,
+				  vname)) {
 		if (strcmp(vname, tmp_name) == 0)
 			break;
 	}
+
+	/*
+	 * We do not check in the cli if the passed in bgp
+	 * instance is actually imported into us before
+	 * we call this function.  As such if we do not
+	 * find this in the import_vrf list than
+	 * we just need to return safely.
+	 */
 	if (!vname)
 		return;
 
 	/* Remove "import_vrf" from our import list. */
-	listnode_delete(bgp->vpn_policy[afi].import_vrf, vname);
+	listnode_delete(to_bgp->vpn_policy[afi].import_vrf, vname);
 	XFREE(MTYPE_TMP, vname);
 
 	/* Remove routes imported from "import_vrf". */
 	/* TODO: In the current logic, we have to first remove all
 	 * imported routes and then (if needed) import back routes
 	 */
-	vpn_leak_prechange(idir, afi, bgp_get_default(), bgp);
+	vpn_leak_prechange(idir, afi, bgp_get_default(), to_bgp);
 
-	if (bgp->vpn_policy[afi].import_vrf->count == 0) {
-		UNSET_FLAG(bgp->af_flags[afi][safi],
+	if (to_bgp->vpn_policy[afi].import_vrf->count == 0) {
+		UNSET_FLAG(to_bgp->af_flags[afi][safi],
 			   BGP_CONFIG_VRF_TO_VRF_IMPORT);
-		ecommunity_free(&bgp->vpn_policy[afi].rtlist[idir]);
+		ecommunity_free(&to_bgp->vpn_policy[afi].rtlist[idir]);
 	} else {
-		ecom = vrf_bgp->vpn_policy[afi].rtlist[edir];
-		ecommunity_del_val(bgp->vpn_policy[afi].rtlist[idir],
+		ecom = from_bgp->vpn_policy[afi].rtlist[edir];
+		ecommunity_del_val(to_bgp->vpn_policy[afi].rtlist[idir],
 				   (struct ecommunity_val *)ecom->val);
-		vpn_leak_postchange(idir, afi, bgp_get_default(), bgp);
+		vpn_leak_postchange(idir, afi, bgp_get_default(), to_bgp);
 	}
+
+	/*
+	 * What?
+	 * So SA is assuming that since the ALL_LIST_ELEMENTS_RO
+	 * below is checking for NULL that export_vrf can be
+	 * NULL, consequently it is complaining( like a cabbage )
+	 * that we could dereference and crash in the listcount(..)
+	 * check below.
+	 * So make it happy, under protest, with liberty and justice
+	 * for all.
+	 */
+	assert(from_bgp->vpn_policy[afi].export_vrf);
 
 	/* Remove us from "import_vrf's" export list. If no other VRF
 	 * is importing from "import_vrf", cleanup appropriately.
 	 */
-	for (ALL_LIST_ELEMENTS_RO(vrf_bgp->vpn_policy[afi].export_vrf,
+	for (ALL_LIST_ELEMENTS_RO(from_bgp->vpn_policy[afi].export_vrf,
 				  node, vname)) {
 		if (strcmp(vname, export_name) == 0)
 			break;
 	}
 
-	listnode_delete(vrf_bgp->vpn_policy[afi].export_vrf, vname);
+	/*
+	 * If we have gotten to this point then the vname must
+	 * exist.  If not, we are in a world of trouble and
+	 * have slag sitting around.
+	 *
+	 * import_vrf and export_vrf must match in having
+	 * the in/out names as appropriate.
+	 */
+	assert(vname);
+
+	listnode_delete(from_bgp->vpn_policy[afi].export_vrf, vname);
 	XFREE(MTYPE_TMP, vname);
 
-	if (!listcount(vrf_bgp->vpn_policy[afi].export_vrf)) {
-		vpn_leak_prechange(edir, afi, bgp_get_default(), vrf_bgp);
-		ecommunity_free(&vrf_bgp->vpn_policy[afi].rtlist[edir]);
-		UNSET_FLAG(vrf_bgp->af_flags[afi][safi],
+	if (!listcount(from_bgp->vpn_policy[afi].export_vrf)) {
+		vpn_leak_prechange(edir, afi, bgp_get_default(), from_bgp);
+		ecommunity_free(&from_bgp->vpn_policy[afi].rtlist[edir]);
+		UNSET_FLAG(from_bgp->af_flags[afi][safi],
 			   BGP_CONFIG_VRF_TO_VRF_EXPORT);
-		memset(&vrf_bgp->vpn_policy[afi].tovpn_rd, 0,
+		memset(&from_bgp->vpn_policy[afi].tovpn_rd, 0,
 		       sizeof(struct prefix_rd));
-		UNSET_FLAG(vrf_bgp->vpn_policy[afi].flags,
+		UNSET_FLAG(from_bgp->vpn_policy[afi].flags,
 			   BGP_VPN_POLICY_TOVPN_RD_SET);
+		from_bgp->vpn_policy[afi].tovpn_label = MPLS_LABEL_NONE;
+
 	}
 }
 
@@ -1489,7 +1742,7 @@ DEFUN (no_vpnv6_network,
 
 int bgp_show_mpls_vpn(struct vty *vty, afi_t afi, struct prefix_rd *prd,
 		      enum bgp_show_type type, void *output_arg, int tags,
-		      u_char use_json)
+		      uint8_t use_json)
 {
 	struct bgp *bgp;
 	struct bgp_table *table;
@@ -1667,7 +1920,7 @@ DEFUN (show_ip_bgp_vpn_all_neighbor_routes,
 	union sockunion su;
 	struct peer *peer;
 	int ret;
-	u_char uj = use_json(argc, argv);
+	uint8_t uj = use_json(argc, argv);
 	afi_t afi;
 	int idx = 0;
 
@@ -1731,7 +1984,7 @@ DEFUN (show_ip_bgp_vpn_rd_neighbor_routes,
 	union sockunion su;
 	struct peer *peer;
 	struct prefix_rd prd;
-	u_char uj = use_json(argc, argv);
+	uint8_t uj = use_json(argc, argv);
 	afi_t afi;
 	int idx = 0;
 
@@ -1809,7 +2062,7 @@ DEFUN (show_ip_bgp_vpn_all_neighbor_advertised_routes,
 	int ret;
 	struct peer *peer;
 	union sockunion su;
-	u_char uj = use_json(argc, argv);
+	uint8_t uj = use_json(argc, argv);
 	afi_t afi;
 	int idx = 0;
 
@@ -1871,7 +2124,7 @@ DEFUN (show_ip_bgp_vpn_rd_neighbor_advertised_routes,
 	struct peer *peer;
 	struct prefix_rd prd;
 	union sockunion su;
-	u_char uj = use_json(argc, argv);
+	uint8_t uj = use_json(argc, argv);
 	afi_t afi;
 	int idx = 0;
 
@@ -1955,4 +2208,23 @@ void bgp_mplsvpn_init(void)
 	install_element(VIEW_NODE,
 			&show_ip_bgp_vpn_rd_neighbor_advertised_routes_cmd);
 #endif /* KEEP_OLD_VPN_COMMANDS */
+}
+
+vrf_id_t get_first_vrf_for_redirect_with_rt(struct ecommunity *eckey)
+{
+	struct listnode *mnode, *mnnode;
+	struct bgp *bgp;
+
+	for (ALL_LIST_ELEMENTS(bm->bgp, mnode, mnnode, bgp)) {
+		struct ecommunity *ec;
+
+		if (bgp->inst_type != BGP_INSTANCE_TYPE_VRF)
+			continue;
+
+		ec = bgp->vpn_policy[AFI_IP].import_redirect_rtlist;
+
+		if (ecom_intersect(ec, eckey))
+			return bgp->vrf_id;
+	}
+	return VRF_UNKNOWN;
 }

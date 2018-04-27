@@ -3,8 +3,6 @@
  * Copyright (C) 2018 Cumulus Networks, Inc.
  *               Donald Sharp
  *
- * This file is part of FRR.
- *
  * FRR is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2, or (at your option) any
@@ -33,7 +31,8 @@ struct pbr_map {
 	/*
 	 * The name of the PBR_MAP
 	 */
-	char name[100];
+#define PBR_MAP_NAMELEN 100
+	char name[PBR_MAP_NAMELEN];
 
 	struct list *seqnumbers;
 
@@ -92,7 +91,7 @@ struct pbr_map_sequence {
 	/*
 	 * Family of the src/dst.  Needed when deleting since we clear them
 	 */
-	u_char family;
+	unsigned char family;
 
 	/*
 	 * The nexthop group we auto create

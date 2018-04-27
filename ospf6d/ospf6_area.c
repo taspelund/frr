@@ -61,7 +61,8 @@ static void ospf6_area_lsdb_hook_add(struct ospf6_lsa *lsa)
 	case OSPF6_LSTYPE_ROUTER:
 	case OSPF6_LSTYPE_NETWORK:
 		if (IS_OSPF6_DEBUG_EXAMIN_TYPE(lsa->header->type)) {
-			zlog_debug("%s Examin LSA %s", __PRETTY_FUNCTION__, lsa->name);
+			zlog_debug("%s Examin LSA %s", __PRETTY_FUNCTION__,
+				   lsa->name);
 			zlog_debug(" Schedule SPF Calculation for %s",
 				   OSPF6_AREA(lsa->lsdb->data)->name);
 		}
@@ -198,7 +199,7 @@ static void ospf6_area_no_summary_unset(struct ospf6 *ospf6,
  * @param o - ospf6 instance
  * @param df - display format for area ID
  */
-struct ospf6_area *ospf6_area_create(u_int32_t area_id, struct ospf6 *o, int df)
+struct ospf6_area *ospf6_area_create(uint32_t area_id, struct ospf6 *o, int df)
 {
 	struct ospf6_area *oa;
 
@@ -297,7 +298,7 @@ void ospf6_area_delete(struct ospf6_area *oa)
 	XFREE(MTYPE_OSPF6_AREA, oa);
 }
 
-struct ospf6_area *ospf6_area_lookup(u_int32_t area_id, struct ospf6 *ospf6)
+struct ospf6_area *ospf6_area_lookup(uint32_t area_id, struct ospf6 *ospf6)
 {
 	struct ospf6_area *oa;
 	struct listnode *n;
@@ -383,7 +384,7 @@ void ospf6_area_show(struct vty *vty, struct ospf6_area *oa)
 #define OSPF6_CMD_AREA_GET(str, oa)                                            \
 	{                                                                      \
 		char *ep;                                                      \
-		u_int32_t area_id = htonl(strtoul(str, &ep, 10));              \
+		uint32_t area_id = htonl(strtoul(str, &ep, 10));               \
 		if (*ep && inet_pton(AF_INET, str, &area_id) != 1) {           \
 			vty_out(vty, "Malformed Area-ID: %s\n", str);          \
 			return CMD_SUCCESS;                                    \
@@ -415,7 +416,7 @@ DEFUN (area_range,
 	struct ospf6_area *oa;
 	struct prefix prefix;
 	struct ospf6_route *range;
-	u_int32_t cost = OSPF_AREA_RANGE_COST_UNSPEC;
+	uint32_t cost = OSPF_AREA_RANGE_COST_UNSPEC;
 
 	OSPF6_CMD_AREA_GET(argv[idx_ipv4]->arg, oa);
 
@@ -587,14 +588,14 @@ DEFUN (area_filter_list,
 	if (strmatch(inout, "in")) {
 		PREFIX_LIST_IN(area) = plist;
 		XFREE(MTYPE_OSPF6_PLISTNAME, PREFIX_NAME_IN(area));
-		PREFIX_NAME_IN(area) = XSTRDUP(MTYPE_OSPF6_PLISTNAME,
-					       plistname);
+		PREFIX_NAME_IN(area) =
+			XSTRDUP(MTYPE_OSPF6_PLISTNAME, plistname);
 		ospf6_abr_reimport(area);
 	} else {
 		PREFIX_LIST_OUT(area) = plist;
 		XFREE(MTYPE_OSPF6_PLISTNAME, PREFIX_NAME_OUT(area));
-		PREFIX_NAME_OUT(area) = XSTRDUP(MTYPE_OSPF6_PLISTNAME,
-						plistname);
+		PREFIX_NAME_OUT(area) =
+			XSTRDUP(MTYPE_OSPF6_PLISTNAME, plistname);
 		ospf6_abr_enable_area(area);
 	}
 
@@ -809,7 +810,7 @@ DEFUN (show_ipv6_ospf6_area_spf_tree,
        "Show SPF tree\n")
 {
 	int idx_ipv4 = 4;
-	u_int32_t area_id;
+	uint32_t area_id;
 	struct ospf6_area *oa;
 	struct ospf6_vertex *root;
 	struct ospf6_route *route;
@@ -855,12 +856,12 @@ DEFUN (show_ipv6_ospf6_simulate_spf_tree_root,
 {
 	int idx_ipv4 = 5;
 	int idx_ipv4_2 = 7;
-	u_int32_t area_id;
+	uint32_t area_id;
 	struct ospf6_area *oa;
 	struct ospf6_vertex *root;
 	struct ospf6_route *route;
 	struct prefix prefix;
-	u_int32_t router_id;
+	uint32_t router_id;
 	struct ospf6_route_table *spf_table;
 	unsigned char tmp_debug_ospf6_spf = 0;
 

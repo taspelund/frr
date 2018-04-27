@@ -152,7 +152,7 @@ int ospf6_abr_originate_summary_to_area(struct ospf6_route *route,
 	struct ospf6_inter_prefix_lsa *prefix_lsa;
 	struct ospf6_inter_router_lsa *router_lsa;
 	struct ospf6_route_table *summary_table = NULL;
-	u_int16_t type;
+	uint16_t type;
 	char buf[PREFIX2STR_BUFFER];
 	int is_debug = 0;
 
@@ -390,10 +390,10 @@ int ospf6_abr_originate_summary_to_area(struct ospf6_route *route,
 		if (prefix_list_apply(PREFIX_LIST_OUT(area), &route->prefix)
 		    != PREFIX_PERMIT) {
 			if (is_debug) {
-				inet_ntop(AF_INET,
-					  &(ADV_ROUTER_IN_PREFIX(
-						  &route->prefix)),
-					  buf, sizeof(buf));
+				inet_ntop(
+					AF_INET,
+					&(ADV_ROUTER_IN_PREFIX(&route->prefix)),
+					buf, sizeof(buf));
 				zlog_debug(
 					"prefix %s was denied by filter-list out",
 					buf);
@@ -506,11 +506,11 @@ void ospf6_abr_range_reset_cost(struct ospf6 *ospf6)
 			OSPF6_ABR_RANGE_CLEAR_COST(range);
 }
 
-static inline u_int32_t ospf6_abr_range_compute_cost(struct ospf6_route *range,
-						     struct ospf6 *o)
+static inline uint32_t ospf6_abr_range_compute_cost(struct ospf6_route *range,
+						    struct ospf6 *o)
 {
 	struct ospf6_route *ro;
-	u_int32_t cost = 0;
+	uint32_t cost = 0;
 
 	for (ro = ospf6_route_match_head(&range->prefix, o->route_table); ro;
 	     ro = ospf6_route_match_next(&range->prefix, ro)) {
@@ -524,7 +524,7 @@ static inline u_int32_t ospf6_abr_range_compute_cost(struct ospf6_route *range,
 }
 
 static inline int
-ospf6_abr_range_summary_needs_update(struct ospf6_route *range, u_int32_t cost)
+ospf6_abr_range_summary_needs_update(struct ospf6_route *range, uint32_t cost)
 {
 	int redo_summary = 0;
 
@@ -560,7 +560,7 @@ ospf6_abr_range_summary_needs_update(struct ospf6_route *range, u_int32_t cost)
 
 static void ospf6_abr_range_update(struct ospf6_route *range)
 {
-	u_int32_t cost = 0;
+	uint32_t cost = 0;
 	struct listnode *node, *nnode;
 	struct ospf6_area *oa;
 	int summary_orig = 0;
@@ -686,11 +686,11 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 	struct ospf6_route_table *table = NULL;
 	struct ospf6_route *range, *route, *old = NULL;
 	struct ospf6_route *abr_entry;
-	u_char type = 0;
+	uint8_t type = 0;
 	char options[3] = {0, 0, 0};
-	u_int8_t prefix_options = 0;
-	u_int32_t cost = 0;
-	u_char router_bits = 0;
+	uint8_t prefix_options = 0;
+	uint32_t cost = 0;
+	uint8_t router_bits = 0;
 	char buf[PREFIX2STR_BUFFER];
 	int is_debug = 0;
 	struct ospf6_inter_prefix_lsa *prefix_lsa = NULL;
@@ -797,6 +797,9 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 	/* (3) if the prefix is equal to an active configured address range */
 	/*     or if the NU bit is set in the prefix */
 	if (lsa->header->type == htons(OSPF6_LSTYPE_INTER_PREFIX)) {
+		/* must have been set in previous block */
+		assert(prefix_lsa);
+
 		range = ospf6_route_lookup(&prefix, oa->range_table);
 		if (range) {
 			if (is_debug)
@@ -890,8 +893,7 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 		if (prefix_list_apply(PREFIX_LIST_IN(oa), &prefix)
 		    != PREFIX_PERMIT) {
 			if (is_debug)
-				zlog_debug(
-					"Prefix was denied by prefix-list");
+				zlog_debug("Prefix was denied by prefix-list");
 			if (old)
 				ospf6_route_remove(old, table);
 			return;
@@ -959,11 +961,11 @@ void ospf6_abr_examin_summary(struct ospf6_lsa *lsa, struct ospf6_area *oa)
 	oa->running_ospf6_abr_examin_summary = 0;
 }
 
-void ospf6_abr_examin_brouter(u_int32_t router_id)
+void ospf6_abr_examin_brouter(uint32_t router_id)
 {
 	struct ospf6_lsa *lsa;
 	struct ospf6_area *oa;
-	u_int16_t type;
+	uint16_t type;
 
 	if (ospf6_is_router_abr(ospf6))
 		oa = ospf6->backbone;
@@ -990,7 +992,7 @@ void ospf6_abr_examin_brouter(u_int32_t router_id)
 void ospf6_abr_reimport(struct ospf6_area *oa)
 {
 	struct ospf6_lsa *lsa;
-	u_int16_t type;
+	uint16_t type;
 
 	type = htons(OSPF6_LSTYPE_INTER_ROUTER);
 	for (ALL_LSDB_TYPED(oa->lsdb, type, lsa))
@@ -1051,7 +1053,7 @@ static int ospf6_inter_area_prefix_lsa_show(struct vty *vty,
 		lsa->header);
 
 	vty_out(vty, "     Metric: %lu\n",
-		(u_long)OSPF6_ABR_SUMMARY_METRIC(prefix_lsa));
+		(unsigned long)OSPF6_ABR_SUMMARY_METRIC(prefix_lsa));
 
 	ospf6_prefix_options_printbuf(prefix_lsa->prefix.prefix_options, buf,
 				      sizeof(buf));
@@ -1095,7 +1097,7 @@ static int ospf6_inter_area_router_lsa_show(struct vty *vty,
 	ospf6_options_printbuf(router_lsa->options, buf, sizeof(buf));
 	vty_out(vty, "     Options: %s\n", buf);
 	vty_out(vty, "     Metric: %lu\n",
-		(u_long)OSPF6_ABR_SUMMARY_METRIC(router_lsa));
+		(unsigned long)OSPF6_ABR_SUMMARY_METRIC(router_lsa));
 
 	inet_ntop(AF_INET, &router_lsa->router_id, buf, sizeof(buf));
 	vty_out(vty, "     Destination Router ID: %s\n", buf);
@@ -1150,8 +1152,7 @@ struct ospf6_lsa_handler inter_prefix_handler = {
 	.lh_short_name = "IAP",
 	.lh_show = ospf6_inter_area_prefix_lsa_show,
 	.lh_get_prefix_str = ospf6_inter_area_prefix_lsa_get_prefix_str,
-	.lh_debug = 0
-};
+	.lh_debug = 0};
 
 struct ospf6_lsa_handler inter_router_handler = {
 	.lh_type = OSPF6_LSTYPE_INTER_ROUTER,
@@ -1159,8 +1160,7 @@ struct ospf6_lsa_handler inter_router_handler = {
 	.lh_short_name = "IAR",
 	.lh_show = ospf6_inter_area_router_lsa_show,
 	.lh_get_prefix_str = ospf6_inter_area_router_lsa_get_prefix_str,
-	.lh_debug = 0
-};
+	.lh_debug = 0};
 
 void ospf6_abr_init(void)
 {

@@ -42,6 +42,7 @@
 #include "bgpd/bgp_ecommunity.h"
 #include "bgpd/bgp_label.h"
 #include "bgpd/bgp_evpn.h"
+#include "bgpd/bgp_flowspec.h"
 
 unsigned long conf_bgp_debug_as4;
 unsigned long conf_bgp_debug_neighbor_events;
@@ -56,6 +57,8 @@ unsigned long conf_bgp_debug_allow_martians;
 unsigned long conf_bgp_debug_nht;
 unsigned long conf_bgp_debug_update_groups;
 unsigned long conf_bgp_debug_vpn;
+unsigned long conf_bgp_debug_flowspec;
+unsigned long conf_bgp_debug_labelpool;
 
 unsigned long term_bgp_debug_as4;
 unsigned long term_bgp_debug_neighbor_events;
@@ -70,6 +73,8 @@ unsigned long term_bgp_debug_allow_martians;
 unsigned long term_bgp_debug_nht;
 unsigned long term_bgp_debug_update_groups;
 unsigned long term_bgp_debug_vpn;
+unsigned long term_bgp_debug_flowspec;
+unsigned long term_bgp_debug_labelpool;
 
 struct list *bgp_debug_neighbor_events_peers = NULL;
 struct list *bgp_debug_keepalive_peers = NULL;
@@ -373,11 +378,6 @@ int bgp_dump_attr(struct attr *attr, char *buf, size_t size)
 			 inet_ntop(AF_INET6, &attr->mp_nexthop_local, addrbuf,
 				   BUFSIZ));
 
-	if (attr->mp_nexthop_len == BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL)
-		snprintf(buf + strlen(buf), size - strlen(buf), "(%s)",
-			 inet_ntop(AF_INET6, &attr->mp_nexthop_local, addrbuf,
-				   BUFSIZ));
-
 	if (attr->mp_nexthop_len == BGP_ATTR_NHLEN_IPV4)
 		snprintf(buf, size, "nexthop %s", inet_ntoa(attr->nexthop));
 
@@ -474,13 +474,13 @@ const char *bgp_notify_subcode_str(char code, char subcode)
 }
 
 /* extract notify admin reason if correctly present */
-const char *bgp_notify_admin_message(char *buf, size_t bufsz, u_char *data,
+const char *bgp_notify_admin_message(char *buf, size_t bufsz, uint8_t *data,
 				     size_t datalen)
 {
 	if (!data || datalen < 1)
 		return NULL;
 
-	u_char len = data[0];
+	uint8_t len = data[0];
 	if (len > 128 || len > datalen - 1)
 		return NULL;
 
@@ -1657,6 +1657,44 @@ DEFUN (no_debug_bgp_vpn,
 	return CMD_SUCCESS;
 }
 
+DEFUN (debug_bgp_labelpool,
+       debug_bgp_labelpool_cmd,
+       "debug bgp labelpool",
+       DEBUG_STR
+       BGP_STR
+       "label pool\n")
+{
+	if (vty->node == CONFIG_NODE)
+		DEBUG_ON(labelpool, LABELPOOL);
+	else
+		TERM_DEBUG_ON(labelpool, LABELPOOL);
+
+	if (vty->node != CONFIG_NODE)
+		vty_out(vty, "enabled debug bgp labelpool\n");
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (no_debug_bgp_labelpool,
+       no_debug_bgp_labelpool_cmd,
+       "no debug bgp labelpool",
+       NO_STR
+       DEBUG_STR
+       BGP_STR
+       "label pool\n")
+{
+	if (vty->node == CONFIG_NODE)
+		DEBUG_OFF(labelpool, LABELPOOL);
+	else
+		TERM_DEBUG_OFF(labelpool, LABELPOOL);
+
+
+	if (vty->node != CONFIG_NODE)
+		vty_out(vty, "disabled debug bgp labelpool\n");
+
+	return CMD_SUCCESS;
+}
+
 DEFUN (no_debug_bgp,
        no_debug_bgp_cmd,
        "no debug bgp",
@@ -1693,6 +1731,8 @@ DEFUN (no_debug_bgp,
 	TERM_DEBUG_OFF(vpn, VPN_LEAK_TO_VRF);
 	TERM_DEBUG_OFF(vpn, VPN_LEAK_RMAP_EVENT);
 	TERM_DEBUG_OFF(vpn, VPN_LEAK_LABEL);
+	TERM_DEBUG_OFF(flowspec, FLOWSPEC);
+	TERM_DEBUG_OFF(labelpool, LABELPOOL);
 	vty_out(vty, "All possible debugging has been turned off\n");
 
 	return CMD_SUCCESS;
@@ -1763,6 +1803,10 @@ DEFUN_NOSH (show_debugging_bgp,
 		vty_out(vty, "  BGP vpn route-map event debugging is on\n");
 	if (BGP_DEBUG(vpn, VPN_LEAK_LABEL))
 		vty_out(vty, "  BGP vpn label event debugging is on\n");
+	if (BGP_DEBUG(flowspec, FLOWSPEC))
+		vty_out(vty, "  BGP flowspec debugging is on\n");
+	if (BGP_DEBUG(labelpool, LABELPOOL))
+		vty_out(vty, "  BGP labelpool debugging is on\n");
 
 	vty_out(vty, "\n");
 	return CMD_SUCCESS;
@@ -1815,6 +1859,10 @@ int bgp_debug_count(void)
 	if (BGP_DEBUG(vpn, VPN_LEAK_RMAP_EVENT))
 		ret++;
 	if (BGP_DEBUG(vpn, VPN_LEAK_LABEL))
+		ret++;
+	if (BGP_DEBUG(flowspec, FLOWSPEC))
+		ret++;
+	if (BGP_DEBUG(labelpool, LABELPOOL))
 		ret++;
 
 	return ret;
@@ -1907,6 +1955,14 @@ static int bgp_config_write_debug(struct vty *vty)
 	}
 	if (CONF_BGP_DEBUG(vpn, VPN_LEAK_LABEL)) {
 		vty_out(vty, "debug bgp vpn label\n");
+		write++;
+	}
+	if (CONF_BGP_DEBUG(flowspec, FLOWSPEC)) {
+		vty_out(vty, "debug bgp flowspec\n");
+		write++;
+	}
+	if (CONF_BGP_DEBUG(labelpool, LABELPOOL)) {
+		vty_out(vty, "debug bgp labelpool\n");
 		write++;
 	}
 
@@ -2008,6 +2064,11 @@ void bgp_debug_init(void)
 	install_element(CONFIG_NODE, &debug_bgp_vpn_cmd);
 	install_element(ENABLE_NODE, &no_debug_bgp_vpn_cmd);
 	install_element(CONFIG_NODE, &no_debug_bgp_vpn_cmd);
+
+	install_element(ENABLE_NODE, &debug_bgp_labelpool_cmd);
+	install_element(CONFIG_NODE, &debug_bgp_labelpool_cmd);
+	install_element(ENABLE_NODE, &no_debug_bgp_labelpool_cmd);
+	install_element(CONFIG_NODE, &no_debug_bgp_labelpool_cmd);
 }
 
 /* Return true if this prefix is on the per_prefix_list of prefixes to debug
@@ -2164,8 +2225,8 @@ int bgp_debug_zebra(struct prefix *p)
 const char *bgp_debug_rdpfxpath2str(afi_t afi, safi_t safi,
 				    struct prefix_rd *prd,
 				    union prefixconstptr pu,
-				    mpls_label_t *label, u_int32_t num_labels,
-				    int addpath_valid, u_int32_t addpath_id,
+				    mpls_label_t *label, uint32_t num_labels,
+				    int addpath_valid, uint32_t addpath_id,
 				    char *str, int size)
 {
 	char rd_buf[RD_ADDRSTRLEN];
@@ -2197,7 +2258,7 @@ const char *bgp_debug_rdpfxpath2str(afi_t afi, safi_t safi,
 			bgp_evpn_label2str(label, num_labels, tag_buf2, 20);
 			sprintf(tag_buf, " label %s", tag_buf2);
 		} else {
-			u_int32_t label_value;
+			uint32_t label_value;
 
 			label_value = decode_label(label);
 			sprintf(tag_buf, " label %u", label_value);
@@ -2209,7 +2270,17 @@ const char *bgp_debug_rdpfxpath2str(afi_t afi, safi_t safi,
 			 prefix_rd2str(prd, rd_buf, sizeof(rd_buf)),
 			 prefix2str(pu, pfx_buf, sizeof(pfx_buf)), tag_buf,
 			 pathid_buf, afi2str(afi), safi2str(safi));
-	else
+	else if (safi == SAFI_FLOWSPEC) {
+		char return_string[BGP_FLOWSPEC_NLRI_STRING_MAX];
+		const struct prefix_fs *fs = pu.fs;
+
+		bgp_fs_nlri_get_string((unsigned char *)fs->prefix.ptr,
+				       fs->prefix.prefixlen,
+				       return_string,
+				       NLRI_STRING_FORMAT_DEBUG, NULL);
+		snprintf(str, size, "FS %s Match{%s}", afi2str(afi),
+			 return_string);
+	} else
 		snprintf(str, size, "%s%s%s %s %s",
 			 prefix2str(pu, pfx_buf, sizeof(pfx_buf)), tag_buf,
 			 pathid_buf, afi2str(afi), safi2str(safi));

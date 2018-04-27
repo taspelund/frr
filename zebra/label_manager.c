@@ -50,6 +50,8 @@ DEFINE_MTYPE_STATIC(LBL_MGR, LM_CHUNK, "Label Manager Chunk");
  * it will be a proxy to relay messages to external label manager
  * This zclient thus is to connect to it
  */
+static struct stream *ibuf;
+static struct stream *obuf;
 static struct zclient *zclient;
 bool lm_is_external;
 
@@ -62,14 +64,14 @@ static int relay_response_back(struct zserv *zserv)
 {
 	int ret = 0;
 	struct stream *src, *dst;
-	u_int16_t size = 0;
-	u_char marker;
-	u_char version;
+	uint16_t size = 0;
+	uint8_t marker;
+	uint8_t version;
 	vrf_id_t vrf_id;
-	u_int16_t resp_cmd;
+	uint16_t resp_cmd;
 
 	src = zclient->ibuf;
-	dst = zserv->obuf;
+	dst = obuf;
 
 	stream_reset(src);
 
@@ -87,7 +89,7 @@ static int relay_response_back(struct zserv *zserv)
 
 	/* send response back */
 	stream_copy(dst, src);
-	ret = writen(zserv->sock, dst->data, stream_get_endp(dst));
+	ret = writen(zserv->sock, src->data, stream_get_endp(src));
 	if (ret <= 0) {
 		zlog_err("%s: Error sending Label Manager response back: %s",
 			 __func__, strerror(errno));
@@ -116,10 +118,10 @@ static int lm_zclient_read(struct thread *t)
 
 static int reply_error(int cmd, struct zserv *zserv, vrf_id_t vrf_id)
 {
+	int ret;
 	struct stream *s;
 
-	s = zserv->obuf;
-	stream_reset(s);
+	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
 
 	zclient_create_header(s, cmd, vrf_id);
 
@@ -129,7 +131,10 @@ static int reply_error(int cmd, struct zserv *zserv, vrf_id_t vrf_id)
 	/* Write packet size. */
 	stream_putw_at(s, 0, stream_get_endp(s));
 
-	return writen(zserv->sock, s->data, stream_get_endp(s));
+	ret = writen(zserv->sock, s->data, stream_get_endp(s));
+
+	stream_free(s);
+	return ret;
 }
 /**
  * Receive a request to get or release a label chunk and forward it to external
@@ -161,7 +166,7 @@ int zread_relay_label_manager_request(int cmd, struct zserv *zserv,
 		ret = relay_response_back(zserv);
 
 	/* Send request to external label manager */
-	src = zserv->ibuf;
+	src = ibuf;
 	dst = zclient->obuf;
 
 	stream_copy(dst, src);
@@ -231,6 +236,40 @@ static void lm_zclient_init(char *lm_zserv_path)
 }
 
 /**
+ * Release label chunks from a client.
+ *
+ * Called on client disconnection or reconnection. It only releases chunks
+ * with empty keep value.
+ *
+ * @param proto Daemon protocol of client, to identify the owner
+ * @param instance Instance, to identify the owner
+ * @return Number of chunks released
+ */
+int release_daemon_label_chunks(struct zserv *client)
+{
+	uint8_t proto = client->proto;
+	uint16_t instance = client->instance;
+	struct listnode *node;
+	struct label_manager_chunk *lmc;
+	int count = 0;
+	int ret;
+
+	for (ALL_LIST_ELEMENTS_RO(lbl_mgr.lc_list, node, lmc)) {
+		if (lmc->proto == proto && lmc->instance == instance
+		    && lmc->keep == 0) {
+			ret = release_label_chunk(lmc->proto, lmc->instance,
+						  lmc->start, lmc->end);
+			if (ret == 0)
+				count++;
+		}
+	}
+
+	zlog_debug("%s: Released %d label chunks", __func__, count);
+
+	return count;
+}
+
+/**
  * Init label manager (or proxy to an external one)
  */
 void label_manager_init(char *lm_zserv_path)
@@ -247,6 +286,11 @@ void label_manager_init(char *lm_zserv_path)
 		lm_is_external = true;
 		lm_zclient_init(lm_zserv_path);
 	}
+
+	ibuf = stream_new(ZEBRA_MAX_PACKET_SIZ);
+	obuf = stream_new(ZEBRA_MAX_PACKET_SIZ);
+
+	hook_register(zapi_client_close, release_daemon_label_chunks);
 }
 
 /**
@@ -261,8 +305,9 @@ void label_manager_init(char *lm_zserv_path)
  * @para size Size of the label chunk
  * @return Pointer to the assigned label chunk
  */
-struct label_manager_chunk *assign_label_chunk(u_char proto, u_short instance,
-					       u_char keep, uint32_t size)
+struct label_manager_chunk *assign_label_chunk(uint8_t proto,
+					       unsigned short instance,
+					       uint8_t keep, uint32_t size)
 {
 	struct label_manager_chunk *lmc;
 	struct listnode *node;
@@ -313,7 +358,7 @@ struct label_manager_chunk *assign_label_chunk(u_char proto, u_short instance,
  * @param end Last label of the chunk
  * @return 0 on success, -1 otherwise
  */
-int release_label_chunk(u_char proto, u_short instance, uint32_t start,
+int release_label_chunk(uint8_t proto, unsigned short instance, uint32_t start,
 			uint32_t end)
 {
 	struct listnode *node;
@@ -344,39 +389,10 @@ int release_label_chunk(u_char proto, u_short instance, uint32_t start,
 	return ret;
 }
 
-/**
- * Release label chunks from a client.
- *
- * Called on client disconnection or reconnection. It only releases chunks
- * with empty keep value.
- *
- * @param proto Daemon protocol of client, to identify the owner
- * @param instance Instance, to identify the owner
- * @return Number of chunks released
- */
-int release_daemon_chunks(u_char proto, u_short instance)
-{
-	struct listnode *node;
-	struct label_manager_chunk *lmc;
-	int count = 0;
-	int ret;
-
-	for (ALL_LIST_ELEMENTS_RO(lbl_mgr.lc_list, node, lmc)) {
-		if (lmc->proto == proto && lmc->instance == instance
-		    && lmc->keep == 0) {
-			ret = release_label_chunk(lmc->proto, lmc->instance,
-						  lmc->start, lmc->end);
-			if (ret == 0)
-				count++;
-		}
-	}
-
-	zlog_debug("%s: Released %d label chunks", __func__, count);
-
-	return count;
-}
 
 void label_manager_close()
 {
 	list_delete_and_null(&lbl_mgr.lc_list);
+	stream_free(ibuf);
+	stream_free(obuf);
 }

@@ -241,7 +241,7 @@ ospf_ase_calculate_asbr_route (struct ospf *ospf,
 
 static struct ospf_route *
 ospf_ase_calculate_new_route(struct ospf_lsa *lsa,
-			     struct ospf_route *asbr_route, u_int32_t metric)
+			     struct ospf_route *asbr_route, uint32_t metric)
 {
 	struct as_external_lsa *al;
 	struct ospf_route *new;
@@ -282,7 +282,7 @@ ospf_ase_calculate_new_route(struct ospf_lsa *lsa,
 
 int ospf_ase_calculate_route(struct ospf *ospf, struct ospf_lsa *lsa)
 {
-	u_int32_t metric;
+	uint32_t metric;
 	struct as_external_lsa *al;
 	struct ospf_route *asbr_route;
 	struct prefix_ipv4 asbr, p;
@@ -610,9 +610,8 @@ static int ospf_ase_compare_tables(struct ospf *ospf,
 		if ((or = rn->info)) {
 			if (!(new_rn = route_node_lookup(new_external_route,
 							 &rn->p)))
-				ospf_zebra_delete(ospf,
-						  (struct prefix_ipv4 *)&rn->p,
-						  or);
+				ospf_zebra_delete(
+					ospf, (struct prefix_ipv4 *)&rn->p, or);
 			else
 				route_unlock_node(new_rn);
 		}
@@ -623,9 +622,8 @@ static int ospf_ase_compare_tables(struct ospf *ospf,
 		if ((or = rn->info) != NULL)
 			if (!ospf_ase_route_match_same(old_external_route,
 						       &rn->p, or))
-				ospf_zebra_add(ospf,
-					       (struct prefix_ipv4 *)&rn->p,
-					       or);
+				ospf_zebra_add(
+					ospf, (struct prefix_ipv4 *)&rn->p, or);
 
 	return 0;
 }
@@ -648,7 +646,7 @@ static int ospf_ase_calculate_timer(struct thread *t)
 		monotime(&start_time);
 
 		/* Calculate external route for each AS-external-LSA */
-		LSDB_LOOP(EXTERNAL_LSDB(ospf), rn, lsa)
+		LSDB_LOOP (EXTERNAL_LSDB(ospf), rn, lsa)
 			ospf_ase_calculate_route(ospf, lsa);
 
 		/*  This version simple adds to the table all NSSA areas  */
@@ -660,12 +658,12 @@ static int ospf_ase_calculate_timer(struct thread *t)
 						inet_ntoa(area->area_id));
 
 				if (area->external_routing == OSPF_AREA_NSSA)
-					LSDB_LOOP(NSSA_LSDB(area), rn, lsa)
+					LSDB_LOOP (NSSA_LSDB(area), rn, lsa)
 						ospf_ase_calculate_route(ospf,
 									 lsa);
 			}
 		/* kevinm: And add the NSSA routes in ospf_top */
-		LSDB_LOOP(NSSA_LSDB(ospf), rn, lsa)
+		LSDB_LOOP (NSSA_LSDB(ospf), rn, lsa)
 			ospf_ase_calculate_route(ospf, lsa);
 
 		/* Compare old and new external routing table and install the
@@ -681,9 +679,12 @@ static int ospf_ase_calculate_timer(struct thread *t)
 		monotime(&stop_time);
 
 		if (IS_DEBUG_OSPF_EVENT)
-			zlog_info("SPF Processing Time(usecs): External Routes: %lld\n",
-				  (stop_time.tv_sec - start_time.tv_sec) * 1000000LL
-				  + (stop_time.tv_usec - start_time.tv_usec));
+			zlog_info(
+				"SPF Processing Time(usecs): External Routes: %lld\n",
+				(stop_time.tv_sec - start_time.tv_sec)
+						* 1000000LL
+					+ (stop_time.tv_usec
+					   - start_time.tv_usec));
 	}
 	return 0;
 }

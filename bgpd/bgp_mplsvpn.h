@@ -43,14 +43,14 @@
 
 extern void bgp_mplsvpn_init(void);
 extern int bgp_nlri_parse_vpn(struct peer *, struct attr *, struct bgp_nlri *);
-extern u_int32_t decode_label(mpls_label_t *);
+extern uint32_t decode_label(mpls_label_t *);
 extern void encode_label(mpls_label_t, mpls_label_t *);
 
 extern int argv_find_and_parse_vpnvx(struct cmd_token **argv, int argc,
 				     int *index, afi_t *afi);
 extern int bgp_show_mpls_vpn(struct vty *vty, afi_t afi, struct prefix_rd *prd,
 			     enum bgp_show_type type, void *output_arg,
-			     int tags, u_char use_json);
+			     int tags, uint8_t use_json);
 
 extern void vpn_leak_from_vrf_update(struct bgp *bgp_vpn, struct bgp *bgp_vrf,
 				     struct bgp_info *info_vrf);
@@ -77,9 +77,10 @@ extern void vpn_leak_to_vrf_withdraw(struct bgp *bgp_vpn,
 
 extern void vpn_leak_zebra_vrf_label_update(struct bgp *bgp, afi_t afi);
 extern void vpn_leak_zebra_vrf_label_withdraw(struct bgp *bgp, afi_t afi);
-extern void vrf_import_from_vrf(struct bgp *bgp, struct bgp *vrf_bgp,
+extern int vpn_leak_label_callback(mpls_label_t label, void *lblid, bool alloc);
+extern void vrf_import_from_vrf(struct bgp *to_bgp, struct bgp *from_bgp,
 				afi_t afi, safi_t safi);
-void vrf_unimport_from_vrf(struct bgp *bgp, struct bgp *vrf_bgp,
+void vrf_unimport_from_vrf(struct bgp *to_bgp, struct bgp *from_bgp,
 			   afi_t afi, safi_t safi);
 
 static inline int vpn_leak_to_vpn_active(struct bgp *bgp_vrf, afi_t afi,
@@ -117,6 +118,25 @@ static inline int vpn_leak_to_vpn_active(struct bgp *bgp_vrf, afi_t afi,
 			*pmsg = "rd not defined";
 		return 0;
 	}
+
+	/* Is a route-map specified, but not defined? */
+	if (bgp_vrf->vpn_policy[afi].rmap_name[BGP_VPN_POLICY_DIR_TOVPN] &&
+		!bgp_vrf->vpn_policy[afi].rmap[BGP_VPN_POLICY_DIR_TOVPN]) {
+		if (pmsg)
+			*pmsg = "route-map tovpn named but not defined";
+		return 0;
+	}
+
+	/* Is there an "auto" export label that isn't allocated yet? */
+	if (CHECK_FLAG(bgp_vrf->vpn_policy[afi].flags,
+		BGP_VPN_POLICY_TOVPN_LABEL_AUTO) &&
+		(bgp_vrf->vpn_policy[afi].tovpn_label == MPLS_LABEL_NONE)) {
+
+		if (pmsg)
+			*pmsg = "auto label not allocated";
+		return 0;
+	}
+
 	return 1;
 }
 
@@ -140,9 +160,19 @@ static inline int vpn_leak_from_vpn_active(struct bgp *bgp_vrf, afi_t afi,
 			*pmsg = "import not set";
 		return 0;
 	}
+
+	/* Is there an RT list set? */
 	if (!bgp_vrf->vpn_policy[afi].rtlist[BGP_VPN_POLICY_DIR_FROMVPN]) {
 		if (pmsg)
 			*pmsg = "rtlist fromvpn not defined";
+		return 0;
+	}
+
+	/* Is a route-map specified, but not defined? */
+	if (bgp_vrf->vpn_policy[afi].rmap_name[BGP_VPN_POLICY_DIR_FROMVPN] &&
+		!bgp_vrf->vpn_policy[afi].rmap[BGP_VPN_POLICY_DIR_FROMVPN]) {
+		if (pmsg)
+			*pmsg = "route-map fromvpn named but not defined";
 		return 0;
 	}
 	return 1;
@@ -183,5 +213,7 @@ static inline void vpn_leak_postchange(vpn_policy_direction_t direction,
 }
 
 extern void vpn_policy_routemap_event(const char *rmap_name);
+
+extern vrf_id_t get_first_vrf_for_redirect_with_rt(struct ecommunity *eckey);
 
 #endif /* _QUAGGA_BGP_MPLSVPN_H */

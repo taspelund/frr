@@ -51,7 +51,7 @@
 
 extern struct isis *isis;
 
-static struct isis_adjacency *adj_alloc(const u_char *id)
+static struct isis_adjacency *adj_alloc(const uint8_t *id)
 {
 	struct isis_adjacency *adj;
 
@@ -61,7 +61,7 @@ static struct isis_adjacency *adj_alloc(const u_char *id)
 	return adj;
 }
 
-struct isis_adjacency *isis_new_adj(const u_char *id, const u_char *snpa,
+struct isis_adjacency *isis_new_adj(const uint8_t *id, const uint8_t *snpa,
 				    int level, struct isis_circuit *circuit)
 {
 	struct isis_adjacency *adj;
@@ -96,7 +96,7 @@ struct isis_adjacency *isis_new_adj(const u_char *id, const u_char *snpa,
 	return adj;
 }
 
-struct isis_adjacency *isis_adj_lookup(const u_char *sysid, struct list *adjdb)
+struct isis_adjacency *isis_adj_lookup(const uint8_t *sysid, struct list *adjdb)
 {
 	struct isis_adjacency *adj;
 	struct listnode *node;
@@ -108,7 +108,7 @@ struct isis_adjacency *isis_adj_lookup(const u_char *sysid, struct list *adjdb)
 	return NULL;
 }
 
-struct isis_adjacency *isis_adj_lookup_snpa(const u_char *ssnpa,
+struct isis_adjacency *isis_adj_lookup_snpa(const uint8_t *ssnpa,
 					    struct list *adjdb)
 {
 	struct listnode *node;
@@ -484,10 +484,10 @@ void isis_adj_print_vty(struct isis_adjacency *adj, struct vty *vty,
 			for (unsigned int i = 0; i < adj->area_address_count;
 			     i++) {
 				vty_out(vty, "      %s\n",
-					  isonet_print(adj->area_addresses[i]
-							       .area_addr,
-						       adj->area_addresses[i]
-							       .addr_len));
+					isonet_print(adj->area_addresses[i]
+							     .area_addr,
+						     adj->area_addresses[i]
+							     .addr_len));
 			}
 		}
 		if (adj->ipv4_address_count) {
@@ -495,7 +495,7 @@ void isis_adj_print_vty(struct isis_adjacency *adj, struct vty *vty,
 			for (unsigned int i = 0; i < adj->ipv4_address_count;
 			     i++)
 				vty_out(vty, "      %s\n",
-					  inet_ntoa(adj->ipv4_addresses[i]));
+					inet_ntoa(adj->ipv4_addresses[i]));
 		}
 		if (adj->ipv6_address_count) {
 			vty_out(vty, "    IPv6 Address(es):\n");

@@ -78,7 +78,6 @@ enum node_type {
 	AUTH_ENABLE_NODE,	/* Authentication mode for change enable. */
 	ENABLE_NODE,		 /* Enable node. */
 	CONFIG_NODE,		 /* Config node. Default mode of config file. */
-	SERVICE_NODE,		 /* Service node. */
 	DEBUG_NODE,		 /* Debug node. */
 	VRF_DEBUG_NODE,		 /* Vrf Debug node. */
 	DEBUG_VNC_NODE,		 /* Debug VNC node. */
@@ -121,8 +120,6 @@ enum node_type {
 	LDP_L2VPN_NODE,		 /* LDP L2VPN node */
 	LDP_PSEUDOWIRE_NODE,     /* LDP Pseudowire node */
 	ISIS_NODE,		 /* ISIS protocol mode */
-	MASC_NODE,		 /* MASC for multicast.  */
-	IRDP_NODE,		 /* ICMP Router Discovery Protocol mode. */
 	ACCESS_NODE,		 /* Access list node. */
 	PREFIX_NODE,		 /* Prefix list node. */
 	ACCESS_IPV6_NODE,	/* Access list node. */
@@ -143,10 +140,13 @@ enum node_type {
 	BGP_EVPN_VNI_NODE,       /* BGP EVPN VNI */
 	RPKI_NODE,     /* RPKI node for configuration of RPKI cache server
 			  connections.*/
+	BGP_FLOWSPECV4_NODE,	/* BGP IPv4 FLOWSPEC Address-Family */
+	BGP_FLOWSPECV6_NODE,	/* BGP IPv6 FLOWSPEC Address-Family */
 	NODE_TYPE_MAX, /* maximum */
 };
 
 extern vector cmdvec;
+extern const struct message tokennames[];
 extern const char *node_names[];
 
 /* Node which has some commands and prompt string and configuration
@@ -340,7 +340,7 @@ struct cmd_node {
 #define BGP_SOFT_RSCLIENT_RIB_STR "Soft reconfig for rsclient RIB\n"
 #define OSPF_STR "OSPF information\n"
 #define NEIGHBOR_STR "Specify neighbor router\n"
-#define DEBUG_STR "Debugging functions (see also 'undebug')\n"
+#define DEBUG_STR "Debugging functions\n"
 #define UNDEBUG_STR "Disable debugging functions (see also 'debug')\n"
 #define ROUTER_STR "Enable a routing process\n"
 #define AS_STR "AS number\n"

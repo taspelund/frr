@@ -54,20 +54,20 @@ struct bpf_insn llcfilter[] = {
 		 3), /* check second byte */
 	BPF_STMT(BPF_LD + BPF_B + BPF_ABS, ETHER_HDR_LEN + 2),
 	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 0x03, 0, 1), /* check third byte */
-	BPF_STMT(BPF_RET + BPF_K, (u_int)-1),
+	BPF_STMT(BPF_RET + BPF_K, (unsigned int)-1),
 	BPF_STMT(BPF_RET + BPF_K, 0)};
-u_int readblen = 0;
-u_char *readbuff = NULL;
+unsigned int readblen = 0;
+uint8_t *readbuff = NULL;
 
 /*
  * Table 9 - Architectural constants for use with ISO 8802 subnetworks
  * ISO 10589 - 8.4.8
  */
 
-u_char ALL_L1_ISS[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x14};
-u_char ALL_L2_ISS[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x15};
-u_char ALL_ISS[6] = {0x09, 0x00, 0x2B, 0x00, 0x00, 0x05};
-u_char ALL_ESS[6] = {0x09, 0x00, 0x2B, 0x00, 0x00, 0x04};
+uint8_t ALL_L1_ISS[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x14};
+uint8_t ALL_L2_ISS[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x15};
+uint8_t ALL_ISS[6] = {0x09, 0x00, 0x2B, 0x00, 0x00, 0x05};
+uint8_t ALL_ESS[6] = {0x09, 0x00, 0x2B, 0x00, 0x00, 0x04};
 
 static char sock_buff[8192];
 
@@ -76,9 +76,9 @@ static int open_bpf_dev(struct isis_circuit *circuit)
 	int i = 0, fd;
 	char bpfdev[128];
 	struct ifreq ifr;
-	u_int blen, immediate;
+	unsigned int blen, immediate;
 #ifdef BIOCSSEESENT
-	u_int seesent;
+	unsigned int seesent;
 #endif
 	struct timeval timeout;
 	struct bpf_program bpf_prog;
@@ -214,9 +214,10 @@ end:
 	return retval;
 }
 
-int isis_recv_pdu_bcast(struct isis_circuit *circuit, u_char *ssnpa)
+int isis_recv_pdu_bcast(struct isis_circuit *circuit, uint8_t *ssnpa)
 {
-	int bytesread = 0, bytestoread, offset, one = 1;
+	int bytesread = 0, bytestoread, offset, one = 1, err = ISIS_OK;
+	uint8_t *buff_ptr;
 	struct bpf_hdr *bpf_hdr;
 
 	assert(circuit->fd > 0);
@@ -230,26 +231,33 @@ int isis_recv_pdu_bcast(struct isis_circuit *circuit, u_char *ssnpa)
 	}
 	if (bytesread < 0) {
 		zlog_warn("isis_recv_pdu_bcast(): read() failed: %s",
-			  safe_strerror(errno));
+				safe_strerror(errno));
 		return ISIS_WARNING;
 	}
 
 	if (bytesread == 0)
 		return ISIS_WARNING;
 
-	bpf_hdr = (struct bpf_hdr *)readbuff;
+	buff_ptr = readbuff;
+	while (buff_ptr < readbuff + bytesread) {
+		bpf_hdr = (struct bpf_hdr *) buff_ptr;
+		assert(bpf_hdr->bh_caplen == bpf_hdr->bh_datalen);
+		offset = bpf_hdr->bh_hdrlen + LLC_LEN + ETHER_HDR_LEN;
 
-	assert(bpf_hdr->bh_caplen == bpf_hdr->bh_datalen);
+		/* then we lose the BPF, LLC and ethernet headers */
+		stream_write(circuit->rcv_stream, buff_ptr + offset,
+			     bpf_hdr->bh_caplen - LLC_LEN - ETHER_HDR_LEN);
+		stream_set_getp(circuit->rcv_stream, 0);
 
-	offset = bpf_hdr->bh_hdrlen + LLC_LEN + ETHER_HDR_LEN;
+		memcpy(ssnpa, buff_ptr + bpf_hdr->bh_hdrlen + ETHER_ADDR_LEN,
+		ETHER_ADDR_LEN);
 
-	/* then we lose the BPF, LLC and ethernet headers */
-	stream_write(circuit->rcv_stream, readbuff + offset,
-		     bpf_hdr->bh_caplen - LLC_LEN - ETHER_HDR_LEN);
-	stream_set_getp(circuit->rcv_stream, 0);
+		err = isis_handle_pdu(circuit, ssnpa);
+		stream_reset(circuit->rcv_stream);
+		buff_ptr += BPF_WORDALIGN(bpf_hdr->bh_hdrlen +
+						bpf_hdr->bh_datalen);
+	}
 
-	memcpy(ssnpa, readbuff + bpf_hdr->bh_hdrlen + ETH_ALEN,
-	       ETH_ALEN);
 
 	if (ioctl(circuit->fd, BIOCFLUSH, &one) < 0)
 		zlog_warn("Flushing failed: %s", safe_strerror(errno));

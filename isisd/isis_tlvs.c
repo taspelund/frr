@@ -496,8 +496,9 @@ static void format_item_lsp_entry(uint16_t mtid, struct isis_item *i,
 {
 	struct isis_lsp_entry *e = (struct isis_lsp_entry *)i;
 
-	sbuf_push(buf, indent, "LSP Entry: %s, seq 0x%08" PRIx32
-		  ", cksum 0x%04" PRIx16 ", lifetime %" PRIu16 "s\n",
+	sbuf_push(buf, indent,
+		  "LSP Entry: %s, seq 0x%08" PRIx32 ", cksum 0x%04" PRIx16
+		  ", lifetime %" PRIu16 "s\n",
 		  isis_format_id(e->id, 8), e->seqno, e->checksum,
 		  e->rem_lifetime);
 }
@@ -579,7 +580,8 @@ static void format_item_extended_reach(uint16_t mtid, struct isis_item *i,
 	sbuf_push(buf, 0, "\n");
 
 	if (r->subtlv_len && r->subtlvs)
-		mpls_te_print_detail(buf, indent + 2, r->subtlvs, r->subtlv_len);
+		mpls_te_print_detail(buf, indent + 2, r->subtlvs,
+				     r->subtlv_len);
 }
 
 static void free_item_extended_reach(struct isis_item *i)
@@ -690,7 +692,8 @@ static void format_item_oldstyle_ip_reach(uint16_t mtid, struct isis_item *i,
 	char prefixbuf[PREFIX2STR_BUFFER];
 
 	sbuf_push(buf, indent, "IP Reachability: %s (Metric: %" PRIu8 ")\n",
-		  prefix2str(&r->prefix, prefixbuf, sizeof(prefixbuf)), r->metric);
+		  prefix2str(&r->prefix, prefixbuf, sizeof(prefixbuf)),
+		  r->metric);
 }
 
 static void free_item_oldstyle_ip_reach(struct isis_item *i)
@@ -2402,8 +2405,9 @@ static int pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream,
 	/* When fragmenting, don't add auth as it's already accounted for in the
 	 * size we are given. */
 	if (!fragment_tlvs) {
-		rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_AUTH, &tlvs->isis_auth,
-				stream, NULL, NULL, NULL, NULL);
+		rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_AUTH,
+				&tlvs->isis_auth, stream, NULL, NULL, NULL,
+				NULL);
 		if (rv)
 			return rv;
 	}
@@ -2753,7 +2757,7 @@ void isis_tlvs_add_area_addresses(struct isis_tlvs *tlvs,
 void isis_tlvs_add_lan_neighbors(struct isis_tlvs *tlvs, struct list *neighbors)
 {
 	struct listnode *node;
-	u_char *snpa;
+	uint8_t *snpa;
 
 	for (ALL_LIST_ELEMENTS_RO(neighbors, node, snpa)) {
 		struct isis_lan_neighbor *n =

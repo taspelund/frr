@@ -396,7 +396,7 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 
 	vec = &pkt->arr.entries[BGP_ATTR_VEC_NH];
 	if (CHECK_FLAG(vec->flags, BPKT_ATTRVEC_FLAGS_UPDATED)) {
-		u_int8_t nhlen;
+		uint8_t nhlen;
 		afi_t nhafi = AFI_MAX; /* NH AFI is based on nhlen! */
 		int route_map_sets_nh;
 		nhlen = stream_getc_from(s, vec->offset);
@@ -698,10 +698,10 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 	int num_pfx = 0;
 	int addpath_encode = 0;
 	int addpath_overhead = 0;
-	u_int32_t addpath_tx_id = 0;
+	uint32_t addpath_tx_id = 0;
 	struct prefix_rd *prd = NULL;
 	mpls_label_t label = MPLS_INVALID_LABEL, *label_pnt = NULL;
-	u_int32_t num_labels = 0;
+	uint32_t num_labels = 0;
 
 	if (!subgrp)
 		return NULL;
@@ -732,8 +732,9 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 
 		space_remaining = STREAM_CONCAT_REMAIN(s, snlri, STREAM_SIZE(s))
 				  - BGP_MAX_PACKET_SIZE_OVERFLOW;
-		space_needed = BGP_NLRI_LENGTH + addpath_overhead +
-			       bgp_packet_mpattr_prefix_size(afi, safi, &rn->p);
+		space_needed =
+			BGP_NLRI_LENGTH + addpath_overhead
+			+ bgp_packet_mpattr_prefix_size(afi, safi, &rn->p);
 
 		/* When remaining space can't include NLRI and it's length.  */
 		if (space_remaining < space_needed)
@@ -777,9 +778,9 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 			space_remaining =
 				STREAM_CONCAT_REMAIN(s, snlri, STREAM_SIZE(s))
 				- BGP_MAX_PACKET_SIZE_OVERFLOW;
-			space_needed = BGP_NLRI_LENGTH + addpath_overhead +
-				bgp_packet_mpattr_prefix_size(afi, safi,
-							      &rn->p);
+			space_needed = BGP_NLRI_LENGTH + addpath_overhead
+				       + bgp_packet_mpattr_prefix_size(
+						 afi, safi, &rn->p);
 
 			/* If the attributes alone do not leave any room for
 			 * NLRI then
@@ -935,7 +936,7 @@ struct bpacket *subgroup_withdraw_packet(struct update_subgroup *subgrp)
 	size_t mp_start = 0;
 	size_t attrlen_pos = 0;
 	size_t mplen_pos = 0;
-	u_char first_time = 1;
+	uint8_t first_time = 1;
 	afi_t afi;
 	safi_t safi;
 	int space_remaining = 0;
@@ -943,7 +944,7 @@ struct bpacket *subgroup_withdraw_packet(struct update_subgroup *subgrp)
 	int num_pfx = 0;
 	int addpath_encode = 0;
 	int addpath_overhead = 0;
-	u_int32_t addpath_tx_id = 0;
+	uint32_t addpath_tx_id = 0;
 	struct prefix_rd *prd = NULL;
 
 

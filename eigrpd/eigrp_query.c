@@ -54,12 +54,12 @@
 #include "eigrpd/eigrp_fsm.h"
 #include "eigrpd/eigrp_memory.h"
 
-u_int32_t eigrp_query_send_all(struct eigrp *eigrp)
+uint32_t eigrp_query_send_all(struct eigrp *eigrp)
 {
 	struct eigrp_interface *iface;
 	struct listnode *node, *node2, *nnode2;
 	struct eigrp_prefix_entry *pe;
-	u_int32_t counter;
+	uint32_t counter;
 
 	if (eigrp == NULL) {
 		zlog_debug("EIGRP Routing Process not enabled");
@@ -93,8 +93,8 @@ void eigrp_query_receive(struct eigrp *eigrp, struct ip *iph,
 	struct TLV_IPv4_Internal_type *tlv;
 	struct prefix dest_addr;
 
-	u_int16_t type;
-	u_int16_t length;
+	uint16_t type;
+	uint16_t length;
 
 	/* increment statistics. */
 	ei->query_in++;
@@ -111,7 +111,7 @@ void eigrp_query_receive(struct eigrp *eigrp, struct ip *iph,
 		type = stream_getw(s);
 		switch (type) {
 		case EIGRP_TLV_IPv4_INT:
-			stream_set_getp(s, s->getp - sizeof(u_int16_t));
+			stream_set_getp(s, s->getp - sizeof(uint16_t));
 
 			tlv = eigrp_read_ipv4_tlv(s);
 
@@ -142,13 +142,13 @@ void eigrp_query_receive(struct eigrp *eigrp, struct ip *iph,
 			break;
 
 		case EIGRP_TLV_IPv4_EXT:
-			/* DVS: processing of external routes needs packet and fsm work.
-			 *      for now, lets just not creash the box
-			 */
+		/* DVS: processing of external routes needs packet and fsm work.
+		 *      for now, lets just not creash the box
+		 */
 		default:
 			length = stream_getw(s);
 			// -2 for type, -2 for len
-			for (length-=4; length ; length--) {
+			for (length -= 4; length; length--) {
 				(void)stream_getc(s);
 			}
 		}
@@ -161,7 +161,7 @@ void eigrp_query_receive(struct eigrp *eigrp, struct ip *iph,
 void eigrp_send_query(struct eigrp_interface *ei)
 {
 	struct eigrp_packet *ep = NULL;
-	u_int16_t length = EIGRP_HEADER_LEN;
+	uint16_t length = EIGRP_HEADER_LEN;
 	struct listnode *node, *nnode, *node2, *nnode2;
 	struct eigrp_neighbor *nbr;
 	struct eigrp_prefix_entry *pe;
@@ -177,16 +177,15 @@ void eigrp_send_query(struct eigrp_interface *ei)
 			ep = eigrp_packet_new(ei->ifp->mtu, NULL);
 
 			/* Prepare EIGRP INIT UPDATE header */
-			eigrp_packet_header_init(EIGRP_OPC_QUERY,
-						 ei->eigrp, ep->s, 0,
+			eigrp_packet_header_init(EIGRP_OPC_QUERY, ei->eigrp,
+						 ep->s, 0,
 						 ei->eigrp->sequence_number, 0);
 
 			// encode Authentication TLV, if needed
 			if ((ei->params.auth_type == EIGRP_AUTH_TYPE_MD5)
 			    && (ei->params.auth_keychain != NULL)) {
-				length +=
-					eigrp_add_authTLV_MD5_to_stream(ep->s,
-									ei);
+				length += eigrp_add_authTLV_MD5_to_stream(ep->s,
+									  ei);
 			}
 			new_packet = false;
 		}
