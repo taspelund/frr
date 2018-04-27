@@ -158,6 +158,7 @@ override_dh_auto_configure:
 		--enable-logfile-mask=0640 \
 		--enable-werror \
 		--with-libpam \
+		--enable-sharpd=yes \
 		--enable-systemd=yes \
 		--enable-datacenter=yes \
 		$(USE_CUMULUS) \
