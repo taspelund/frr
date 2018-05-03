@@ -54,10 +54,11 @@ enum bgp_show_type {
 
 
 #define BGP_SHOW_SCODE_HEADER                                                  \
-	"Status codes: s suppressed, d damped, "                               \
+	"Status codes:  s suppressed, d damped, "                              \
 	"h history, * valid, > best, = multipath,\n"                           \
-	"              i internal, r RIB-failure, S Stale, R Removed\n"
-#define BGP_SHOW_OCODE_HEADER "Origin codes: i - IGP, e - EGP, ? - incomplete\n\n"
+	"               i internal, r RIB-failure, S Stale, R Removed\n"
+#define BGP_SHOW_OCODE_HEADER "Origin codes:  i - IGP, e - EGP, ? - incomplete\n\n"
+#define BGP_SHOW_NCODE_HEADER "Nexthop codes: @NNN nexthop's vrf id, < announce-nh-self\n"
 #define BGP_SHOW_HEADER "   Network          Next Hop            Metric LocPrf Weight Path\n"
 
 /* Maximum number of labels we can process or send with a prefix. We
@@ -319,7 +320,8 @@ static inline void bgp_bump_version(struct bgp_node *node)
 static inline int bgp_fibupd_safi(safi_t safi)
 {
 	if (safi == SAFI_UNICAST || safi == SAFI_MULTICAST
-	    || safi == SAFI_LABELED_UNICAST)
+	    || safi == SAFI_LABELED_UNICAST
+	    || safi == SAFI_FLOWSPEC)
 		return 1;
 	return 0;
 }
