@@ -38,7 +38,14 @@ Besides the common invocation options (:ref:`common-invocation-options`), the
    force zebra to limit the maximum ecmp allowed to X.  This number
    is bounded by what you compiled FRR with as the maximum number.
 
-.. program:: configure
+.. option:: -n, --vrfwnetns
+
+   When *Zebra* starts with this option, the VRF backend is based on Linux
+   network namespaces. That implies that all network namespaces discovered by
+   ZEBRA will create an associated VRF. The other daemons will operate on the VRF
+   VRF defined by *Zebra*, as usual.
+
+   .. seealso:: :ref:`vrf`
 
 .. _interface-commands:
 
@@ -53,6 +60,10 @@ Standard Commands
 .. index:: interface IFNAME
 
 .. clicmd:: interface IFNAME
+
+.. index:: interface IFNAME vrf VRF
+
+.. clicmd:: interface IFNAME vrf VRF
 
 .. index:: shutdown
 
@@ -234,8 +245,8 @@ Link Parameters Commands
 Static Route Commands
 =====================
 
-Static routing is a very fundamental feature of routing technology. It
-defines static prefix and gateway.
+Static routing is a very fundamental feature of routing technology. It defines
+static prefix and gateway.
 
 .. index:: ip route NETWORK GATEWAY
 .. clicmd:: ip route NETWORK GATEWAY
@@ -253,16 +264,16 @@ defines static prefix and gateway.
       ip route 10.0.0.0/8 ppp0
       ip route 10.0.0.0/8 null0
 
-   First example defines 10.0.0.0/8 static route with gateway 10.0.0.2.
-   Second one defines the same prefix but with gateway to interface ppp0. The
-   third install a blackhole route.
+   First example defines 10.0.0.0/8 static route with gateway 10.0.0.2. Second
+   one defines the same prefix but with gateway to interface ppp0. The third
+   install a blackhole route.
 
 .. index:: ip route NETWORK NETMASK GATEWAY
 .. clicmd:: ip route NETWORK NETMASK GATEWAY
 
-   This is alternate version of above command. When NETWORK is
-   A.B.C.D format, user must define NETMASK value with A.B.C.D
-   format. GATEWAY is same option as above command.
+   This is alternate version of above command. When NETWORK is A.B.C.D format,
+   user must define NETMASK value with A.B.C.D format. GATEWAY is same option
+   as above command.
 
    .. code-block:: frr
 
@@ -345,16 +356,139 @@ default) should the specified gateways not be reachable. E.g.:
    on Linux operating systems only, and perform AND matching on packet's
    destination and source addresses in the kernel's forwarding path. Note that
    destination longest-prefix match is "more important" than source LPM, e.g.
-   *"2001:db8:1::/64 from 2001:db8::/48"* will win over
-   *"2001:db8::/48 from 2001:db8:1::/64"* if both match.
+   ``2001:db8:1::/64 from 2001:db8::/48`` will win over
+   ``2001:db8::/48 from 2001:db8:1::/64`` if both match.
 
 .. index:: table TABLENO
 .. clicmd:: table TABLENO
 
-   Select the primary kernel routing table to be used. This only works
-   for kernels supporting multiple routing tables (like GNU/Linux 2.2.x
-   and later). After setting TABLENO with this command,
-   static routes defined after this are added to the specified table.
+   Select the primary kernel routing table to be used. This only works for
+   kernels supporting multiple routing tables (like GNU/Linux 2.2.x and later).
+   After setting TABLENO with this command, static routes defined after this
+   are added to the specified table.
+
+.. _vrf:
+
+Virtual Routing and Forwarding
+==============================
+
+FRR supports :abbr:`VRF (Virtual Routing and Forwarding)`. VRF is a way to
+separate networking contexts on the same machine. Those networking contexts are
+associated with separate interfaces, thus making it possible to associate one
+interface with a specific VRF.
+
+VRF can be used, for example, when instantiating per enterprise networking
+services, without having to instantiate the physical host machine or the
+routing management daemons for each enterprise. As a result, interfaces are
+separate for each set of VRF, and routing daemons can have their own context
+for each VRF.
+
+This conceptual view introduces the *Default VRF* case. If the user does not
+configure any specific VRF, then by default, FRR uses the *Default VRF*.
+
+In the context of *Zebra*, this is done automatically when configuring a static
+route with, for example, :clicmd:`ip route NETWORK GATEWAY`:
+
+.. code-block:: frr
+
+   # case without VRF
+   configure terminal
+    ip route 10.0.0.0 255.255.255.0 10.0.0.2
+   exit
+
+Configuring VRF networking contexts can be done in various ways on FRR. The VRF
+interfaces can be configured by entering in interface configuration mode
+:clicmd:`interface IFNAME vrf VRF`. Also, if the user wants to configure a
+static route for a specific VRF, then a specific VRF configuration mode is
+available. After entering into that mode with :clicmd:`vrf VRF` the user can
+enter the same route command as before, but this time, the route command will
+apply to the VRF.
+
+.. code-block:: frr
+
+   # case with VRF
+   configure terminal
+   vrf r1-cust1
+    ip route 10.0.0.0 255.255.255.0 10.0.0.2
+   exit-vrf
+
+A VRF backend mode is chosen when running *Zebra*.
+
+If no option is chosen, then the *Linux VRF* implementation as references in
+https://www.kernel.org/doc/Documentation/networking/vrf.txt will be mapped over
+the *Zebra* VRF. The routing table associated to that VRF is a Linux table
+identifier located in the same *Linux network namespace* where *Zebra* started.
+
+If the :option:`-n` option is chosen, then the *Linux network namespace* will
+be mapped over the *Zebra* VRF. That implies that *Zebra* is able to configure
+several *Linux network namespaces*.  The routing table associated to that VRF
+is the whole routing tables located in that namespace. For instance, this mode
+matches OpenStack Network Namespaces. It matches also OpenFastPath. The default
+behavior remains Linux VRF which is supported by the Linux kernel community,
+see https://www.kernel.org/doc/Documentation/networking/vrf.txt.
+
+Because of that difference, there are some subtle differences when running some
+commands in relationship to VRF. Here is an extract of some of those commands:
+
+.. index:: vrf VRF
+.. clicmd:: vrf VRF
+
+   This command is available on configuration mode. By default, above command
+   permits accessing the vrf configuration mode. This mode is available for
+   both VRFs. It is to be noted that *Zebra* does not create *Linux VRF*.
+   Provisioning this command is used to keep the configuration intact.
+
+.. index:: netns NAMESPACE
+.. clicmd:: netns NAMESPACE
+
+   This command is based on VRF configuration mode. This command is available
+   when *Zebra* is run in :option:`-n` mode. This command reflects which *Linux
+   network namespace* is to be mapped with *Zebra* VRF. It is to be noted that
+   *Zebra* creates and detects added/suppressed VRFs from the Linux environment
+   (in fact, those managed with iproute2). Provisioning this command is used to
+   keep the configuration intact.
+
+.. index:: ip route NETWORK NETMASK GATEWAY NEXTHOPVRF
+.. clicmd:: ip route NETWORK NETMASK GATEWAY NEXTHOPVRF
+
+   This command is based on VRF configuration mode or in configuration mode. If
+   on configuration mode, this applies to default VRF. Otherwise, this command
+   applies to the VRF of the vrf configuration mode. This command is used to
+   configure a vrf route leak across 2 VRFs. This command is only available
+   when *Zebra* is launched without :option:`-n` option.
+
+.. index:: ip route NETWORK NETMASK GATEWAY table TABLENO
+.. clicmd:: ip route NETWORK NETMASK GATEWAY table TABLENO
+
+   This command is based on configuration mode. There, for default VRF, this
+   command is available for all modes. The ``TABLENO`` configured is one of the
+   tables from Default *Linux network namespace*.
+
+.. index:: show ip route vrf VRF
+.. clicmd:: show ip route vrf VRF
+
+   The show command permits dumping the routing table associated to the VRF. If
+   *Zebra* is launched with default settings, this will be the ``TABLENO`` of
+   the VRF configured on the kernel, thanks to information provided in
+   https://www.kernel.org/doc/Documentation/networking/vrf.txt. If *Zebra* is
+   launched with :option:`-n` option, this will be the default routing table of
+   the *Linux network namespace* ``VRF``.
+
+.. index:: show ip route vrf VRF table TABLENO
+.. clicmd:: show ip route vrf VRF table TABLENO
+
+   The show command is only available with :option:`-n` option. This command
+   will dump the routing table ``TABLENO`` of the *Linux network namespace*
+   ``VRF``.
+
+The usual static route commands are also available in the VRF context. When
+entered within the VRF context the static routes are created in the VRF.
+
+.. code-block:: frr
+
+   ip route 10.0.0.0 255.255.255.0 10.0.0.2 vrf r1-cust1 table 43
+   show ip table vrf r1-cust1 table 43
+
 
 .. _multicast-rib-commands:
 
@@ -525,6 +659,8 @@ as well. We refer to the component that programs the forwarding plane
 The FIB push interface comprises of a TCP connection between zebra and
 the FPM. The connection is initiated by zebra -- that is, the FPM acts
 as the TCP server.
+
+.. program:: configure
 
 The relevant zebra code kicks in when zebra is configured with the
 :option:`--enable-fpm` flag. Zebra periodically attempts to connect to

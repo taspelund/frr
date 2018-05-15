@@ -12155,7 +12155,6 @@ static void bgp_ac_neighbor(vector comps, struct cmd_token *token)
 {
 	struct bgp *bgp;
 	struct peer *peer;
-	struct peer_group *group;
 	struct listnode *lnbgp, *lnpeer;
 
 	for (ALL_LIST_ELEMENTS_RO(bm->bgp, lnbgp, bgp)) {
@@ -12179,11 +12178,6 @@ static void bgp_ac_neighbor(vector comps, struct cmd_token *token)
 
 			vector_set(comps, XSTRDUP(MTYPE_COMPLETION, name));
 		}
-
-		if (token->type == VARIABLE_TKN)
-			for (ALL_LIST_ELEMENTS_RO(bgp->group, lnpeer, group))
-				vector_set(comps, XSTRDUP(MTYPE_COMPLETION,
-							  group->name));
 	}
 }
 
@@ -12193,9 +12187,27 @@ static const struct cmd_variable_handler bgp_var_neighbor[] = {
 	{.varname = "peer", .completions = bgp_ac_neighbor},
 	{.completions = NULL}};
 
+static void bgp_ac_peergroup(vector comps, struct cmd_token *token)
+{
+	struct bgp *bgp;
+	struct peer_group *group;
+	struct listnode *lnbgp, *lnpeer;
+
+	for (ALL_LIST_ELEMENTS_RO(bm->bgp, lnbgp, bgp)) {
+		for (ALL_LIST_ELEMENTS_RO(bgp->group, lnpeer, group))
+			vector_set(comps, XSTRDUP(MTYPE_COMPLETION,
+						  group->name));
+	}
+}
+
+static const struct cmd_variable_handler bgp_var_peergroup[] = {
+	{.tokenname = "PGNAME", .completions = bgp_ac_peergroup},
+	{.completions = NULL} };
+
 void bgp_vty_init(void)
 {
 	cmd_variable_handler_register(bgp_var_neighbor);
+	cmd_variable_handler_register(bgp_var_peergroup);
 
 	/* Install bgp top node. */
 	install_node(&bgp_node, bgp_config_write);
@@ -12577,6 +12589,8 @@ void bgp_vty_init(void)
 	install_element(BGP_VPNV4_NODE, &no_neighbor_nexthop_self_cmd);
 	install_element(BGP_VPNV6_NODE, &neighbor_nexthop_self_cmd);
 	install_element(BGP_VPNV6_NODE, &no_neighbor_nexthop_self_cmd);
+	install_element(BGP_EVPN_NODE, &neighbor_nexthop_self_cmd);
+	install_element(BGP_EVPN_NODE, &no_neighbor_nexthop_self_cmd);
 
 	/* "neighbor next-hop-self force" commands. */
 	install_element(BGP_NODE, &neighbor_nexthop_self_force_hidden_cmd);

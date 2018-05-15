@@ -4085,15 +4085,18 @@ static int peer_af_flag_modify(struct peer *peer, afi_t afi, safi_t safi,
 	if (afi == AFI_L2VPN && safi == SAFI_EVPN) {
 		if (set) {
 
-			/* if we are setting NEXTHOP_SELF, we need to unset the
-			 * NEXTHOP_UNCHANGED flag */
+			/*
+			 * if we are setting NEXTHOP_SELF, we need to unset the
+			 * NEXTHOP_UNCHANGED flag
+			 */
 			if (CHECK_FLAG(flag, PEER_FLAG_NEXTHOP_SELF) ||
 			    CHECK_FLAG(flag, PEER_FLAG_FORCE_NEXTHOP_SELF))
 				UNSET_FLAG(peer->af_flags[afi][safi],
 					   PEER_FLAG_NEXTHOP_UNCHANGED);
 		} else {
 
-			/* if we are unsetting NEXTHOP_SELF, we need to set the
+			/*
+			 * if we are unsetting NEXTHOP_SELF, we need to set the
 			 * NEXTHOP_UNCHANGED flag to reset the defaults for EVPN
 			 */
 			if (CHECK_FLAG(flag, PEER_FLAG_NEXTHOP_SELF) ||
@@ -5978,39 +5981,63 @@ int peer_maximum_prefix_set(struct peer *peer, afi_t afi, safi_t safi,
 	struct peer_group *group;
 	struct listnode *node, *nnode;
 
+	/* apply configuration and set flags */
 	SET_FLAG(peer->af_flags[afi][safi], PEER_FLAG_MAX_PREFIX);
-	peer->pmax[afi][safi] = max;
-	peer->pmax_threshold[afi][safi] = threshold;
-	peer->pmax_restart[afi][safi] = restart;
 	if (warning)
 		SET_FLAG(peer->af_flags[afi][safi],
 			 PEER_FLAG_MAX_PREFIX_WARNING);
 	else
 		UNSET_FLAG(peer->af_flags[afi][safi],
 			   PEER_FLAG_MAX_PREFIX_WARNING);
+	peer->pmax[afi][safi] = max;
+	peer->pmax_threshold[afi][safi] = threshold;
+	peer->pmax_restart[afi][safi] = restart;
 
+	/* if handling a peer-group, apply to all children */
 	if (CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		group = peer->group;
 		for (ALL_LIST_ELEMENTS(group->peer, node, nnode, peer)) {
-			SET_FLAG(peer->af_flags[afi][safi],
-				 PEER_FLAG_MAX_PREFIX);
-			peer->pmax[afi][safi] = max;
-			peer->pmax_threshold[afi][safi] = threshold;
-			peer->pmax_restart[afi][safi] = restart;
-			if (warning)
+			/*
+			 * If peer configuration is user-set, it overrides
+			 * peer-group config.
+			 */
+			if (!CHECK_FLAG(peer->af_flags_override[afi][safi],
+					PEER_FLAG_MAX_PREFIX)) {
 				SET_FLAG(peer->af_flags[afi][safi],
-					 PEER_FLAG_MAX_PREFIX_WARNING);
-			else
-				UNSET_FLAG(peer->af_flags[afi][safi],
-					   PEER_FLAG_MAX_PREFIX_WARNING);
+					 PEER_FLAG_MAX_PREFIX);
+				peer->pmax[afi][safi] = max;
+				peer->pmax_threshold[afi][safi] = threshold;
+				peer->pmax_restart[afi][safi] = restart;
+			}
+			if (!CHECK_FLAG(peer->af_flags_override[afi][safi],
+					PEER_FLAG_MAX_PREFIX_WARNING)) {
+				if (warning)
+					SET_FLAG(peer->af_flags[afi][safi],
+						 PEER_FLAG_MAX_PREFIX_WARNING);
+				else
+					UNSET_FLAG(
+						peer->af_flags[afi][safi],
+						PEER_FLAG_MAX_PREFIX_WARNING);
+			}
 
 			if ((peer->status == Established)
 			    && (peer->afc[afi][safi]))
 				bgp_maximum_prefix_overflow(peer, afi, safi, 1);
 		}
 	} else {
+		/* if not handling a peer-group, set the override flags */
 		if ((peer->status == Established) && (peer->afc[afi][safi]))
 			bgp_maximum_prefix_overflow(peer, afi, safi, 1);
+
+		SET_FLAG(peer->af_flags_override[afi][safi],
+			 PEER_FLAG_MAX_PREFIX);
+
+		if (warning)
+			SET_FLAG(peer->af_flags_override[afi][safi],
+				 PEER_FLAG_MAX_PREFIX_WARNING);
+		else
+			UNSET_FLAG(peer->af_flags_override[afi][safi],
+				   PEER_FLAG_MAX_PREFIX_WARNING);
 	}
 
 	return 0;
@@ -6021,49 +6048,49 @@ int peer_maximum_prefix_unset(struct peer *peer, afi_t afi, safi_t safi)
 	struct peer_group *group;
 	struct listnode *node, *nnode;
 
-	/* apply peer-group config */
-	if (peer_group_active(peer)) {
-		if (CHECK_FLAG(peer->group->conf->af_flags[afi][safi],
-			       PEER_FLAG_MAX_PREFIX))
-			SET_FLAG(peer->af_flags[afi][safi],
-				 PEER_FLAG_MAX_PREFIX);
-		else
-			UNSET_FLAG(peer->af_flags[afi][safi],
-				   PEER_FLAG_MAX_PREFIX);
-
-		if (CHECK_FLAG(peer->group->conf->af_flags[afi][safi],
-			       PEER_FLAG_MAX_PREFIX_WARNING))
-			SET_FLAG(peer->af_flags[afi][safi],
-				 PEER_FLAG_MAX_PREFIX_WARNING);
-		else
-			UNSET_FLAG(peer->af_flags[afi][safi],
-				   PEER_FLAG_MAX_PREFIX_WARNING);
-
-		peer->pmax[afi][safi] = peer->group->conf->pmax[afi][safi];
-		peer->pmax_threshold[afi][safi] =
-			peer->group->conf->pmax_threshold[afi][safi];
-		peer->pmax_restart[afi][safi] =
-			peer->group->conf->pmax_restart[afi][safi];
-		return 0;
-	}
-
 	UNSET_FLAG(peer->af_flags[afi][safi], PEER_FLAG_MAX_PREFIX);
 	UNSET_FLAG(peer->af_flags[afi][safi], PEER_FLAG_MAX_PREFIX_WARNING);
 	peer->pmax[afi][safi] = 0;
 	peer->pmax_threshold[afi][safi] = 0;
 	peer->pmax_restart[afi][safi] = 0;
 
-	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP))
-		return 0;
+	/* if not handling a peer-group, unset override flags */
+	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
+		UNSET_FLAG(peer->af_flags_override[afi][safi],
+			   PEER_FLAG_MAX_PREFIX);
+		UNSET_FLAG(peer->af_flags_override[afi][safi],
+			   PEER_FLAG_MAX_PREFIX_WARNING);
+		/* if peer is part of a peer-group, apply peer-group config */
+		if (peer_group_active(peer)) {
+			peer->pmax[afi][safi] =
+				peer->group->conf->pmax[afi][safi];
+			peer->pmax_threshold[afi][safi] =
+				peer->group->conf->pmax_threshold[afi][safi];
+			peer->pmax_restart[afi][safi] =
+				peer->group->conf->pmax_restart[afi][safi];
+		}
 
+		return 0;
+	}
+
+	/*
+	 * If this peer is a peer-group, set all peers in the group unless they
+	 * have overrides for our config.
+	 */
 	group = peer->group;
 	for (ALL_LIST_ELEMENTS(group->peer, node, nnode, peer)) {
-		UNSET_FLAG(peer->af_flags[afi][safi], PEER_FLAG_MAX_PREFIX);
-		UNSET_FLAG(peer->af_flags[afi][safi],
-			   PEER_FLAG_MAX_PREFIX_WARNING);
-		peer->pmax[afi][safi] = 0;
-		peer->pmax_threshold[afi][safi] = 0;
-		peer->pmax_restart[afi][safi] = 0;
+		if (!CHECK_FLAG(peer->af_flags_override[afi][safi],
+				PEER_FLAG_MAX_PREFIX_WARNING))
+			UNSET_FLAG(peer->af_flags[afi][safi],
+				   PEER_FLAG_MAX_PREFIX_WARNING);
+		if (!CHECK_FLAG(peer->af_flags_override[afi][safi],
+				PEER_FLAG_MAX_PREFIX)) {
+			UNSET_FLAG(peer->af_flags[afi][safi],
+				   PEER_FLAG_MAX_PREFIX);
+			peer->pmax[afi][safi] = 0;
+			peer->pmax_threshold[afi][safi] = 0;
+			peer->pmax_restart[afi][safi] = 0;
+		}
 	}
 	return 0;
 }
@@ -7140,8 +7167,9 @@ static void bgp_config_write_peer_af(struct vty *vty, struct bgp *bgp,
 
 	/* atribute-unchanged. */
 	if (peer_af_flag_check(peer, afi, safi, PEER_FLAG_AS_PATH_UNCHANGED)
-	    || (safi != SAFI_EVPN &&
-		peer_af_flag_check(peer, afi, safi, PEER_FLAG_NEXTHOP_UNCHANGED))
+	    || (safi != SAFI_EVPN
+		&& peer_af_flag_check(peer, afi, safi,
+				      PEER_FLAG_NEXTHOP_UNCHANGED))
 	    || peer_af_flag_check(peer, afi, safi, PEER_FLAG_MED_UNCHANGED)) {
 
 		if (!peer_group_active(peer)
@@ -7591,6 +7619,7 @@ void bgp_master_init(struct thread_master *master)
 	bm->start_time = bgp_clock();
 	bm->t_rmap_update = NULL;
 	bm->rmap_update_timer = RMAP_DEFAULT_UPDATE_TIMER;
+	bm->terminating = false;
 
 	bgp_process_queue_init();
 

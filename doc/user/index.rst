@@ -1,5 +1,5 @@
-Welcome to FRR's documentation!
-===============================
+FRRouting User Guide
+====================
 
 .. toctree::
    :maxdepth: 2
@@ -27,6 +27,7 @@ Welcome to FRR's documentation!
    ripngd
    sharp
    vnc
+   bugs
    glossary
    appendix
 

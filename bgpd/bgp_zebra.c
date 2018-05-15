@@ -1287,17 +1287,11 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 				}
 			}
 
-			if (bgp->table_map[afi][safi].name || nh_othervrf) {
+			if (bgp->table_map[afi][safi].name) {
 				/* Copy info and attributes, so the route-map
 				   apply doesn't modify the BGP route info. */
 				local_attr = *mpinfo->attr;
 				mpinfo_cp->attr = &local_attr;
-				if (nh_othervrf) {
-					/* allow route-map to modify */
-					local_attr.nexthop =
-						info->extra->nexthop_orig.u
-							.prefix4;
-				}
 			}
 
 			if (bgp->table_map[afi][safi].name) {
@@ -1322,19 +1316,11 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 			ifindex_t ifindex;
 			struct in6_addr *nexthop;
 
-			if (bgp->table_map[afi][safi].name || nh_othervrf) {
+			if (bgp->table_map[afi][safi].name) {
 				/* Copy info and attributes, so the route-map
 				   apply doesn't modify the BGP route info. */
 				local_attr = *mpinfo->attr;
 				mpinfo_cp->attr = &local_attr;
-				if (nh_othervrf) {
-					/* allow route-map to modify */
-					local_attr.mp_nexthop_global =
-						info->extra->nexthop_orig.u
-							.prefix6;
-					local_attr.mp_nexthop_len =
-						BGP_ATTR_NHLEN_IPV6_GLOBAL;
-				}
 			}
 
 			if (bgp->table_map[afi][safi].name) {
@@ -2405,11 +2391,24 @@ static void bgp_zebra_process_label_chunk(
 	uint8_t response_keep;
 	uint32_t first;
 	uint32_t last;
+	uint8_t proto;
+	unsigned short instance;
 
 	s = zclient->ibuf;
+	STREAM_GETC(s, proto);
+	STREAM_GETW(s, instance);
 	STREAM_GETC(s, response_keep);
 	STREAM_GETL(s, first);
 	STREAM_GETL(s, last);
+
+	if (zclient->redist_default != proto) {
+		zlog_err("Got LM msg with wrong proto %u", proto);
+		return;
+	}
+	if (zclient->instance != instance) {
+		zlog_err("Got LM msg with wrong instance %u", proto);
+		return;
+	}
 
 	if (first > last ||
 		first < MPLS_LABEL_UNRESERVED_MIN ||
