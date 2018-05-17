@@ -218,12 +218,12 @@ static int host_rb_entry_compare(const struct host_rb_entry *hle1,
 RB_GENERATE(host_rb_entry_rb, host_rb_entry, hl_entry,
 	    host_rb_entry_compare);
 
-static uint32_t zrmac_host_count(zebra_mac_t *zrmac)
+static uint32_t rb_host_count(struct host_rb_entry_rb *hrbe)
 {
 	struct host_rb_entry *hle;
 	uint32_t count = 0;
 
-	RB_FOREACH (hle, host_rb_entry_rb, &zrmac->host_rb)
+	RB_FOREACH (hle, host_rb_entry_rb, hrbe)
 		count++;
 
 	return count;
@@ -528,7 +528,7 @@ static void zl3vni_print_rmac(zebra_mac_t *zrmac,
 			prefix_mac2str(&zrmac->macaddr, buf1, sizeof(buf1)));
 		vty_out(vty, " Remote VTEP: %s\n",
 			inet_ntoa(zrmac->fwd_info.r_vtep_ip));
-		vty_out(vty, " Refcount: %d\n", zrmac_host_count(zrmac));
+		vty_out(vty, " Refcount: %d\n", rb_host_count(&zrmac->host_rb));
 		vty_out(vty, "  Prefixes:\n");
 		RB_FOREACH (hle, host_rb_entry_rb, &zrmac->host_rb)
 			vty_out(vty, "    %s\n",
@@ -541,7 +541,8 @@ static void zl3vni_print_rmac(zebra_mac_t *zrmac,
 						      sizeof(buf1)));
 		json_object_string_add(json, "vtepIp",
 				       inet_ntoa(zrmac->fwd_info.r_vtep_ip));
-		json_object_int_add(json, "refCount", zrmac_host_count(zrmac));
+		json_object_int_add(json, "refCount",
+				    rb_host_count(&zrmac->host_rb));
 		RB_FOREACH (hle, host_rb_entry_rb, &zrmac->host_rb)
 			json_object_array_add(
 				json_hosts,
@@ -3117,7 +3118,8 @@ static void zl3vni_cleanup_all(struct hash_backet *backet,
 	zebra_vxlan_process_l3vni_oper_down(zl3vni);
 }
 
-static void zrmac_find_or_add_host(zebra_mac_t *zrmac, struct prefix *host)
+static void rb_find_or_add_host(struct host_rb_entry_rb *hrbe,
+				struct prefix *host)
 {
 	struct host_rb_entry lookup;
 	struct host_rb_entry *hle;
@@ -3125,17 +3127,17 @@ static void zrmac_find_or_add_host(zebra_mac_t *zrmac, struct prefix *host)
 	memset(&lookup, 0, sizeof(lookup));
 	memcpy(&lookup.p, host, sizeof(*host));
 
-	hle = RB_FIND(host_rb_entry_rb, &zrmac->host_rb, &lookup);
+	hle = RB_FIND(host_rb_entry_rb, hrbe, &lookup);
 	if (hle)
 		return;
 
 	hle = XCALLOC(MTYPE_HOST_PREFIX, sizeof(struct host_rb_entry));
 	memcpy(hle, &lookup, sizeof(lookup));
 
-	RB_INSERT(host_rb_entry_rb, &zrmac->host_rb, hle);
+	RB_INSERT(host_rb_entry_rb, hrbe, hle);
 }
 
-static void zrmac_delete_host(zebra_mac_t *zrmac, struct prefix *host)
+static void rb_delete_host(struct host_rb_entry_rb *hrbe, struct prefix *host)
 {
 	struct host_rb_entry lookup;
 	struct host_rb_entry *hle;
@@ -3143,9 +3145,9 @@ static void zrmac_delete_host(zebra_mac_t *zrmac, struct prefix *host)
 	memset(&lookup, 0, sizeof(lookup));
 	memcpy(&lookup.p, host, sizeof(*host));
 
-	hle = RB_FIND(host_rb_entry_rb, &zrmac->host_rb, &lookup);
+	hle = RB_FIND(host_rb_entry_rb, hrbe, &lookup);
 	if (hle)
-		RB_REMOVE(host_rb_entry_rb, &zrmac->host_rb, hle);
+		RB_REMOVE(host_rb_entry_rb, hrbe, hle);
 
 	return;
 }
@@ -3350,7 +3352,7 @@ static int zl3vni_remote_rmac_add(zebra_l3vni_t *zl3vni,
 		zl3vni_rmac_install(zl3vni, zrmac);
 	}
 
-	zrmac_find_or_add_host(zrmac, host_prefix);
+	rb_find_or_add_host(&zrmac->host_rb, host_prefix);
 
 	return 0;
 }
@@ -3361,7 +3363,7 @@ static void zl3vni_remote_rmac_del(zebra_l3vni_t *zl3vni,
 				  zebra_mac_t *zrmac,
 				  struct prefix *host_prefix)
 {
-	zrmac_delete_host(zrmac, host_prefix);
+	rb_delete_host(&zrmac->host_rb, host_prefix);
 
 	if (RB_EMPTY(host_rb_entry_rb, &zrmac->host_rb)) {
 		/* uninstall from kernel */
