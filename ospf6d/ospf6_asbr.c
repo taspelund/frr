@@ -311,7 +311,6 @@ void ospf6_asbr_update_route_ecmp_path(struct ospf6_route *old,
 				}
 				ospf6_route_remove(old_route,
 						   ospf6->route_table);
-				break;
 			}
 		}
 		if (route_updated)
