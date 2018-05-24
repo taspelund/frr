@@ -29,7 +29,8 @@ Besides the common invocation options (:ref:`common-invocation-options`), the
 
 .. option:: -r, --retain
 
-   When program terminates, retain routes added by zebra.
+   When program terminates, do not flush routes installed by *zebra* from the
+   kernel.
 
 .. option:: -e X, --ecmp X
 
@@ -46,6 +47,14 @@ Besides the common invocation options (:ref:`common-invocation-options`), the
    VRF defined by *Zebra*, as usual.
 
    .. seealso:: :ref:`vrf`
+
+.. option:: --v6-rr-semantics
+
+   The linux kernel is receiving the ability to use the same route
+   replacement semantics for v6 that v4 uses.  If you are using a
+   kernel that supports this functionality then run *Zebra* with this
+   option and we will use Route Replace Semantics instead of delete
+   than add.
 
 .. _interface-commands:
 

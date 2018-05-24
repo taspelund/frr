@@ -164,6 +164,7 @@ static void vrf_import_rt_free(struct vrf_irt_node *irt)
 	}
 
 	hash_release(bgp_def->vrf_import_rt_hash, irt);
+	list_delete_and_null(&irt->vrfs);
 	XFREE(MTYPE_BGP_EVPN_VRF_IMPORT_RT, irt);
 }
 
@@ -265,6 +266,7 @@ static struct irt_node *import_rt_new(struct bgp *bgp,
 static void import_rt_free(struct bgp *bgp, struct irt_node *irt)
 {
 	hash_release(bgp->import_rt_hash, irt);
+	list_delete_and_null(&irt->vnis);
 	XFREE(MTYPE_BGP_EVPN_IMPORT_RT, irt);
 }
 
@@ -393,7 +395,6 @@ static void unmap_vrf_from_rt(struct bgp *bgp_vrf, struct vrf_irt_node *irt)
 	/* Delete VRF from list for this RT. */
 	listnode_delete(irt->vrfs, bgp_vrf);
 	if (!listnode_head(irt->vrfs)) {
-		list_delete_and_null(&irt->vrfs);
 		vrf_import_rt_free(irt);
 	}
 }
@@ -416,7 +417,7 @@ static void map_vni_to_rt(struct bgp *bgp, struct bgpevpn *vpn,
 		mask_ecom_global_admin(&eval_tmp, eval);
 
 	irt = lookup_import_rt(bgp, &eval_tmp);
-	if (irt && irt->vnis)
+	if (irt)
 		if (is_vni_present_in_irt_vnis(irt->vnis, vpn))
 			/* Already mapped. */
 			return;
@@ -440,7 +441,6 @@ static void unmap_vni_from_rt(struct bgp *bgp, struct bgpevpn *vpn,
 	/* Delete VNI from hash list for this RT. */
 	listnode_delete(irt->vnis, vpn);
 	if (!listnode_head(irt->vnis)) {
-		list_delete_and_null(&irt->vnis);
 		import_rt_free(bgp, irt);
 	}
 }
@@ -771,8 +771,11 @@ static void add_mac_mobility_to_attr(uint32_t seq_num, struct attr *attr)
 		ecom_tmp.size = 1;
 		ecom_tmp.val = (uint8_t *)eval.val;
 
-		attr->ecommunity =
-			ecommunity_merge(attr->ecommunity, &ecom_tmp);
+		if (attr->ecommunity)
+			attr->ecommunity =
+				ecommunity_merge(attr->ecommunity, &ecom_tmp);
+		else
+			attr->ecommunity = ecommunity_dup(&ecom_tmp);
 	}
 }
 
@@ -1853,6 +1856,7 @@ static int install_evpn_route_entry_in_vrf(struct bgp *bgp_vrf,
 		SET_FLAG(ri->flags, BGP_INFO_VALID);
 		bgp_info_extra_get(ri);
 		ri->extra->parent = bgp_info_lock(parent_ri);
+		bgp_lock_node((struct bgp_node *)parent_ri->net);
 		if (parent_ri->extra) {
 			memcpy(&ri->extra->label, &parent_ri->extra->label,
 			       sizeof(ri->extra->label));
@@ -1925,6 +1929,7 @@ static int install_evpn_route_entry(struct bgp *bgp, struct bgpevpn *vpn,
 		SET_FLAG(ri->flags, BGP_INFO_VALID);
 		bgp_info_extra_get(ri);
 		ri->extra->parent = bgp_info_lock(parent_ri);
+		bgp_lock_node((struct bgp_node *)parent_ri->net);
 		if (parent_ri->extra) {
 			memcpy(&ri->extra->label, &parent_ri->extra->label,
 			       sizeof(ri->extra->label));
@@ -2105,7 +2110,7 @@ static int is_route_matching_for_vrf(struct bgp *bgp_vrf, struct bgp_info *ri)
 
 		/* See if this RT matches specified VNIs import RTs */
 		irt = lookup_vrf_import_rt(eval);
-		if (irt && irt->vrfs)
+		if (irt)
 			if (is_vrf_present_in_irt_vrfs(irt->vrfs, bgp_vrf))
 				return 1;
 
@@ -2123,7 +2128,7 @@ static int is_route_matching_for_vrf(struct bgp *bgp_vrf, struct bgp_info *ri)
 			mask_ecom_global_admin(&eval_tmp, eval);
 			irt = lookup_vrf_import_rt(&eval_tmp);
 		}
-		if (irt && irt->vrfs)
+		if (irt)
 			if (is_vrf_present_in_irt_vrfs(irt->vrfs, bgp_vrf))
 				return 1;
 	}
@@ -2172,7 +2177,7 @@ static int is_route_matching_for_vni(struct bgp *bgp, struct bgpevpn *vpn,
 
 		/* See if this RT matches specified VNIs import RTs */
 		irt = lookup_import_rt(bgp, eval);
-		if (irt && irt->vnis)
+		if (irt)
 			if (is_vni_present_in_irt_vnis(irt->vnis, vpn))
 				return 1;
 
@@ -2190,7 +2195,7 @@ static int is_route_matching_for_vni(struct bgp *bgp, struct bgpevpn *vpn,
 			mask_ecom_global_admin(&eval_tmp, eval);
 			irt = lookup_import_rt(bgp, &eval_tmp);
 		}
-		if (irt && irt->vnis)
+		if (irt)
 			if (is_vni_present_in_irt_vnis(irt->vnis, vpn))
 				return 1;
 	}
@@ -2544,7 +2549,7 @@ static int install_uninstall_evpn_route(struct bgp *bgp, afi_t afi, safi_t safi,
 		 * into l2vni table)
 		 */
 		irt = lookup_import_rt(bgp, eval);
-		if (irt && irt->vnis)
+		if (irt)
 			install_uninstall_route_in_vnis(bgp, afi, safi, evp, ri,
 							irt->vnis, import);
 
@@ -2552,7 +2557,7 @@ static int install_uninstall_evpn_route(struct bgp *bgp, afi_t afi, safi_t safi,
 		 * into l3vni/vrf table)
 		 */
 		vrf_irt = lookup_vrf_import_rt(eval);
-		if (vrf_irt && vrf_irt->vrfs)
+		if (vrf_irt)
 			install_uninstall_route_in_vrfs(bgp, afi, safi, evp, ri,
 							vrf_irt->vrfs, import);
 
@@ -2572,10 +2577,10 @@ static int install_uninstall_evpn_route(struct bgp *bgp, afi_t afi, safi_t safi,
 			irt = lookup_import_rt(bgp, &eval_tmp);
 			vrf_irt = lookup_vrf_import_rt(&eval_tmp);
 		}
-		if (irt && irt->vnis)
+		if (irt)
 			install_uninstall_route_in_vnis(bgp, afi, safi, evp, ri,
 							irt->vnis, import);
-		if (vrf_irt && vrf_irt->vrfs)
+		if (vrf_irt)
 			install_uninstall_route_in_vrfs(bgp, afi, safi, evp, ri,
 							vrf_irt->vrfs, import);
 	}
@@ -3326,7 +3331,7 @@ void bgp_evpn_advertise_type5_route(struct bgp *bgp_vrf, struct prefix *p,
 	int ret = 0;
 	struct prefix_evpn evp;
 	char buf[PREFIX_STRLEN];
-  
+
 	build_type5_prefix_from_ip_prefix(&evp, p);
 	ret = update_evpn_type5_route(bgp_vrf, &evp, src_attr);
 	if (ret)
