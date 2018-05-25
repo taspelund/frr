@@ -1,8 +1,33 @@
+frr (4.0+cl3u3) RELEASED; urgency=medium
+
+  * Fixes: Lots of stuff
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Fri, 25 May 2018 18:10:00 -0400
+
+frr (4.0+cl3u2) RELEASED; urgency=medium
+
+  * Fixes: CM-20471 bgpd: Update parent's refcount for imported routes
+  * Fixes: CM-20776 bgpd: Set NEXT_HOP attribute for EVPN imported routes
+  * Fixes: CM-20664 Increase timeout for restart failure conditions
+  * Fixes: CM-20807 ospf6d: Fix area border router duplicate
+  * Fixes: CM-20841 Put back lost backwards compatibility guard in packaging
+  * Fixes: CM-20744 ospfd: Always create the fifo for the interface
+  * Fixes: CM-20086 lib: allow hostname to begin with a letter or number
+  * Fixes: CM-21019 bgpd: Fix crash on shutdown
+  * Fixes: CM-21013 watchfrr: Accept deprecated options
+  * Fixes: CM-20871 zebra: link/unlink l2vni with l3vni when svi state change
+  * Fixes: CM-20732 bgpd: Fix a typo in output cmd
+  * Fixes: CM-21068 bgpd: Fix crash on shutdown
+  * Fixes: CM-21114 vtysh: Fix bad path to conf file in -q mode
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Wed, 19 May 2018 12:30:41 -0400
+
 frr (4.0+cl3u1) RELEASED; urgency=medium
 
-  * New Enabled: FRR Dev Builds
+  * New Enabled: PBR Policy Based Routing
+  * New Enabled: BGP VRF - VRF Route Leaking
 
- -- FRRouting-Dev <dev@lists.frrouting.org>  Wed, 18 Oct 2017 17:01:42 -0700
+ -- dev-support <dev-support@cumulusnetworks.com>  Mon, 9 Apr 2018 18:10:00 -0400
 
 frr (3.0-1) RELEASED; urgency=medium
 
