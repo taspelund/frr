@@ -2854,6 +2854,18 @@ static int bgp_startup_timer_expire(struct thread *thread)
 	return 0;
 }
 
+/*
+ * On shutdown we call the cleanup function which
+ * does a free of the link list nodes,  free up
+ * the data we are pointing at too.
+ */
+static void bgp_vrf_string_name_delete(void *data)
+{
+	char *vname = data;
+
+	XFREE(MTYPE_TMP, vname);
+}
+
 /* BGP instance creation by `router bgp' commands. */
 static struct bgp *bgp_create(as_t *as, const char *name,
 			      enum bgp_instance_type inst_type)
@@ -2965,7 +2977,11 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 			MPLS_LABEL_NONE;
 
 		bgp->vpn_policy[afi].import_vrf = list_new();
+		bgp->vpn_policy[afi].import_vrf->del =
+			bgp_vrf_string_name_delete;
 		bgp->vpn_policy[afi].export_vrf = list_new();
+		bgp->vpn_policy[afi].export_vrf->del =
+			bgp_vrf_string_name_delete;
 	}
 	if (name) {
 		bgp->name = XSTRDUP(MTYPE_BGP, name);
@@ -3368,6 +3384,21 @@ void bgp_free(struct bgp *bgp)
 	bf_release_index(bm->rd_idspace, bgp->vrf_rd_id);
 
 	bgp_evpn_cleanup(bgp);
+	for (afi = AFI_IP; afi < AFI_MAX; afi++) {
+		vpn_policy_direction_t dir;
+
+		if (bgp->vpn_policy[afi].import_vrf)
+			list_delete_and_null(&bgp->vpn_policy[afi].import_vrf);
+		if (bgp->vpn_policy[afi].export_vrf)
+			list_delete_and_null(&bgp->vpn_policy[afi].export_vrf);
+
+		dir = BGP_VPN_POLICY_DIR_FROMVPN;
+		if (bgp->vpn_policy[afi].rtlist[dir])
+			ecommunity_free(&bgp->vpn_policy[afi].rtlist[dir]);
+		dir = BGP_VPN_POLICY_DIR_TOVPN;
+		if (bgp->vpn_policy[afi].rtlist[dir])
+			ecommunity_free(&bgp->vpn_policy[afi].rtlist[dir]);
+	}
 
 	if (bgp->name)
 		XFREE(MTYPE_BGP, bgp->name);
