@@ -61,16 +61,8 @@ struct evpn_addr {
 	u_char route_type;
 	u_char ip_prefix_length;
 	struct ethaddr mac;
-	uint32_t eth_tag;
 	struct ipaddr ip;
-#if 0
-  union
-  {
-    u_char addr;
-    struct in_addr v4_addr;
-    struct in6_addr v6_addr;
-  } ip;
-#endif
+	uint32_t eth_tag;
 };
 
 #define IS_EVPN_PREFIX_IPADDR_NONE(evp)  IS_IPADDR_NONE(&(evp)->prefix.ip)
