@@ -98,6 +98,12 @@ static int netlink_rule_update(int cmd, struct zebra_pbr_rule *rule)
 			  &rule->rule.filter.dst_ip.u.prefix, bytelen);
 	}
 
+	/* fwmark, if specified */
+	if (IS_RULE_FILTERING_ON_FWMARK(rule)) {
+		addattr32(&req.n, sizeof(req), FRA_FWMARK,
+			  rule->rule.filter.fwmark);
+	}
+
 	/* Route table to use to forward, if filter criteria matches. */
 	if (rule->rule.action.table < 256)
 		req.frh.table = rule->rule.action.table;
@@ -166,8 +172,7 @@ void kernel_del_pbr_rule(struct zebra_pbr_rule *rule)
  * notification of interest. The expectation is that if this corresponds
  * to a PBR rule added by FRR, it will be readded.
  */
-int netlink_rule_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
-			ns_id_t ns_id, int startup)
+int netlink_rule_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 {
 	struct zebra_ns *zns;
 	struct fib_rule_hdr *frh;

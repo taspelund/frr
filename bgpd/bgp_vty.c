@@ -6311,6 +6311,10 @@ DEFPY (af_label_vpn_export,
 	if (argv_find(argv, argc, "no", &idx))
 		yes = 0;
 
+	/* If "no ...", squash trailing parameter */
+	if (!yes)
+		label_auto = NULL;
+
 	if (yes) {
 		if (!label_auto)
 			label = label_val; /* parser should force unsigned */
@@ -10657,7 +10661,7 @@ static int bgp_show_neighbor(struct vty *vty, struct bgp *bgp,
 		if (use_json)
 			json_object_boolean_true_add(json, "bgpNoSuchNeighbor");
 		else
-			vty_out(vty, "%% No such neighbor\n");
+			vty_out(vty, "%% No such neighbor in this view/vrf\n");
 	}
 
 	if (use_json) {

@@ -52,6 +52,12 @@ enum bgp_show_type {
 	bgp_show_type_detail,
 };
 
+enum bgp_show_adj_route_type {
+	bgp_show_adj_route_advertised,
+	bgp_show_adj_route_received,
+	bgp_show_adj_route_filtered,
+};
+
 
 #define BGP_SHOW_SCODE_HEADER                                                  \
 	"Status codes:  s suppressed, d damped, "                              \
@@ -140,6 +146,8 @@ struct bgp_info_extra {
 	 * Set nexthop_orig.family to 0 if not valid.
 	 */
 	struct prefix nexthop_orig;
+	/* presence of FS pbr entry */
+	void *bgp_fs_pbr;
 };
 
 struct bgp_info {
