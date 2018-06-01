@@ -5882,13 +5882,7 @@ static int bgp_aggregate_unset(struct vty *vty, const char *prefix_str,
 	}
 
 	aggregate = rn->info;
-	if (aggregate->safi == SAFI_UNICAST)
-		bgp_aggregate_delete(bgp, &p, afi, SAFI_UNICAST, aggregate);
-	if (aggregate->safi == SAFI_LABELED_UNICAST)
-		bgp_aggregate_delete(bgp, &p, afi, SAFI_LABELED_UNICAST,
-				     aggregate);
-	if (aggregate->safi == SAFI_MULTICAST)
-		bgp_aggregate_delete(bgp, &p, afi, SAFI_MULTICAST, aggregate);
+	bgp_aggregate_delete(bgp, &p, afi, safi, aggregate);
 
 	/* Unlock aggregate address configuration. */
 	rn->info = NULL;
@@ -5938,13 +5932,7 @@ static int bgp_aggregate_set(struct vty *vty, const char *prefix_str, afi_t afi,
 	rn->info = aggregate;
 
 	/* Aggregate address insert into BGP routing table. */
-	if (safi == SAFI_UNICAST)
-		bgp_aggregate_add(bgp, &p, afi, SAFI_UNICAST, aggregate);
-	if (safi == SAFI_LABELED_UNICAST)
-		bgp_aggregate_add(bgp, &p, afi, SAFI_LABELED_UNICAST,
-				  aggregate);
-	if (safi == SAFI_MULTICAST)
-		bgp_aggregate_add(bgp, &p, afi, SAFI_MULTICAST, aggregate);
+	bgp_aggregate_add(bgp, &p, afi, safi, aggregate);
 
 	return CMD_SUCCESS;
 }
