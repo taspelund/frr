@@ -109,12 +109,7 @@ extern struct zclient *zclient;
 static int bgp_check_main_socket(bool create, struct bgp *bgp)
 {
 	static int bgp_server_main_created;
-	struct listnode *bgpnode, *nbgpnode;
-	struct bgp *bgp_temp;
 
-	if (bgp->inst_type == BGP_INSTANCE_TYPE_VRF &&
-	    vrf_is_mapped_on_netns(bgp->vrf_id))
-		return 0;
 	if (create == true) {
 		if (bgp_server_main_created)
 			return 0;
@@ -125,18 +120,6 @@ static int bgp_check_main_socket(bool create, struct bgp *bgp)
 	}
 	if (!bgp_server_main_created)
 		return 0;
-	/* only delete socket on some cases */
-	for (ALL_LIST_ELEMENTS(bm->bgp, bgpnode, nbgpnode, bgp_temp)) {
-		/* do not count with current bgp */
-		if (bgp_temp == bgp)
-			continue;
-		/* if other instance non VRF, do not delete socket */
-		if (bgp_temp->inst_type == BGP_INSTANCE_TYPE_DEFAULT)
-			return 0;
-		/* vrf lite, do not delete socket */
-		if (!vrf_is_mapped_on_netns(bgp_temp->vrf_id))
-			return 0;
-	}
 	bgp_close();
 	bgp_server_main_created = 0;
 	return 0;
@@ -1391,6 +1374,12 @@ void bgp_peer_conf_if_to_su_update(struct peer *peer)
 	if (!peer->conf_if)
 		return;
 
+	/*
+	 * Our peer structure is stored in the bgp->peerhash
+	 * release it before we modify anything.
+	 */
+	hash_release(peer->bgp->peerhash, peer);
+
 	prev_family = peer->su.sa.sa_family;
 	if ((ifp = if_lookup_by_name(peer->conf_if, peer->bgp->vrf_id))) {
 		peer->ifp = ifp;
@@ -1429,8 +1418,9 @@ void bgp_peer_conf_if_to_su_update(struct peer *peer)
 		memset(&peer->su.sin6.sin6_addr, 0, sizeof(struct in6_addr));
 	}
 
-	/* Since our su changed we need to del/add peer to the peerhash */
-	hash_release(peer->bgp->peerhash, peer);
+	/*
+	 * Since our su changed we need to del/add peer to the peerhash
+	 */
 	hash_get(peer->bgp->peerhash, peer, hash_alloc_intern);
 }
 
@@ -3079,17 +3069,16 @@ int bgp_handle_socket(struct bgp *bgp, struct vrf *vrf, vrf_id_t old_vrf_id,
 	/* Create BGP server socket, if listen mode not disabled */
 	if (!bgp || bgp_option_check(BGP_OPT_NO_LISTEN))
 		return 0;
-	if (bgp->name && bgp->inst_type == BGP_INSTANCE_TYPE_VRF && vrf) {
+	if (bgp->inst_type == BGP_INSTANCE_TYPE_VRF) {
 		/*
 		 * suppress vrf socket
 		 */
 		if (create == FALSE) {
-			if (vrf_is_mapped_on_netns(vrf->vrf_id))
-				bgp_close_vrf_socket(bgp);
-			else
-				ret = bgp_check_main_socket(create, bgp);
-			return ret;
+			bgp_close_vrf_socket(bgp);
+			return 0;
 		}
+		if (vrf == NULL)
+			return BGP_ERR_INVALID_VALUE;
 		/* do nothing
 		 * if vrf_id did not change
 		 */
@@ -3104,21 +3093,12 @@ int bgp_handle_socket(struct bgp *bgp, struct vrf *vrf, vrf_id_t old_vrf_id,
 		 */
 		if (vrf->vrf_id == VRF_UNKNOWN)
 			return 0;
-		/* if BGP VRF instance requested
-		 * if backend is NETNS, create BGP server socket in the NETNS
-		 */
-		if (vrf_is_mapped_on_netns(bgp->vrf_id)) {
-			ret = bgp_socket(bgp, bm->port, bm->address);
-			if (ret < 0)
-				return BGP_ERR_INVALID_VALUE;
-			return 0;
-		}
-	}
-	/* if BGP VRF instance requested or VRF lite backend
-	 * if BGP non VRF instance, create it
-	 *  if not already done
-	 */
-	return bgp_check_main_socket(create, bgp);
+		ret = bgp_socket(bgp, bm->port, bm->address);
+		if (ret < 0)
+			return BGP_ERR_INVALID_VALUE;
+		return 0;
+	} else
+		return bgp_check_main_socket(create, bgp);
 }
 
 /* Called from VTY commands. */
@@ -3495,16 +3475,7 @@ struct peer *peer_lookup(struct bgp *bgp, union sockunion *su)
 		struct listnode *bgpnode, *nbgpnode;
 
 		for (ALL_LIST_ELEMENTS(bm->bgp, bgpnode, nbgpnode, bgp)) {
-			/* Skip VRFs Lite only, this function will not be
-			 * invoked without an instance
-			 * when examining VRFs.
-			 */
-			if ((bgp->inst_type == BGP_INSTANCE_TYPE_VRF)
-			    && !vrf_is_mapped_on_netns(bgp->vrf_id))
-				continue;
-
 			peer = hash_lookup(bgp->peerhash, &tmp_peer);
-
 			if (peer)
 				break;
 		}
@@ -3805,6 +3776,7 @@ static const struct peer_flag_action peer_flag_action_list[] = {
 	{PEER_FLAG_DYNAMIC_CAPABILITY, 0, peer_change_reset},
 	{PEER_FLAG_DISABLE_CONNECTED_CHECK, 0, peer_change_reset},
 	{PEER_FLAG_CAPABILITY_ENHE, 0, peer_change_reset},
+	{PEER_FLAG_ENFORCE_FIRST_AS, 0, peer_change_reset_in},
 	{0, 0, 0}};
 
 static const struct peer_flag_action peer_af_flag_action_list[] = {
@@ -6747,6 +6719,14 @@ static void bgp_config_write_peer_global(struct vty *vty, struct bgp *bgp,
 		}
 	}
 
+	/* enforce-first-as */
+	if (CHECK_FLAG(peer->flags, PEER_FLAG_ENFORCE_FIRST_AS)) {
+		if (!peer_group_active(peer)
+		    || !CHECK_FLAG(g_peer->flags, PEER_FLAG_ENFORCE_FIRST_AS)) {
+			vty_out(vty, " neighbor %s enforce-first-as\n", addr);
+		}
+	}
+
 	/* update-source */
 	if (peer->update_if) {
 		if (!peer_group_active(peer) || !g_peer->update_if
@@ -7296,6 +7276,12 @@ static void bgp_config_write_family(struct vty *vty, struct bgp *bgp, afi_t afi,
 	vty_endframe(vty, " exit-address-family\n");
 }
 
+/* clang-format off */
+#if defined(VERSION_TYPE_DEV) && CONFDATE > 20180517
+CPP_NOTICE("bgpd: remove 'bgp enforce-first-as' config migration from bgp_config_write")
+#endif
+/* clang-format on */
+
 int bgp_config_write(struct vty *vty)
 {
 	int write = 0;
@@ -7330,6 +7316,15 @@ int bgp_config_write(struct vty *vty)
 		/* skip all auto created vrf as they dont have user config */
 		if (CHECK_FLAG(bgp->vrf_flags, BGP_VRF_AUTO))
 			continue;
+
+		/* Migrate deprecated 'bgp enforce-first-as'
+		 * config to 'neighbor * enforce-first-as' configs
+		 */
+		if (bgp_flag_check(bgp, BGP_FLAG_ENFORCE_FIRST_AS)) {
+			for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer))
+				peer_flag_set(peer, PEER_FLAG_ENFORCE_FIRST_AS);
+			bgp_flag_unset(bgp, BGP_FLAG_ENFORCE_FIRST_AS);
+		}
 
 		/* Router bgp ASN */
 		vty_out(vty, "router bgp %u", bgp->as);
@@ -7428,10 +7423,6 @@ int bgp_config_write(struct vty *vty)
 
 			vty_out(vty, "\n");
 		}
-
-		/* BGP enforce-first-as. */
-		if (bgp_flag_check(bgp, BGP_FLAG_ENFORCE_FIRST_AS))
-			vty_out(vty, " bgp enforce-first-as\n");
 
 		/* BGP deterministic-med. */
 		if (!!bgp_flag_check(bgp, BGP_FLAG_DETERMINISTIC_MED)

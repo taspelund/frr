@@ -1235,13 +1235,6 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 
 	tag = info->attr->tag;
 
-	/*
-	 * When we create an aggregate route we must also install a
-	 * Null0 route in the RIB
-	 */
-	if (info->sub_type == BGP_ROUTE_AGGREGATE)
-		zapi_route_set_blackhole(&api, BLACKHOLE_NULL);
-
 	/* If the route's source is EVPN, flag as such. */
 	is_evpn = is_route_parent_evpn(info);
 	if (is_evpn)
@@ -1323,7 +1316,7 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 					&mpinfo_cp->attr->nexthop,
 					mpinfo_cp->attr, is_evpn, api_nh);
 		} else {
-			ifindex_t ifindex;
+			ifindex_t ifindex = IFINDEX_INTERNAL;
 			struct in6_addr *nexthop;
 
 			if (bgp->table_map[afi][safi].name) {
@@ -1381,7 +1374,14 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 	if (has_valid_label && !(CHECK_FLAG(api.flags, ZEBRA_FLAG_EVPN_ROUTE)))
 		SET_FLAG(api.message, ZAPI_MESSAGE_LABEL);
 
-	if (info->sub_type != BGP_ROUTE_AGGREGATE)
+	/*
+	 * When we create an aggregate route we must also
+	 * install a Null0 route in the RIB, so overwrite
+	 * what was written into api with a blackhole route
+	 */
+	if (info->sub_type == BGP_ROUTE_AGGREGATE)
+		zapi_route_set_blackhole(&api, BLACKHOLE_NULL);
+	else
 		api.nexthop_num = valid_nh_count;
 
 	SET_FLAG(api.message, ZAPI_MESSAGE_METRIC);
@@ -2249,6 +2249,40 @@ static void bgp_zebra_connected(struct zclient *zclient)
 	 */
 }
 
+static int bgp_zebra_process_local_es(int cmd, struct zclient *zclient,
+				      zebra_size_t length, vrf_id_t vrf_id)
+{
+	esi_t esi;
+	struct bgp *bgp = NULL;
+	struct stream *s = NULL;
+	char buf[ESI_STR_LEN];
+	char buf1[INET6_ADDRSTRLEN];
+	struct ipaddr originator_ip;
+
+	memset(&esi, 0, sizeof(esi_t));
+	memset(&originator_ip, 0, sizeof(struct ipaddr));
+
+	bgp = bgp_lookup_by_vrf_id(vrf_id);
+	if (!bgp)
+		return 0;
+
+	s = zclient->ibuf;
+	stream_get(&esi, s, sizeof(esi_t));
+	stream_get(&originator_ip, s, sizeof(struct ipaddr));
+
+	if (BGP_DEBUG(zebra, ZEBRA))
+		zlog_debug("Rx %s ESI %s originator-ip %s",
+			   (cmd == ZEBRA_LOCAL_ES_ADD) ? "add" : "del",
+			   esi_to_str(&esi, buf, sizeof(buf)),
+			   ipaddr2str(&originator_ip, buf1, sizeof(buf1)));
+
+	if (cmd == ZEBRA_LOCAL_ES_ADD)
+		bgp_evpn_local_es_add(bgp, &esi, &originator_ip);
+	else
+		bgp_evpn_local_es_del(bgp, &esi, &originator_ip);
+	return 0;
+}
+
 static int bgp_zebra_process_local_l3vni(int cmd, struct zclient *zclient,
 					 zebra_size_t length, vrf_id_t vrf_id)
 {
@@ -2484,6 +2518,8 @@ void bgp_zebra_init(struct thread_master *master)
 	zclient->nexthop_update = bgp_read_nexthop_update;
 	zclient->import_check_update = bgp_read_import_check_update;
 	zclient->fec_update = bgp_read_fec_update;
+	zclient->local_es_add = bgp_zebra_process_local_es;
+	zclient->local_es_del = bgp_zebra_process_local_es;
 	zclient->local_vni_add = bgp_zebra_process_local_vni;
 	zclient->local_vni_del = bgp_zebra_process_local_vni;
 	zclient->local_macip_add = bgp_zebra_process_local_macip;
