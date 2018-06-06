@@ -771,18 +771,21 @@ static void bgp_clear_star_soft_out(struct vty *vty, const char *name)
 #endif
 
 /* BGP global configuration.  */
-
-DEFUN (bgp_multiple_instance_func,
-       bgp_multiple_instance_cmd,
-       "bgp multiple-instance",
-       BGP_STR
-       "Enable bgp multiple instance\n")
+#if defined(VERSION_TYPE_DEV) && (CONFDATE > 20190601)
+CPP_NOTICE("bgpd: time to remove deprecated bgp multiple-instance")
+CPP_NOTICE("This includes BGP_OPT_MULTIPLE_INSTANCE")
+#endif
+DEFUN_HIDDEN (bgp_multiple_instance_func,
+	      bgp_multiple_instance_cmd,
+	      "bgp multiple-instance",
+	      BGP_STR
+	      "Enable bgp multiple instance\n")
 {
 	bgp_option_set(BGP_OPT_MULTIPLE_INSTANCE);
 	return CMD_SUCCESS;
 }
 
-DEFUN (no_bgp_multiple_instance,
+DEFUN_HIDDEN (no_bgp_multiple_instance,
        no_bgp_multiple_instance_cmd,
        "no bgp multiple-instance",
        NO_STR
@@ -791,6 +794,9 @@ DEFUN (no_bgp_multiple_instance,
 {
 	int ret;
 
+	vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+	vty_out(vty, "if you are using this please let the developers know\n");
+	zlog_warn("Deprecated option: `bgp multiple-instance` being used");
 	ret = bgp_option_unset(BGP_OPT_MULTIPLE_INSTANCE);
 	if (ret < 0) {
 		vty_out(vty, "%% There are more than two BGP instances\n");
@@ -799,31 +805,38 @@ DEFUN (no_bgp_multiple_instance,
 	return CMD_SUCCESS;
 }
 
-DEFUN (bgp_config_type,
-       bgp_config_type_cmd,
-       "bgp config-type <cisco|zebra>",
-       BGP_STR
-       "Configuration type\n"
-       "cisco\n"
-       "zebra\n")
+#if defined(VERSION_TYPE_DEV) && (CONFDATE > 20190601)
+CPP_NOTICE("bgpd: time to remove deprecated cli bgp config-type cisco")
+CPP_NOTICE("This includes BGP_OPT_CISCO_CONFIG")
+#endif
+DEFUN_HIDDEN (bgp_config_type,
+	      bgp_config_type_cmd,
+	      "bgp config-type <cisco|zebra>",
+	      BGP_STR
+	      "Configuration type\n"
+	      "cisco\n"
+	      "zebra\n")
 {
 	int idx = 0;
-	if (argv_find(argv, argc, "cisco", &idx))
+	if (argv_find(argv, argc, "cisco", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please let the developers know!\n");
+		zlog_warn("Deprecated option: `bgp config-type cisco` being used");
 		bgp_option_set(BGP_OPT_CONFIG_CISCO);
-	else
+	} else
 		bgp_option_unset(BGP_OPT_CONFIG_CISCO);
 
 	return CMD_SUCCESS;
 }
 
-DEFUN (no_bgp_config_type,
-       no_bgp_config_type_cmd,
-       "no bgp config-type [<cisco|zebra>]",
-       NO_STR
-       BGP_STR
-       "Display configuration type\n"
-       "cisco\n"
-       "zebra\n")
+DEFUN_HIDDEN (no_bgp_config_type,
+	      no_bgp_config_type_cmd,
+	      "no bgp config-type [<cisco|zebra>]",
+	      NO_STR
+	      BGP_STR
+	      "Display configuration type\n"
+	      "cisco\n"
+	      "zebra\n")
 {
 	bgp_option_unset(BGP_OPT_CONFIG_CISCO);
 	return CMD_SUCCESS;
@@ -4075,6 +4088,7 @@ DEFUN (neighbor_send_community,
        "Send Community attribute to this neighbor\n")
 {
 	int idx_peer = 1;
+
 	return peer_af_flag_set_vty(vty, argv[idx_peer]->arg, bgp_node_afi(vty),
 				    bgp_node_safi(vty),
 				    PEER_FLAG_SEND_COMMUNITY);
@@ -4094,6 +4108,7 @@ DEFUN (no_neighbor_send_community,
        "Send Community attribute to this neighbor\n")
 {
 	int idx_peer = 2;
+
 	return peer_af_flag_unset_vty(vty, argv[idx_peer]->arg,
 				      bgp_node_afi(vty), bgp_node_safi(vty),
 				      PEER_FLAG_SEND_COMMUNITY);
@@ -4117,27 +4132,26 @@ DEFUN (neighbor_send_community_type,
        "Send Standard Community attributes\n"
        "Send Large Community attributes\n")
 {
-	int idx = 0;
+	int idx_peer = 1;
 	uint32_t flag = 0;
+	const char *type = argv[argc - 1]->text;
 
-	char *peer = argv[1]->arg;
-
-	if (argv_find(argv, argc, "standard", &idx))
+	if (strmatch(type, "standard")) {
 		SET_FLAG(flag, PEER_FLAG_SEND_COMMUNITY);
-	else if (argv_find(argv, argc, "extended", &idx))
+	} else if (strmatch(type, "extended")) {
 		SET_FLAG(flag, PEER_FLAG_SEND_EXT_COMMUNITY);
-	else if (argv_find(argv, argc, "large", &idx))
+	} else if (strmatch(type, "large")) {
 		SET_FLAG(flag, PEER_FLAG_SEND_LARGE_COMMUNITY);
-	else if (argv_find(argv, argc, "both", &idx)) {
+	} else if (strmatch(type, "both")) {
 		SET_FLAG(flag, PEER_FLAG_SEND_COMMUNITY);
 		SET_FLAG(flag, PEER_FLAG_SEND_EXT_COMMUNITY);
-	} else {
+	} else { /* if (strmatch(type, "all")) */
 		SET_FLAG(flag, PEER_FLAG_SEND_COMMUNITY);
 		SET_FLAG(flag, PEER_FLAG_SEND_EXT_COMMUNITY);
 		SET_FLAG(flag, PEER_FLAG_SEND_LARGE_COMMUNITY);
 	}
 
-	return peer_af_flag_set_vty(vty, peer, bgp_node_afi(vty),
+	return peer_af_flag_set_vty(vty, argv[idx_peer]->arg, bgp_node_afi(vty),
 				    bgp_node_safi(vty), flag);
 }
 
@@ -4166,33 +4180,27 @@ DEFUN (no_neighbor_send_community_type,
        "Send Large Community attributes\n")
 {
 	int idx_peer = 2;
-
+	uint32_t flag = 0;
 	const char *type = argv[argc - 1]->text;
 
-	if (strmatch(type, "standard"))
-		return peer_af_flag_unset_vty(
-			vty, argv[idx_peer]->arg, bgp_node_afi(vty),
-			bgp_node_safi(vty), PEER_FLAG_SEND_COMMUNITY);
-	if (strmatch(type, "extended"))
-		return peer_af_flag_unset_vty(
-			vty, argv[idx_peer]->arg, bgp_node_afi(vty),
-			bgp_node_safi(vty), PEER_FLAG_SEND_EXT_COMMUNITY);
-	if (strmatch(type, "large"))
-		return peer_af_flag_unset_vty(
-			vty, argv[idx_peer]->arg, bgp_node_afi(vty),
-			bgp_node_safi(vty), PEER_FLAG_SEND_LARGE_COMMUNITY);
-	if (strmatch(type, "both"))
-		return peer_af_flag_unset_vty(
-			vty, argv[idx_peer]->arg, bgp_node_afi(vty),
-			bgp_node_safi(vty),
-			PEER_FLAG_SEND_COMMUNITY
-				| PEER_FLAG_SEND_EXT_COMMUNITY);
+	if (strmatch(type, "standard")) {
+		SET_FLAG(flag, PEER_FLAG_SEND_COMMUNITY);
+	} else if (strmatch(type, "extended")) {
+		SET_FLAG(flag, PEER_FLAG_SEND_EXT_COMMUNITY);
+	} else if (strmatch(type, "large")) {
+		SET_FLAG(flag, PEER_FLAG_SEND_LARGE_COMMUNITY);
+	} else if (strmatch(type, "both")) {
+		SET_FLAG(flag, PEER_FLAG_SEND_COMMUNITY);
+		SET_FLAG(flag, PEER_FLAG_SEND_EXT_COMMUNITY);
+	} else { /* if (strmatch(type, "all")) */
+		SET_FLAG(flag, PEER_FLAG_SEND_COMMUNITY);
+		SET_FLAG(flag, PEER_FLAG_SEND_EXT_COMMUNITY);
+		SET_FLAG(flag, PEER_FLAG_SEND_LARGE_COMMUNITY);
+	}
 
-	/* if (strmatch (type, "all")) */
-	return peer_af_flag_unset_vty(
-		vty, argv[idx_peer]->arg, bgp_node_afi(vty), bgp_node_safi(vty),
-		(PEER_FLAG_SEND_COMMUNITY | PEER_FLAG_SEND_EXT_COMMUNITY
-		 | PEER_FLAG_SEND_LARGE_COMMUNITY));
+	return peer_af_flag_unset_vty(vty, argv[idx_peer]->arg,
+				      bgp_node_afi(vty), bgp_node_safi(vty),
+				      flag);
 }
 
 ALIAS_HIDDEN(
@@ -5362,8 +5370,8 @@ static int peer_prefix_list_set_vty(struct vty *vty, const char *ip_str,
 				    const char *direct_str)
 {
 	int ret;
-	struct peer *peer;
 	int direct = FILTER_IN;
+	struct peer *peer;
 
 	peer = peer_and_group_lookup_vty(vty, ip_str);
 	if (!peer)

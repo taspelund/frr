@@ -51,9 +51,7 @@ BGP connection is internal one or external one.
 .. clicmd:: router bgp ASN
 
    Enable a BGP protocol process with the specified ASN. After
-   this statement you can input any `BGP Commands`. You can not
-   create different BGP process under different ASN without
-   specifying `multiple-instance` (:ref:`multiple-instance`).
+   this statement you can input any `BGP Commands`.
 
 .. index:: no router bgp ASN
 .. clicmd:: no router bgp ASN
@@ -1543,6 +1541,15 @@ BPGD supports multiple VRF instances via the *router bgp* command:
 VRFNAME is matched against VRFs configured in the kernel. When no *vrf VRFNAME*
 is specified, the BGP protocol process belongs to the default VRF.
 
+With VRF, you can isolate networking information. Having BGP VRF allows you to
+have several BGP instances on the same system process. This solution solves
+scalabiliy issues where the network administrator had previously to run separately
+several BGP processes on each namespace. Now, not only BGP VRF solves this, but
+also this method applies to both kind of VRFs backend: default VRF from Linux kernel
+or network namespaces. Also, having separate BGP instances does not imply that the
+AS number has to be different. For internal purposes, it is possible to do iBGP
+peering from two differents network namespaces.
+
 BGP routes may be leaked (i.e., copied) between a unicast VRF RIB and the VPN
 safi RIB of the default VRF (leaking is also permitted between the unicast RIB
 of the default VRF and VPN).  A shortcut syntax is also available for
@@ -1925,31 +1932,38 @@ Server or both at the same time.
 Multiple instance
 -----------------
 
-To enable multiple view function of *bgpd*, you must turn on multiple instance
-feature beforehand.
+The multiple instances feature of *bgpd* is by default turned on.  This command
+is deprecated and will be removed in a future version of FRR.  If you do not
+want multiple instances, do not configure them from the cli.  Please note
+that some commands auto-generate a second instance.
 
 .. index:: bgp multiple-instance
 .. clicmd:: bgp multiple-instance
 
-   Enable BGP multiple instance feature. After this feature is enabled,
-   you can make multiple BGP instances or multiple BGP views.
+   Enable BGP multiple instance feature. This is the default
+   configuration and this cli will not be displayed.  This command
+   is deprecated and will be removed in the future.
 
 .. index:: no bgp multiple-instance
 .. clicmd:: no bgp multiple-instance
 
    Disable BGP multiple instance feature. You can not disable this feature
-   when BGP multiple instances or views exist.
+   when BGP multiple instances or views exist.  This command
+   is deprecated and will be removed in the future.
 
 When you want to make configuration more Cisco like one,
 
 .. index:: bgp config-type cisco
 .. clicmd:: bgp config-type cisco
 
-   Cisco compatible BGP configuration output.
+   Cisco compatible BGP configuration output.  This command is deprecated
+   and will be removed in a future version of FRR.  Please transition
+   to using the appropriate bgp commands to affect your behavior.
 
 When bgp config-type cisco is specified,
 
-``no synchronization`` is displayed.
+``no synchronization`` is displayed.  This command does nothing and
+is for display purposes only.
 ``no auto-summary`` is displayed.
 
 The ``network`` and ``aggregate-address`` arguments are displayed as::
@@ -1990,7 +2004,8 @@ command.
 .. index:: bgp config-type zebra
 .. clicmd:: bgp config-type zebra
 
-   FRR style BGP configuration. This is default.
+   FRR style BGP configuration. This is default.  This command is deprecated
+   and will be removed in the future.
 
 .. _bgp-instance-and-view:
 
