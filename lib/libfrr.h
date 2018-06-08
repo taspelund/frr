@@ -118,7 +118,7 @@ extern void frr_early_fini(void);
 DECLARE_KOOH(frr_fini, (), ())
 extern void frr_fini(void);
 
-extern char config_default[256];
+extern char config_default[512];
 extern char frr_zclientpath[256];
 extern char config_default_int[256];
 extern const char frr_sysconfdir[];
