@@ -381,7 +381,7 @@ DEFPY (show_pbr,
 	show_pbr_cmd,
 	"show pbr",
 	SHOW_STR
-	"Policy Based Routing\n")
+	PBR_STR)
 {
 	pbr_nht_write_table_range(vty);
 	pbr_nht_write_rule_range(vty);
@@ -393,7 +393,7 @@ DEFPY (show_pbr_map,
 	show_pbr_map_cmd,
 	"show pbr map [NAME$name] [detail$detail]",
 	SHOW_STR
-	"Policy Based Routing\n"
+	PBR_STR
 	"PBR Map\n"
 	"PBR Map Name\n"
 	"Detailed information\n")
@@ -461,7 +461,7 @@ DEFPY(show_pbr_nexthop_group,
       show_pbr_nexthop_group_cmd,
       "show pbr nexthop-groups [WORD$word]",
       SHOW_STR
-      "Policy Based Routing\n"
+      PBR_STR
       "Nexthop Groups\n"
       "Optional Name of the nexthop group\n")
 {
@@ -474,7 +474,7 @@ DEFPY (show_pbr_interface,
 	show_pbr_interface_cmd,
 	"show pbr interface [NAME$name]",
 	SHOW_STR
-	"Policy Based Routing\n"
+	PBR_STR
 	"PBR Interface\n"
 	"PBR Interface Name\n")
 {
