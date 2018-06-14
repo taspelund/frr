@@ -35,6 +35,7 @@
 #include "privs.h"
 #include "network.h"
 #include "libfrr.h"
+#include "lib_errors.h"
 
 #include <arpa/telnet.h>
 #include <termios.h>
@@ -2302,8 +2303,9 @@ static void vty_read_file(FILE *confp)
 		nl = strchr(vty->error_buf, '\n');
 		if (nl)
 			*nl = '\0';
-		zlog_err("ERROR: %s on config line %u: %s",
-			 message, line_num, vty->error_buf);
+		zlog_ferr(LIB_ERR_VTY,
+			  "ERROR: %s on config line %u: %s", message, line_num,
+			  vty->error_buf);
 	}
 
 	vty_close(vty);
@@ -2397,8 +2399,9 @@ void vty_read_config(const char *config_file, char *config_default_dir)
 			if (confp)
 				zlog_warn("WARNING: using backup configuration file!");
 			else {
-				zlog_err("can't open configuration file [%s]",
-					config_file);
+				zlog_ferr(LIB_ERR_VTY,
+					  "can't open configuration file [%s]",
+					  config_file);
 				exit(1);
 			}
 		}
@@ -2441,8 +2444,9 @@ void vty_read_config(const char *config_file, char *config_default_dir)
 				zlog_warn("WARNING: using backup configuration file!");
 				fullpath = config_default_dir;
 			} else {
-				zlog_err("can't open configuration file [%s]",
-					config_default_dir);
+				zlog_ferr(LIB_ERR_VTY,
+					  "can't open configuration file [%s]",
+					  config_default_dir);
 				goto tmp_free_and_out;
 			}
 		} else
