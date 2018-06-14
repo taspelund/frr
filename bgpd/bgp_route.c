@@ -174,16 +174,31 @@ static struct bgp_info_extra *bgp_info_extra_new(void)
 
 static void bgp_info_extra_free(struct bgp_info_extra **extra)
 {
-	if (extra && *extra) {
-		if ((*extra)->damp_info)
-			bgp_damp_info_free((*extra)->damp_info, 0);
+	struct bgp_info_extra *e;
 
-		(*extra)->damp_info = NULL;
+	if (!extra || !*extra)
+		return;
 
-		XFREE(MTYPE_BGP_ROUTE_EXTRA, *extra);
+	e = *extra;
+	if (e->damp_info)
+		bgp_damp_info_free(e->damp_info, 0);
 
-		*extra = NULL;
+	e->damp_info = NULL;
+	if (e->parent) {
+		struct bgp_info *bi = (struct bgp_info *)e->parent;
+
+		if (bi->net)
+			bgp_unlock_node((struct bgp_node *)bi->net);
+		bi->net = NULL;
+		bgp_info_unlock(e->parent);
+		e->parent = NULL;
 	}
+
+	if (e->bgp_orig)
+		bgp_unlock(e->bgp_orig);
+	XFREE(MTYPE_BGP_ROUTE_EXTRA, *extra);
+
+	*extra = NULL;
 }
 
 /* Get bgp_info extra information for the given bgp_info, lazy allocated
@@ -205,22 +220,6 @@ struct bgp_info *bgp_info_new(void)
 /* Free bgp route information. */
 static void bgp_info_free(struct bgp_info *binfo)
 {
-	/* unlink reference to parent, if any. */
-	if (binfo->extra) {
-		if (binfo->extra->parent) {
-			bgp_unlock_node(
-				(struct bgp_node *)((struct bgp_info *)binfo
-							    ->extra->parent)
-					->net);
-			bgp_info_unlock(
-				(struct bgp_info *)binfo->extra->parent);
-			binfo->extra->parent = NULL;
-		}
-
-		if (binfo->extra->bgp_orig)
-			bgp_unlock(binfo->extra->bgp_orig);
-	}
-
 	if (binfo->attr)
 		bgp_attr_unintern(&binfo->attr);
 
@@ -6962,22 +6961,22 @@ void route_vty_out_tag(struct vty *vty, struct prefix *p,
 						inet_ntop(
 							AF_INET6,
 							&attr->mp_nexthop_global,
-							buf_a, BUFSIZ));
+							buf_a, sizeof(buf_a)));
 				else
 					vty_out(vty, "%s",
 						inet_ntop(
 							AF_INET6,
 							&attr->mp_nexthop_global,
-							buf_a, BUFSIZ));
+							buf_a, sizeof(buf_a)));
 			} else if (attr->mp_nexthop_len
 				   == BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL) {
 				if (json) {
 					inet_ntop(AF_INET6,
 						  &attr->mp_nexthop_global,
-						  buf_a, BUFSIZ);
+						  buf_a, sizeof(buf_a));
 					inet_ntop(AF_INET6,
 						  &attr->mp_nexthop_local,
-						  buf_b, BUFSIZ);
+						  buf_b, sizeof(buf_b));
 					sprintf(buf_c, "%s(%s)", buf_a, buf_b);
 					json_object_string_add(
 						json_out,
@@ -6987,11 +6986,11 @@ void route_vty_out_tag(struct vty *vty, struct prefix *p,
 						inet_ntop(
 							AF_INET6,
 							&attr->mp_nexthop_global,
-							buf_a, BUFSIZ),
+							buf_a, sizeof(buf_a)),
 						inet_ntop(
 							AF_INET6,
 							&attr->mp_nexthop_local,
-							buf_b, BUFSIZ));
+							buf_b, sizeof(buf_b)));
 			}
 		}
 	}

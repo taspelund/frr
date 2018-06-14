@@ -548,8 +548,10 @@ static int vtysh_execute_func(const char *line, int pager)
 				line = "end";
 				vline = cmd_make_strvec(line);
 
-				if (vline == NULL && vty->is_paged) {
-					vty_close_pager(vty);
+
+				if (vline == NULL) {
+					if (vty->is_paged)
+						vty_close_pager(vty);
 					return CMD_SUCCESS;
 				}
 
@@ -2644,7 +2646,10 @@ int vtysh_write_config_integrated(void)
 		vtysh_client_config(&vtysh_client[i], line);
 
 	vtysh_config_write();
+	vty->of_saved = vty->of;
+	vty->of = fp;
 	vtysh_config_dump();
+	vty->of = vty->of_saved;
 
 	if (fchmod(fd, CONFIGFILE_MASK) != 0) {
 		printf("%% Warning: can't chmod configuration file %s: %s\n",
