@@ -36,6 +36,7 @@
 #include "nexthop.h"
 #include "vrf.h"
 #include "mpls.h"
+#include "lib_errors.h"
 
 #include "zebra/zserv.h"
 #include "zebra/zebra_ns.h"
@@ -151,11 +152,13 @@ static int netlink_recvbuf(struct nlsock *nl, uint32_t newsize)
 
 	/* Try force option (linux >= 2.6.14) and fall back to normal set */
 	if (zserv_privs.change(ZPRIVS_RAISE))
-		zlog_err("routing_socket: Can't raise privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES,
+			  "routing_socket: Can't raise privileges");
 	ret = setsockopt(nl->sock, SOL_SOCKET, SO_RCVBUFFORCE, &nl_rcvbufsize,
 			 sizeof(nl_rcvbufsize));
 	if (zserv_privs.change(ZPRIVS_LOWER))
-		zlog_err("routing_socket: Can't lower privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES,
+			  "routing_socket: Can't lower privileges");
 	if (ret < 0)
 		ret = setsockopt(nl->sock, SOL_SOCKET, SO_RCVBUF,
 				 &nl_rcvbufsize, sizeof(nl_rcvbufsize));
@@ -188,7 +191,7 @@ static int netlink_socket(struct nlsock *nl, unsigned long groups,
 	int save_errno;
 
 	if (zserv_privs.change(ZPRIVS_RAISE)) {
-		zlog_err("Can't raise privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't raise privileges");
 		return -1;
 	}
 
@@ -207,7 +210,7 @@ static int netlink_socket(struct nlsock *nl, unsigned long groups,
 	ret = bind(sock, (struct sockaddr *)&snl, sizeof snl);
 	save_errno = errno;
 	if (zserv_privs.change(ZPRIVS_LOWER))
-		zlog_err("Can't lower privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't lower privileges");
 
 	if (ret < 0) {
 		zlog_err("Can't bind %s socket to group 0x%x: %s", nl->name,
@@ -709,11 +712,11 @@ int netlink_talk(int (*filter)(struct sockaddr_nl *, struct nlmsghdr *, ns_id_t,
 
 	/* Send message to netlink interface. */
 	if (zserv_privs.change(ZPRIVS_RAISE))
-		zlog_err("Can't raise privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't raise privileges");
 	status = sendmsg(nl->sock, &msg, 0);
 	save_errno = errno;
 	if (zserv_privs.change(ZPRIVS_LOWER))
-		zlog_err("Can't lower privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't lower privileges");
 
 	if (IS_ZEBRA_DEBUG_KERNEL_MSGDUMP_SEND) {
 		zlog_debug("%s: >> netlink message dump [sent]", __func__);
@@ -759,7 +762,7 @@ int netlink_request(struct nlsock *nl, struct nlmsghdr *n)
 
 	/* Raise capabilities and send message, then lower capabilities. */
 	if (zserv_privs.change(ZPRIVS_RAISE)) {
-		zlog_err("Can't raise privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't raise privileges");
 		return -1;
 	}
 
@@ -768,7 +771,7 @@ int netlink_request(struct nlsock *nl, struct nlmsghdr *n)
 	save_errno = errno;
 
 	if (zserv_privs.change(ZPRIVS_LOWER))
-		zlog_err("Can't lower privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't lower privileges");
 
 	if (ret < 0) {
 		zlog_err("%s sendto failed: %s", nl->name,

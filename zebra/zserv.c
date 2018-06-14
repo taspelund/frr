@@ -43,6 +43,7 @@
 #include "vrf.h"
 #include "libfrr.h"
 #include "sockopt.h"
+#include "lib_errors.h"
 
 #include "zebra/zserv.h"
 #include "zebra/zebra_ns.h"
@@ -3161,7 +3162,7 @@ void zebra_zserv_socket_init(char *path)
 	zserv_privs.change(ZPRIVS_LOWER);
 
 	if (sa.ss_family != AF_UNIX && zserv_privs.change(ZPRIVS_RAISE))
-		zlog_err("Can't raise privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't raise privileges");
 
 	ret = bind(sock, (struct sockaddr *)&sa, sa_len);
 	if (ret < 0) {
@@ -3173,7 +3174,7 @@ void zebra_zserv_socket_init(char *path)
 		return;
 	}
 	if (sa.ss_family != AF_UNIX && zserv_privs.change(ZPRIVS_LOWER))
-		zlog_err("Can't lower privileges");
+		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't lower privileges");
 
 	ret = listen(sock, 5);
 	if (ret < 0) {
