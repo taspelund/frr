@@ -5244,6 +5244,8 @@ int peer_password_set(struct peer *peer, const char *password)
 		XFREE(MTYPE_PEER_PASSWORD, peer->password);
 
 	peer->password = XSTRDUP(MTYPE_PEER_PASSWORD, password);
+	if (host.obfuscate)
+		caesar(false, peer->password, BGP_PASSWD_OBFUSCATION_KEY);
 
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->status))
@@ -5267,6 +5269,9 @@ int peer_password_set(struct peer *peer, const char *password)
 			XFREE(MTYPE_PEER_PASSWORD, peer->password);
 
 		peer->password = XSTRDUP(MTYPE_PEER_PASSWORD, password);
+		if (host.obfuscate)
+			caesar(false, peer->password,
+			       BGP_PASSWD_OBFUSCATION_KEY);
 
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->status))
 			bgp_notify_send(peer, BGP_NOTIFY_CEASE,
@@ -6671,8 +6676,14 @@ static void bgp_config_write_peer_global(struct vty *vty, struct bgp *bgp,
 	if (peer->password) {
 		if (!peer_group_active(peer) || !g_peer->password
 		    || strcmp(peer->password, g_peer->password) != 0) {
+			if (host.obfuscate)
+				caesar(true, peer->password,
+				       BGP_PASSWD_OBFUSCATION_KEY);
 			vty_out(vty, " neighbor %s password %s\n", addr,
 				peer->password);
+			if (host.obfuscate)
+				caesar(false, peer->password,
+				       BGP_PASSWD_OBFUSCATION_KEY);
 		}
 	}
 
