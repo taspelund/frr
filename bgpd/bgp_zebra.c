@@ -44,6 +44,7 @@
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_fsm.h"
 #include "bgpd/bgp_debug.h"
+#include "bgpd/bgp_errors.h"
 #include "bgpd/bgp_mpath.h"
 #include "bgpd/bgp_nexthop.h"
 #include "bgpd/bgp_nht.h"
@@ -1950,9 +1951,10 @@ static int bgp_zebra_process_local_macip(int command, struct zclient *zclient,
 	ipa_len = stream_getl(s);
 	if (ipa_len != 0 && ipa_len != IPV4_MAX_BYTELEN
 	    && ipa_len != IPV6_MAX_BYTELEN) {
-		zlog_err("%u:Recv MACIP %s with invalid IP addr length %d",
-			 vrf_id, (command == ZEBRA_MACIP_ADD) ? "Add" : "Del",
-			 ipa_len);
+		zlog_ferr(BGP_ERR_MACIP_LEN,
+			  "%u:Recv MACIP %s with invalid IP addr length %d",
+			  vrf_id, (command == ZEBRA_MACIP_ADD) ? "Add" : "Del",
+			  ipa_len);
 		return -1;
 	}
 
