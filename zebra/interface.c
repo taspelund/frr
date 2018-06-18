@@ -880,6 +880,7 @@ void if_up(struct interface *ifp)
 {
 	struct zebra_if *zif;
 	struct interface *link_if;
+	struct zebra_vrf *zvrf = vrf_info_lookup(ifp->vrf_id);
 
 	zif = ifp->info;
 	zif->up_count++;
@@ -906,6 +907,12 @@ void if_up(struct interface *ifp)
 
 	/* Install connected routes to the kernel. */
 	if_install_connected(ifp);
+
+	/* Install any static routes using this vrf interface */
+	if (IS_ZEBRA_IF_VRF(ifp)) {
+		static_fixup_vrf_ids(zvrf);
+		static_config_install_delayed_routes(zvrf);
+	}
 
 	if (IS_ZEBRA_DEBUG_RIB_DETAILED)
 		zlog_debug("%u: IF %s up, scheduling RIB processing",
