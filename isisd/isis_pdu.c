@@ -34,6 +34,7 @@
 #include "if.h"
 #include "checksum.h"
 #include "md5.h"
+#include "lib_errors.h"
 
 #include "isisd/dict.h"
 #include "isisd/isis_constants.h"
@@ -1359,7 +1360,8 @@ static int isis_handle_pdu(struct isis_circuit *circuit, u_char *ssnpa)
 	uint8_t max_area_addrs = stream_getc(circuit->rcv_stream);
 
 	if (idrp == ISO9542_ESIS) {
-		zlog_err("No support for ES-IS packet IDRP=%" PRIx8, idrp);
+		zlog_ferr(LIB_ERR_DEVELOPMENT,
+			  "No support for ES-IS packet IDRP=%" PRIx8, idrp);
 		return ISIS_ERROR;
 	}
 
