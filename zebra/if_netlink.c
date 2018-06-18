@@ -79,9 +79,9 @@ static void set_ifindex(struct interface *ifp, ifindex_t ifi_index,
 	if (((oifp = if_lookup_by_index_per_ns(zns, ifi_index)) != NULL)
 	    && (oifp != ifp)) {
 		if (ifi_index == IFINDEX_INTERNAL)
-			zlog_err(
-				"Netlink is setting interface %s ifindex to reserved "
-				"internal value %u",
+			zlog_ferr(
+				LIB_ERR_INTERFACE,
+				"Netlink is setting interface %s ifindex to reserved internal value %u",
 				ifp->name, ifi_index);
 		else {
 			if (IS_ZEBRA_DEBUG_KERNEL)
@@ -89,9 +89,9 @@ static void set_ifindex(struct interface *ifp, ifindex_t ifi_index,
 					"interface index %d was renamed from %s to %s",
 					ifi_index, oifp->name, ifp->name);
 			if (if_is_up(oifp))
-				zlog_err(
-					"interface rename detected on up interface: index %d "
-					"was renamed from %s to %s, results are uncertain!",
+				zlog_ferr(
+					LIB_ERR_INTERFACE,
+					"interface rename detected on up interface: index %d was renamed from %s to %s, results are uncertain!",
 					ifi_index, oifp->name, ifp->name);
 			if_delete_update(oifp);
 		}
@@ -309,8 +309,8 @@ static void netlink_vrf_change(struct nlmsghdr *h, struct rtattr *tb,
 		vrf = vrf_get((vrf_id_t)ifi->ifi_index,
 			      name); // It would create vrf
 		if (!vrf) {
-			zlog_err("VRF %s id %u not created", name,
-				 ifi->ifi_index);
+			zlog_ferr(LIB_ERR_INTERFACE, "VRF %s id %u not created",
+				  name, ifi->ifi_index);
 			return;
 		}
 
@@ -331,8 +331,9 @@ static void netlink_vrf_change(struct nlmsghdr *h, struct rtattr *tb,
 
 		/* Enable the created VRF. */
 		if (!vrf_enable(vrf)) {
-			zlog_err("Failed to enable VRF %s id %u", name,
-				 ifi->ifi_index);
+			zlog_ferr(LIB_ERR_INTERFACE,
+				  "Failed to enable VRF %s id %u", name,
+				  ifi->ifi_index);
 			return;
 		}
 
@@ -905,7 +906,8 @@ int netlink_interface_addr(struct sockaddr_nl *snl, struct nlmsghdr *h,
 
 	ifp = if_lookup_by_index_per_ns(zns, ifa->ifa_index);
 	if (ifp == NULL) {
-		zlog_err(
+		zlog_ferr(
+			LIB_ERR_INTERFACE,
 			"netlink_interface_addr can't find interface by index %d",
 			ifa->ifa_index);
 		return -1;
