@@ -455,10 +455,10 @@ in one shot. */
 	while (written > 0) {
 		struct buffer_data *d;
 		if (!(d = b->head)) {
-			zlog_err(
-				"%s: corruption detected: buffer queue empty, "
-				"but written is %lu",
-				__func__, (u_long)written);
+			zlog_ferr(
+				LIB_ERR_DEVELOPMENT,
+				"%s: corruption detected: buffer queue empty, but written is %lu",
+				__func__, (unsigned long)written);
 			break;
 		}
 		if (written < d->cp - d->sp) {

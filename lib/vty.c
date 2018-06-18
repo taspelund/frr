@@ -1245,10 +1245,10 @@ static int vty_telnet_option(struct vty *vty, unsigned char *buf, int nbytes)
 					TELNET_NAWS_SB_LEN,
 					(u_long)vty->sb_len);
 			else if (sizeof(vty->sb_buf) < TELNET_NAWS_SB_LEN)
-				zlog_err(
-					"Bug detected: sizeof(vty->sb_buf) %lu < %d, "
-					"too small to handle the telnet NAWS option",
-					(u_long)sizeof(vty->sb_buf),
+				zlog_ferr(
+					LIB_ERR_DEVELOPMENT,
+					"Bug detected: sizeof(vty->sb_buf) %lu < %d, too small to handle the telnet NAWS option",
+					(unsigned long)sizeof(vty->sb_buf),
 					TELNET_NAWS_SB_LEN);
 			else {
 				vty->width = ((vty->sb_buf[1] << 8)
