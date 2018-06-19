@@ -816,7 +816,7 @@ int vtysh_mark_file(const char *filename)
 			vty_out(vty, "%s", vty->buf);
 			break;
 		case CMD_SUCCESS_DAEMON: {
-			int cmd_stat = CMD_SUCCESS;
+			int cmd_stat;
 
 			vty_out(vty, "%s", vty->buf);
 			cmd_stat = vtysh_client_execute(&vtysh_client[0],
@@ -2136,6 +2136,28 @@ DEFUNSH(VTYSH_INTERFACE, vtysh_quit_interface, vtysh_quit_interface_cmd, "quit",
 	return vtysh_exit_interface(self, vty, argc, argv);
 }
 
+DEFUN (vtysh_show_poll,
+       vtysh_show_poll_cmd,
+       "show thread poll",
+       SHOW_STR
+       "Thread information\n"
+       "Thread Poll Information\n")
+{
+	unsigned int i;
+	int ret = CMD_SUCCESS;
+	char line[100];
+
+	snprintf(line, sizeof(line), "do show thread poll\n");
+	for (i = 0; i < array_size(vtysh_client); i++)
+		if (vtysh_client[i].fd >= 0) {
+			vty_out(vty, "Thread statistics for %s:\n",
+				vtysh_client[i].name);
+			ret = vtysh_client_execute(&vtysh_client[i], line);
+			vty_out(vty, "\n");
+		}
+	return ret;
+}
+
 DEFUN (vtysh_show_thread,
        vtysh_show_thread_cmd,
        "show thread cpu [FILTER]",
@@ -2623,8 +2645,12 @@ int vtysh_write_config_integrated(void)
 	char line[] = "do write terminal\n";
 	FILE *fp;
 	int fd;
+#ifdef FRR_USER
 	struct passwd *pwentry;
+#endif
+#ifdef FRR_GROUP
 	struct group *grentry;
+#endif
 	uid_t uid = -1;
 	gid_t gid = -1;
 	struct stat st;
@@ -3720,6 +3746,7 @@ void vtysh_init_vty(void)
 	install_element(VIEW_NODE, &vtysh_show_work_queues_cmd);
 	install_element(VIEW_NODE, &vtysh_show_work_queues_daemon_cmd);
 	install_element(VIEW_NODE, &vtysh_show_thread_cmd);
+	install_element(VIEW_NODE, &vtysh_show_poll_cmd);
 
 	/* Logging */
 	install_element(VIEW_NODE, &vtysh_show_logging_cmd);
