@@ -120,7 +120,7 @@ extern void frr_fini(void);
 
 extern char config_default[512];
 extern char frr_zclientpath[256];
-extern char config_default_int[256];
+extern char config_default_int[512];
 extern const char frr_sysconfdir[];
 extern const char frr_vtydir[];
 extern const char frr_moduledir[];
