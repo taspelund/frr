@@ -4212,11 +4212,6 @@ int bgp_evpn_local_macip_del(struct bgp *bgp, vni_t vni, struct ethaddr *mac,
 	struct bgpevpn *vpn;
 	struct prefix_evpn p;
 
-	if (!bgp->vnihash) {
-		zlog_err("%u: VNI hash not created", bgp->vrf_id);
-		return -1;
-	}
-
 	/* Lookup VNI hash - should exist. */
 	vpn = bgp_evpn_lookup_vni(bgp, vni);
 	if (!vpn || !is_vni_live(vpn)) {
@@ -4240,11 +4235,6 @@ int bgp_evpn_local_macip_add(struct bgp *bgp, vni_t vni, struct ethaddr *mac,
 {
 	struct bgpevpn *vpn;
 	struct prefix_evpn p;
-
-	if (!bgp->vnihash) {
-		zlog_err("%u: VNI hash not created", bgp->vrf_id);
-		return -1;
-	}
 
 	/* Lookup VNI hash - should exist. */
 	vpn = bgp_evpn_lookup_vni(bgp, vni);
@@ -4459,11 +4449,6 @@ int bgp_evpn_local_vni_del(struct bgp *bgp, vni_t vni)
 {
 	struct bgpevpn *vpn;
 
-	if (!bgp->vnihash) {
-		zlog_err("%u: VNI hash not created", bgp->vrf_id);
-		return -1;
-	}
-
 	/* Locate VNI hash */
 	vpn = bgp_evpn_lookup_vni(bgp, vni);
 	if (!vpn) {
@@ -4501,11 +4486,6 @@ int bgp_evpn_local_vni_add(struct bgp *bgp, vni_t vni,
 {
 	struct bgpevpn *vpn;
 	struct prefix_evpn p;
-
-	if (!bgp->vnihash) {
-		zlog_err("%u: VNI hash not created", bgp->vrf_id);
-		return -1;
-	}
 
 	/* Lookup VNI. If present and no change, exit. */
 	vpn = bgp_evpn_lookup_vni(bgp, vni);

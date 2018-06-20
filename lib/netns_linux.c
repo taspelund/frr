@@ -428,8 +428,9 @@ void ns_init(void)
 	default_ns = NULL;
 #endif /* HAVE_NETNS */
 	if (ns_default_ns_fd == -1)
-		zlog_err("NS initialisation failure (%s)",
-			 safe_strerror(errno));
+		zlog_ferr(LIB_ERR_NS,
+			  "NS initialisation failure (%s)",
+			  safe_strerror(errno));
 	ns_current_ns_fd = -1;
 	ns_initialised = 1;
 }

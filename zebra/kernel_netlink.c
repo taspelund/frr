@@ -245,7 +245,7 @@ static int netlink_information_fetch(struct sockaddr_nl *snl,
 {
 	/* JF: Ignore messages that aren't from the kernel */
 	if (snl->nl_pid != 0) {
-		zlog_err("Ignoring message from pid %u", snl->nl_pid);
+		zlog_debug("Ignoring message from pid %u", snl->nl_pid);
 		return 0;
 	}
 
