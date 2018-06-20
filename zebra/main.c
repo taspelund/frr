@@ -374,6 +374,9 @@ int main(int argc, char **argv)
 	/* Init label manager */
 	label_manager_init(lblmgr_path);
 
+	/* Error init */
+	zebra_error_init();
+
 	frr_run(zebrad.master);
 
 	/* Not reached... */
