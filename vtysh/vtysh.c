@@ -44,7 +44,6 @@
 #include "vrf.h"
 #include "libfrr.h"
 #include "command_graph.h"
-#include "frrstr.h"
 #include "json.h"
 
 DEFINE_MTYPE_STATIC(MVTYSH, VTYSH_CMD, "Vtysh cmd copy")
