@@ -414,14 +414,19 @@ leak_update(
 		/* No nexthop tracking for redistributed routes */
 		if (source_bi->sub_type == BGP_ROUTE_REDISTRIBUTE)
 			nh_valid = 1;
-		else
+		else {
+			struct bgp_info *bi_to_send = bi;
+
+			if (bi->extra && bi->extra->parent)
+				bi_to_send = bi->extra->parent;
 			/*
 			 * TBD do we need to do anything about the
 			 * 'connected' parameter?
 			 */
 			nh_valid = bgp_find_or_add_nexthop(
 						bgp, bgp_nexthop,
-						afi, bi, NULL, 0);
+						afi, bi_to_send, NULL, 0);
+		}
 
 		if (debug)
 			zlog_debug("%s: nexthop is %svalid (in vrf %s)",
