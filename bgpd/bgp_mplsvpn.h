@@ -152,6 +152,10 @@ static inline void vpn_leak_prechange(vpn_policy_direction_t direction,
 				      afi_t afi, struct bgp *bgp_vpn,
 				      struct bgp *bgp_vrf)
 {
+	/* Detect when default bgp instance is not (yet) defined by config */
+	if (!bgp_vpn)
+		return;
+
 	if ((direction == BGP_VPN_POLICY_DIR_FROMVPN) &&
 		vpn_leak_from_vpn_active(bgp_vrf, afi, NULL)) {
 
@@ -168,6 +172,10 @@ static inline void vpn_leak_postchange(vpn_policy_direction_t direction,
 				       afi_t afi, struct bgp *bgp_vpn,
 				       struct bgp *bgp_vrf)
 {
+	/* Detect when default bgp instance is not (yet) defined by config */
+	if (!bgp_vpn)
+		return;
+
 	if (direction == BGP_VPN_POLICY_DIR_FROMVPN)
 		vpn_leak_to_vrf_update_all(bgp_vrf, bgp_vpn, afi);
 	if (direction == BGP_VPN_POLICY_DIR_TOVPN) {
@@ -183,5 +191,7 @@ static inline void vpn_leak_postchange(vpn_policy_direction_t direction,
 }
 
 extern void vpn_policy_routemap_event(const char *rmap_name);
+
+extern void vpn_leak_postchange_all(void);
 
 #endif /* _QUAGGA_BGP_MPLSVPN_H */
