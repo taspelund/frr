@@ -34,6 +34,7 @@
 #include "hash.h"
 #include "queue.h"
 #include "filter.h"
+#include "frrstr.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_advertise.h"
@@ -2008,27 +2009,19 @@ DEFUN (no_bgp_fast_external_failover,
 CPP_NOTICE("bgpd: remove deprecated '[no] bgp enforce-first-as' commands")
 #endif
 
-DEFUN_DEPRECATED (bgp_enforce_first_as,
-       bgp_enforce_first_as_cmd,
-       "bgp enforce-first-as",
-       BGP_STR
-       "Enforce the first AS for EBGP routes\n")
+DEFUN_HIDDEN (bgp_enforce_first_as,
+	      bgp_enforce_first_as_cmd,
+	      "[no] bgp enforce-first-as",
+	      NO_STR
+	      BGP_STR
+	      "Enforce the first AS for EBGP routes\n")
 {
 	VTY_DECLVAR_CONTEXT(bgp, bgp);
-	bgp_flag_set(bgp, BGP_FLAG_ENFORCE_FIRST_AS);
 
-	return CMD_SUCCESS;
-}
-
-DEFUN_DEPRECATED (no_bgp_enforce_first_as,
-       no_bgp_enforce_first_as_cmd,
-       "no bgp enforce-first-as",
-       NO_STR
-       BGP_STR
-       "Enforce the first AS for EBGP routes\n")
-{
-	VTY_DECLVAR_CONTEXT(bgp, bgp);
-	bgp_flag_unset(bgp, BGP_FLAG_ENFORCE_FIRST_AS);
+	if (strmatch(argv[0]->text, "no"))
+		bgp_flag_unset(bgp, BGP_FLAG_ENFORCE_FIRST_AS);
+	else
+		bgp_flag_set(bgp, BGP_FLAG_ENFORCE_FIRST_AS);
 
 	return CMD_SUCCESS;
 }
@@ -6746,6 +6739,11 @@ DEFPY (bgp_imexport_vrf,
 	safi_t safi;
 	afi_t afi;
 
+	if (import_name == NULL) {
+		vty_out(vty, "%% Missing import name\n");
+		return CMD_WARNING;
+	}
+
 	if (argv_find(argv, argc, "no", &idx))
 		remove = true;
 
@@ -7076,7 +7074,7 @@ static int bgp_clear_prefix(struct vty *vty, const char *view_name,
 				    != NULL) {
 					if (rm->p.prefixlen
 					    == match.prefixlen) {
-						SET_FLAG(rn->flags,
+						SET_FLAG(rm->flags,
 							 BGP_NODE_USER_CLEAR);
 						bgp_process(bgp, rm, afi, safi);
 					}
@@ -7939,6 +7937,11 @@ static int bgp_show_summary(struct vty *vty, struct bgp *bgp, int afi, int safi,
 			if (CHECK_FLAG(peer->flags, PEER_FLAG_SHUTDOWN))
 				json_object_string_add(json_peer, "state",
 						       "Idle (Admin)");
+			else if (peer->afc_recv[afi][safi])
+				json_object_string_add(
+					json_peer, "state",
+					lookup_msg(bgp_status_msg, peer->status,
+						   NULL));
 			else if (CHECK_FLAG(peer->sflags,
 					    PEER_STATUS_PREFIX_OVERFLOW))
 				json_object_string_add(json_peer, "state",
@@ -11410,7 +11413,6 @@ DEFUN (show_ip_bgp_peer_groups,
        "Peer group name\n")
 {
 	char *vrf, *pg;
-	vrf = pg = NULL;
 	int idx = 0;
 
 	vrf = argv_find(argv, argc, "VIEWVRFNAME", &idx) ? argv[idx]->arg
@@ -12441,7 +12443,6 @@ void bgp_vty_init(void)
 
 	/* "bgp enforce-first-as" commands */
 	install_element(BGP_NODE, &bgp_enforce_first_as_cmd);
-	install_element(BGP_NODE, &no_bgp_enforce_first_as_cmd);
 
 	/* "bgp bestpath compare-routerid" commands */
 	install_element(BGP_NODE, &bgp_bestpath_compare_router_id_cmd);

@@ -198,7 +198,7 @@ static int zserv_write(struct thread *thread)
 {
 	struct zserv *client = THREAD_ARG(thread);
 	struct stream *msg;
-	uint32_t wcmd;
+	uint32_t wcmd = 0;
 	struct stream_fifo *cache;
 
 	/* If we have any data pending, try to flush it first */
@@ -618,14 +618,6 @@ static int zserv_handle_client_close(struct thread *thread)
 {
 	struct zserv *client = THREAD_ARG(thread);
 
-	/*
-	 * Ensure these have been nulled. This does not equate to the
-	 * associated task(s) being scheduled or unscheduled on the client
-	 * pthread's threadmaster.
-	 */
-	assert(!client->t_read);
-	assert(!client->t_write);
-
 	/* synchronously stop thread */
 	frr_pthread_stop(client->pthread, NULL);
 
@@ -939,6 +931,11 @@ static void zebra_show_client_detail(struct vty *vty, struct zserv *client)
 	vty_out(vty, "MAC-IP add notifications: %d\n", client->macipadd_cnt);
 	vty_out(vty, "MAC-IP delete notifications: %d\n", client->macipdel_cnt);
 
+#if defined DEV_BUILD
+	vty_out(vty, "Input Fifo: %zu:%zu Output Fifo: %zu:%zu\n",
+		client->ibuf_fifo->count, client->ibuf_fifo->max_count,
+		client->obuf_fifo->count, client->obuf_fifo->max_count);
+#endif
 	vty_out(vty, "\n");
 	return;
 }

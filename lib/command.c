@@ -261,8 +261,11 @@ void print_version(const char *progname)
 
 char *argv_concat(struct cmd_token **argv, int argc, int shift)
 {
-	int cnt = argc - shift;
-	const char *argstr[cnt];
+	int cnt = MAX(argc - shift, 0);
+	const char *argstr[cnt + 1];
+
+	if (!cnt)
+		return NULL;
 
 	for (int i = 0; i < cnt; i++)
 		argstr[i] = argv[i + shift]->arg;
@@ -513,13 +516,6 @@ static int config_write_host(struct vty *vty)
 			if (host.enable)
 				vty_out(vty, "enable password %s\n",
 					host.enable);
-		}
-
-		if (zlog_default->default_lvl != LOG_DEBUG) {
-			vty_out(vty,
-				"! N.B. The 'log trap' command is deprecated.\n");
-			vty_out(vty, "log trap %s\n",
-				zlog_priority[zlog_default->default_lvl]);
 		}
 
 		if (host.logfile
@@ -2429,7 +2425,8 @@ static int set_log_file(struct vty *vty, const char *fname, int loglevel)
 		XFREE(MTYPE_TMP, p);
 
 	if (!ret) {
-		vty_out(vty, "can't open logfile %s\n", fname);
+		if (vty)
+			vty_out(vty, "can't open logfile %s\n", fname);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
@@ -2443,6 +2440,39 @@ static int set_log_file(struct vty *vty, const char *fname, int loglevel)
 		zlog_set_level(ZLOG_DEST_SYSLOG, ZLOG_DISABLED);
 #endif
 	return CMD_SUCCESS;
+}
+
+void command_setup_early_logging(const char *dest, const char *level)
+{
+	char *token;
+
+	if (level) {
+		int nlevel = level_match(level);
+
+		if (nlevel != ZLOG_DISABLED)
+			zlog_default->default_lvl = nlevel;
+	}
+
+	if (!dest)
+		return;
+
+	if (strcmp(dest, "stdout") == 0) {
+		zlog_set_level(ZLOG_DEST_STDOUT, zlog_default->default_lvl);
+		return;
+	}
+
+	if (strcmp(dest, "syslog") == 0) {
+		zlog_set_level(ZLOG_DEST_SYSLOG, zlog_default->default_lvl);
+		return;
+	}
+
+	token = strstr(dest, ":");
+	if (token == NULL)
+		return;
+
+	token++;
+
+	set_log_file(NULL, token, zlog_default->default_lvl);
 }
 
 DEFUN (config_log_file,
@@ -2549,36 +2579,6 @@ DEFUN (no_config_log_facility,
        LOG_FACILITY_DESC)
 {
 	zlog_default->facility = LOG_DAEMON;
-	return CMD_SUCCESS;
-}
-
-DEFUN_DEPRECATED(
-	config_log_trap, config_log_trap_cmd,
-	"log trap <emergencies|alerts|critical|errors|warnings|notifications|informational|debugging>",
-	"Logging control\n"
-	"(Deprecated) Set logging level and default for all destinations\n" LOG_LEVEL_DESC)
-{
-	int new_level;
-	int i;
-
-	if ((new_level = level_match(argv[2]->arg)) == ZLOG_DISABLED)
-		return CMD_ERR_NO_MATCH;
-
-	zlog_default->default_lvl = new_level;
-	for (i = 0; i < ZLOG_NUM_DESTS; i++)
-		if (zlog_default->maxlvl[i] != ZLOG_DISABLED)
-			zlog_default->maxlvl[i] = new_level;
-	return CMD_SUCCESS;
-}
-
-DEFUN_DEPRECATED(
-	no_config_log_trap, no_config_log_trap_cmd,
-	"no log trap [emergencies|alerts|critical|errors|warnings|notifications|informational|debugging]",
-	NO_STR
-	"Logging control\n"
-	"Permit all logging information\n" LOG_LEVEL_DESC)
-{
-	zlog_default->default_lvl = LOG_DEBUG;
 	return CMD_SUCCESS;
 }
 
@@ -2871,8 +2871,6 @@ void cmd_init(int terminal)
 		install_element(CONFIG_NODE, &no_config_log_syslog_cmd);
 		install_element(CONFIG_NODE, &config_log_facility_cmd);
 		install_element(CONFIG_NODE, &no_config_log_facility_cmd);
-		install_element(CONFIG_NODE, &config_log_trap_cmd);
-		install_element(CONFIG_NODE, &no_config_log_trap_cmd);
 		install_element(CONFIG_NODE, &config_log_record_priority_cmd);
 		install_element(CONFIG_NODE,
 				&no_config_log_record_priority_cmd);

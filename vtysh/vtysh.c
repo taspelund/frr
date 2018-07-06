@@ -2415,10 +2415,11 @@ DEFUNSH(VTYSH_ALL, vtysh_log_syslog, vtysh_log_syslog_cmd,
 }
 
 DEFUNSH(VTYSH_ALL, no_vtysh_log_syslog, no_vtysh_log_syslog_cmd,
-	"no log syslog [LEVEL]", NO_STR
+	"no log syslog [<emergencies|alerts|critical|errors|warnings|notifications|informational|debugging>]",
+	NO_STR
 	"Logging control\n"
 	"Cancel logging to syslog\n"
-	"Logging level\n")
+	LOG_LEVEL_DESC)
 {
 	return CMD_SUCCESS;
 }
@@ -2436,24 +2437,6 @@ DEFUNSH(VTYSH_ALL, no_vtysh_log_facility, no_vtysh_log_facility_cmd,
 	"Logging control\n"
 	"Reset syslog facility to default (daemon)\n"
 	"Syslog facility\n")
-{
-	return CMD_SUCCESS;
-}
-
-DEFUNSH_DEPRECATED(
-	VTYSH_ALL, vtysh_log_trap, vtysh_log_trap_cmd,
-	"log trap <emergencies|alerts|critical|errors|warnings|notifications|informational|debugging>",
-	"Logging control\n"
-	"(Deprecated) Set logging level and default for all destinations\n" LOG_LEVEL_DESC)
-{
-	return CMD_SUCCESS;
-}
-
-DEFUNSH_DEPRECATED(VTYSH_ALL, no_vtysh_log_trap, no_vtysh_log_trap_cmd,
-		   "no log trap [LEVEL]", NO_STR
-		   "Logging control\n"
-		   "Permit all logging information\n"
-		   "Logging level\n")
 {
 	return CMD_SUCCESS;
 }
@@ -2634,8 +2617,13 @@ static void backup_config_file(const char *fbackup)
 	strcat(integrate_sav, CONF_BACKUP_EXT);
 
 	/* Move current configuration file to backup config file. */
-	unlink(integrate_sav);
-	rename(fbackup, integrate_sav);
+	if (unlink(integrate_sav) != 0) {
+		vty_out(vty, "Warning: %s unlink failed\n", integrate_sav);
+	}
+	if (rename(fbackup, integrate_sav) != 0) {
+		vty_out(vty, "Error renaming %s to %s\n", fbackup,
+			integrate_sav);
+	}
 	free(integrate_sav);
 }
 
@@ -3369,9 +3357,12 @@ static void vtysh_autocomplete(vector comps, struct cmd_token *token)
 	snprintf(accmd, sizeof(accmd), "autocomplete %d %s %s", token->type,
 		 token->text, token->varname ? token->varname : "-");
 
+	vty->of_saved = vty->of;
+	vty->of = NULL;
 	for (i = 0; i < array_size(vtysh_client); i++)
 		vtysh_client_run_all(&vtysh_client[i], accmd, 1, vtysh_ac_line,
 				     comps);
+	vty->of = vty->of_saved;
 }
 
 static const struct cmd_variable_handler vtysh_var_handler[] = {
@@ -3760,8 +3751,6 @@ void vtysh_init_vty(void)
 	install_element(CONFIG_NODE, &no_vtysh_log_monitor_cmd);
 	install_element(CONFIG_NODE, &vtysh_log_syslog_cmd);
 	install_element(CONFIG_NODE, &no_vtysh_log_syslog_cmd);
-	install_element(CONFIG_NODE, &vtysh_log_trap_cmd);
-	install_element(CONFIG_NODE, &no_vtysh_log_trap_cmd);
 	install_element(CONFIG_NODE, &vtysh_log_facility_cmd);
 	install_element(CONFIG_NODE, &no_vtysh_log_facility_cmd);
 	install_element(CONFIG_NODE, &vtysh_log_record_priority_cmd);

@@ -1426,7 +1426,8 @@ DEFUN (vnc_export_nvegroup,
 	if (rfg_new == NULL) {
 		rfg_new = bgp_rfapi_cfg_match_byname(bgp, argv[5]->arg,
 						     RFAPI_GROUP_CFG_VRF);
-		vnc_add_vrf_opener(bgp, rfg_new);
+		if (rfg_new)
+			vnc_add_vrf_opener(bgp, rfg_new);
 	}
 
 	if (rfg_new == NULL) {
@@ -4518,7 +4519,7 @@ void bgp_rfapi_show_summary(struct bgp *bgp, struct vty *vty)
 	if (VNC_EXPORT_ZEBRA_GRP_ENABLED(hc)) {
 		redist++;
 		vty_out(vty, "%sToZebra Groups={", (redist == 1 ? "" : " "));
-		if (hc->rfg_export_direct_bgp_l) {
+		if (hc->rfg_export_zebra_l) {
 			int cnt = 0;
 			struct listnode *node, *nnode;
 			struct rfapi_rfg_name *rfgn;

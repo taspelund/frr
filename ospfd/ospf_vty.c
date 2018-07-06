@@ -2412,8 +2412,8 @@ DEFUN (ospf_neighbor_poll_interval,
 	int idx_poll = 3;
 	int idx_pri = 5;
 	struct in_addr nbr_addr;
-	unsigned int priority = OSPF_NEIGHBOR_PRIORITY_DEFAULT;
-	unsigned int interval = OSPF_POLL_INTERVAL_DEFAULT;
+	unsigned int priority;
+	unsigned int interval;
 
 	if (!inet_aton(argv[idx_ipv4]->arg, &nbr_addr)) {
 		vty_out(vty, "Please specify Neighbor ID by A.B.C.D\n");
@@ -2422,8 +2422,8 @@ DEFUN (ospf_neighbor_poll_interval,
 
 	interval = strtoul(argv[idx_poll]->arg, NULL, 10);
 
-	if (argc > 4)
-		priority = strtoul(argv[idx_pri]->arg, NULL, 10);
+	priority = argc > 4 ? strtoul(argv[idx_pri]->arg, NULL, 10)
+			    : OSPF_NEIGHBOR_PRIORITY_DEFAULT;
 
 	ospf_nbr_nbma_set(ospf, nbr_addr);
 	ospf_nbr_nbma_poll_interval_set(ospf, nbr_addr, interval);
@@ -4809,16 +4809,19 @@ static void show_ip_ospf_nbr_nbma_detail_sub(struct vty *vty,
 		vty_out(vty, "    Poll interval %d\n", nbr_nbma->v_poll);
 
 	/* Show poll-interval timer. */
-	if (use_json) {
-		long time_store;
-		time_store = monotime_until(&nbr_nbma->t_poll->u.sands, NULL)
-			     / 1000LL;
-		json_object_int_add(json_sub, "pollIntervalTimerDueMsec",
-				    time_store);
-	} else
-		vty_out(vty, "    Poll timer due in %s\n",
-			ospf_timer_dump(nbr_nbma->t_poll, timebuf,
-					sizeof(timebuf)));
+	if (nbr_nbma->t_poll) {
+		if (use_json) {
+			long time_store;
+			time_store = monotime_until(&nbr_nbma->t_poll->u.sands,
+						    NULL) / 1000LL;
+			json_object_int_add(json_sub,
+					    "pollIntervalTimerDueMsec",
+					    time_store);
+		} else
+			vty_out(vty, "    Poll timer due in %s\n",
+				ospf_timer_dump(nbr_nbma->t_poll, timebuf,
+						sizeof(timebuf)));
+	}
 
 	/* Show poll-interval timer thread. */
 	if (use_json) {
@@ -8165,6 +8168,11 @@ DEFUN (ospf_redistribute_instance_source,
 	struct ospf_redist *red;
 
 	source = proto_redistnum(AFI_IP, argv[idx_ospf_table]->text);
+
+	if (source < 0) {
+		vty_out(vty, "Unknown instance redistribution\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 
 	instance = strtoul(argv[idx_number]->arg, NULL, 10);
 

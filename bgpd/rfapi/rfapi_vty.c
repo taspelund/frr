@@ -388,15 +388,11 @@ int rfapiStream2Vty(void *stream,			   /* input */
 		return 1;
 	}
 
-	if (stream) {
-		*vty = stream; /* VTYNL requires vty to be legit */
-		*fp = (int (*)(void *, const char *, ...))vty_out;
-		*outstream = stream;
-		*vty_newline = str_vty_newline(*vty);
-		return 1;
-	}
-
-	return 0;
+	*vty = stream; /* VTYNL requires vty to be legit */
+	*fp = (int (*)(void *, const char *, ...))vty_out;
+	*outstream = stream;
+	*vty_newline = str_vty_newline(*vty);
+	return 1;
 }
 
 /* called from bgpd/bgp_vty.c'route_vty_out() */
@@ -3021,9 +3017,9 @@ static int rfapiDeleteLocalPrefixesByRFD(struct rfapi_local_reg_delete_arg *cda,
 		 * match un, vn addresses of NVEs
 		 */
 		if (pUn && (rfapi_ip_addr_cmp(pUn, &rfd->un_addr)))
-			continue;
+			break;
 		if (pVn && (rfapi_ip_addr_cmp(pVn, &rfd->vn_addr)))
-			continue;
+			break;
 
 #if DEBUG_L2_EXTRA
 		vnc_zlog_debug_verbose("%s: un, vn match", __func__);

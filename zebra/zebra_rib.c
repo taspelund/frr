@@ -1428,18 +1428,14 @@ static void rib_process_update_fib(struct zebra_vrf *zvrf,
 				if (new != old)
 					zlog_debug(
 						"%u:%s: Deleting route rn %p, re %p (type %d) "
-						"old %p (type %d) - %s",
+						"old %p (type %d) - nexthop inactive",
 						zvrf_id(zvrf), buf, rn, new,
-						new->type, old, old->type,
-						nh_active ? "install failed"
-							  : "nexthop inactive");
+						new->type, old, old->type);
 				else
 					zlog_debug(
-						"%u:%s: Deleting route rn %p, re %p (type %d) - %s",
+						"%u:%s: Deleting route rn %p, re %p (type %d) - nexthop inactive",
 						zvrf_id(zvrf), buf, rn, new,
-						new->type,
-						nh_active ? "install failed"
-							  : "nexthop inactive");
+						new->type);
 			}
 
 			/* If labeled-unicast route, uninstall transit LSP. */
@@ -2542,12 +2538,10 @@ void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 						rn, vrf_id,
 						"via %s ifindex %d type %d "
 						"doesn't exist in rib",
-						inet_ntop(
-							family2afi(afi),
-							&nh->gate, buf2,
-							INET_ADDRSTRLEN), /* FIXME
-									     */
-						nh->ifindex, type);
+						inet_ntop(afi2family(afi),
+							  &nh->gate, buf2,
+							  sizeof(buf2)),
+							  nh->ifindex, type);
 				else
 					rnode_debug(
 						rn, vrf_id,

@@ -240,9 +240,6 @@ struct cmd_node {
 #define DEFUN_HIDDEN(funcname, cmdname, cmdstr, helpstr)                       \
 	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr, CMD_ATTR_HIDDEN)
 
-#define DEFUN_DEPRECATED(funcname, cmdname, cmdstr, helpstr)                   \
-	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr, CMD_ATTR_DEPRECATED)
-
 /* DEFUN_NOSH for commands that vtysh should ignore */
 #define DEFUN_NOSH(funcname, cmdname, cmdstr, helpstr)                         \
 	DEFUN(funcname, cmdname, cmdstr, helpstr)
@@ -479,4 +476,5 @@ extern void
 cmd_variable_handler_register(const struct cmd_variable_handler *cvh);
 extern char *cmd_variable_comp2str(vector comps, unsigned short cols);
 
+extern void command_setup_early_logging(const char *dest, const char *level);
 #endif /* _ZEBRA_COMMAND_H */

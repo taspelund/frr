@@ -1026,12 +1026,16 @@ static inline bgp_peer_sort_t peer_calc_sort(struct peer *peer)
 		else if (peer->as_type == AS_EXTERNAL)
 			return BGP_PEER_EBGP;
 
-		else if (peer->as_type == AS_SPECIFIED && peer->as)
+		else if (peer->as_type == AS_SPECIFIED && peer->as) {
+			assert(bgp);
 			return (bgp->as == peer->as ? BGP_PEER_IBGP
 						    : BGP_PEER_EBGP);
+		}
 
 		else {
 			struct peer *peer1;
+
+			assert(peer->group);
 			peer1 = listnode_head(peer->group->peer);
 
 			if (peer1)
@@ -2733,9 +2737,8 @@ int peer_group_bind(struct bgp *bgp, union sockunion *su, struct peer *peer,
 		if (peer->group) {
 			assert(group && peer->group == group);
 		} else {
-			struct listnode *pn;
-			pn = listnode_lookup(bgp->peer, peer);
-			list_delete_node(bgp->peer, pn);
+			listnode_delete(bgp->peer, peer);
+
 			peer->group = group;
 			listnode_add_sort(bgp->peer, peer);
 

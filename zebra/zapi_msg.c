@@ -448,7 +448,7 @@ void nbr_connected_add_ipv6(struct interface *ifp, struct in6_addr *address)
 	struct prefix p;
 
 	p.family = AF_INET6;
-	IPV6_ADDR_COPY(&p.u.prefix, address);
+	IPV6_ADDR_COPY(&p.u.prefix6, address);
 	p.prefixlen = IPV6_MAX_PREFIXLEN;
 
 	ifc = listnode_head(ifp->nbr_connected);
@@ -473,7 +473,7 @@ void nbr_connected_delete_ipv6(struct interface *ifp, struct in6_addr *address)
 	struct prefix p;
 
 	p.family = AF_INET6;
-	IPV6_ADDR_COPY(&p.u.prefix, address);
+	IPV6_ADDR_COPY(&p.u.prefix6, address);
 	p.prefixlen = IPV6_MAX_PREFIXLEN;
 
 	ifc = nbr_connected_check(ifp, &p);
@@ -521,12 +521,31 @@ int zsend_redistribute_route(int cmd, struct zserv *client, struct prefix *p,
 	struct zapi_nexthop *api_nh;
 	struct nexthop *nexthop;
 	int count = 0;
+	afi_t afi;
 
 	memset(&api, 0, sizeof(api));
 	api.vrf_id = re->vrf_id;
 	api.type = re->type;
 	api.instance = re->instance;
 	api.flags = re->flags;
+
+	afi = family2afi(p->family);
+	switch (afi) {
+	case AFI_IP:
+		if (cmd == ZEBRA_REDISTRIBUTE_ROUTE_ADD)
+			client->redist_v4_add_cnt++;
+		else
+			client->redist_v4_del_cnt++;
+		break;
+	case AFI_IP6:
+		if (cmd == ZEBRA_REDISTRIBUTE_ROUTE_ADD)
+			client->redist_v6_add_cnt++;
+		else
+			client->redist_v6_del_cnt++;
+		break;
+	default:
+		break;
+	}
 
 	/* Prefix. */
 	api.prefix = *p;
@@ -2896,9 +2915,9 @@ static inline void zread_ipset_entry(ZAPI_HANDLER_ARGS)
 
 		if (!is_default_prefix(&zpi.dst))
 			zpi.filter_bm |= PBR_FILTER_DST_IP;
-		if (zpi.dst_port_min != 0)
+		if (zpi.dst_port_min != 0 || zpi.proto == IPPROTO_ICMP)
 			zpi.filter_bm |= PBR_FILTER_DST_PORT;
-		if (zpi.src_port_min != 0)
+		if (zpi.src_port_min != 0 || zpi.proto == IPPROTO_ICMP)
 			zpi.filter_bm |= PBR_FILTER_SRC_PORT;
 		if (zpi.dst_port_max != 0)
 			zpi.filter_bm |= PBR_FILTER_DST_PORT_RANGE;
@@ -2938,6 +2957,12 @@ static inline void zread_iptable(ZAPI_HANDLER_ARGS)
 	STREAM_GETL(s, zpi.action);
 	STREAM_GETL(s, zpi.fwmark);
 	STREAM_GET(&zpi.ipset_name, s, ZEBRA_IPSET_NAME_SIZE);
+	STREAM_GETW(s, zpi.pkt_len_min);
+	STREAM_GETW(s, zpi.pkt_len_max);
+	STREAM_GETW(s, zpi.tcp_flags);
+	STREAM_GETW(s, zpi.tcp_mask_flags);
+	STREAM_GETC(s, zpi.dscp_value);
+	STREAM_GETC(s, zpi.fragment);
 	STREAM_GETL(s, zpi.nb_interface);
 	zebra_pbr_iptable_update_interfacelist(s, &zpi);
 

@@ -476,6 +476,8 @@ static int vty_command(struct vty *vty, char *buf)
 	const char *protocolname;
 	char *cp = NULL;
 
+	assert(vty);
+
 	/*
 	 * Log non empty command lines
 	 */
@@ -493,13 +495,13 @@ static int vty_command(struct vty *vty, char *buf)
 
 		/* format the base vty info */
 		snprintf(vty_str, sizeof(vty_str), "vty[??]@%s", vty->address);
-		if (vty)
-			for (i = 0; i < vector_active(vtyvec); i++)
-				if (vty == vector_slot(vtyvec, i)) {
-					snprintf(vty_str, sizeof(vty_str),
-						 "vty[%d]@%s", i, vty->address);
-					break;
-				}
+
+		for (i = 0; i < vector_active(vtyvec); i++)
+			if (vty == vector_slot(vtyvec, i)) {
+				snprintf(vty_str, sizeof(vty_str), "vty[%d]@%s",
+					 i, vty->address);
+				break;
+			}
 
 		/* format the prompt */
 		snprintf(prompt_str, sizeof(prompt_str), cmd_prompt(vty->node),
@@ -2459,12 +2461,13 @@ static FILE *vty_use_backup_config(const char *fullpath)
 }
 
 /* Read up configuration file from file_name. */
-void vty_read_config(const char *config_file, char *config_default_dir)
+bool vty_read_config(const char *config_file, char *config_default_dir)
 {
 	char cwd[MAXPATHLEN];
 	FILE *confp = NULL;
 	const char *fullpath;
 	char *tmp = NULL;
+	bool read_success = false;
 
 	/* If -f flag specified. */
 	if (config_file != NULL) {
@@ -2522,8 +2525,9 @@ void vty_read_config(const char *config_file, char *config_default_dir)
 
 		if (strstr(config_default_dir, "vtysh") == NULL) {
 			ret = stat(config_default_int, &conf_stat);
-			if (ret >= 0)
+			if (ret >= 0) {
 				goto tmp_free_and_out;
+			}
 		}
 #endif /* VTYSH */
 		confp = fopen(config_default_dir, "r");
@@ -2547,6 +2551,7 @@ void vty_read_config(const char *config_file, char *config_default_dir)
 	}
 
 	vty_read_file(confp);
+	read_success = true;
 
 	fclose(confp);
 
@@ -2555,6 +2560,8 @@ void vty_read_config(const char *config_file, char *config_default_dir)
 tmp_free_and_out:
 	if (tmp)
 		XFREE(MTYPE_TMP, tmp);
+
+	return read_success;
 }
 
 /* Small utility function which output log to the VTY. */
