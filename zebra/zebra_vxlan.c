@@ -290,6 +290,7 @@ static void zvni_find_neigh_addr_width(struct hash_backet *backet, void *ctxt)
 	ipaddr2str(&n->ip, buf, sizeof(buf)), width = strlen(buf);
 	if (width > wctx->addr_width)
 		wctx->addr_width = width;
+
 }
 
 /*
@@ -334,6 +335,10 @@ static void zvni_print_neigh(zebra_neigh_t *n, void *ctxt, json_object *json)
 			vty_out(vty, " Default-gateway");
 		else
 			json_object_boolean_true_add(json, "defaultGateway");
+	}
+	if (CHECK_FLAG(n->flags, ZEBRA_NEIGH_ROUTER_FLAG)) {
+		if (!json)
+			vty_out(vty, " Router");
 	}
 	if (json == NULL)
 		vty_out(vty, "\n");
@@ -440,11 +445,11 @@ static void zvni_print_neigh_hash_all_vni(struct hash_backet *backet,
 		return;
 	}
 	num_neigh = hashcount(zvni->neigh_table);
-	if (json == NULL)
+	if (json == NULL) {
 		vty_out(vty,
 			"\nVNI %u #ARP (IPv4 and IPv6, local and remote) %u\n\n",
 			zvni->vni, num_neigh);
-	else {
+	} else {
 		json_vni = json_object_new_object();
 		json_object_int_add(json_vni, "numArpNd", num_neigh);
 		snprintf(vni_str, VNI_STR_LEN, "%u", zvni->vni);
@@ -466,9 +471,10 @@ static void zvni_print_neigh_hash_all_vni(struct hash_backet *backet,
 	wctx.json = json_vni;
 	hash_iterate(zvni->neigh_table, zvni_find_neigh_addr_width, &wctx);
 
-	if (json == NULL)
+	if (json == NULL) {
 		vty_out(vty, "%*s %-6s %-17s %-21s\n", -wctx.addr_width, "IP",
 			"Type", "MAC", "Remote VTEP");
+	}
 	hash_iterate(zvni->neigh_table, zvni_print_neigh_hash, &wctx);
 
 	if (json)
@@ -1590,6 +1596,9 @@ static int zvni_neigh_send_add_to_client(vni_t vni,
 
 	if (CHECK_FLAG(neigh_flags, ZEBRA_NEIGH_DEF_GW))
 		SET_FLAG(flags, ZEBRA_MACIP_TYPE_GW);
+	/* Set router flag (R-bit) based on local neigh entry add */
+	if (CHECK_FLAG(neigh_flags, ZEBRA_NEIGH_ROUTER_FLAG))
+		SET_FLAG(flags, ZEBRA_MACIP_TYPE_ROUTER_FLAG);
 
 	return zvni_macip_send_msg_to_client(vni, macaddr, ip, flags,
 					     ZEBRA_MACIP_ADD);
@@ -1614,6 +1623,7 @@ static int zvni_neigh_install(zebra_vni_t *zvni, zebra_neigh_t *n)
 	struct zebra_if *zif;
 	struct zebra_l2info_vxlan *vxl;
 	struct interface *vlan_if;
+	uint8_t flags;
 
 	if (!(n->flags & ZEBRA_NEIGH_REMOTE))
 		return 0;
@@ -1627,7 +1637,11 @@ static int zvni_neigh_install(zebra_vni_t *zvni, zebra_neigh_t *n)
 	if (!vlan_if)
 		return -1;
 
-	return kernel_add_neigh(vlan_if, &n->ip, &n->emac);
+	flags = NTF_EXT_LEARNED;
+	if (n->flags & ZEBRA_NEIGH_ROUTER_FLAG)
+		flags |= NTF_ROUTER;
+
+	return kernel_add_neigh(vlan_if, &n->ip, &n->emac, flags);
 }
 
 /*
@@ -1852,6 +1866,9 @@ static int zvni_gw_macip_add(struct interface *ifp, zebra_vni_t *zvni,
 	/* Set "local" forwarding info. */
 	SET_FLAG(n->flags, ZEBRA_NEIGH_LOCAL);
 	SET_FLAG(n->flags, ZEBRA_NEIGH_DEF_GW);
+	/* Set Router flag (R-bit) */
+	if (ip->ipa_type == IPADDR_V6)
+		SET_FLAG(n->flags, ZEBRA_NEIGH_ROUTER_FLAG);
 	memcpy(&n->emac, macaddr, ETH_ALEN);
 	n->ifindex = ifp->ifindex;
 
@@ -1861,10 +1878,10 @@ static int zvni_gw_macip_add(struct interface *ifp, zebra_vni_t *zvni,
 
 	if (IS_ZEBRA_DEBUG_VXLAN)
 		zlog_debug(
-			"SVI %s(%u) L2-VNI %u, sending GW MAC %s IP %s add to BGP",
+			"SVI %s(%u) L2-VNI %u, sending GW MAC %s IP %s add to BGP with flags 0x%x",
 			ifp->name, ifp->ifindex, zvni->vni,
 			prefix_mac2str(macaddr, buf, sizeof(buf)),
-			ipaddr2str(ip, buf2, sizeof(buf2)));
+			ipaddr2str(ip, buf2, sizeof(buf2)), n->flags);
 
 	zvni_neigh_send_add_to_client(zvni->vni, ip, macaddr,
 				      n->flags);
@@ -2009,7 +2026,8 @@ static void zvni_gw_macip_add_for_vni_hash(struct hash_backet *backet,
 static int zvni_local_neigh_update(zebra_vni_t *zvni,
 				   struct interface *ifp,
 				   struct ipaddr *ip,
-				   struct ethaddr *macaddr)
+				   struct ethaddr *macaddr,
+				   uint8_t router_flag)
 {
 	char buf[ETHER_ADDR_STRLEN];
 	char buf2[INET6_ADDRSTRLEN];
@@ -2127,15 +2145,19 @@ static int zvni_local_neigh_update(zebra_vni_t *zvni,
 		return 0;
 	}
 
+	/*Set router flag (R-bit) */
+	if (router_flag)
+		SET_FLAG(n->flags, ZEBRA_NEIGH_ROUTER_FLAG);
+
 	/* Inform BGP. */
 	if (IS_ZEBRA_DEBUG_VXLAN)
-		zlog_debug("Neigh %s (MAC %s) is now ACTIVE on L2-VNI %u",
+		zlog_debug("Neigh %s (MAC %s) is now ACTIVE on L2-VNI %u with flags 0x%x",
 			   ipaddr2str(ip, buf2, sizeof(buf2)),
 			   prefix_mac2str(macaddr, buf, sizeof(buf)),
-			   zvni->vni);
+			   zvni->vni, n->flags);
 	ZEBRA_NEIGH_SET_ACTIVE(n);
 
-	return zvni_neigh_send_add_to_client(zvni->vni, ip, macaddr, 0);
+	return zvni_neigh_send_add_to_client(zvni->vni, ip, macaddr, n->flags);
 }
 
 static int zvni_remote_neigh_update(zebra_vni_t *zvni,
@@ -3421,6 +3443,8 @@ static int zl3vni_nh_del(zebra_l3vni_t *zl3vni,
 static int zl3vni_nh_install(zebra_l3vni_t *zl3vni,
 			     zebra_neigh_t *n)
 {
+	uint8_t flags;
+
 	if (!is_l3vni_oper_up(zl3vni))
 		return -1;
 
@@ -3428,7 +3452,11 @@ static int zl3vni_nh_install(zebra_l3vni_t *zl3vni,
 	    !(n->flags & ZEBRA_NEIGH_REMOTE_NH))
 		return 0;
 
-	return kernel_add_neigh(zl3vni->svi_if, &n->ip, &n->emac);
+	flags = NTF_EXT_LEARNED;
+	if (n->flags & ZEBRA_NEIGH_ROUTER_FLAG)
+		flags |= NTF_ROUTER;
+
+	return kernel_add_neigh(zl3vni->svi_if, &n->ip, &n->emac, flags);
 }
 
 /*
@@ -4603,9 +4631,11 @@ void zebra_vxlan_print_neigh_vni_vtep(struct vty *vty, struct zebra_vrf *zvrf,
 	memset(&wctx, 0, sizeof(struct neigh_walk_ctx));
 	wctx.zvni = zvni;
 	wctx.vty = vty;
+	wctx.addr_width = 15;
 	wctx.flags = SHOW_REMOTE_NEIGH_FROM_VTEP;
 	wctx.r_vtep_ip = vtep_ip;
 	wctx.json = json;
+	hash_iterate(zvni->neigh_table, zvni_find_neigh_addr_width, &wctx);
 	hash_iterate(zvni->neigh_table, zvni_print_neigh_hash, &wctx);
 
 	if (use_json) {
@@ -5036,7 +5066,8 @@ int zebra_vxlan_handle_kernel_neigh_update(struct interface *ifp,
 					   struct ipaddr *ip,
 					   struct ethaddr *macaddr,
 					   u_int16_t state,
-					   u_char ext_learned)
+					   u_char ext_learned,
+					   uint8_t router_flag)
 {
 	char buf[ETHER_ADDR_STRLEN];
 	char buf2[INET6_ADDRSTRLEN];
@@ -5067,7 +5098,8 @@ int zebra_vxlan_handle_kernel_neigh_update(struct interface *ifp,
 
 	/* Is this about a local neighbor or a remote one? */
 	if (!ext_learned)
-		return zvni_local_neigh_update(zvni, ifp, ip, macaddr);
+		return zvni_local_neigh_update(zvni, ifp, ip, macaddr,
+					       router_flag);
 
 	return zvni_remote_neigh_update(zvni, ifp, ip, macaddr, state);
 }
@@ -5460,6 +5492,10 @@ int zebra_vxlan_remote_macip_add(struct zserv *client, u_short length,
 			/* TODO: Handle MAC change. */
 			n->r_vtep_ip = vtep_ip;
 			SET_FLAG(n->flags, ZEBRA_NEIGH_REMOTE);
+
+			/* Set router flag (R-bit) to this Neighbor entry */
+			if (CHECK_FLAG(flags, ZEBRA_MACIP_TYPE_ROUTER_FLAG))
+				SET_FLAG(n->flags, ZEBRA_NEIGH_ROUTER_FLAG);
 
 			/* Install the entry. */
 			zvni_neigh_install(zvni, n);
