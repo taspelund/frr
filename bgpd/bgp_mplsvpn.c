@@ -1367,7 +1367,7 @@ void vrf_import_from_vrf(struct bgp *bgp, struct bgp *vrf_bgp,
 	struct ecommunity *ecom;
 	bool first_export = false;
 
-	export_name = bgp->name ? bgp->name : BGP_DEFAULT_NAME;
+	export_name = bgp->name ? bgp->name : VRF_DEFAULT_NAME;
 	idir = BGP_VPN_POLICY_DIR_FROMVPN;
 	edir = BGP_VPN_POLICY_DIR_TOVPN;
 
@@ -1376,7 +1376,7 @@ void vrf_import_from_vrf(struct bgp *bgp, struct bgp *vrf_bgp,
 	 * any VRF is importing from "import_vrf".
 	 */
 	vname = (vrf_bgp->name ? XSTRDUP(MTYPE_TMP, vrf_bgp->name)
-			       : XSTRDUP(MTYPE_TMP, BGP_DEFAULT_NAME));
+			       : XSTRDUP(MTYPE_TMP, VRF_DEFAULT_NAME));
 
 	listnode_add(bgp->vpn_policy[afi].import_vrf, vname);
 
@@ -1430,8 +1430,8 @@ void vrf_unimport_from_vrf(struct bgp *bgp, struct bgp *vrf_bgp,
 	struct ecommunity *ecom;
 	struct listnode *node;
 
-	export_name = bgp->name ? bgp->name : BGP_DEFAULT_NAME;
-	tmp_name = vrf_bgp->name ? vrf_bgp->name : BGP_DEFAULT_NAME;
+	export_name = bgp->name ? bgp->name : VRF_DEFAULT_NAME;
+	tmp_name = vrf_bgp->name ? vrf_bgp->name : VRF_DEFAULT_NAME;
 	idir = BGP_VPN_POLICY_DIR_FROMVPN;
 	edir = BGP_VPN_POLICY_DIR_TOVPN;
 

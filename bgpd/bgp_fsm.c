@@ -1029,8 +1029,9 @@ int bgp_stop(struct peer *peer)
 				"%%ADJCHANGE: neighbor %s(%s) in vrf %s Down %s",
 				peer->host,
 				(peer->hostname) ? peer->hostname : "Unknown",
-				vrf ? ((vrf->vrf_id != VRF_DEFAULT) ? vrf->name
-								    : "Default")
+				vrf ? ((vrf->vrf_id != VRF_DEFAULT)
+						? vrf->name
+						: VRF_DEFAULT_NAME)
 				    : "",
 				peer_down_str[(int)peer->last_reset]);
 		}
@@ -1552,8 +1553,9 @@ static int bgp_establish(struct peer *peer)
 		zlog_info("%%ADJCHANGE: neighbor %s(%s) in vrf %s Up",
 			  peer->host,
 			  (peer->hostname) ? peer->hostname : "Unknown",
-			  vrf ? ((vrf->vrf_id != VRF_DEFAULT) ? vrf->name
-							      : "Default")
+			  vrf ? ((vrf->vrf_id != VRF_DEFAULT)
+					? vrf->name
+					: VRF_DEFAULT_NAME)
 			      : "");
 	}
 	/* assign update-group/subgroup */
