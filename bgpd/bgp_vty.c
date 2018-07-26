@@ -184,6 +184,7 @@ safi_t bgp_node_safi(struct vty *vty)
  * @param afi string, one of
  *  - "ipv4"
  *  - "ipv6"
+ *  - "l2vpn"
  * @return the corresponding afi_t
  */
 afi_t bgp_vty_afi_from_str(const char *afi_str)
@@ -193,6 +194,8 @@ afi_t bgp_vty_afi_from_str(const char *afi_str)
 		afi = AFI_IP;
 	else if (strmatch(afi_str, "ipv6"))
 		afi = AFI_IP6;
+	else if (strmatch(afi_str, "l2vpn"))
+		afi = AFI_L2VPN;
 	return afi;
 }
 
@@ -222,6 +225,8 @@ safi_t bgp_vty_safi_from_str(const char *safi_str)
 		safi = SAFI_UNICAST;
 	else if (strmatch(safi_str, "vpn"))
 		safi = SAFI_MPLS_VPN;
+	else if (strmatch(safi_str, "evpn"))
+		safi = SAFI_EVPN;
 	else if (strmatch(safi_str, "labeled-unicast"))
 		safi = SAFI_LABELED_UNICAST;
 	else if (strmatch(safi_str, "flowspec"))
@@ -772,7 +777,7 @@ static void bgp_clear_star_soft_out(struct vty *vty, const char *name)
 #endif
 
 /* BGP global configuration.  */
-#if defined(VERSION_TYPE_DEV) && (CONFDATE > 20190601)
+#if (CONFDATE > 20190601)
 CPP_NOTICE("bgpd: time to remove deprecated bgp multiple-instance")
 CPP_NOTICE("This includes BGP_OPT_MULTIPLE_INSTANCE")
 #endif
@@ -806,7 +811,7 @@ DEFUN_HIDDEN (no_bgp_multiple_instance,
 	return CMD_SUCCESS;
 }
 
-#if defined(VERSION_TYPE_DEV) && (CONFDATE > 20190601)
+#if (CONFDATE > 20190601)
 CPP_NOTICE("bgpd: time to remove deprecated cli bgp config-type cisco")
 CPP_NOTICE("This includes BGP_OPT_CISCO_CONFIG")
 #endif
@@ -2013,7 +2018,7 @@ DEFUN (no_bgp_fast_external_failover,
 }
 
 /* "bgp enforce-first-as" configuration. */
-#if defined(VERSION_TYPE_DEV) && CONFDATE > 20180517
+#if CONFDATE > 20180517
 CPP_NOTICE("bgpd: remove deprecated '[no] bgp enforce-first-as' commands")
 #endif
 
@@ -9117,6 +9122,10 @@ static void bgp_show_peer(struct vty *vty, struct peer *p, uint8_t use_json,
 		json_object_string_add(
 			json_neigh, "remoteRouterId",
 			inet_ntop(AF_INET, &p->remote_id, buf1, sizeof(buf1)));
+		json_object_string_add(
+			json_neigh, "localRouterId",
+			inet_ntop(AF_INET, &bgp->router_id, buf1,
+					sizeof(buf1)));
 
 		/* Confederation */
 		if (CHECK_FLAG(bgp->config, BGP_CONFIG_CONFEDERATION)
@@ -9136,7 +9145,7 @@ static void bgp_show_peer(struct vty *vty, struct peer *p, uint8_t use_json,
 			uptime -= p->uptime;
 			epoch_tbuf = time(NULL) - uptime;
 
-#if defined(VERSION_TYPE_DEV) && CONFDATE > 20200101
+#if CONFDATE > 20200101
 			CPP_NOTICE(
 				"bgpTimerUp should be deprecated and can be removed now");
 #endif

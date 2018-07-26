@@ -196,6 +196,10 @@ static void bgp_info_extra_free(struct bgp_info_extra **extra)
 
 	if (e->bgp_orig)
 		bgp_unlock(e->bgp_orig);
+
+	if ((*extra)->bgp_fs_pbr)
+		list_delete_all_node((*extra)->bgp_fs_pbr);
+	(*extra)->bgp_fs_pbr = NULL;
 	XFREE(MTYPE_BGP_ROUTE_EXTRA, *extra);
 
 	*extra = NULL;
@@ -8163,7 +8167,7 @@ static int bgp_show_regexp(struct vty *vty, struct bgp *bgp, const char *regstr,
 			   afi_t afi, safi_t safi, enum bgp_show_type type);
 static int bgp_show_community(struct vty *vty, struct bgp *bgp,
 			      const char *comstr, int exact, afi_t afi,
-			      safi_t safi);
+			      safi_t safi, uint8_t use_json);
 
 
 static int bgp_show_table(struct vty *vty, struct bgp *bgp, safi_t safi,
@@ -8789,17 +8793,11 @@ static int bgp_show_route_in_table(struct vty *vty, struct bgp *bgp,
 			bgp_unlock_node(rm);
 		}
 	} else if (safi == SAFI_FLOWSPEC) {
-		rn = bgp_flowspec_get_match_per_ip(afi, rib,
-						   &match, prefix_check);
-		if (rn != NULL) {
-			route_vty_out_flowspec(vty, &rn->p,
-					       rn->info, use_json ?
-					       NLRI_STRING_FORMAT_JSON :
-					       NLRI_STRING_FORMAT_LARGE,
-					       json_paths);
-			display++;
-			bgp_unlock_node(rn);
-		}
+		display = bgp_flowspec_display_match_per_ip(afi, rib,
+					   &match, prefix_check,
+					   vty,
+					   use_json,
+					   json_paths);
 	} else {
 		header = 1;
 
@@ -9038,7 +9036,6 @@ DEFUN (show_ip_bgp,
            |prefix-list WORD\
            |filter-list WORD\
            |statistics\
-           |community <AA:NN|local-AS|no-advertise|no-export|graceful-shutdown> [exact-match]\
            |community-list <(1-500)|WORD> [exact-match]\
            |A.B.C.D/M longer-prefixes\
            |X:X::X:X/M longer-prefixes\
@@ -9058,13 +9055,6 @@ DEFUN (show_ip_bgp,
        "Display routes conforming to the filter-list\n"
        "Regular expression access list name\n"
        "BGP RIB advertisement statistics\n"
-       "Display routes matching the communities\n"
-       COMMUNITY_AANN_STR
-       "Do not send outside local AS (well-known community)\n"
-       "Do not advertise to any peer (well-known community)\n"
-       "Do not export to next AS (well-known community)\n"
-       "Graceful shutdown (well-known community)\n"
-       "Exact match of the communities\n"
        "Display routes matching the community-list\n"
        "community-list number\n"
        "community-list name\n"
@@ -9079,7 +9069,6 @@ DEFUN (show_ip_bgp,
 	int exact_match = 0;
 	struct bgp *bgp = NULL;
 	int idx = 0;
-	int idx_community_type = 0;
 
 	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
 					    &bgp);
@@ -9106,24 +9095,6 @@ DEFUN (show_ip_bgp,
 		return bgp_show_route_map(vty, bgp, argv[idx + 1]->arg, afi,
 					  safi, bgp_show_type_route_map);
 
-	if (argv_find(argv, argc, "community", &idx)) {
-		/* show a specific community */
-		if (argv_find(argv, argc, "local-AS", &idx_community_type)
-		    || argv_find(argv, argc, "no-advertise",
-				 &idx_community_type)
-		    || argv_find(argv, argc, "no-export", &idx_community_type)
-		    || argv_find(argv, argc, "graceful-shutdown",
-				 &idx_community_type)
-		    || argv_find(argv, argc, "AA:NN", &idx_community_type)) {
-
-			if (argv_find(argv, argc, "exact-match", &idx))
-				exact_match = 1;
-			return bgp_show_community(vty, bgp,
-						  argv[idx_community_type]->arg,
-						  exact_match, afi, safi);
-		}
-	}
-
 	if (argv_find(argv, argc, "community-list", &idx)) {
 		const char *clist_number_or_name = argv[++idx]->arg;
 		if (++idx < argc && strmatch(argv[idx]->text, "exact-match"))
@@ -9148,7 +9119,7 @@ DEFUN (show_ip_bgp_json,
           [<\
              cidr-only\
              |dampening <flap-statistics|dampened-paths>\
-             |community \
+             |community [<AA:NN|local-AS|no-advertise|no-export|graceful-shutdown>] [exact-match]\
           >] [json]",
        SHOW_STR
        IP_STR
@@ -9161,6 +9132,12 @@ DEFUN (show_ip_bgp_json,
        "Display flap statistics of routes\n"
        "Display paths suppressed due to dampening\n"
        "Display routes matching the communities\n"
+       COMMUNITY_AANN_STR
+       "Do not send outside local AS (well-known community)\n"
+       "Do not advertise to any peer (well-known community)\n"
+       "Do not export to next AS (well-known community)\n"
+       "Graceful shutdown (well-known community)\n"
+       "Exact match of the communities\n"
        JSON_STR)
 {
 	afi_t afi = AFI_IP6;
@@ -9168,6 +9145,8 @@ DEFUN (show_ip_bgp_json,
 	enum bgp_show_type sh_type = bgp_show_type_normal;
 	struct bgp *bgp = NULL;
 	int idx = 0;
+	int idx_community_type = 0;
+	int exact_match = 0;
 
 	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
 					    &bgp);
@@ -9193,10 +9172,31 @@ DEFUN (show_ip_bgp_json,
 	}
 
 	if (argv_find(argv, argc, "community", &idx)) {
-		/* show all communities */
-		return bgp_show(vty, bgp, afi, safi,
-				bgp_show_type_community_all, NULL, uj);
+
+		/* show a specific community */
+		if (argv_find(argv, argc, "local-AS", &idx_community_type) ||
+			argv_find(argv, argc, "no-advertise",
+					&idx_community_type) ||
+			argv_find(argv, argc, "no-export",
+					&idx_community_type) ||
+			argv_find(argv, argc, "graceful-shutdown",
+					&idx_community_type) ||
+			argv_find(argv, argc, "AA:NN", &idx_community_type)) {
+			if (argv_find(argv, argc, "exact-match", &idx))
+				exact_match = 1;
+
+			return (bgp_show_community(vty, bgp,
+						argv[idx_community_type]->arg,
+						exact_match, afi, safi, uj));
+		} else {
+
+			/* show all communities */
+			return (bgp_show(vty, bgp, afi, safi,
+					bgp_show_type_community_all, NULL,
+					uj));
+		}
 	}
+
 	return bgp_show(vty, bgp, afi, safi, sh_type, NULL, uj);
 }
 
@@ -9403,7 +9403,7 @@ static int bgp_show_route_map(struct vty *vty, struct bgp *bgp,
 
 static int bgp_show_community(struct vty *vty, struct bgp *bgp,
 			      const char *comstr, int exact, afi_t afi,
-			      safi_t safi)
+			      safi_t safi, uint8_t use_json)
 {
 	struct community *com;
 	int ret = 0;
@@ -9417,7 +9417,7 @@ static int bgp_show_community(struct vty *vty, struct bgp *bgp,
 	ret = bgp_show(vty, bgp, afi, safi,
 		       (exact ? bgp_show_type_community_exact
 			      : bgp_show_type_community),
-		       com, 0);
+		       com, use_json);
 	community_free(com);
 
 	return ret;

@@ -448,6 +448,8 @@ enum zapi_iptable_notify_owner {
 /* Zebra MAC types */
 #define ZEBRA_MACIP_TYPE_STICKY                0x01 /* Sticky MAC*/
 #define ZEBRA_MACIP_TYPE_GW                    0x02 /* gateway (SVI) mac*/
+#define ZEBRA_MACIP_TYPE_ROUTER_FLAG           0x04 /* Router Flag - proxy NA */
+#define ZEBRA_MACIP_TYPE_OVERRIDE_FLAG         0x08 /* Override Flag */
 
 struct zclient_options {
 	bool receive_notify;
@@ -457,7 +459,7 @@ struct zclient_options {
 extern struct zclient *zclient_new(struct thread_master *);
 
 /* clang-format off */
-#if defined(VERSION_TYPE_DEV) && CONFDATE > 20181101
+#if CONFDATE > 20181101
 CPP_NOTICE("zclient_new_notify can take over or zclient_new now");
 #endif
 /* clang-format on */
@@ -598,7 +600,7 @@ extern void zebra_interface_if_set_value(struct stream *, struct interface *);
 extern void zebra_router_id_update_read(struct stream *s, struct prefix *rid);
 
 /* clang-format off */
-#if defined(VERSION_TYPE_DEV) && CONFDATE > 20180823
+#if CONFDATE > 20180823
 CPP_NOTICE("zapi_ipv4_route, zapi_ipv6_route, zapi_ipv4_route_ipv6_nexthop as well as the zapi_ipv4 and zapi_ipv6 data structures should be removed now");
 #endif
 /* clang-format on */
