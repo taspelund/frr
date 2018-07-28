@@ -249,6 +249,7 @@ static u_int32_t num_valid_macs(zebra_vni_t *zvni)
 		for (hb = hash->index[i]; hb; hb = hb->next) {
 			mac = (zebra_mac_t *)hb->data;
 			if (CHECK_FLAG(mac->flags, ZEBRA_MAC_REMOTE)
+			    || CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL)
 			    || !CHECK_FLAG(mac->flags, ZEBRA_MAC_AUTO))
 				num_macs++;
 		}
