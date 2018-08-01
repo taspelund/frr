@@ -417,4 +417,5 @@ extern struct bgpevpn *bgp_evpn_new(struct bgp *bgp, vni_t vni,
 				    struct in_addr originator_ip,
 				    vrf_id_t tenant_vrf_id);
 extern void bgp_evpn_free(struct bgp *bgp, struct bgpevpn *vpn);
+extern bool bgp_evpn_lookup_l3vni_l2vni_table(vni_t vni);
 #endif /* _BGP_EVPN_PRIVATE_H */
