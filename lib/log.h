@@ -88,6 +88,10 @@ extern void zlog_debug(const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 /* For logs which have error codes associated with them */
 #define zlog_ferr(ferr_id, format, ...)                                        \
 	zlog_err("[EC %d] " format, ferr_id, ##__VA_ARGS__)
+#define flog_err_sys(ferr_id, format, ...)                                     \
+	flog_err(ferr_id, format, ##__VA_ARGS__)
+#define flog_warn(ferr_id, format, ...)                                        \
+	zlog_warn("[EC %d] " format, ferr_id, ##__VA_ARGS__)
 
 
 extern void zlog_thread_info(int log_level);
