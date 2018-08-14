@@ -466,7 +466,7 @@ leak_update(
 			zlog_debug("%s: ->%s: %s Found route, changed attr",
 				   __func__, bgp->name_pretty, buf_prefix);
 
-		return bi;
+		return NULL;
 	}
 
 	new = info_make(ZEBRA_ROUTE_BGP, BGP_ROUTE_IMPORTED, 0,
