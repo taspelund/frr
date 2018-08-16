@@ -6396,14 +6396,7 @@ char *peer_uptime(time_t uptime2, char *buf, size_t len, u_char use_json,
 
 	/* Check buffer length. */
 	if (len < BGP_UPTIME_LEN) {
-		if (!use_json) {
-			zlog_warn("peer_uptime (): buffer shortage %lu",
-				  (u_long)len);
-			/* XXX: should return status instead of buf... */
-			snprintf(buf, len, "<error> ");
-		}
-		return buf;
-	}
+		assert("peer_uptime: buffer is too small" == NULL);
 
 	/* If there is no connection has been done before print `never'. */
 	if (uptime2 == 0) {
