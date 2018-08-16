@@ -176,9 +176,6 @@ long spf_backoff_schedule(struct spf_backoff *backoff)
 		else
 			rv = backoff->long_delay;
 		break;
-	default:
-		zlog_warn("SPF Back-off(%s) in unknown state", backoff->name);
-		rv = backoff->init_delay;
 	}
 
 	backoff_debug(
