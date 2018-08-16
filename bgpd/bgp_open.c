@@ -244,7 +244,8 @@ static int bgp_capability_mp(struct peer *peer, struct capability_header *hdr)
 
 	/* Verify length is 4 */
 	if (hdr->length != 4) {
-		zlog_warn(
+		flog_warn(
+			BGP_WARN_CAPABILITY_INVALID_LENGTH,
 			"MP Cap: Received invalid length %d, non-multiple of 4",
 			hdr->length);
 		return -1;
@@ -439,7 +440,8 @@ static int bgp_capability_restart(struct peer *peer,
 
 	/* Verify length is a multiple of 4 */
 	if ((caphdr->length - 2) % 4) {
-		zlog_warn(
+		flog_warn(
+			BGP_WARN_CAPABILITY_INVALID_LENGTH,
 			"Restart Cap: Received invalid length %d, non-multiple of 4",
 			caphdr->length);
 		return -1;
@@ -536,7 +538,8 @@ static int bgp_capability_addpath(struct peer *peer,
 
 	/* Verify length is a multiple of 4 */
 	if (hdr->length % 4) {
-		zlog_warn(
+		flog_warn(
+			BGP_WARN_CAPABILITY_INVALID_LENGTH,
 			"Add Path: Received invalid length %d, non-multiple of 4",
 			hdr->length);
 		return -1;
@@ -594,7 +597,8 @@ static int bgp_capability_enhe(struct peer *peer, struct capability_header *hdr)
 
 	/* Verify length is a multiple of 4 */
 	if (hdr->length % 6) {
-		zlog_warn(
+		flog_warn(
+			BGP_WARN_CAPABILITY_INVALID_LENGTH,
 			"Extended NH: Received invalid length %d, non-multiple of 6",
 			hdr->length);
 		return -1;
@@ -636,7 +640,8 @@ static int bgp_capability_enhe(struct peer *peer, struct capability_header *hdr)
 		if (afi != AFI_IP || nh_afi != AFI_IP6
 		    || !(safi == SAFI_UNICAST
 			 || safi == SAFI_LABELED_UNICAST)) {
-			zlog_warn(
+			flog_warn(
+				BGP_WARN_CAPABILITY_INVALID_DATA,
 				"%s Unexpected afi/safi/next-hop afi: %u/%u/%u "
 				"in Extended Next-hop capability, ignoring",
 				peer->host, pkt_afi, pkt_safi, pkt_nh_afi);
@@ -667,7 +672,8 @@ static int bgp_capability_hostname(struct peer *peer,
 
 	len = stream_getc(s);
 	if (stream_get_getp(s) + len > end) {
-		zlog_warn(
+		flog_warn(
+			BGP_WARN_CAPABILITY_INVALID_DATA,
 			"%s: Received malformed hostname capability from peer %s",
 			__FUNCTION__, peer->host);
 		return -1;
@@ -697,7 +703,8 @@ static int bgp_capability_hostname(struct peer *peer,
 	}
 
 	if (stream_get_getp(s) + 1 > end) {
-		zlog_warn(
+		flog_warn(
+			BGP_WARN_CAPABILITY_INVALID_DATA,
 			"%s: Received invalid domain name len (hostname capability) from peer %s",
 			__FUNCTION__, peer->host);
 		return -1;
@@ -705,7 +712,8 @@ static int bgp_capability_hostname(struct peer *peer,
 
 	len = stream_getc(s);
 	if (stream_get_getp(s) + len > end) {
-		zlog_warn(
+		flog_warn(
+			BGP_WARN_CAPABILITY_INVALID_DATA,
 			"%s: Received runt domain name (hostname capability) from peer %s",
 			__FUNCTION__, peer->host);
 		return -1;
@@ -942,10 +950,12 @@ static int bgp_capability_parse(struct peer *peer, size_t length,
 				   specific
 				   capabilities.  It seems reasonable for now...
 				   */
-				zlog_warn("%s Vendor specific capability %d",
+				flog_warn(BGP_WARN_CAPABILITY_VENDOR,
+					  "%s Vendor specific capability %d",
 					  peer->host, caphdr.code);
 			} else {
-				zlog_warn(
+				flog_warn(
+					BGP_WARN_CAPABILITY_UNKNOWN,
 					"%s unrecognized capability code: %d - ignored",
 					peer->host, caphdr.code);
 				memcpy(*error, sp, caphdr.length + 2);
@@ -960,7 +970,8 @@ static int bgp_capability_parse(struct peer *peer, size_t length,
 		}
 		if (stream_get_getp(s) != (start + caphdr.length)) {
 			if (stream_get_getp(s) > (start + caphdr.length))
-				zlog_warn(
+				flog_warn(
+					BGP_WARN_CAPABILITY_INVALID_LENGTH,
 					"%s Cap-parser for %s read past cap-length, %u!",
 					peer->host,
 					lookup_msg(capcode_str, caphdr.code,
