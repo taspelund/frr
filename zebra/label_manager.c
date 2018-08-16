@@ -207,9 +207,7 @@ static int lm_zclient_connect(struct thread *t)
 	}
 
 	/* make socket non-blocking */
-	if (set_nonblocking(zclient->sock) < 0)
-		zlog_warn("%s: set_nonblocking(%d) failed", __func__,
-			  zclient->sock);
+	(void)set_nonblocking(zclient->sock);
 
 	return 0;
 }

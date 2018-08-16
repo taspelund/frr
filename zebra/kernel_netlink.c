@@ -324,8 +324,9 @@ static void netlink_install_filter(int sock, __u32 pid)
 
 	if (setsockopt(sock, SOL_SOCKET, SO_ATTACH_FILTER, &prog, sizeof(prog))
 	    < 0)
-		zlog_warn("Can't install socket filter: %s\n",
-			  safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SOCKET,
+			     "Can't install socket filter: %s\n",
+			     safe_strerror(errno));
 }
 
 void netlink_parse_rtattr(struct rtattr **tb, int max, struct rtattr *rta,
@@ -651,7 +652,8 @@ int netlink_parse_info(int (*filter)(struct sockaddr_nl *, struct nlmsghdr *,
 
 			error = (*filter)(&snl, h, zns->ns_id, startup);
 			if (error < 0) {
-				zlog_warn("%s filter function error", nl->name);
+				zlog_debug("%s filter function error",
+					   nl->name);
 				ret = error;
 			}
 		}

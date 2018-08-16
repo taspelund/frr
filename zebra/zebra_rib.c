@@ -1048,8 +1048,9 @@ void kernel_route_rib_pass_fail(struct route_node *rn, struct prefix *p,
 		dest->selected_fib = re;
 
 		zsend_route_notify_owner(re, p, ZAPI_ROUTE_FAIL_INSTALL);
-		zlog_warn("%u:%s: Route install failed", re->vrf_id,
-			  prefix2str(p, buf, sizeof(buf)));
+		flog_err(ZEBRA_ERR_DP_INSTALL_FAIL,
+			 "%u:%s: Route install failed", re->vrf_id,
+			 prefix2str(p, buf, sizeof(buf)));
 		break;
 	case SOUTHBOUND_DELETE_SUCCESS:
 		/*
@@ -1072,8 +1073,9 @@ void kernel_route_rib_pass_fail(struct route_node *rn, struct prefix *p,
 		 * delete fails?
 		 */
 		dest->selected_fib = NULL;
-		zlog_warn("%u:%s: Route Deletion failure", re->vrf_id,
-			  prefix2str(p, buf, sizeof(buf)));
+		flog_err(ZEBRA_ERR_DP_DELETE_FAIL,
+			 "%u:%s: Route Deletion failure", re->vrf_id,
+			 prefix2str(p, buf, sizeof(buf)));
 
 		zsend_route_notify_owner(re, p, ZAPI_ROUTE_REMOVE_FAIL);
 		break;

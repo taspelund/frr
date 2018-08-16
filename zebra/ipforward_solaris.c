@@ -86,8 +86,9 @@ static int solaris_nd(const int cmd, const char *parameter, const int value)
 		flog_err(LIB_ERR_PRIVILEGES,
 			  "solaris_nd: Can't raise privileges");
 	if ((fd = open(device, O_RDWR)) < 0) {
-		zlog_warn("failed to open device %s - %s", device,
-			  safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SYSTEM_CALL,
+			     "failed to open device %s - %s", device,
+			     safe_strerror(errno));
 		if (zserv_privs.change(ZPRIVS_LOWER))
 			flog_err(LIB_ERR_PRIVILEGES,
 				  "solaris_nd: Can't lower privileges");
@@ -99,8 +100,9 @@ static int solaris_nd(const int cmd, const char *parameter, const int value)
 			flog_err(LIB_ERR_PRIVILEGES,
 				  "solaris_nd: Can't lower privileges");
 		close(fd);
-		zlog_warn("ioctl I_STR failed on device %s - %s", device,
-			  safe_strerror(save_errno));
+		flog_err_sys(LIB_ERR_SYSTEM_CALL,
+			     "ioctl I_STR failed on device %s - %s", device,
+			     safe_strerror(errno));
 		return -1;
 	}
 	close(fd);
@@ -112,7 +114,7 @@ static int solaris_nd(const int cmd, const char *parameter, const int value)
 		errno = 0;
 		retval = atoi(nd_buf);
 		if (errno) {
-			zlog_warn(
+			zlog_debug(
 				"failed to convert returned value to integer - %s",
 				safe_strerror(errno));
 			retval = -1;

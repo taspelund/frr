@@ -64,6 +64,7 @@
 #include "zebra/rt_netlink.h"
 #include "zebra/zebra_mroute.h"
 #include "zebra/zebra_vxlan.h"
+#include "zebra/zebra_errors.h"
 
 #ifndef AF_MPLS
 #define AF_MPLS 28
@@ -143,6 +144,15 @@ static inline int zebra2proto(int proto)
 		proto = RTPROT_SHARP;
 		break;
 	default:
+		/*
+		 * When a user adds a new protocol this will show up
+		 * to let them know to do something about it.  This
+		 * is intentionally a warn because we should see
+		 * this as part of development of a new protocol
+		 */
+		zlog_debug(
+			"%s: Please add this protocol(%d) to proper rt_netlink.c handling",
+			__PRETTY_FUNCTION__, proto);
 		proto = RTPROT_ZEBRA;
 		break;
 	}
@@ -185,6 +195,15 @@ static inline int proto2zebra(int proto, int family)
 		proto = ZEBRA_ROUTE_STATIC;
 		break;
 	default:
+		/*
+		 * When a user adds a new protocol this will show up
+		 * to let them know to do something about it.  This
+		 * is intentionally a warn because we should see
+		 * this as part of development of a new protocol
+		 */
+		zlog_debug(
+			"%s: Please add this protocol(%d) to proper rt_netlink.c handling",
+			__PRETTY_FUNCTION__, proto);
 		proto = ZEBRA_ROUTE_KERNEL;
 		break;
 	}
@@ -496,7 +515,8 @@ static int netlink_route_change_read_unicast(struct sockaddr_nl *snl,
 					if (ifp)
 						nh_vrf_id = ifp->vrf_id;
 					else {
-						zlog_warn(
+						flog_warn(
+							ZEBRA_ERR_UNKNOWN_INTERFACE,
 							"%s: Unknown interface %u specified, defaulting to VRF_DEFAULT",
 							__PRETTY_FUNCTION__,
 							index);
@@ -702,7 +722,7 @@ int netlink_route_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 
 	if (!(h->nlmsg_type == RTM_NEWROUTE || h->nlmsg_type == RTM_DELROUTE)) {
 		/* If this is not route add/delete message print warning. */
-		zlog_warn("Kernel message: %d NS %u\n", h->nlmsg_type, ns_id);
+		zlog_debug("Kernel message: %d NS %u\n", h->nlmsg_type, ns_id);
 		return 0;
 	}
 
@@ -1832,10 +1852,10 @@ static int netlink_macfdb_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 
 	zif = (struct zebra_if *)ifp->info;
 	if ((br_if = zif->brslave_info.br_if) == NULL) {
-		zlog_warn("%s family %s IF %s(%u) brIF %u - no bridge master",
-			  nl_msg_type_to_str(h->nlmsg_type),
-			  nl_family_to_str(ndm->ndm_family), ifp->name,
-			  ndm->ndm_ifindex, zif->brslave_info.bridge_ifindex);
+		zlog_debug("%s family %s IF %s(%u) brIF %u - no bridge master",
+			   nl_msg_type_to_str(h->nlmsg_type),
+			   nl_family_to_str(ndm->ndm_family), ifp->name,
+			   ndm->ndm_ifindex, zif->brslave_info.bridge_ifindex);
 		return 0;
 	}
 
@@ -1844,15 +1864,15 @@ static int netlink_macfdb_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	netlink_parse_rtattr(tb, NDA_MAX, NDA_RTA(ndm), len);
 
 	if (!tb[NDA_LLADDR]) {
-		zlog_warn("%s family %s IF %s(%u) brIF %u - no LLADDR",
-			  nl_msg_type_to_str(h->nlmsg_type),
-			  nl_family_to_str(ndm->ndm_family), ifp->name,
-			  ndm->ndm_ifindex, zif->brslave_info.bridge_ifindex);
+		zlog_debug("%s family %s IF %s(%u) brIF %u - no LLADDR",
+			   nl_msg_type_to_str(h->nlmsg_type),
+			   nl_family_to_str(ndm->ndm_family), ifp->name,
+			   ndm->ndm_ifindex, zif->brslave_info.bridge_ifindex);
 		return 0;
 	}
 
 	if (RTA_PAYLOAD(tb[NDA_LLADDR]) != ETH_ALEN) {
-		zlog_warn(
+		zlog_debug(
 			"%s family %s IF %s(%u) brIF %u - LLADDR is not MAC, len %lu",
 			nl_msg_type_to_str(h->nlmsg_type),
 			nl_family_to_str(ndm->ndm_family), ifp->name,
@@ -2049,9 +2069,9 @@ static int netlink_macfdb_update(struct interface *ifp, vlanid_t vid,
 	zns = zvrf->zns;
 	zif = ifp->info;
 	if ((br_if = zif->brslave_info.br_if) == NULL) {
-		zlog_warn("MAC %s on IF %s(%u) - no mapping to bridge",
-			  (cmd == RTM_NEWNEIGH) ? "add" : "del", ifp->name,
-			  ifp->ifindex);
+		zlog_debug("MAC %s on IF %s(%u) - no mapping to bridge",
+			   (cmd == RTM_NEWNEIGH) ? "add" : "del", ifp->name,
+			   ifp->ifindex);
 		return -1;
 	}
 
@@ -2136,10 +2156,10 @@ static int netlink_ipneigh_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	netlink_parse_rtattr(tb, NDA_MAX, NDA_RTA(ndm), len);
 
 	if (!tb[NDA_DST]) {
-		zlog_warn("%s family %s IF %s(%u) - no DST",
-			  nl_msg_type_to_str(h->nlmsg_type),
-			  nl_family_to_str(ndm->ndm_family), ifp->name,
-			  ndm->ndm_ifindex);
+		zlog_debug("%s family %s IF %s(%u) - no DST",
+			   nl_msg_type_to_str(h->nlmsg_type),
+			   nl_family_to_str(ndm->ndm_family), ifp->name,
+			   ndm->ndm_ifindex);
 		return 0;
 	}
 
@@ -2195,7 +2215,7 @@ static int netlink_ipneigh_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	if (h->nlmsg_type == RTM_NEWNEIGH) {
 		if (tb[NDA_LLADDR]) {
 			if (RTA_PAYLOAD(tb[NDA_LLADDR]) != ETH_ALEN) {
-				zlog_warn(
+				zlog_debug(
 					"%s family %s IF %s(%u) - LLADDR is not MAC, len %lu",
 					nl_msg_type_to_str(h->nlmsg_type),
 					nl_family_to_str(ndm->ndm_family),

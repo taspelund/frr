@@ -72,10 +72,10 @@ static int kernel_rtm_add_labels(struct mpls_label_stack *nh_label,
 				 struct sockaddr_mpls *smpls)
 {
 	if (nh_label->num_labels > 1) {
-		zlog_warn(
-			"%s: can't push %u labels at "
-			"once (maximum is 1)",
-			__func__, nh_label->num_labels);
+		flog_warn(ZEBRA_ERR_MAX_LABELS_PUSH,
+			  "%s: can't push %u labels at "
+			  "once (maximum is 1)",
+			  __func__, nh_label->num_labels);
 		return -1;
 	}
 
@@ -397,7 +397,8 @@ void kernel_route_rib(struct route_node *rn, struct prefix *p,
 	int route = 0;
 
 	if (src_p && src_p->prefixlen) {
-		zlog_warn("route add: IPv6 sourcedest routes unsupported!");
+		flog_warn(ZEBRA_ERR_UNSUPPORTED_V6_SRCDEST,
+			  "%s: IPv6 sourcedest routes unsupported!", __func__);
 		return;
 	}
 

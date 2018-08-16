@@ -66,6 +66,7 @@
 #include "zebra/zebra_mpls.h"
 #include "zebra/kernel_netlink.h"
 #include "zebra/if_netlink.h"
+#include "zebra/zebra_errors.h"
 
 extern struct zebra_privs_t zserv_privs;
 
@@ -111,8 +112,8 @@ static void netlink_interface_update_hw_addr(struct rtattr **tb,
 		hw_addr_len = RTA_PAYLOAD(tb[IFLA_ADDRESS]);
 
 		if (hw_addr_len > INTERFACE_HWADDR_MAX)
-			zlog_warn("Hardware address is too large: %d",
-				  hw_addr_len);
+			zlog_debug("Hardware address is too large: %d",
+				   hw_addr_len);
 		else {
 			ifp->hw_addr_len = hw_addr_len;
 			memcpy(ifp->hw_addr, RTA_DATA(tb[IFLA_ADDRESS]),
@@ -346,7 +347,8 @@ static void netlink_vrf_change(struct nlmsghdr *h, struct rtattr *tb,
 		vrf = vrf_lookup_by_id((vrf_id_t)ifi->ifi_index);
 
 		if (!vrf) {
-			zlog_warn("%s: vrf not found", __func__);
+			flog_warn(ZEBRA_ERR_VRF_NOT_FOUND, "%s: vrf not found",
+				  __func__);
 			return;
 		}
 
@@ -528,7 +530,8 @@ static int netlink_bridge_interface(struct nlmsghdr *h, int len, ns_id_t ns_id,
 	/* The interface should already be known, if not discard. */
 	ifp = if_lookup_by_index_per_ns(zebra_ns_lookup(ns_id), ifi->ifi_index);
 	if (!ifp) {
-		zlog_warn("Cannot find bridge IF %s(%u)", name, ifi->ifi_index);
+		zlog_debug("Cannot find bridge IF %s(%u)", name,
+			   ifi->ifi_index);
 		return 0;
 	}
 	if (!IS_ZEBRA_IF_VXLAN(ifp))
@@ -891,8 +894,13 @@ int netlink_interface_addr(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	zns = zebra_ns_lookup(ns_id);
 	ifa = NLMSG_DATA(h);
 
-	if (ifa->ifa_family != AF_INET && ifa->ifa_family != AF_INET6)
+	if (ifa->ifa_family != AF_INET && ifa->ifa_family != AF_INET6) {
+		flog_warn(
+			ZEBRA_ERR_UNKNOWN_FAMILY,
+			"Invalid address family: %u received from kernel interface addr change: %u",
+			ifa->ifa_family, h->nlmsg_type);
 		return 0;
+	}
 
 	if (h->nlmsg_type != RTM_NEWADDR && h->nlmsg_type != RTM_DELADDR)
 		return 0;
@@ -1043,8 +1051,8 @@ int netlink_link_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	/* assume if not default zns, then new VRF */
 	if (!(h->nlmsg_type == RTM_NEWLINK || h->nlmsg_type == RTM_DELLINK)) {
 		/* If this is not link add/delete message so print warning. */
-		zlog_warn("netlink_link_change: wrong kernel message %d",
-			  h->nlmsg_type);
+		zlog_debug("netlink_link_change: wrong kernel message %d",
+			   h->nlmsg_type);
 		return 0;
 	}
 
@@ -1249,8 +1257,10 @@ int netlink_link_change(struct sockaddr_nl *snl, struct nlmsghdr *h,
 	} else {
 		/* Delete interface notification from kernel */
 		if (ifp == NULL) {
-			zlog_warn("RTM_DELLINK for unknown interface %s(%u)",
-				  name, ifi->ifi_index);
+			if (IS_ZEBRA_DEBUG_KERNEL)
+				zlog_debug(
+					"RTM_DELLINK for unknown interface %s(%u)",
+					name, ifi->ifi_index);
 			return 0;
 		}
 
