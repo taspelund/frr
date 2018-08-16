@@ -593,7 +593,8 @@ static void sendmsg_zebra_rnh(struct bgp_nexthop_cache *bnc, int command)
 			       exact_match, bnc->bgp->vrf_id);
 	/* TBD: handle the failure */
 	if (ret < 0)
-		zlog_warn("sendmsg_nexthop: zclient_send_message() failed");
+		flog_warn(BGP_WARN_ZEBRA_SEND,
+			  "sendmsg_nexthop: zclient_send_message() failed");
 
 	if ((command == ZEBRA_NEXTHOP_REGISTER)
 	    || (command == ZEBRA_IMPORT_ROUTE_REGISTER))
