@@ -42,6 +42,7 @@ enum lib_ferr_refs {
 	LIB_WARN_STREAM,
 	LIB_WARN_LINUX_NS,
 	LIB_WARN_SLOW_THREAD,
+	LIB_WARN_RMAP_RECURSION_LIMIT,
 };
 
 extern void lib_error_init(void);
