@@ -10844,8 +10844,6 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 		json_object *json_export_vrfs = NULL;
 
 		json = json_object_new_object();
-		json_import_vrfs = json_object_new_array();
-		json_export_vrfs = json_object_new_array();
 
 		/* Provide context for the block */
 		json_object_string_add(json, "vrf", name ? name : "default");
@@ -10870,8 +10868,9 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 				BGP_CONFIG_VRF_TO_VRF_IMPORT)) {
 			json_object_string_add(json, "importFromVrfs", "none");
 			json_object_string_add(json, "importRts", "none");
-			json_object_free(json_import_vrfs);
 		} else {
+			json_import_vrfs = json_object_new_array();
+
 			for (ALL_LIST_ELEMENTS_RO(
 						bgp->vpn_policy[afi].import_vrf,
 						node, vname))
@@ -10895,8 +10894,9 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 			json_object_string_add(json, "routeDistinguisher",
 					       "none");
 			json_object_string_add(json, "exportRts", "none");
-			json_object_free(json_export_vrfs);
 		} else {
+			json_export_vrfs = json_object_new_array();
+
 			for (ALL_LIST_ELEMENTS_RO(
 						bgp->vpn_policy[afi].export_vrf,
 						node, vname))
