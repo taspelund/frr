@@ -364,8 +364,9 @@ buffer_status_t buffer_flush_window(struct buffer *b, int fd, int width,
 			iov_size =
 				((iov_index > IOV_MAX) ? IOV_MAX : iov_index);
 			if ((nbytes = writev(fd, c_iov, iov_size)) < 0) {
-				zlog_warn("%s: writev to fd %d failed: %s",
-					  __func__, fd, safe_strerror(errno));
+				flog_err(LIB_ERR_SOCKET,
+					 "%s: writev to fd %d failed: %s",
+					 __func__, fd, safe_strerror(errno));
 				break;
 			}
 
@@ -376,8 +377,9 @@ buffer_status_t buffer_flush_window(struct buffer *b, int fd, int width,
 	}
 #else  /* IOV_MAX */
 	if ((nbytes = writev(fd, iov, iov_index)) < 0)
-		zlog_warn("%s: writev to fd %d failed: %s", __func__, fd,
-			  safe_strerror(errno));
+		flog_err(LIB_ERR_SOCKET,
+			 "%s: writev to fd %d failed: %s", __func__, fd,
+			 safe_strerror(errno));
 #endif /* IOV_MAX */
 
 	/* Free printed buffer data. */
@@ -434,7 +436,8 @@ in one shot. */
 		if (ERRNO_IO_RETRY(errno))
 			/* Calling code should try again later. */
 			return BUFFER_PENDING;
-		zlog_warn("%s: write error on fd %d: %s", __func__, fd,
+		flog_err(LIB_ERR_SOCKET,
+			 "%s: write error on fd %d: %s", __func__, fd,
 			  safe_strerror(errno));
 		return BUFFER_ERROR;
 	}
@@ -489,8 +492,9 @@ buffer_status_t buffer_write(struct buffer *b, int fd, const void *p,
 		if (ERRNO_IO_RETRY(errno))
 			nbytes = 0;
 		else {
-			zlog_warn("%s: write error on fd %d: %s", __func__, fd,
-				  safe_strerror(errno));
+			flog_err(LIB_ERR_SOCKET,
+				 "%s: write error on fd %d: %s", __func__, fd,
+				 safe_strerror(errno));
 			return BUFFER_ERROR;
 		}
 	}
