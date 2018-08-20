@@ -310,6 +310,7 @@ static struct ospf *ospf_new(u_short instance, const char *name)
 	new->lsa_refresher_started = monotime(NULL);
 
 	new->ibuf = stream_new(OSPF_MAX_PACKET_SIZE + 1);
+
 	new->t_read = NULL;
 	new->oi_write_q = list_new();
 	new->write_oi_count = OSPF_WRITE_INTERFACE_COUNT_DEFAULT;

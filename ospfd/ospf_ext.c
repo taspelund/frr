@@ -545,9 +545,6 @@ static int ospf_ext_link_new_if(struct interface *ifp)
 	int rc = -1;
 
 	if (lookup_ext_by_ifp(ifp) != NULL) {
-		zlog_warn(
-			"EXT (%s): interface %s is already in use",
-			__func__, ifp ? ifp->name : "-");
 		rc = 0; /* Do nothing here. */
 		return rc;
 	}

@@ -751,6 +751,7 @@ static struct ospf_lsa *ospf_router_info_lsa_new()
 
 	/* Create a stream for LSA. */
 	s = stream_new(OSPF_MAX_LSA_SIZE);
+
 	lsah = (struct lsa_header *)STREAM_DATA(s);
 
 	options = OSPF_OPTION_E;  /* Enable AS external as we flood RI with

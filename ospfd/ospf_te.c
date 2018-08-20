@@ -1284,7 +1284,7 @@ static int ospf_mpls_te_lsa_originate_area(void *arg)
 		if (CHECK_FLAG(lp->flags, LPFLG_LSA_ENGAGED)) {
 			if (CHECK_FLAG(lp->flags, LPFLG_LSA_FORCED_REFRESH)) {
 				UNSET_FLAG(lp->flags, LPFLG_LSA_FORCED_REFRESH);
-				zlog_warn(
+				zlog_info(
 					"OSPF MPLS-TE (ospf_mpls_te_lsa_originate_area): Refresh instead of Originate");
 				ospf_mpls_te_lsa_schedule(lp, REFRESH_THIS_LSA);
 			}
@@ -1292,7 +1292,7 @@ static int ospf_mpls_te_lsa_originate_area(void *arg)
 		}
 
 		if (!is_mandated_params_set(lp)) {
-			zlog_warn(
+			zlog_info(
 				"ospf_mpls_te_lsa_originate_area: Link(%s) lacks some mandated MPLS-TE parameters.",
 				lp->ifp ? lp->ifp->name : "?");
 			continue;
