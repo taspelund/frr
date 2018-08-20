@@ -10870,6 +10870,7 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 				BGP_CONFIG_VRF_TO_VRF_IMPORT)) {
 			json_object_string_add(json, "importFromVrfs", "none");
 			json_object_string_add(json, "importRts", "none");
+			json_object_free(json_import_vrfs);
 		} else {
 			for (ALL_LIST_ELEMENTS_RO(
 						bgp->vpn_policy[afi].import_vrf,
@@ -10894,6 +10895,7 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 			json_object_string_add(json, "routeDistinguisher",
 					       "none");
 			json_object_string_add(json, "exportRts", "none");
+			json_object_free(json_export_vrfs);
 		} else {
 			for (ALL_LIST_ELEMENTS_RO(
 						bgp->vpn_policy[afi].export_vrf,
@@ -10959,7 +10961,7 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 			afi_safi_print(afi, safi));
 		else {
 			vty_out(vty,
-		       "This VRF is exporting %s routes to the ollowing VRFs:\n",
+		       "This VRF is exporting %s routes to the following VRFs:\n",
 			afi_safi_print(afi, safi));
 
 			for (ALL_LIST_ELEMENTS_RO(
@@ -10976,6 +10978,7 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 					bgp->vpn_policy[afi].rtlist[dir],
 					ECOMMUNITY_FORMAT_ROUTE_MAP, 0);
 			vty_out(vty, "Export RT: %s\n", ecom_str);
+			XFREE(MTYPE_ECOMMUNITY_STR, ecom_str);
 		}
 	}
 
@@ -10984,8 +10987,8 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 
 /* "show [ip] bgp route-leak" command.  */
 DEFUN (show_ip_bgp_route_leak,
-show_ip_bgp_route_leak_cmd,
-"show [ip] bgp [<view|vrf> VIEWVRFNAME] ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] route-leak  [json]",
+	show_ip_bgp_route_leak_cmd,
+	"show [ip] bgp [<view|vrf> VIEWVRFNAME] ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] route-leak  [json]",
 	SHOW_STR
 	IP_STR
 	BGP_STR
