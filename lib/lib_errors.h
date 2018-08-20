@@ -39,6 +39,7 @@ enum lib_ferr_refs {
 	LIB_ERR_ZMQ,
 	LIB_ERR_UNAVAILABLE,
 	LIB_WARN_SNMP,
+	LIB_WARN_STREAM,
 };
 
 extern void lib_error_init(void);
