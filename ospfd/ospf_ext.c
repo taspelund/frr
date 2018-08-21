@@ -177,12 +177,8 @@ int ospf_ext_init(void)
 void ospf_ext_term(void)
 {
 
-	if ((OspfEXT.scope != OSPF_OPAQUE_AREA_LSA)
-	    && (OspfEXT.scope != OSPF_OPAQUE_AS_LSA))
-		zlog_warn(
-			"EXT: Unable to unregister Extended Prefix "
-			"Opaque LSA functions: Wrong scope!");
-	else
+	if ((OspfEXT.scope == OSPF_OPAQUE_AREA_LSA)
+	    || (OspfEXT.scope == OSPF_OPAQUE_AS_LSA))
 		ospf_delete_opaque_functab(OspfEXT.scope,
 					   OPAQUE_TYPE_EXTENDED_PREFIX_LSA);
 
@@ -319,9 +315,9 @@ static void set_prefix_sid(struct ext_itf *exti, uint8_t algorithm,
 
 	if ((algorithm != SR_ALGORITHM_SPF)
 	    && (algorithm != SR_ALGORITHM_STRICT_SPF)) {
-		zlog_warn(
-			"EXT (%s): unrecognized algorithm, not SPF or S-SPF",
-			__func__);
+		flog_err(OSPF_ERR_INVALID_ALGORITHM,
+			 "EXT (%s): unrecognized algorithm, not SPF or S-SPF",
+			 __func__);
 		return;
 	}
 
@@ -581,9 +577,9 @@ static int ospf_ext_link_del_if(struct interface *ifp)
 
 		rc = 0;
 	} else {
-		zlog_warn(
-			"EXT (%s): interface %s is not found",
-			__func__, ifp ? ifp->name : "-");
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): interface %s is not found", __func__,
+			  ifp ? ifp->name : "-");
 	}
 
 	return rc;
@@ -599,12 +595,8 @@ static void ospf_ext_link_ism_change(struct ospf_interface *oi, int old_status)
 
 	/* Get interface information for Segment Routing */
 	exti = lookup_ext_by_ifp(oi->ifp);
-	if (exti == NULL) {
-		zlog_warn(
-			"EXT (%s): Cannot get Extended info. from OI(%s)",
-			__func__, IF_NAME(oi));
+	if (exti == NULL)
 		return;
-	}
 
 	/* Determine if interface is related to Adjacency or LAN Adj. SID */
 	if (oi->type != OSPF_IFTYPE_LOOPBACK) {
@@ -634,9 +626,9 @@ static void ospf_ext_pref_ism_change(struct ospf_interface *oi, int old_status)
 	/* Get interface information for Segment Routing */
 	exti = lookup_ext_by_ifp(oi->ifp);
 	if (exti == NULL) {
-		zlog_warn(
-			"EXT (%s): Cannot get Extended info. from OI(%s)",
-			__func__, IF_NAME(oi));
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Cannot get Extended info. from OI(%s)",
+			  __func__, IF_NAME(oi));
 		return;
 	}
 
@@ -673,16 +665,16 @@ static void ospf_ext_link_nsm_change(struct ospf_neighbor *nbr, int old_status)
 	/* Get interface information for Segment Routing */
 	exti = lookup_ext_by_ifp(oi->ifp);
 	if (exti == NULL) {
-		zlog_warn(
-			"EXT (%s): Cannot get Extended info. from OI(%s)",
-			__func__, IF_NAME(oi));
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Cannot get Extended info. from OI(%s)",
+			  __func__, IF_NAME(oi));
 		return;
 	}
 
 	if (oi->area == NULL || oi->area->ospf == NULL) {
-		zlog_warn(
-			"EXT (%s): Cannot refer to OSPF from OI(%s)",
-			__func__, IF_NAME(oi));
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Cannot refer to OSPF from OI(%s)",
+			  __func__, IF_NAME(oi));
 		return;
 	}
 
@@ -777,7 +769,8 @@ static int ospf_ext_link_lsa_update(struct ospf_lsa *lsa)
 {
 	/* Sanity Check */
 	if (lsa == NULL) {
-		zlog_warn("EXT (%s): Abort! LSA is NULL", __func__);
+		flog_warn(OSPF_WARN_LSA_NULL,
+			  "EXT (%s): Abort! LSA is NULL", __func__);
 		return -1;
 	}
 
@@ -810,7 +803,8 @@ static int ospf_ext_pref_lsa_update(struct ospf_lsa *lsa)
 
 	/* Sanity Check */
 	if (lsa == NULL) {
-		zlog_warn("EXT (%s): Abort! LSA is NULL", __func__);
+		flog_warn(OSPF_WARN_LSA_NULL,
+			  "EXT (%s): Abort! LSA is NULL", __func__);
 		return -1;
 	}
 
@@ -1084,7 +1078,8 @@ static int ospf_ext_pref_lsa_originate1(struct ospf_area *area,
 	/* Create new Opaque-LSA/Extended Prefix Opaque LSA instance. */
 	new = ospf_ext_pref_lsa_new(area, exti);
 	if (new == NULL) {
-		zlog_warn("EXT (%s): ospf_ext_pref_lsa_new() error", __func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): ospf_ext_pref_lsa_new() error", __func__);
 		return rc;
 	}
 
@@ -1137,7 +1132,8 @@ static int ospf_ext_link_lsa_originate1(struct ospf_area *area,
 	/* Create new Opaque-LSA/Extended Link Opaque LSA instance. */
 	new = ospf_ext_link_lsa_new(area, exti);
 	if (new == NULL) {
-		zlog_warn("EXT (%s): ospf_ext_link_lsa_new() error", __func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): ospf_ext_link_lsa_new() error", __func__);
 		return rc;
 	}
 
@@ -1210,9 +1206,9 @@ static int ospf_ext_pref_lsa_originate(void *arg)
 		if (CHECK_FLAG(exti->flags, EXT_LPFLG_LSA_ENGAGED)) {
 			if (CHECK_FLAG(exti->flags,
 				       EXT_LPFLG_LSA_FORCED_REFRESH)) {
-				zlog_warn(
-					"EXT (%s): Refresh instead of "
-					"Originate", __func__);
+				flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+					  "EXT (%s): Refresh instead of Originate",
+					__func__);
 				UNSET_FLAG(exti->flags,
 					   EXT_LPFLG_LSA_FORCED_REFRESH);
 				ospf_ext_pref_lsa_schedule(exti,
@@ -1266,9 +1262,9 @@ static int ospf_ext_link_lsa_originate(void *arg)
 		if (CHECK_FLAG(exti->flags, EXT_LPFLG_LSA_ENGAGED)) {
 			if (CHECK_FLAG(exti->flags,
 				       EXT_LPFLG_LSA_FORCED_REFRESH)) {
-				zlog_warn(
-					"EXT (%s): Refresh instead of "
-					"Originate", __func__);
+				flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+					  "EXT (%s): Refresh instead of Originate",
+					  __func__);
 				UNSET_FLAG(exti->flags,
 					   EXT_LPFLG_LSA_FORCED_REFRESH);
 				ospf_ext_link_lsa_schedule(exti,
@@ -1316,15 +1312,17 @@ static struct ospf_lsa *ospf_ext_pref_lsa_refresh(struct ospf_lsa *lsa)
 	/* Lookup this lsa corresponding Extended parameters */
 	exti = lookup_ext_by_instance(lsa);
 	if (exti == NULL) {
-		zlog_warn("EXT (%s): Invalid parameter LSA ID", __func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Invalid parameter LSA ID", __func__);
 		/* Flush it anyway. */
 		lsa->data->ls_age = htons(OSPF_LSA_MAXAGE);
 	}
 
 	/* Check if Interface was not disable in the interval */
 	if ((exti != NULL) && !CHECK_FLAG(exti->flags, EXT_LPFLG_LSA_ACTIVE)) {
-		zlog_warn("EXT (%s): Interface was Disabled: Flush it!",
-			__func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Interface was Disabled: Flush it!",
+			  __func__);
 		/* Flush it anyway. */
 		lsa->data->ls_age = htons(OSPF_LSA_MAXAGE);
 	}
@@ -1341,7 +1339,8 @@ static struct ospf_lsa *ospf_ext_pref_lsa_refresh(struct ospf_lsa *lsa)
 	new = ospf_ext_pref_lsa_new(area, exti);
 
 	if (new == NULL) {
-		zlog_warn("EXT (%s): ospf_ext_pref_lsa_new() error", __func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): ospf_ext_pref_lsa_new() error", __func__);
 		return NULL;
 	}
 	new->data->ls_seqnum = lsa_seqnum_increment(lsa);
@@ -1401,16 +1400,17 @@ static struct ospf_lsa *ospf_ext_link_lsa_refresh(struct ospf_lsa *lsa)
 	/* Lookup this LSA corresponding Extended parameters */
 	exti = lookup_ext_by_instance(lsa);
 	if (exti == NULL) {
-		zlog_warn("EXT (%s): Invalid parameter LSA ID", __func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Invalid parameter LSA ID", __func__);
 		/* Flush it anyway. */
 		lsa->data->ls_age = htons(OSPF_LSA_MAXAGE);
 	}
 
 	/* Check if Interface was not disable in the interval */
 	if ((exti != NULL) && !CHECK_FLAG(exti->flags, EXT_LPFLG_LSA_ACTIVE)) {
-		zlog_warn(
-			"EXT (%s): Interface was Disabled: Flush it!",
-			__func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Interface was Disabled: Flush it!",
+			  __func__);
 		lsa->data->ls_age = htons(OSPF_LSA_MAXAGE);
 	}
 
@@ -1425,7 +1425,8 @@ static struct ospf_lsa *ospf_ext_link_lsa_refresh(struct ospf_lsa *lsa)
 	/* Create new Opaque-LSA/Extended Link instance */
 	new = ospf_ext_link_lsa_new(area, exti);
 	if (new == NULL) {
-		zlog_warn("EXT (%s): Error creating new LSA", __func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Error creating new LSA", __func__);
 		return NULL;
 	}
 	new->data->ls_seqnum = lsa_seqnum_increment(lsa);
@@ -1482,9 +1483,9 @@ static void ospf_ext_pref_lsa_schedule(struct ext_itf *exti,
 
 	/* Set LSA header information */
 	if (exti->area == NULL) {
-		zlog_warn(
-			"EXT (%s): Flooding is Area scope but area is not yet "
-			"set", __func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Flooding is Area scope but area is not yet set",
+			  __func__);
 		if (OspfEXT.area == NULL) {
 			top = ospf_lookup_by_vrf_id(VRF_DEFAULT);
 			OspfEXT.area = ospf_area_lookup_by_area_id(
@@ -1510,9 +1511,6 @@ static void ospf_ext_pref_lsa_schedule(struct ext_itf *exti,
 	case FLUSH_THIS_LSA:
 		UNSET_FLAG(exti->flags, EXT_LPFLG_LSA_ENGAGED);
 		ospf_opaque_lsa_flush_schedule(&lsa);
-		break;
-	default:
-		zlog_warn("EXT (%s): Unknown opcode", __func__);
 		break;
 	}
 
@@ -1547,9 +1545,9 @@ static void ospf_ext_link_lsa_schedule(struct ext_itf *exti,
 
 	/* Set LSA header information */
 	if (exti->area == NULL) {
-		zlog_warn(
-			"EXT (%s): Flooding is Area scope but area is not "
-			"yet set", __func__);
+		flog_warn(OSPF_WARN_EXT_LSA_UNEXPECTED,
+			  "EXT (%s): Flooding is Area scope but area is not yet set",
+			  __func__);
 		if (OspfEXT.area == NULL) {
 			top = ospf_lookup_by_vrf_id(VRF_DEFAULT);
 			OspfEXT.area = ospf_area_lookup_by_area_id(
@@ -1575,9 +1573,6 @@ static void ospf_ext_link_lsa_schedule(struct ext_itf *exti,
 	case FLUSH_THIS_LSA:
 		UNSET_FLAG(exti->flags, EXT_LPFLG_LSA_ENGAGED);
 		ospf_opaque_lsa_flush_schedule(&lsa);
-		break;
-	default:
-		zlog_warn("EXT (%s): Unknown opcode", __func__);
 		break;
 	}
 
