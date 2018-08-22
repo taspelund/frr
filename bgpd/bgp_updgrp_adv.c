@@ -662,7 +662,8 @@ void subgroup_announce_route(struct update_subgroup *subgrp)
 void subgroup_default_originate(struct update_subgroup *subgrp, int withdraw)
 {
 	struct bgp *bgp;
-	struct bgp_info *info, init_info;
+	struct attr attr;
+	struct bgp_info *info, init_info, tmp_info;
 	struct prefix p;
 	struct peer *from;
 	struct bgp_node *rn;
@@ -685,8 +686,23 @@ void subgroup_default_originate(struct update_subgroup *subgrp, int withdraw)
 	bgp = peer->bgp;
 	from = bgp->peer_self;
 
-	init_info.attr = NULL;
+	bgp_attr_default_set(&attr, BGP_ORIGIN_IGP);
+	attr.local_pref = bgp->default_local_pref;
+
+	if ((afi == AFI_IP6) || peer_cap_enhe(peer, afi, safi)) {
+		/* IPv6 global nexthop must be included.
+		 */
+		attr.mp_nexthop_len = BGP_ATTR_NHLEN_IPV6_GLOBAL;
+
+		/* If the peer is on shared nextwork and
+		 * we have link-local nexthop set it. */
+		if (peer->shared_network
+		    && !IN6_IS_ADDR_UNSPECIFIED(&peer->nexthop.v6_local))
+			attr.mp_nexthop_len = BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL;
+	}
+	init_info.attr = &attr;
 	info = &init_info;
+	bgp_attr_intern(info->attr);
 
 	memset(&p, 0, sizeof(p));
 	p.family = afi2family(afi);
@@ -697,8 +713,6 @@ void subgroup_default_originate(struct update_subgroup *subgrp, int withdraw)
 		for (rn = bgp_table_top(bgp->rib[afi][safi]); rn;
 		     rn = bgp_route_next(rn)) {
 			for (ri = rn->info; ri; ri = ri->next) {
-				struct bgp_info tmp_info;
-
 				tmp_info.peer = ri->peer;
 				tmp_info.attr = ri->attr;
 
@@ -709,13 +723,9 @@ void subgroup_default_originate(struct update_subgroup *subgrp, int withdraw)
 
 				if ((afi == AFI_IP6)
 				    || peer_cap_enhe(peer, afi, safi)) {
-					/* IPv6 global nexthop must be included.
-					 */
 					tmp_info.attr->mp_nexthop_len =
 						BGP_ATTR_NHLEN_IPV6_GLOBAL;
 
-					/* If the peer is on shared nextwork and
-					 * we have link-local nexthop set it. */
 					if (peer->shared_network
 					    && !IN6_IS_ADDR_UNSPECIFIED(
 						       &peer->nexthop.v6_local))
@@ -728,6 +738,7 @@ void subgroup_default_originate(struct update_subgroup *subgrp, int withdraw)
 					&rn->p, RMAP_BGP, &tmp_info);
 
 				info = &tmp_info;
+				bgp_attr_intern(info->attr);
 
 				if (ret != RMAP_DENYMATCH)
 					break;
@@ -776,6 +787,7 @@ void subgroup_default_originate(struct update_subgroup *subgrp, int withdraw)
 				BGP_ADDPATH_TX_ID_FOR_DEFAULT_ORIGINATE);
 		}
 	}
+	aspath_unintern(&info->attr->aspath);
 }
 
 /*

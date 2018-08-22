@@ -39,6 +39,7 @@
 #include "routemap.h"
 #include "frr_pthread.h"
 
+#include "zebra/zebra_errors.h"
 #include "zebra/rib.h"
 #include "zebra/zserv.h"
 #include "zebra/debug.h"
@@ -138,10 +139,15 @@ static void sigint(void)
 {
 	struct vrf *vrf;
 	struct zebra_vrf *zvrf;
+	struct listnode *ln, *nn;
+	struct zserv *client;
 
 	zlog_notice("Terminating on signal");
 
 	frr_early_fini();
+
+	for (ALL_LIST_ELEMENTS(zebrad.client_list, ln, nn, client))
+		zserv_close_client(client);
 
 	list_delete_all_node(zebrad.client_list);
 	zebra_ptm_finish();
@@ -283,7 +289,8 @@ int main(int argc, char **argv)
 			multipath_num = atoi(optarg);
 			if (multipath_num > MULTIPATH_NUM
 			    || multipath_num <= 0) {
-				zlog_err(
+				flog_err(
+					ZEBRA_ERR_BAD_MULTIPATH_NUM,
 					"Multipath Number specified must be less than %d and greater than 0",
 					MULTIPATH_NUM);
 				return 1;
@@ -406,6 +413,9 @@ int main(int argc, char **argv)
 
 	/* RNH init */
 	zebra_rnh_init();
+	
+	/* Error init */
+	zebra_error_init();
 
 #if defined(HANDLE_ZAPI_FUZZING)
 	if (zapi_fuzzing) {

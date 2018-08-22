@@ -28,6 +28,7 @@
 #include "hash.h"
 #include "jhash.h"
 #include "vrf.h"
+#include "lib_errors.h"
 
 #include "pimd.h"
 #include "pim_cmd.h"
@@ -79,14 +80,13 @@ static void pim_free()
 	pim_route_map_terminate();
 
 	zclient_lookup_free();
-
-	zprivs_terminate(&pimd_privs);
 }
 
 void pim_init()
 {
 	if (!inet_aton(PIM_ALL_PIM_ROUTERS, &qpim_all_pim_routers_addr)) {
-		zlog_err(
+		flog_err(
+			LIB_ERR_SOCKET,
 			"%s %s: could not solve %s to group address: errno=%d: %s",
 			__FILE__, __PRETTY_FUNCTION__, PIM_ALL_PIM_ROUTERS,
 			errno, safe_strerror(errno));

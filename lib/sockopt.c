@@ -27,6 +27,7 @@
 #include "log.h"
 #include "sockopt.h"
 #include "sockunion.h"
+#include "lib_errors.h"
 
 void setsockopt_so_recvbuf(int sock, int size)
 {
@@ -61,8 +62,9 @@ int getsockopt_so_sendbuf(const int sock)
 	int ret = getsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char *)&optval,
 			     &optlen);
 	if (ret < 0) {
-		zlog_err("fd %d: can't getsockopt SO_SNDBUF: %d (%s)", sock,
-			 errno, safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SYSTEM_CALL,
+			     "fd %d: can't getsockopt SO_SNDBUF: %d (%s)", sock,
+			     errno, safe_strerror(errno));
 		return ret;
 	}
 	return optval;
@@ -73,9 +75,9 @@ static void *getsockopt_cmsg_data(struct msghdr *msgh, int level, int type)
 	struct cmsghdr *cmsg;
 	void *ptr = NULL;
 
-	for (cmsg = ZCMSG_FIRSTHDR(msgh); cmsg != NULL;
+	for (cmsg = CMSG_FIRSTHDR(msgh); cmsg != NULL;
 	     cmsg = CMSG_NXTHDR(msgh, cmsg))
-		if (cmsg->cmsg_level == level && cmsg->cmsg_type)
+		if (cmsg->cmsg_level == level && cmsg->cmsg_type == type)
 			return (ptr = CMSG_DATA(cmsg));
 
 	return NULL;
@@ -670,8 +672,10 @@ int sockopt_tcp_signature(int sock, union sockunion *su, const char *password)
 		if (ENOENT == errno)
 			ret = 0;
 		else
-			zlog_err("sockopt_tcp_signature: setsockopt(%d): %s",
-				 sock, safe_strerror(errno));
+			flog_err_sys(
+				LIB_ERR_SYSTEM_CALL,
+				"sockopt_tcp_signature: setsockopt(%d): %s",
+				sock, safe_strerror(errno));
 	}
 	return ret;
 #else  /* HAVE_TCP_MD5SIG */

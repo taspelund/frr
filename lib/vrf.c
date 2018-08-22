@@ -35,6 +35,7 @@
 #include "ns.h"
 #include "privs.h"
 #include "nexthop_group.h"
+#include "lib_errors.h"
 
 /* default VRF ID value used when VRF backend is not NETNS */
 #define VRF_DEFAULT_INTERNAL 0
@@ -466,13 +467,15 @@ void vrf_init(int (*create)(struct vrf *), int (*enable)(struct vrf *),
 	/* The default VRF always exists. */
 	default_vrf = vrf_get(VRF_DEFAULT, VRF_DEFAULT_NAME);
 	if (!default_vrf) {
-		zlog_err("vrf_init: failed to create the default VRF!");
+		flog_err(LIB_ERR_VRF_START,
+			  "vrf_init: failed to create the default VRF!");
 		exit(1);
 	}
 
 	/* Enable the default VRF. */
 	if (!vrf_enable(default_vrf)) {
-		zlog_err("vrf_init: failed to enable the default VRF!");
+		flog_err(LIB_ERR_VRF_START,
+			  "vrf_init: failed to enable the default VRF!");
 		exit(1);
 	}
 
@@ -542,20 +545,23 @@ int vrf_socket(int domain, int type, int protocol, vrf_id_t vrf_id,
 
 	ret = vrf_switch_to_netns(vrf_id);
 	if (ret < 0)
-		zlog_err("%s: Can't switch to VRF %u (%s)", __func__, vrf_id,
-			 safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SOCKET, "%s: Can't switch to VRF %u (%s)",
+			     __func__, vrf_id, safe_strerror(errno));
+
 	if (ret > 0 && interfacename && vrf_default_accepts_vrf(type)) {
 		zlog_err("VRF socket not used since net.ipv4.%s_l3mdev_accept != 0",
 			  (type == SOCK_STREAM ? "tcp" : "udp"));
 		errno = EEXIST; /* not sure if this is the best error... */
 		return -2;
 	}
+
 	ret = socket(domain, type, protocol);
 	save_errno = errno;
 	ret2 = vrf_switchback_to_initial();
 	if (ret2 < 0)
-		zlog_err("%s: Can't switchback from VRF %u (%s)", __func__,
-			 vrf_id, safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SOCKET,
+			     "%s: Can't switchback from VRF %u (%s)", __func__,
+			     vrf_id, safe_strerror(errno));
 	errno = save_errno;
 	if (ret <= 0)
 		return ret;
@@ -676,10 +682,8 @@ int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf, char *pathname,
 	return CMD_SUCCESS;
 }
 
-int vrf_is_mapped_on_netns(vrf_id_t vrf_id)
+int vrf_is_mapped_on_netns(struct vrf *vrf)
 {
-	struct vrf *vrf = vrf_lookup_by_id(vrf_id);
-
 	if (!vrf || vrf->data.l.netns_name[0] == '\0')
 		return 0;
 	if (vrf->vrf_id == VRF_DEFAULT)
@@ -711,12 +715,12 @@ DEFUN_NOSH (vrf,
 	return vrf_handler_create(vty, vrfname, NULL);
 }
 
-DEFUN_NOSH (no_vrf,
-           no_vrf_cmd,
-           "no vrf NAME",
-           NO_STR
-           "Delete a pseudo VRF's configuration\n"
-           "VRF's name\n")
+DEFUN (no_vrf,
+       no_vrf_cmd,
+       "no vrf NAME",
+       NO_STR
+       "Delete a pseudo VRF's configuration\n"
+       "VRF's name\n")
 {
 	const char *vrfname = argv[2]->arg;
 
@@ -744,7 +748,7 @@ DEFUN_NOSH (no_vrf,
 
 struct cmd_node vrf_node = {VRF_NODE, "%s(config-vrf)# ", 1};
 
-DEFUN (vrf_netns,
+DEFUN_NOSH (vrf_netns,
        vrf_netns_cmd,
        "netns NAME",
        "Attach VRF to a Namespace\n"
@@ -758,20 +762,14 @@ DEFUN (vrf_netns,
 	if (!pathname)
 		return CMD_WARNING_CONFIG_FAILED;
 
-	if (vrf_daemon_privs &&
-	    vrf_daemon_privs->change(ZPRIVS_RAISE))
-		zlog_err("%s: Can't raise privileges", __func__);
-
-	ret = vrf_netns_handler_create(vty, vrf, pathname,
-				       NS_UNKNOWN, NS_UNKNOWN);
-
-	if (vrf_daemon_privs &&
-	    vrf_daemon_privs->change(ZPRIVS_LOWER))
-		zlog_err("%s: Can't lower privileges", __func__);
+	frr_elevate_privs(vrf_daemon_privs) {
+		ret = vrf_netns_handler_create(vty, vrf, pathname,
+					       NS_UNKNOWN, NS_UNKNOWN);
+	}
 	return ret;
 }
 
-DEFUN (no_vrf_netns,
+DEFUN_NOSH (no_vrf_netns,
 	no_vrf_netns_cmd,
 	"no netns [NAME]",
 	NO_STR
@@ -887,7 +885,7 @@ int vrf_bind(vrf_id_t vrf_id, int fd, char *name)
 
 	if (fd < 0 || name == NULL)
 		return fd;
-	if (vrf_is_mapped_on_netns(vrf_id))
+	if (vrf_is_mapped_on_netns(vrf_lookup_by_id(vrf_id)))
 		return fd;
 #ifdef SO_BINDTODEVICE
 	ret = setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, name, strlen(name)+1);
@@ -905,14 +903,15 @@ int vrf_getaddrinfo(const char *node, const char *service,
 
 	ret = vrf_switch_to_netns(vrf_id);
 	if (ret < 0)
-		zlog_err("%s: Can't switch to VRF %u (%s)", __func__, vrf_id,
-			 safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SOCKET, "%s: Can't switch to VRF %u (%s)",
+			     __func__, vrf_id, safe_strerror(errno));
 	ret = getaddrinfo(node, service, hints, res);
 	save_errno = errno;
 	ret2 = vrf_switchback_to_initial();
 	if (ret2 < 0)
-		zlog_err("%s: Can't switchback from VRF %u (%s)", __func__,
-			 vrf_id, safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SOCKET,
+			     "%s: Can't switchback from VRF %u (%s)", __func__,
+			     vrf_id, safe_strerror(errno));
 	errno = save_errno;
 	return ret;
 }
@@ -923,16 +922,17 @@ int vrf_ioctl(vrf_id_t vrf_id, int d, unsigned long request, char *params)
 
 	ret = vrf_switch_to_netns(vrf_id);
 	if (ret < 0) {
-		zlog_err("%s: Can't switch to VRF %u (%s)", __func__, vrf_id,
-			 safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SOCKET, "%s: Can't switch to VRF %u (%s)",
+			     __func__, vrf_id, safe_strerror(errno));
 		return 0;
 	}
 	rc = ioctl(d, request, params);
 	saved_errno = errno;
 	ret = vrf_switchback_to_initial();
 	if (ret < 0)
-		zlog_err("%s: Can't switchback from VRF %u (%s)", __func__,
-			 vrf_id, safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SOCKET,
+			     "%s: Can't switchback from VRF %u (%s)", __func__,
+			     vrf_id, safe_strerror(errno));
 	errno = saved_errno;
 	return rc;
 }
@@ -944,14 +944,15 @@ int vrf_sockunion_socket(const union sockunion *su, vrf_id_t vrf_id,
 
 	ret = vrf_switch_to_netns(vrf_id);
 	if (ret < 0)
-		zlog_err("%s: Can't switch to VRF %u (%s)", __func__, vrf_id,
-			 safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SOCKET, "%s: Can't switch to VRF %u (%s)",
+			     __func__, vrf_id, safe_strerror(errno));
 	ret = sockunion_socket(su);
 	save_errno = errno;
 	ret2 = vrf_switchback_to_initial();
 	if (ret2 < 0)
-		zlog_err("%s: Can't switchback from VRF %u (%s)", __func__,
-			 vrf_id, safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SOCKET,
+			     "%s: Can't switchback from VRF %u (%s)", __func__,
+			     vrf_id, safe_strerror(errno));
 	errno = save_errno;
 
 	if (ret <= 0)

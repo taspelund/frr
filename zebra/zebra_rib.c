@@ -20,37 +20,38 @@
 
 #include <zebra.h>
 
-#include "if.h"
-#include "prefix.h"
-#include "table.h"
-#include "memory.h"
-#include "zebra_memory.h"
 #include "command.h"
+#include "if.h"
+#include "linklist.h"
 #include "log.h"
 #include "log_int.h"
-#include "sockunion.h"
-#include "linklist.h"
-#include "thread.h"
-#include "workqueue.h"
+#include "memory.h"
+#include "mpls.h"
+#include "nexthop.h"
+#include "prefix.h"
 #include "prefix.h"
 #include "routemap.h"
-#include "nexthop.h"
-#include "vrf.h"
-#include "mpls.h"
+#include "sockunion.h"
 #include "srcdest_table.h"
+#include "table.h"
+#include "thread.h"
+#include "vrf.h"
+#include "workqueue.h"
 
+#include "zebra/connected.h"
+#include "zebra/debug.h"
+#include "zebra/interface.h"
+#include "zebra/redistribute.h"
 #include "zebra/rib.h"
 #include "zebra/rt.h"
-#include "zebra/zebra_ns.h"
-#include "zebra/zebra_vrf.h"
-#include "zebra/redistribute.h"
-#include "zebra/zebra_routemap.h"
-#include "zebra/debug.h"
-#include "zebra/zebra_rnh.h"
-#include "zebra/interface.h"
-#include "zebra/connected.h"
-#include "zebra/zebra_vxlan.h"
 #include "zebra/zapi_msg.h"
+#include "zebra/zebra_errors.h"
+#include "zebra/zebra_memory.h"
+#include "zebra/zebra_ns.h"
+#include "zebra/zebra_rnh.h"
+#include "zebra/zebra_routemap.h"
+#include "zebra/zebra_vrf.h"
+#include "zebra/zebra_vxlan.h"
 
 DEFINE_HOOK(rib_update, (struct route_node * rn, const char *reason),
 	    (rn, reason))
@@ -1125,10 +1126,14 @@ void rib_install_kernel(struct route_node *rn, struct route_entry *re,
 	hook_call(rib_update, rn, "installing in kernel");
 	switch (kernel_route_rib(rn, p, src_p, old, re)) {
 	case DP_REQUEST_QUEUED:
-		zlog_err("No current known DataPlane interfaces can return this, please fix");
+		flog_err(
+			ZEBRA_ERR_DP_INVALID_RC,
+			"No current known DataPlane interfaces can return this, please fix");
 		break;
 	case DP_REQUEST_FAILURE:
-		zlog_err("No current known Rib Install Failure cases, please fix");
+		flog_err(
+			ZEBRA_ERR_DP_INSTALL_FAIL,
+			"No current known Rib Install Failure cases, please fix");
 		break;
 	case DP_REQUEST_SUCCESS:
 		zvrf->installs++;
@@ -1161,10 +1166,14 @@ void rib_uninstall_kernel(struct route_node *rn, struct route_entry *re)
 	hook_call(rib_update, rn, "uninstalling from kernel");
 	switch (kernel_route_rib(rn, p, src_p, re, NULL)) {
 	case DP_REQUEST_QUEUED:
-		zlog_err("No current known DataPlane interfaces can return this, please fix");
+		flog_err(
+			ZEBRA_ERR_DP_INVALID_RC,
+			"No current known DataPlane interfaces can return this, please fix");
 		break;
 	case DP_REQUEST_FAILURE:
-		zlog_err("No current known RIB Install Failure cases, please fix");
+		flog_err(
+			ZEBRA_ERR_DP_INSTALL_FAIL,
+			"No current known RIB Install Failure cases, please fix");
 		break;
 	case DP_REQUEST_SUCCESS:
 		if (zvrf)
@@ -1936,7 +1945,8 @@ void rib_queue_add(struct route_node *rn)
 	}
 
 	if (zebrad.ribq == NULL) {
-		zlog_err("%s: work_queue does not exist!", __func__);
+		flog_err(ZEBRA_ERR_WQ_NONEXISTENT,
+			  "%s: work_queue does not exist!", __func__);
 		return;
 	}
 
@@ -1965,7 +1975,6 @@ static struct meta_queue *meta_queue_new(void)
 	unsigned i;
 
 	new = XCALLOC(MTYPE_WORK_QUEUE, sizeof(struct meta_queue));
-	assert(new);
 
 	for (i = 0; i < MQ_SIZE; i++) {
 		new->subq[i] = list_new();
@@ -1992,7 +2001,8 @@ static void rib_queue_init(struct zebra_t *zebra)
 
 	if (!(zebra->ribq =
 		      work_queue_new(zebra->master, "route_node processing"))) {
-		zlog_err("%s: could not initialise work queue!", __func__);
+		flog_err(ZEBRA_ERR_WQ_NONEXISTENT,
+			  "%s: could not initialise work queue!", __func__);
 		return;
 	}
 
@@ -2005,7 +2015,8 @@ static void rib_queue_init(struct zebra_t *zebra)
 	zebra->ribq->spec.hold = ZEBRA_RIB_PROCESS_HOLD_TIME;
 
 	if (!(zebra->mq = meta_queue_new())) {
-		zlog_err("%s: could not initialise meta queue!", __func__);
+		flog_err(ZEBRA_ERR_WQ_NONEXISTENT,
+			  "%s: could not initialise meta queue!", __func__);
 		return;
 	}
 	return;
@@ -2086,7 +2097,8 @@ static void rib_link(struct route_node *rn, struct route_entry *re, int process)
 		rib_queue_add(rn);
 }
 
-void rib_addnode(struct route_node *rn, struct route_entry *re, int process)
+static void rib_addnode(struct route_node *rn,
+			struct route_entry *re, int process)
 {
 	/* RE node has been un-removed before route-node is processed.
 	 * route_node must hence already be on the queue for processing..
@@ -2135,10 +2147,6 @@ void rib_unlink(struct route_node *rn, struct route_entry *re)
 	if (dest->selected_fib == re)
 		dest->selected_fib = NULL;
 
-	/* free RE and nexthops */
-	if (re->type == ZEBRA_ROUTE_STATIC)
-		zebra_deregister_rnh_static_nexthops(re->ng.nexthop->vrf_id,
-						     re->ng.nexthop, rn);
 	nexthops_free(re->ng.nexthop);
 	XFREE(MTYPE_RE, re);
 }
@@ -2235,8 +2243,9 @@ void rib_lookup_and_dump(struct prefix_ipv4 *p, vrf_id_t vrf_id)
 	/* Lookup table.  */
 	table = zebra_vrf_table(AFI_IP, SAFI_UNICAST, vrf_id);
 	if (!table) {
-		zlog_err("%s:%u zebra_vrf_table() returned NULL",
-			 __func__, vrf_id);
+		flog_err(ZEBRA_ERR_TABLE_LOOKUP_FAILED,
+			  "%s:%u zebra_vrf_table() returned NULL", __func__,
+			  vrf_id);
 		return;
 	}
 
@@ -2282,8 +2291,9 @@ void rib_lookup_and_pushup(struct prefix_ipv4 *p, vrf_id_t vrf_id)
 	rib_dest_t *dest;
 
 	if (NULL == (table = zebra_vrf_table(AFI_IP, SAFI_UNICAST, vrf_id))) {
-		zlog_err("%s:%u zebra_vrf_table() returned NULL",
-			 __func__, vrf_id);
+		flog_err(ZEBRA_ERR_TABLE_LOOKUP_FAILED,
+			  "%s:%u zebra_vrf_table() returned NULL", __func__,
+			  vrf_id);
 		return;
 	}
 
@@ -2324,7 +2334,7 @@ int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 {
 	struct route_table *table;
 	struct route_node *rn;
-	struct route_entry *same;
+	struct route_entry *same = NULL;
 	struct nexthop *nexthop;
 	int ret = 0;
 
@@ -2358,8 +2368,12 @@ int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 	/* Lookup route node.*/
 	rn = srcdest_rnode_get(table, p, src_p);
 
-	/* If same type of route are installed, treat it as a implicit
-	   withdraw. */
+	/*
+	 * If same type of route are installed, treat it as a implicit
+	 * withdraw.
+	 * If the user has specified the No route replace semantics
+	 * for the install don't do a route replace.
+	 */
 	RNODE_FOREACH_RE (rn, same) {
 		if (CHECK_FLAG(same->status, ROUTE_ENTRY_REMOVED))
 			continue;
@@ -2371,9 +2385,15 @@ int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 		if (same->type == ZEBRA_ROUTE_KERNEL
 		    && same->metric != re->metric)
 			continue;
+
+		if (CHECK_FLAG(re->flags, ZEBRA_FLAG_RR_USE_DISTANCE) &&
+		    same->distance != re->distance)
+			continue;
+
 		/*
-		 * We should allow duplicate connected routes because of
-		 * IPv6 link-local routes and unnumbered interfaces on Linux.
+		 * We should allow duplicate connected routes
+		 * because of IPv6 link-local routes and unnumbered
+		 * interfaces on Linux.
 		 */
 		if (same->type != ZEBRA_ROUTE_CONNECT)
 			break;
@@ -2410,7 +2430,8 @@ int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 		unsigned short instance, int flags, struct prefix *p,
 		struct prefix_ipv6 *src_p, const struct nexthop *nh,
-		uint32_t table_id, uint32_t metric, bool fromkernel)
+		uint32_t table_id, uint32_t metric, uint8_t distance,
+		bool fromkernel)
 {
 	struct route_table *table;
 	struct route_node *rn;
@@ -2464,6 +2485,10 @@ void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 			continue;
 		if (re->instance != instance)
 			continue;
+		if (CHECK_FLAG(re->flags, ZEBRA_FLAG_RR_USE_DISTANCE) &&
+		    distance != re->distance)
+			continue;
+
 		if (re->type == ZEBRA_ROUTE_KERNEL && re->metric != metric)
 			continue;
 		if (re->type == ZEBRA_ROUTE_CONNECT && (rtnh = re->ng.nexthop)
@@ -2626,8 +2651,7 @@ int rib_add(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 }
 
 /* Schedule routes of a particular table (address-family) based on event. */
-static void rib_update_table(struct route_table *table,
-			     rib_update_event_t event)
+void rib_update_table(struct route_table *table, rib_update_event_t event)
 {
 	struct route_node *rn;
 	struct route_entry *re, *next;
@@ -2707,12 +2731,18 @@ void rib_update(vrf_id_t vrf_id, rib_update_event_t event)
 
 	/* Process routes of interested address-families. */
 	table = zebra_vrf_table(AFI_IP, SAFI_UNICAST, vrf_id);
-	if (table)
+	if (table) {
+		if (IS_ZEBRA_DEBUG_EVENT)
+			zlog_debug("%s : AFI_IP event %d", __func__, event);
 		rib_update_table(table, event);
+	}
 
 	table = zebra_vrf_table(AFI_IP6, SAFI_UNICAST, vrf_id);
-	if (table)
+	if (table) {
+		if (IS_ZEBRA_DEBUG_EVENT)
+			zlog_debug("%s : AFI_IP6 event %d", __func__, event);
 		rib_update_table(table, event);
+	}
 }
 
 /* Delete self installed routes after zebra is relaunched.  */

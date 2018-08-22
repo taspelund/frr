@@ -33,6 +33,7 @@
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_mplsvpn.h"
 #include "bgpd/bgp_flowspec_private.h"
+#include "bgpd/bgp_errors.h"
 
 DEFINE_MTYPE_STATIC(BGPD, PBR_MATCH_ENTRY, "PBR match entry")
 DEFINE_MTYPE_STATIC(BGPD, PBR_MATCH, "PBR match")
@@ -652,8 +653,9 @@ static int bgp_pbr_build_and_validate_entry(struct prefix *p,
 			action_count++;
 			if (action_count > ACTIONS_MAX_NUM) {
 				if (BGP_DEBUG(pbr, PBR_ERROR))
-					zlog_err("%s: flowspec actions exceeds limit (max %u)",
-						 __func__, action_count);
+					flog_err(BGP_ERR_FLOWSPEC_PACKET,
+						  "%s: flowspec actions exceeds limit (max %u)",
+						  __func__, action_count);
 				break;
 			}
 			api_action = &api->actions[action_count - 1];
@@ -1678,7 +1680,7 @@ static void bgp_pbr_dump_entry(struct bgp_pbr_filter *bpf, bool add)
 			 ? "!" : "",
 			 bpf->dscp->val);
 	}
-	zlog_info("BGP: %s FS PBR from %s to %s, %s %s",
+	zlog_debug("BGP: %s FS PBR from %s to %s, %s %s",
 		  add ? "adding" : "removing",
 		  bpf->src == NULL ? "<all>" :
 		  prefix2str(bpf->src, bufsrc, sizeof(bufsrc)),
@@ -1805,7 +1807,7 @@ static void bgp_pbr_policyroute_add_to_zebra_unit(struct bgp *bgp,
 		       bgp_pbr_match_alloc_intern);
 
 	/* new, then self allocate ipset_name and unique */
-	if (bpm && bpm->unique == 0) {
+	if (bpm->unique == 0) {
 		bpm->unique = ++bgp_pbr_match_counter_unique;
 		/* 0 value is forbidden */
 		sprintf(bpm->ipset_name, "match%p", bpm);
@@ -1836,10 +1838,9 @@ static void bgp_pbr_policyroute_add_to_zebra_unit(struct bgp *bgp,
 	temp2.src_port_max = src_port ? src_port->max_port : 0;
 	temp2.dst_port_max = dst_port ? dst_port->max_port : 0;
 	temp2.proto = bpf->protocol;
-	if (bpm)
-		bpme = hash_get(bpm->entry_hash, &temp2,
-				bgp_pbr_match_entry_alloc_intern);
-	if (bpme && bpme->unique == 0) {
+	bpme = hash_get(bpm->entry_hash, &temp2,
+			bgp_pbr_match_entry_alloc_intern);
+	if (bpme->unique == 0) {
 		bpme->unique = ++bgp_pbr_match_entry_counter_unique;
 		/* 0 value is forbidden */
 		bpme->backpointer = bpm;
@@ -1851,7 +1852,7 @@ static void bgp_pbr_policyroute_add_to_zebra_unit(struct bgp *bgp,
 		bpme_found = true;
 
 	/* already installed */
-	if (bpme_found && bpme) {
+	if (bpme_found) {
 		struct bgp_info_extra *extra = bgp_info_extra_get(binfo);
 
 		if (extra && extra->bgp_fs_pbr &&
@@ -2250,15 +2251,17 @@ void bgp_pbr_update_entry(struct bgp *bgp, struct prefix *p,
 
 	if (!bgp_zebra_tm_chunk_obtained()) {
 		if (BGP_DEBUG(pbr, PBR_ERROR))
-			zlog_err("%s: table chunk not obtained yet",
-				 __func__);
+			flog_err(BGP_ERR_TABLE_CHUNK,
+				  "%s: table chunk not obtained yet",
+				  __func__);
 		return;
 	}
 
 	if (bgp_pbr_build_and_validate_entry(p, info, &api) < 0) {
 		if (BGP_DEBUG(pbr, PBR_ERROR))
-			zlog_err("%s: cancel updating entry %p in bgp pbr",
-				 __func__, info);
+			flog_err(BGP_ERR_FLOWSPEC_INSTALLATION,
+				  "%s: cancel updating entry %p in bgp pbr",
+				  __func__, info);
 		return;
 	}
 	bgp_pbr_handle_entry(bgp, info, &api, nlri_update);

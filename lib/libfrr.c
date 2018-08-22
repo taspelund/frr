@@ -35,6 +35,7 @@
 #include "log_int.h"
 #include "module.h"
 #include "network.h"
+#include "lib_errors.h"
 
 DEFINE_HOOK(frr_late_init, (struct thread_master * tm), (tm))
 DEFINE_KOOH(frr_early_fini, (), ())
@@ -631,6 +632,9 @@ struct thread_master *frr_init(void)
 	vty_init(master);
 	memory_init();
 
+	log_ref_init();
+	lib_error_init();
+
 	return master;
 }
 
@@ -778,9 +782,14 @@ static int frr_config_read_in(struct thread *t)
 {
 	if (!vty_read_config(di->config_file, config_default) &&
 	    di->backup_config_file) {
+		char *orig = XSTRDUP(MTYPE_TMP, host_config_get());
+
 		zlog_info("Attempting to read backup config file: %s specified",
 			  di->backup_config_file);
 		vty_read_config(di->backup_config_file, config_default);
+
+		host_config_set(orig);
+		XFREE(MTYPE_TMP, orig);
 	}
 	return 0;
 }
@@ -853,8 +862,9 @@ static void frr_terminal_close(int isexit)
 
 	nullfd = open("/dev/null", O_RDONLY | O_NOCTTY);
 	if (nullfd == -1) {
-		zlog_err("%s: failed to open /dev/null: %s", __func__,
-			 safe_strerror(errno));
+		flog_err_sys(LIB_ERR_SYSTEM_CALL,
+			     "%s: failed to open /dev/null: %s", __func__,
+			     safe_strerror(errno));
 	} else {
 		dup2(nullfd, 0);
 		dup2(nullfd, 1);
@@ -925,8 +935,9 @@ void frr_run(struct thread_master *master)
 	} else if (di->daemon_mode) {
 		int nullfd = open("/dev/null", O_RDONLY | O_NOCTTY);
 		if (nullfd == -1) {
-			zlog_err("%s: failed to open /dev/null: %s", __func__,
-				 safe_strerror(errno));
+			flog_err_sys(LIB_ERR_SYSTEM_CALL,
+				     "%s: failed to open /dev/null: %s",
+				     __func__, safe_strerror(errno));
 		} else {
 			dup2(nullfd, 0);
 			dup2(nullfd, 1);
@@ -963,6 +974,7 @@ void frr_fini(void)
 	/* memory_init -> nothing needed */
 	vty_terminate();
 	cmd_terminate();
+	log_ref_fini();
 	zprivs_terminate(di->privs);
 	/* signal_init -> nothing needed */
 	thread_master_free(master);

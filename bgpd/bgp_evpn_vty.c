@@ -35,6 +35,7 @@
 #include "bgpd/bgp_evpn_private.h"
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_vty.h"
+#include "bgpd/bgp_errors.h"
 #include "bgpd/bgp_ecommunity.h"
 
 #define SHOW_DISPLAY_STANDARD 0
@@ -1892,7 +1893,8 @@ static struct bgpevpn *evpn_create_update_vni(struct bgp *bgp, vni_t vni)
 		 */
 		vpn = bgp_evpn_new(bgp, vni, bgp->router_id, 0);
 		if (!vpn) {
-			zlog_err(
+			flog_err(
+				BGP_ERR_VNI,
 				"%u: Failed to allocate VNI entry for VNI %u - at Config",
 				bgp->vrf_id, vni);
 			return NULL;
@@ -2807,9 +2809,6 @@ DEFUN (bgp_evpn_advertise_default_gw_vni,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!vpn)
-		return CMD_WARNING;
-
 	evpn_set_advertise_default_gw(bgp, vpn);
 
 	return CMD_SUCCESS;
@@ -2825,9 +2824,6 @@ DEFUN (no_bgp_evpn_advertise_default_vni_gw,
 	VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
 
 	if (!bgp)
-		return CMD_WARNING;
-
-	if (!vpn)
 		return CMD_WARNING;
 
 	evpn_unset_advertise_default_gw(bgp, vpn);
@@ -2972,9 +2968,6 @@ DEFUN_HIDDEN (bgp_evpn_advertise_vni_subnet,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!vpn)
-		return CMD_WARNING;
-
 	bgp_vrf = bgp_lookup_by_vrf_id(vpn->tenant_vrf_id);
 	if (!bgp_vrf)
 		return CMD_WARNING;
@@ -2993,9 +2986,6 @@ DEFUN_HIDDEN (no_bgp_evpn_advertise_vni_subnet,
 	VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
 
 	if (!bgp)
-		return CMD_WARNING;
-
-	if (!vpn)
 		return CMD_WARNING;
 
 	evpn_unset_advertise_subnet(bgp, vpn);
@@ -4225,7 +4215,7 @@ DEFUN (bgp_evpn_vni_rd,
 	VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
 	int ret;
 
-	if (!bgp || !vpn)
+	if (!bgp)
 		return CMD_WARNING;
 
 	if (bgp->vrf_id != VRF_DEFAULT) {
@@ -4261,7 +4251,7 @@ DEFUN (no_bgp_evpn_vni_rd,
 	VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
 	int ret;
 
-	if (!bgp || !vpn)
+	if (!bgp)
 		return CMD_WARNING;
 
 	if (bgp->vrf_id != VRF_DEFAULT) {
@@ -4301,7 +4291,7 @@ DEFUN (no_bgp_evpn_vni_rd_without_val,
 	struct bgp *bgp = VTY_GET_CONTEXT(bgp);
 	VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
 
-	if (!bgp || !vpn)
+	if (!bgp)
 		return CMD_WARNING;
 
 	if (bgp->vrf_id != VRF_DEFAULT) {
@@ -4630,7 +4620,7 @@ DEFUN (bgp_evpn_vni_rt,
 	int rt_type;
 	struct ecommunity *ecomadd = NULL;
 
-	if (!bgp || !vpn)
+	if (!bgp)
 		return CMD_WARNING;
 
 	if (bgp->vrf_id != VRF_DEFAULT) {
@@ -4698,7 +4688,7 @@ DEFUN (no_bgp_evpn_vni_rt,
 	int rt_type, found_ecomdel;
 	struct ecommunity *ecomdel = NULL;
 
-	if (!bgp || !vpn)
+	if (!bgp)
 		return CMD_WARNING;
 
 	if (bgp->vrf_id != VRF_DEFAULT) {
@@ -4797,7 +4787,7 @@ DEFUN (no_bgp_evpn_vni_rt_without_val,
 	VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
 	int rt_type;
 
-	if (!bgp || !vpn)
+	if (!bgp)
 		return CMD_WARNING;
 
 	if (bgp->vrf_id != VRF_DEFAULT) {

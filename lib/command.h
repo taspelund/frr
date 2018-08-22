@@ -139,6 +139,8 @@ enum node_type {
 			  connections.*/
 	BGP_FLOWSPECV4_NODE,	/* BGP IPv4 FLOWSPEC Address-Family */
 	BGP_FLOWSPECV6_NODE,	/* BGP IPv6 FLOWSPEC Address-Family */
+	BFD_NODE,		 /* BFD protocol mode. */
+	BFD_PEER_NODE,		 /* BFD peer configuration mode. */
 	NODE_TYPE_MAX, /* maximum */
 };
 
@@ -219,6 +221,9 @@ struct cmd_node {
 #define DEFPY(funcname, cmdname, cmdstr, helpstr)                              \
 	DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, 0, 0)            \
 	funcdecl_##funcname
+
+#define DEFPY_NOSH(funcname, cmdname, cmdstr, helpstr)                         \
+	DEFPY(funcname, cmdname, cmdstr, helpstr)
 
 #define DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr, attr)                   \
 	DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attr, 0)         \
@@ -302,6 +307,9 @@ struct cmd_node {
 #define DEFPY(funcname, cmdname, cmdstr, helpstr)                              \
 	DEFUN(funcname, cmdname, cmdstr, helpstr)
 
+#define DEFPY_NOSH(funcname, cmdname, cmdstr, helpstr)                         \
+	DEFUN_NOSH(funcname, cmdname, cmdstr, helpstr)
+
 #define DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr, attr)                   \
 	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr, attr)
 #endif /* VTYSH_EXTRACT_PL */
@@ -338,6 +346,7 @@ struct cmd_node {
 #define UNDEBUG_STR "Disable debugging functions (see also 'debug')\n"
 #define ROUTER_STR "Enable a routing process\n"
 #define AS_STR "AS number\n"
+#define MAC_STR "MAC address\n"
 #define MBGP_STR "MBGP information\n"
 #define MATCH_STR "Match values from routing table\n"
 #define SET_STR "Set values in destination routing protocol\n"

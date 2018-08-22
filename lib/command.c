@@ -45,6 +45,7 @@
 #include "libfrr.h"
 #include "jhash.h"
 #include "hook.h"
+#include "lib_errors.h"
 
 DEFINE_MTYPE(LIB, HOST, "Host config")
 DEFINE_MTYPE(LIB, COMPLETION, "Completion item")
@@ -143,6 +144,8 @@ const char *node_names[] = {
 				     */
 	"bgp ipv6 flowspec",	    /* BGP_FLOWSPECV6_NODE
 				     */
+	"bfd",			 /* BFD_NODE */
+	"bfd peer",		 /* BFD_PEER_NODE */
 };
 /* clang-format on */
 
@@ -987,6 +990,9 @@ enum node_type node_parent(enum node_type node)
 	case LDP_PSEUDOWIRE_NODE:
 		ret = LDP_L2VPN_NODE;
 		break;
+	case BFD_PEER_NODE:
+		ret = BFD_NODE;
+		break;
 	default:
 		ret = CONFIG_NODE;
 		break;
@@ -1433,6 +1439,7 @@ void cmd_exit(struct vty *vty)
 	case RMAP_NODE:
 	case PBRMAP_NODE:
 	case VTY_NODE:
+	case BFD_NODE:
 		vty->node = CONFIG_NODE;
 		break;
 	case BGP_IPV4_NODE:
@@ -1473,6 +1480,9 @@ void cmd_exit(struct vty *vty)
 		break;
 	case LINK_PARAMS_NODE:
 		vty->node = INTERFACE_NODE;
+		break;
+	case BFD_PEER_NODE:
+		vty->node = BFD_NODE;
 		break;
 	default:
 		break;
@@ -1544,6 +1554,8 @@ DEFUN (config_end,
 	case KEYCHAIN_KEY_NODE:
 	case VTY_NODE:
 	case LINK_PARAMS_NODE:
+	case BFD_NODE:
+	case BFD_PEER_NODE:
 		vty_config_unlock(vty);
 		vty->node = ENABLE_NODE;
 		break;
@@ -2405,15 +2417,12 @@ static int set_log_file(struct vty *vty, const char *fname, int loglevel)
 		cwd[MAXPATHLEN] = '\0';
 
 		if (getcwd(cwd, MAXPATHLEN) == NULL) {
-			zlog_err("config_log_file: Unable to alloc mem!");
+			flog_err_sys(LIB_ERR_SYSTEM_CALL,
+				     "config_log_file: Unable to alloc mem!");
 			return CMD_WARNING_CONFIG_FAILED;
 		}
 
-		if ((p = XMALLOC(MTYPE_TMP, strlen(cwd) + strlen(fname) + 2))
-		    == NULL) {
-			zlog_err("config_log_file: Unable to alloc mem!");
-			return CMD_WARNING_CONFIG_FAILED;
-		}
+		p = XMALLOC(MTYPE_TMP, strlen(cwd) + strlen(fname) + 2);
 		sprintf(p, "%s/%s", cwd, fname);
 		fullpath = p;
 	} else

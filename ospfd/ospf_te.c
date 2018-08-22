@@ -857,11 +857,6 @@ static int ospf_mpls_te_new_if(struct interface *ifp)
 	}
 
 	new = XCALLOC(MTYPE_OSPF_MPLS_TE, sizeof(struct mpls_te_link));
-	if (new == NULL) {
-		zlog_warn("ospf_mpls_te_new_if: XMALLOC: %s",
-			  safe_strerror(errno));
-		return rc;
-	}
 
 	new->instance = get_mpls_te_instance_value();
 	new->ifp = ifp;
@@ -1206,18 +1201,7 @@ static struct ospf_lsa *ospf_mpls_te_lsa_new(struct ospf *ospf,
 	lsah->length = htons(length);
 
 	/* Now, create an OSPF LSA instance. */
-	if ((new = ospf_lsa_new()) == NULL) {
-		zlog_warn("%s: ospf_lsa_new() ?", __func__);
-		stream_free(s);
-		return NULL;
-	}
-	if ((new->data = ospf_lsa_data_new(length)) == NULL) {
-		zlog_warn("%s: ospf_lsa_data_new() ?", __func__);
-		ospf_lsa_unlock(&new);
-		new = NULL;
-		stream_free(s);
-		return new;
-	}
+	new = ospf_lsa_new_and_data(length);
 
 	new->vrf_id = ospf->vrf_id;
 	if (area && area->ospf)

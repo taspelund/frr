@@ -179,6 +179,9 @@ void vtysh_config_parse_line(void *arg, const char *line)
 					   strlen(" ip multicast boundary"))
 				   == 0) {
 				config_add_line_end(config->line, line);
+			} else if (strncmp(line, " ip igmp query-interval",
+					   strlen(" ip igmp query-interval")) == 0) {
+				config_add_line_end(config->line, line);
 			} else if (config->index == LINK_PARAMS_NODE
 				   && strncmp(line, "  exit-link-params",
 					      strlen("  exit"))
@@ -315,6 +318,8 @@ void vtysh_config_parse_line(void *arg, const char *line)
 			config = config_get(PROTOCOL_NODE, line);
 		else if (strncmp(line, "mpls", strlen("mpls")) == 0)
 			config = config_get(MPLS_NODE, line);
+		else if (strncmp(line, "bfd", strlen("bfd")) == 0)
+			config = config_get(BFD_NODE, line);
 		else {
 			if (strncmp(line, "log", strlen("log")) == 0
 			    || strncmp(line, "hostname", strlen("hostname"))

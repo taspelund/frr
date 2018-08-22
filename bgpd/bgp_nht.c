@@ -38,6 +38,7 @@
 #include "bgpd/bgp_attr.h"
 #include "bgpd/bgp_nexthop.h"
 #include "bgpd/bgp_debug.h"
+#include "bgpd/bgp_errors.h"
 #include "bgpd/bgp_nht.h"
 #include "bgpd/bgp_fsm.h"
 #include "bgpd/bgp_zebra.h"
@@ -88,7 +89,7 @@ int bgp_find_nexthop(struct bgp_info *path, int connected)
 
 static void bgp_unlink_nexthop_check(struct bgp_nexthop_cache *bnc)
 {
-	if (LIST_EMPTY(&(bnc->paths)) && bnc->nht_info) {
+	if (LIST_EMPTY(&(bnc->paths)) && !bnc->nht_info) {
 		if (BGP_DEBUG(nht, NHT)) {
 			char buf[PREFIX2STR_BUFFER];
 			zlog_debug("bgp_unlink_nexthop: freeing bnc %s",
@@ -343,7 +344,8 @@ void bgp_parse_nexthop_update(int command, vrf_id_t vrf_id)
 
 	bgp = bgp_lookup_by_vrf_id(vrf_id);
 	if (!bgp) {
-		zlog_err(
+		flog_err(
+			BGP_ERR_NH_UPD,
 			"parse nexthop update: instance not found for vrf_id %u",
 			vrf_id);
 		return;

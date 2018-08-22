@@ -54,6 +54,7 @@
 #include "lib/zclient.h"          /* for zmsghdr, ZEBRA_HEADER_SIZE, ZEBRA... */
 #include "lib/frr_pthread.h"      /* for frr_pthread_new, frr_pthread_stop... */
 #include "lib/frratomic.h"        /* for atomic_load_explicit, atomic_stor... */
+#include "lib/lib_errors.h"       /* for generic ferr ids */
 
 #include "zebra/debug.h"          /* for various debugging macros */
 #include "zebra/rib.h"            /* for rib_score_proto */
@@ -91,7 +92,7 @@ enum zserv_event {
 	/* The calling client has packets on its input buffer */
 	ZSERV_PROCESS_MESSAGES,
 	/* The calling client wishes to be killed */
-	ZSERV_HANDLE_CLOSE,
+	ZSERV_HANDLE_CLIENT_FAIL,
 };
 
 /*
@@ -160,18 +161,25 @@ static void zserv_log_message(const char *errmsg, struct stream *msg,
 /*
  * Gracefully shut down a client connection.
  *
- * Cancel any pending tasks for the client's thread. Then schedule a task on the
- * main thread to shut down the calling thread.
+ * Cancel any pending tasks for the client's thread. Then schedule a task on
+ * the main thread to shut down the calling thread.
+ *
+ * It is not safe to close the client socket in this function. The socket is
+ * owned by the main thread.
  *
  * Must be called from the client pthread, never the main thread.
  */
-static void zserv_client_close(struct zserv *client)
+static void zserv_client_fail(struct zserv *client)
 {
+	zlog_warn("Client '%s' encountered an error and is shutting down.",
+		  zebra_route_string(client->proto));
+
 	atomic_store_explicit(&client->pthread->running, false,
-			      memory_order_seq_cst);
+			      memory_order_relaxed);
+
 	THREAD_OFF(client->t_read);
 	THREAD_OFF(client->t_write);
-	zserv_event(client, ZSERV_HANDLE_CLOSE);
+	zserv_event(client, ZSERV_HANDLE_CLIENT_FAIL);
 }
 
 /*
@@ -264,7 +272,7 @@ static int zserv_write(struct thread *thread)
 zwrite_fail:
 	zlog_warn("%s: could not write to %s [fd = %d], closing.", __func__,
 		  zebra_route_string(client->proto), client->sock);
-	zserv_client_close(client);
+	zserv_client_fail(client);
 	return 0;
 }
 
@@ -438,7 +446,7 @@ static int zserv_read(struct thread *thread)
 
 zread_fail:
 	stream_fifo_free(cache);
-	zserv_client_close(client);
+	zserv_client_fail(client);
 	return -1;
 }
 
@@ -569,6 +577,7 @@ static void zserv_client_free(struct zserv *client)
 		unsigned long nroutes;
 
 		close(client->sock);
+
 		nroutes = rib_score_proto(client->proto, client->instance);
 		zlog_notice(
 			"client %d disconnected. %lu %s routes removed from the rib",
@@ -605,28 +614,40 @@ static void zserv_client_free(struct zserv *client)
 	XFREE(MTYPE_TMP, client);
 }
 
-/*
- * Finish closing a client.
- *
- * This task is scheduled by a ZAPI client pthread on the main pthread when it
- * wants to stop itself. When this executes, the client connection should
- * already have been closed. This task's responsibility is to gracefully
- * terminate the client thread, update relevant internal datastructures and
- * free any resources allocated by the main thread.
- */
-static int zserv_handle_client_close(struct thread *thread)
+void zserv_close_client(struct zserv *client)
 {
-	struct zserv *client = THREAD_ARG(thread);
-
-	/* synchronously stop thread */
+	/* synchronously stop and join pthread */
 	frr_pthread_stop(client->pthread, NULL);
 
-	/* destroy frr_pthread */
+	if (IS_ZEBRA_DEBUG_EVENT)
+		zlog_debug("Closing client '%s'",
+			   zebra_route_string(client->proto));
+
+	thread_cancel_event(zebrad.master, client);
+	THREAD_OFF(client->t_cleanup);
+
+	/* destroy pthread */
 	frr_pthread_destroy(client->pthread);
 	client->pthread = NULL;
 
+	/* remove from client list */
 	listnode_delete(zebrad.client_list, client);
+
+	/* delete client */
 	zserv_client_free(client);
+}
+
+/*
+ * This task is scheduled by a ZAPI client pthread on the main pthread when it
+ * wants to stop itself. When this executes, the client connection should
+ * already have been closed and the thread will most likely have died, but its
+ * resources still need to be cleaned up.
+ */
+static int zserv_handle_client_fail(struct thread *thread)
+{
+	struct zserv *client = THREAD_ARG(thread);
+
+	zserv_close_client(client);
 	return 0;
 }
 
@@ -766,15 +787,14 @@ void zserv_start(char *path)
 			unlink(suna->sun_path);
 	}
 
-	zserv_privs.change(ZPRIVS_RAISE);
-	setsockopt_so_recvbuf(zebrad.sock, 1048576);
-	setsockopt_so_sendbuf(zebrad.sock, 1048576);
-	zserv_privs.change(ZPRIVS_LOWER);
+	frr_elevate_privs(&zserv_privs) {
+		setsockopt_so_recvbuf(zebrad.sock, 1048576);
+		setsockopt_so_sendbuf(zebrad.sock, 1048576);
+	}
 
-	if (sa.ss_family != AF_UNIX && zserv_privs.change(ZPRIVS_RAISE))
-		zlog_err("Can't raise privileges");
-
-	ret = bind(zebrad.sock, (struct sockaddr *)&sa, sa_len);
+	frr_elevate_privs((sa.ss_family != AF_UNIX) ? &zserv_privs : NULL) {
+		ret = bind(zebrad.sock, (struct sockaddr *)&sa, sa_len);
+	}
 	if (ret < 0) {
 		zlog_warn("Can't bind zserv socket on %s: %s", path,
 			  safe_strerror(errno));
@@ -784,8 +804,6 @@ void zserv_start(char *path)
 		zebrad.sock = -1;
 		return;
 	}
-	if (sa.ss_family != AF_UNIX && zserv_privs.change(ZPRIVS_LOWER))
-		zlog_err("Can't lower privileges");
 
 	ret = listen(zebrad.sock, 5);
 	if (ret < 0) {
@@ -814,9 +832,9 @@ void zserv_event(struct zserv *client, enum zserv_event event)
 		thread_add_event(zebrad.master, zserv_process_messages, client,
 				 0, NULL);
 		break;
-	case ZSERV_HANDLE_CLOSE:
-		thread_add_event(zebrad.master, zserv_handle_client_close,
-				 client, 0, NULL);
+	case ZSERV_HANDLE_CLIENT_FAIL:
+		thread_add_event(zebrad.master, zserv_handle_client_fail,
+				 client, 0, &client->t_cleanup);
 	}
 }
 
@@ -1037,7 +1055,6 @@ void zserv_init(void)
 {
 	/* Client list init. */
 	zebrad.client_list = list_new();
-	zebrad.client_list->del = (void (*)(void *)) zserv_client_free;
 
 	/* Misc init. */
 	zebrad.sock = -1;

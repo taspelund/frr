@@ -54,11 +54,13 @@
 #include "bgpd/bgp_regex.h"
 #include "bgpd/bgp_clist.h"
 #include "bgpd/bgp_debug.h"
+#include "bgpd/bgp_errors.h"
 #include "bgpd/bgp_filter.h"
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_packet.h"
 #include "bgpd/bgp_keepalives.h"
 #include "bgpd/bgp_network.h"
+#include "bgpd/bgp_errors.h"
 
 #ifdef ENABLE_BGP_VNC
 #include "bgpd/rfapi/rfapi_backend.h"
@@ -275,6 +277,14 @@ static int bgp_vrf_enable(struct vrf *vrf)
 		bgp_instance_up(bgp);
 		vpn_leak_zebra_vrf_label_update(bgp, AFI_IP);
 		vpn_leak_zebra_vrf_label_update(bgp, AFI_IP6);
+		vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP,
+				    bgp_get_default(), bgp);
+		vpn_leak_postchange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP,
+				    bgp_get_default(), bgp);
+		vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP6,
+				    bgp_get_default(), bgp);
+		vpn_leak_postchange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP6,
+				    bgp_get_default(), bgp);
 	}
 
 	return 0;
@@ -296,6 +306,14 @@ static int bgp_vrf_disable(struct vrf *vrf)
 
 		vpn_leak_zebra_vrf_label_withdraw(bgp, AFI_IP);
 		vpn_leak_zebra_vrf_label_withdraw(bgp, AFI_IP6);
+		vpn_leak_prechange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP,
+				   bgp_get_default(), bgp);
+		vpn_leak_prechange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP,
+				   bgp_get_default(), bgp);
+		vpn_leak_prechange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP6,
+				   bgp_get_default(), bgp);
+		vpn_leak_prechange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP6,
+				   bgp_get_default(), bgp);
 
 		old_vrf_id = bgp->vrf_id;
 		bgp_handle_socket(bgp, vrf, VRF_UNKNOWN, false);
@@ -384,7 +402,8 @@ int main(int argc, char **argv)
 			multipath_num = atoi(optarg);
 			if (multipath_num > MULTIPATH_NUM
 			    || multipath_num <= 0) {
-				zlog_err(
+				flog_err(
+					BGP_ERR_MULTIPATH,
 					"Multipath Number specified must be less than %d and greater than 0",
 					MULTIPATH_NUM);
 				return 1;
@@ -417,6 +436,7 @@ int main(int argc, char **argv)
 	if (no_fib_flag)
 		bgp_option_set(BGP_OPT_NO_FIB);
 
+	bgp_error_init();
 	/* Initializations. */
 	bgp_vrf_init();
 

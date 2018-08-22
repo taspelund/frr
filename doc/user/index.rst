@@ -39,6 +39,7 @@ Protocols
    :maxdepth: 2
 
    zebra
+   bfd
    bgp
    babeld
    ldpd
@@ -52,6 +53,7 @@ Protocols
    ripd
    ripngd
    sharp
+   static
    vnc
 
 ########

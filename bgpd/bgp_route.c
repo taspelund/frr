@@ -44,6 +44,7 @@
 #include "bgpd/bgp_route.h"
 #include "bgpd/bgp_attr.h"
 #include "bgpd/bgp_debug.h"
+#include "bgpd/bgp_errors.h"
 #include "bgpd/bgp_aspath.h"
 #include "bgpd/bgp_regex.h"
 #include "bgpd/bgp_community.h"
@@ -187,8 +188,24 @@ static void bgp_info_extra_free(struct bgp_info_extra **extra)
 	if (e->parent) {
 		struct bgp_info *bi = (struct bgp_info *)e->parent;
 
-		if (bi->net)
-			bi->net = bgp_unlock_node((struct bgp_node *)bi->net);
+		if (bi->net) {
+			/* FIXME: since multiple e may have the same e->parent
+			 * and e->parent->net is holding a refcount for each
+			 * of them, we need to do some fudging here.
+			 *
+			 * WARNING: if bi->net->lock drops to 0, bi may be
+			 * freed as well (because bi->net was holding the
+			 * last reference to bi) => write after free!
+			 */
+			unsigned refcount;
+
+			bi = bgp_info_lock(bi);
+			refcount = bi->net->lock - 1;
+			bgp_unlock_node((struct bgp_node *)bi->net);
+			if (!refcount)
+				bi->net = NULL;
+			bgp_info_unlock(bi);
+		}
 		bgp_info_unlock(e->parent);
 		e->parent = NULL;
 	}
@@ -197,8 +214,7 @@ static void bgp_info_extra_free(struct bgp_info_extra **extra)
 		bgp_unlock(e->bgp_orig);
 
 	if ((*extra)->bgp_fs_pbr)
-		list_delete_all_node((*extra)->bgp_fs_pbr);
-	(*extra)->bgp_fs_pbr = NULL;
+		list_delete_and_null(&((*extra)->bgp_fs_pbr));
 	XFREE(MTYPE_BGP_ROUTE_EXTRA, *extra);
 
 	*extra = NULL;
@@ -493,16 +509,18 @@ static int bgp_info_cmp(struct bgp *bgp, struct bgp_info *new,
 			}
 
 			if (newattr->sticky && !existattr->sticky) {
-				zlog_warn(
-					"%s: %s wins over %s due to sticky MAC flag",
-					pfx_buf, new_buf, exist_buf);
+				if (debug)
+					zlog_debug(
+						"%s: %s wins over %s due to sticky MAC flag",
+						pfx_buf, new_buf, exist_buf);
 				return 1;
 			}
 
 			if (!newattr->sticky && existattr->sticky) {
-				zlog_warn(
-					"%s: %s loses to %s due to sticky MAC flag",
-					pfx_buf, new_buf, exist_buf);
+				if (debug)
+					zlog_debug(
+						"%s: %s loses to %s due to sticky MAC flag",
+						pfx_buf, new_buf, exist_buf);
 				return 0;
 			}
 		}
@@ -2459,15 +2477,9 @@ static void bgp_processq_del(struct work_queue *wq, void *data)
 
 void bgp_process_queue_init(void)
 {
-	if (!bm->process_main_queue) {
+	if (!bm->process_main_queue)
 		bm->process_main_queue =
 			work_queue_new(bm->master, "process_main_queue");
-
-		if (!bm->process_main_queue) {
-			zlog_err("%s: Failed to allocate work queue", __func__);
-			exit(1);
-		}
-	}
 
 	bm->process_main_queue->spec.workfunc = &bgp_process_wq;
 	bm->process_main_queue->spec.del_item_data = &bgp_processq_del;
@@ -3838,11 +3850,7 @@ static void bgp_clear_node_queue_init(struct peer *peer)
 	snprintf(wname, sizeof(wname), "clear %s", peer->host);
 #undef CLEAR_QUEUE_NAME_LEN
 
-	if ((peer->clear_node_queue = work_queue_new(bm->master, wname))
-	    == NULL) {
-		zlog_err("%s: Failed to allocate work queue", __func__);
-		exit(1);
-	}
+	peer->clear_node_queue = work_queue_new(bm->master, wname);
 	peer->clear_node_queue->spec.hold = 10;
 	peer->clear_node_queue->spec.workfunc = &bgp_clear_route_node;
 	peer->clear_node_queue->spec.del_item_data = &bgp_clear_node_queue_del;
@@ -4212,8 +4220,9 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 
 		/* Prefix length check. */
 		if (p.prefixlen > prefix_blen(&p) * 8) {
-			zlog_err(
-				"%s [Error] Update packet error (wrong perfix length %d for afi %u)",
+			flog_err(
+				BGP_ERR_UPDATE_RCV,
+				"%s [Error] Update packet error (wrong prefix length %d for afi %u)",
 				peer->host, p.prefixlen, packet->afi);
 			return -1;
 		}
@@ -4223,7 +4232,8 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 
 		/* When packet overflow occur return immediately. */
 		if (pnt + psize > lim) {
-			zlog_err(
+			flog_err(
+				BGP_ERR_UPDATE_RCV,
 				"%s [Error] Update packet error (prefix length %d overflows packet)",
 				peer->host, p.prefixlen);
 			return -1;
@@ -4232,7 +4242,8 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 		/* Defensive coding, double-check the psize fits in a struct
 		 * prefix */
 		if (psize > (ssize_t)sizeof(p.u)) {
-			zlog_err(
+			flog_err(
+				BGP_ERR_UPDATE_RCV,
 				"%s [Error] Update packet error (prefix length %d too large for prefix storage %zu)",
 				peer->host, p.prefixlen, sizeof(p.u));
 			return -1;
@@ -4253,7 +4264,8 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 				 * be logged locally, and the prefix SHOULD be
 				 * ignored.
 				 */
-				zlog_err(
+				flog_err(
+					BGP_ERR_UPDATE_RCV,
 					"%s: IPv4 unicast NLRI is multicast address %s, ignoring",
 					peer->host, inet_ntoa(p.u.prefix4));
 				continue;
@@ -4265,7 +4277,8 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 			if (IN6_IS_ADDR_LINKLOCAL(&p.u.prefix6)) {
 				char buf[BUFSIZ];
 
-				zlog_err(
+				flog_err(
+					BGP_ERR_UPDATE_RCV,
 					"%s: IPv6 unicast NLRI is link-local address %s, ignoring",
 					peer->host,
 					inet_ntop(AF_INET6, &p.u.prefix6, buf,
@@ -4276,7 +4289,8 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 			if (IN6_IS_ADDR_MULTICAST(&p.u.prefix6)) {
 				char buf[BUFSIZ];
 
-				zlog_err(
+				flog_err(
+					BGP_ERR_UPDATE_RCV,
 					"%s: IPv6 unicast NLRI is multicast address %s, ignoring",
 					peer->host,
 					inet_ntop(AF_INET6, &p.u.prefix6, buf,
@@ -4305,7 +4319,8 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 
 	/* Packet length consistency check. */
 	if (pnt != lim) {
-		zlog_err(
+		flog_err(
+			BGP_ERR_UPDATE_RCV,
 			"%s [Error] Update packet error (prefix length mismatch with total length)",
 			peer->host);
 		return -1;
@@ -5201,8 +5216,8 @@ int bgp_static_set_safi(afi_t afi, safi_t safi, struct vty *vty,
 			if (routermac) {
 				bgp_static->router_mac =
 					XCALLOC(MTYPE_ATTR, ETH_ALEN + 1);
-				prefix_str2mac(routermac,
-					       bgp_static->router_mac);
+				(void)prefix_str2mac(routermac,
+						     bgp_static->router_mac);
 			}
 			if (gwip)
 				prefix_copy(&bgp_static->gatewayIp, &gw_ip);
@@ -6255,24 +6270,14 @@ static void route_vty_out_route(struct prefix *p, struct vty *vty,
 				json_object *json)
 {
 	int len = 0;
-	uint32_t destination;
 	char buf[BUFSIZ];
 
 	if (p->family == AF_INET) {
 		if (!json) {
-			len = vty_out(vty, "%s",
-				      inet_ntop(p->family, &p->u.prefix, buf,
-						BUFSIZ));
-			destination = ntohl(p->u.prefix4.s_addr);
-
-			if ((IN_CLASSC(destination) && p->prefixlen == 24)
-			    || (IN_CLASSB(destination) && p->prefixlen == 16)
-			    || (IN_CLASSA(destination) && p->prefixlen == 8)
-			    || p->u.prefix4.s_addr == 0) {
-				/* When mask is natural,
-				   mask is not displayed. */
-			} else
-				len += vty_out(vty, "/%d", p->prefixlen);
+			len = vty_out(
+				vty, "%s/%d",
+				inet_ntop(p->family, &p->u.prefix, buf, BUFSIZ),
+				p->prefixlen);
 		} else {
 			json_object_string_add(json, "prefix",
 					       inet_ntop(p->family,
@@ -7737,13 +7742,6 @@ void route_vty_out_detail(struct vty *vty, struct bgp *bgp, struct prefix *p,
 			else
 				vty_out(vty, ", localpref %u",
 					attr->local_pref);
-		} else {
-			if (json_paths)
-				json_object_int_add(json_path, "localpref",
-						    bgp->default_local_pref);
-			else
-				vty_out(vty, ", localpref %u",
-					bgp->default_local_pref);
 		}
 
 		if (attr->weight != 0) {
@@ -9567,7 +9565,7 @@ ravg_tally (unsigned long count, unsigned long oldavg, unsigned long newval)
   unsigned long newtot = (count-1) * oldavg + (newval * TALLY_SIGFIG);
   unsigned long res = (newtot * TALLY_SIGFIG) / count;
   unsigned long ret = newtot / count;
-  
+
   if ((res % TALLY_SIGFIG) > (TALLY_SIGFIG/2))
     return ret + 1;
   else
@@ -9661,7 +9659,7 @@ static int bgp_table_stats_walker(struct thread *t)
 				ts->counts[BGP_STATS_ASPATH_TOTHOPS] += hops;
 				ts->counts[BGP_STATS_ASPATH_TOTSIZE] += size;
 #if 0
-              ts->counts[BGP_STATS_ASPATH_AVGHOPS] 
+              ts->counts[BGP_STATS_ASPATH_AVGHOPS]
                 = ravg_tally (ts->counts[BGP_STATS_ASPATH_COUNT],
                               ts->counts[BGP_STATS_ASPATH_AVGHOPS],
                               hops);
@@ -10149,9 +10147,9 @@ static void show_adj_route(struct vty *vty, struct peer *peer, afi_t afi,
 					       json_scode);
 			json_object_object_add(json, "bgpOriginCodes",
 					       json_ocode);
-			json_object_string_add(json,
-					       "bgpOriginatingDefaultNetwork",
-					       "0.0.0.0");
+			json_object_string_add(
+				json, "bgpOriginatingDefaultNetwork",
+				(afi == AFI_IP) ? "0.0.0.0/0" : "::/0");
 		} else {
 			vty_out(vty, "BGP table version is %" PRIu64
 				     ", local router ID is %s, vrf id ",
@@ -10165,7 +10163,8 @@ static void show_adj_route(struct vty *vty, struct peer *peer, afi_t afi,
 			vty_out(vty, BGP_SHOW_NCODE_HEADER);
 			vty_out(vty, BGP_SHOW_OCODE_HEADER);
 
-			vty_out(vty, "Originating default network 0.0.0.0\n\n");
+			vty_out(vty, "Originating default network %s\n\n",
+				(afi == AFI_IP) ? "0.0.0.0/0" : "::/0");
 		}
 		header1 = 0;
 	}
