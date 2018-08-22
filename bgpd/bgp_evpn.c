@@ -547,9 +547,9 @@ static int bgp_zebra_send_remote_macip(struct bgp *bgp, struct bgpevpn *vpn,
 		zlog_debug(
 			"Tx %s MACIP, VNI %u MAC %s IP %s flags 0x%x seq %u remote VTEP %s",
 			add ? "ADD" : "DEL", vpn->vni,
-			prefix_mac2str(&p->prefix.macip_addr.mac,
+			prefix_mac2str(&p->prefix.mac,
 				       buf1, sizeof(buf1)),
-			ipaddr2str(&p->prefix.macip_addr.ip,
+			ipaddr2str(&p->prefix.ip,
 				   buf3, sizeof(buf3)), flags, seq,
 			inet_ntop(AF_INET, &remote_vtep_ip, buf2,
 				  sizeof(buf2)));
@@ -1553,16 +1553,16 @@ static int update_all_type2_routes(struct bgp *bgp, struct bgpevpn *vpn)
 			attr.sticky = 1;
 		else if (evpn_route_is_def_gw(bgp, rn)) {
 			attr.default_gw = 1;
-			if (is_evpn_prefix_ipaddr_v6(evp))
+			if (IS_EVPN_PREFIX_IPADDR_V6(evp))
 				attr.router_flag = 1;
 		}
 
 		/* Add L3 VNI RTs and RMAC for non IPv6 link-local if
 		 * using L3 VNI for type-2 routes also.
 		 */
-		if ((is_evpn_prefix_ipaddr_v4(evp) ||
+		if ((IS_EVPN_PREFIX_IPADDR_V4(evp) ||
 		     !IN6_IS_ADDR_LINKLOCAL(
-			&evp->prefix.macip_addr.ip.ipaddr_v6)) &&
+			&evp->prefix.ip.ipaddr_v6)) &&
 		    CHECK_FLAG(vpn->flags, VNI_FLAG_USE_TWO_LABELS) &&
 		    bgpevpn_get_l3vni(vpn))
 			add_l3_ecomm = 1;

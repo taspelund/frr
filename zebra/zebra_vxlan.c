@@ -5604,7 +5604,7 @@ int zebra_vxlan_remote_macip_add(struct zserv *client, u_short length,
 
 	if (!EVPN_ENABLED(zvrf)) {
 		zlog_debug("EVPN not enabled, ignoring remote MACIP ADD");
-		return;
+		return 0;
 	}
 
 	memset(&macaddr, 0, sizeof(struct ethaddr));
