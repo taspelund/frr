@@ -212,7 +212,7 @@ static int kernel_rtm_ipv4(int cmd, struct prefix *p, struct route_entry *re)
 			 */
 			case ZEBRA_ERR_RTEXIST:
 				if (cmd != RTM_ADD)
-					zlog_ferr(
+					flog_err(
 						LIB_ERR_SYSTEM_CALL,
 						"%s: rtm_write() returned %d for command %d",
 						__func__, error, cmd);
@@ -226,7 +226,7 @@ static int kernel_rtm_ipv4(int cmd, struct prefix *p, struct route_entry *re)
 			case ZEBRA_ERR_RTNOEXIST:
 			case ZEBRA_ERR_RTUNREACH:
 			default:
-				zlog_ferr(
+				flog_err(
 					LIB_ERR_SYSTEM_CALL,
 					"%s: %s: rtm_write() unexpectedly returned %d for command %s",
 					__func__,
@@ -402,7 +402,7 @@ void kernel_route_rib(struct route_node *rn, struct prefix *p,
 	}
 
 	if (zserv_privs.change(ZPRIVS_RAISE))
-		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't raise privileges");
+		flog_err(LIB_ERR_PRIVILEGES, "Can't raise privileges");
 
 	if (old)
 		route |= kernel_rtm(RTM_DELETE, p, old);
@@ -411,7 +411,7 @@ void kernel_route_rib(struct route_node *rn, struct prefix *p,
 		route |= kernel_rtm(RTM_ADD, p, new);
 
 	if (zserv_privs.change(ZPRIVS_LOWER))
-		zlog_ferr(LIB_ERR_PRIVILEGES, "Can't lower privileges");
+		flog_err(LIB_ERR_PRIVILEGES, "Can't lower privileges");
 
 	if (new) {
 		kernel_route_rib_pass_fail(rn, p, new,

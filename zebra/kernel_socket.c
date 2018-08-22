@@ -408,7 +408,7 @@ int ifm_read(struct if_msghdr *ifm)
 
 	/* paranoia: sanity check structure */
 	if (ifm->ifm_msglen < sizeof(struct if_msghdr)) {
-		zlog_ferr(ZEBRA_ERR_NETLINK_LENGTH_ERROR,
+		flog_err(ZEBRA_ERR_NETLINK_LENGTH_ERROR,
 			  "ifm_read: ifm->ifm_msglen %d too short\n",
 			  ifm->ifm_msglen);
 		return -1;
@@ -1384,7 +1384,7 @@ static int kernel_read(struct thread *thread)
 static void routing_socket(struct zebra_ns *zns)
 {
 	if (zserv_privs.change(ZPRIVS_RAISE))
-		zlog_ferr(LIB_ERR_PRIVILEGES,
+		flog_err(LIB_ERR_PRIVILEGES,
 			  "routing_socket: Can't raise privileges");
 
 	routing_sock = ns_socket(AF_ROUTE, SOCK_RAW,
@@ -1392,7 +1392,7 @@ static void routing_socket(struct zebra_ns *zns)
 
 	if (routing_sock < 0) {
 		if (zserv_privs.change(ZPRIVS_LOWER))
-			zlog_ferr(LIB_ERR_PRIVILEGES,
+			flog_err(LIB_ERR_PRIVILEGES,
 				  "routing_socket: Can't lower privileges");
 		zlog_warn("Can't init kernel routing socket");
 		return;
@@ -1406,7 +1406,7 @@ static void routing_socket(struct zebra_ns *zns)
 	  zlog_warn ("Can't set O_NONBLOCK to routing socket");*/
 
 	if (zserv_privs.change(ZPRIVS_LOWER))
-		zlog_ferr(LIB_ERR_PRIVILEGES,
+		flog_err(LIB_ERR_PRIVILEGES,
 			  "routing_socket: Can't lower privileges");
 
 	/* kernel_read needs rewrite. */

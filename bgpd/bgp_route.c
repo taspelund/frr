@@ -4187,7 +4187,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 
 		/* Prefix length check. */
 		if (p.prefixlen > prefix_blen(&p) * 8) {
-			zlog_ferr(
+			flog_err(
 				BGP_ERR_UPDATE_RCV,
 				"%s [Error] Update packet error (wrong prefix length %d for afi %u)",
 				peer->host, p.prefixlen, packet->afi);
@@ -4199,7 +4199,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 
 		/* When packet overflow occur return immediately. */
 		if (pnt + psize > lim) {
-			zlog_ferr(
+			flog_err(
 				BGP_ERR_UPDATE_RCV,
 				"%s [Error] Update packet error (prefix length %d overflows packet)",
 				peer->host, p.prefixlen);
@@ -4209,7 +4209,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 		/* Defensive coding, double-check the psize fits in a struct
 		 * prefix */
 		if (psize > (ssize_t)sizeof(p.u)) {
-			zlog_ferr(
+			flog_err(
 				BGP_ERR_UPDATE_RCV,
 				"%s [Error] Update packet error (prefix length %d too large for prefix storage %zu)",
 				peer->host, p.prefixlen, sizeof(p.u));
@@ -4231,7 +4231,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 				 * be logged locally, and the prefix SHOULD be
 				 * ignored.
 				 */
-				zlog_ferr(
+				flog_err(
 					BGP_ERR_UPDATE_RCV,
 					"%s: IPv4 unicast NLRI is multicast address %s, ignoring",
 					peer->host, inet_ntoa(p.u.prefix4));
@@ -4244,7 +4244,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 			if (IN6_IS_ADDR_LINKLOCAL(&p.u.prefix6)) {
 				char buf[BUFSIZ];
 
-				zlog_ferr(
+				flog_err(
 					BGP_ERR_UPDATE_RCV,
 					"%s: IPv6 unicast NLRI is link-local address %s, ignoring",
 					peer->host,
@@ -4256,7 +4256,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 			if (IN6_IS_ADDR_MULTICAST(&p.u.prefix6)) {
 				char buf[BUFSIZ];
 
-				zlog_ferr(
+				flog_err(
 					BGP_ERR_UPDATE_RCV,
 					"%s: IPv6 unicast NLRI is multicast address %s, ignoring",
 					peer->host,
@@ -4286,7 +4286,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 
 	/* Packet length consistency check. */
 	if (pnt != lim) {
-		zlog_ferr(
+		flog_err(
 			BGP_ERR_UPDATE_RCV,
 			"%s [Error] Update packet error (prefix length mismatch with total length)",
 			peer->host);

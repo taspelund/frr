@@ -24,7 +24,7 @@
 #include "bgp_errors.h"
 
 /* clang-format off */
-static struct log_ref ferr_bgp_warn[] = {
+static struct ferr_ref ferr_bgp_warn[] = {
 	{
 		.code = BGP_WARN_ASPATH_FEWER_HOPS,
 		.title = "BGP AS-path conversion has failed",
@@ -192,7 +192,7 @@ static struct log_ref ferr_bgp_warn[] = {
 	}
 };
 
-static struct log_ref ferr_bgp_err[] = {
+static struct ferr_ref ferr_bgp_err[] = {
 	{
 		.code = BGP_ERR_ATTR_FLAG,
 		.title = "BGP attribute flag is incorrect",
@@ -458,7 +458,6 @@ static struct log_ref ferr_bgp_err[] = {
 
 void bgp_error_init(void)
 {
-	log_ref_add(ferr_bgp_warn);
-	log_ref_add(ferr_bgp_err);
-	log_ref_add(ferr_bgp_warn);
+	ferr_ref_add(ferr_bgp_err);
+	ferr_ref_add(ferr_bgp_warn);
 }

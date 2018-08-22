@@ -1923,7 +1923,7 @@ void rib_queue_add(struct route_node *rn)
 	}
 
 	if (zebrad.ribq == NULL) {
-		zlog_ferr(ZEBRA_ERR_WQ_NONEXISTENT,
+		flog_err(ZEBRA_ERR_WQ_NONEXISTENT,
 			  "%s: work_queue does not exist!", __func__);
 		return;
 	}
@@ -1979,7 +1979,7 @@ static void rib_queue_init(struct zebra_t *zebra)
 
 	if (!(zebra->ribq =
 		      work_queue_new(zebra->master, "route_node processing"))) {
-		zlog_ferr(ZEBRA_ERR_WQ_NONEXISTENT,
+		flog_err(ZEBRA_ERR_WQ_NONEXISTENT,
 			  "%s: could not initialise work queue!", __func__);
 		return;
 	}
@@ -1993,7 +1993,7 @@ static void rib_queue_init(struct zebra_t *zebra)
 	zebra->ribq->spec.hold = ZEBRA_RIB_PROCESS_HOLD_TIME;
 
 	if (!(zebra->mq = meta_queue_new())) {
-		zlog_ferr(ZEBRA_ERR_WQ_NONEXISTENT,
+		flog_err(ZEBRA_ERR_WQ_NONEXISTENT,
 			  "%s: could not initialise meta queue!", __func__);
 		return;
 	}
@@ -2224,7 +2224,7 @@ void rib_lookup_and_dump(struct prefix_ipv4 *p, vrf_id_t vrf_id)
 	/* Lookup table.  */
 	table = zebra_vrf_table(AFI_IP, SAFI_UNICAST, vrf_id);
 	if (!table) {
-		zlog_ferr(ZEBRA_ERR_TABLE_LOOKUP_FAILED,
+		flog_err(ZEBRA_ERR_TABLE_LOOKUP_FAILED,
 			  "%s:%u zebra_vrf_table() returned NULL", __func__,
 			  vrf_id);
 		return;
@@ -2271,7 +2271,7 @@ void rib_lookup_and_pushup(struct prefix_ipv4 *p, vrf_id_t vrf_id)
 	rib_dest_t *dest;
 
 	if (NULL == (table = zebra_vrf_table(AFI_IP, SAFI_UNICAST, vrf_id))) {
-		zlog_ferr(ZEBRA_ERR_TABLE_LOOKUP_FAILED,
+		flog_err(ZEBRA_ERR_TABLE_LOOKUP_FAILED,
 			  "%s:%u zebra_vrf_table() returned NULL", __func__,
 			  vrf_id);
 		return;

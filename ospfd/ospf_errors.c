@@ -24,7 +24,7 @@
 #include "ospf_errors.h"
 
 /* clang-format off */
-static struct log_ref ferr_ospf_warn[] = {
+static struct ferr_ref ferr_ospf_warn[] = {
 	{
 		.code = OSPF_WARN_SET_METRIC_PLUS,
 		.title = "OSPF does not support `set metric +rtt/-rtt`",

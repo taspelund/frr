@@ -490,7 +490,7 @@ void prefix_copy(struct prefix *dest, const struct prefix *src)
 		dest->u.lp.id = src->u.lp.id;
 		dest->u.lp.adv_router = src->u.lp.adv_router;
 	} else {
-		zlog_ferr(LIB_ERR_DEVELOPMENT,
+		flog_err(LIB_ERR_DEVELOPMENT,
 			  "prefix_copy(): Unknown address family %d",
 			  src->family);
 		assert(0);

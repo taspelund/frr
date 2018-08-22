@@ -1951,7 +1951,7 @@ static int bgp_zebra_process_local_macip(int command, struct zclient *zclient,
 	ipa_len = stream_getl(s);
 	if (ipa_len != 0 && ipa_len != IPV4_MAX_BYTELEN
 	    && ipa_len != IPV6_MAX_BYTELEN) {
-		zlog_ferr(BGP_ERR_MACIP_LEN,
+		flog_err(BGP_ERR_MACIP_LEN,
 			  "%u:Recv MACIP %s with invalid IP addr length %d",
 			  vrf_id, (command == ZEBRA_MACIP_ADD) ? "Add" : "Del",
 			  ipa_len);
