@@ -143,7 +143,7 @@ static int spf_backoff_holddown_elapsed(struct thread *thread)
 
 long spf_backoff_schedule(struct spf_backoff *backoff)
 {
-	long rv;
+	long rv = 0;
 	struct timeval now;
 
 	gettimeofday(&now, NULL);
