@@ -4133,7 +4133,8 @@ static void process_remote_macip_add(vni_t vni,
 	struct zebra_if *zif = NULL;
 	uint32_t tmp_seq;
 	uint8_t sticky = 0;
-	u_char remote_gw = 0;
+	uint8_t remote_gw = 0;
+	uint8_t router_flag = 0;
 
 	/* Locate VNI hash entry - expected to exist. */
 	zvni = zvni_lookup(vni);
@@ -4173,6 +4174,7 @@ static void process_remote_macip_add(vni_t vni,
 
 	sticky = CHECK_FLAG(flags, ZEBRA_MACIP_TYPE_STICKY);
 	remote_gw = CHECK_FLAG(flags, ZEBRA_MACIP_TYPE_GW);
+	router_flag = CHECK_FLAG(flags, ZEBRA_MACIP_TYPE_ROUTER_FLAG);
 
 	mac = zvni_mac_lookup(zvni, macaddr);
 
@@ -4289,6 +4291,8 @@ static void process_remote_macip_add(vni_t vni,
 	n = zvni_neigh_lookup(zvni, ipaddr);
 	if (!n
 	    || !CHECK_FLAG(n->flags, ZEBRA_NEIGH_REMOTE)
+	    || ((CHECK_FLAG(n->flags, ZEBRA_NEIGH_ROUTER_FLAG) ? 1 : 0)
+		!= router_flag)
 	    || (memcmp(&n->emac, macaddr, sizeof(*macaddr)) != 0)
 	    || !IPV4_ADDR_SAME(&n->r_vtep_ip, &vtep_ip)
 	    || seq != n->rem_seq)
@@ -4369,6 +4373,8 @@ static void process_remote_macip_add(vni_t vni,
 		/* Set router flag (R-bit) to this Neighbor entry */
 		if (CHECK_FLAG(flags, ZEBRA_MACIP_TYPE_ROUTER_FLAG))
 			SET_FLAG(n->flags, ZEBRA_NEIGH_ROUTER_FLAG);
+		else
+			UNSET_FLAG(n->flags, ZEBRA_NEIGH_ROUTER_FLAG);
 
 		/* Install the entry. */
 		zvni_neigh_install(zvni, n);
