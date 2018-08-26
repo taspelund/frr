@@ -2097,6 +2097,24 @@ static int zvni_local_neigh_update(zebra_vni_t *zvni,
 				 * care about a purely local change.
 				 */
 				n->ifindex = ifp->ifindex;
+				/* Router flag (R-bit) has changed
+				 * update to client.
+				 */
+				if (router_flag !=
+				    (CHECK_FLAG(n->flags,
+					ZEBRA_NEIGH_ROUTER_FLAG) ? 1 : 0)) {
+					/* Mark Router flag (R-bit) */
+					if (router_flag)
+						SET_FLAG(n->flags,
+						ZEBRA_NEIGH_ROUTER_FLAG);
+					else
+						UNSET_FLAG(n->flags,
+						ZEBRA_NEIGH_ROUTER_FLAG);
+
+					return zvni_neigh_send_add_to_client(
+							zvni->vni, ip, macaddr,
+							n->flags, n->loc_seq);
+				}
 				return 0;
 			}
 
