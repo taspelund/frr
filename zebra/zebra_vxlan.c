@@ -4022,7 +4022,7 @@ static void process_remote_macip_add(vni_t vni,
 	struct zebra_if *zif = NULL;
 	uint32_t tmp_seq;
 	uint8_t sticky = 0;
-	u_char remote_gw = 0;
+	uint8_t remote_gw = 0;
 
 	/* Locate VNI hash entry - expected to exist. */
 	zvni = zvni_lookup(vni);
