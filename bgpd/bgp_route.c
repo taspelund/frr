@@ -6760,7 +6760,7 @@ void route_vty_out(struct vty *vty, struct prefix *p, struct bgp_info *binfo,
 
 /* called from terminal list command */
 void route_vty_out_tmp(struct vty *vty, struct prefix *p, struct attr *attr,
-		       safi_t safi, uint8_t use_json, json_object *json_ar)
+		       safi_t safi, bool use_json, json_object *json_ar)
 {
 	json_object *json_status = NULL;
 	json_object *json_net = NULL;
@@ -7089,7 +7089,7 @@ void route_vty_out_overlay(struct vty *vty, struct prefix *p,
 /* dampening route */
 static void damp_route_vty_out(struct vty *vty, struct prefix *p,
 			       struct bgp_info *binfo, int display, safi_t safi,
-			       uint8_t use_json, json_object *json)
+			       bool use_json, json_object *json)
 {
 	struct attr *attr;
 	int len;
@@ -7152,7 +7152,7 @@ static void damp_route_vty_out(struct vty *vty, struct prefix *p,
 /* flap route */
 static void flap_route_vty_out(struct vty *vty, struct prefix *p,
 			       struct bgp_info *binfo, int display, safi_t safi,
-			       uint8_t use_json, json_object *json)
+			       bool use_json, json_object *json)
 {
 	struct attr *attr;
 	struct bgp_damp_info *bdi;
@@ -8165,12 +8165,12 @@ static int bgp_show_regexp(struct vty *vty, struct bgp *bgp, const char *regstr,
 			   afi_t afi, safi_t safi, enum bgp_show_type type);
 static int bgp_show_community(struct vty *vty, struct bgp *bgp,
 			      const char *comstr, int exact, afi_t afi,
-			      safi_t safi, uint8_t use_json);
+			      safi_t safi, bool use_json);
 
 
 static int bgp_show_table(struct vty *vty, struct bgp *bgp, safi_t safi,
 			  struct bgp_table *table, enum bgp_show_type type,
-			  void *output_arg, uint8_t use_json, char *rd,
+			  void *output_arg, bool use_json, char *rd,
 			  int is_last, unsigned long *output_cum,
 			  unsigned long *total_cum,
 			  unsigned long *json_header_depth)
@@ -8457,8 +8457,7 @@ static int bgp_show_table(struct vty *vty, struct bgp *bgp, safi_t safi,
 
 int bgp_show_table_rd(struct vty *vty, struct bgp *bgp, safi_t safi,
 		      struct bgp_table *table, struct prefix_rd *prd_match,
-		      enum bgp_show_type type, void *output_arg,
-		      uint8_t use_json)
+		      enum bgp_show_type type, void *output_arg, bool use_json)
 {
 	struct bgp_node *rn, *next;
 	unsigned long output_cum = 0;
@@ -8498,7 +8497,7 @@ int bgp_show_table_rd(struct vty *vty, struct bgp *bgp, safi_t safi,
 	return CMD_SUCCESS;
 }
 static int bgp_show(struct vty *vty, struct bgp *bgp, afi_t afi, safi_t safi,
-		    enum bgp_show_type type, void *output_arg, uint8_t use_json)
+		    enum bgp_show_type type, void *output_arg, bool use_json)
 {
 	struct bgp_table *table;
 	unsigned long json_header_depth = 0;
@@ -8536,16 +8535,18 @@ static int bgp_show(struct vty *vty, struct bgp *bgp, afi_t afi, safi_t safi,
 }
 
 static void bgp_show_all_instances_routes_vty(struct vty *vty, afi_t afi,
-					      safi_t safi, uint8_t use_json)
+					      safi_t safi, bool use_json)
 {
 	struct listnode *node, *nnode;
 	struct bgp *bgp;
 	int is_first = 1;
+	bool route_output = false;
 
 	if (use_json)
 		vty_out(vty, "{\n");
 
 	for (ALL_LIST_ELEMENTS(bm->bgp, node, nnode, bgp)) {
+		route_output = true;
 		if (use_json) {
 			if (!is_first)
 				vty_out(vty, ",\n");
@@ -8568,6 +8569,8 @@ static void bgp_show_all_instances_routes_vty(struct vty *vty, afi_t afi,
 
 	if (use_json)
 		vty_out(vty, "}\n");
+	else if (!route_output)
+		vty_out(vty, "%% BGP instance not found\n");
 }
 
 /* Header of detailed BGP route information */
@@ -8753,8 +8756,7 @@ static int bgp_show_route_in_table(struct vty *vty, struct bgp *bgp,
 				   struct bgp_table *rib, const char *ip_str,
 				   afi_t afi, safi_t safi,
 				   struct prefix_rd *prd, int prefix_check,
-				   enum bgp_path_type pathtype,
-				   uint8_t use_json)
+				   enum bgp_path_type pathtype, bool use_json)
 {
 	int ret;
 	int header;
@@ -8890,7 +8892,7 @@ static int bgp_show_route_in_table(struct vty *vty, struct bgp *bgp,
 static int bgp_show_route(struct vty *vty, struct bgp *bgp, const char *ip_str,
 			  afi_t afi, safi_t safi, struct prefix_rd *prd,
 			  int prefix_check, enum bgp_path_type pathtype,
-			  uint8_t use_json)
+			  bool use_json)
 {
 	if (!bgp) {
 		bgp = bgp_get_default();
@@ -8999,7 +9001,7 @@ DEFUN (show_ip_bgp_large_community_list,
 			safi = bgp_vty_safi_from_str(argv[idx]->text);
 	}
 
-	int uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 
 	struct bgp *bgp = bgp_lookup_by_name(vrf);
 	if (bgp == NULL) {
@@ -9042,7 +9044,7 @@ DEFUN (show_ip_bgp_large_community,
 			safi = bgp_vty_safi_from_str(argv[idx]->text);
 	}
 
-	int uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 
 	struct bgp *bgp = bgp_lookup_by_name(vrf);
 	if (bgp == NULL) {
@@ -9126,7 +9128,7 @@ DEFUN (show_ip_bgp,
 	int idx = 0;
 
 	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
-					    &bgp);
+					    &bgp, false);
 	if (!idx)
 		return CMD_WARNING;
 
@@ -9202,15 +9204,15 @@ DEFUN (show_ip_bgp_json,
 	int idx = 0;
 	int idx_community_type = 0;
 	int exact_match = 0;
+	bool uj = use_json(argc, argv);
 
-	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
-					    &bgp);
-	if (!idx)
-		return CMD_WARNING;
-
-	int uj = use_json(argc, argv);
 	if (uj)
 		argc--;
+
+	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
+					    &bgp, uj);
+	if (!idx)
+		return CMD_WARNING;
 
 	if (argv_find(argv, argc, "cidr-only", &idx))
 		return bgp_show(vty, bgp, afi, safi, bgp_show_type_cidr_only,
@@ -9280,12 +9282,12 @@ DEFUN (show_ip_bgp_route,
 	char *prefix = NULL;
 	struct bgp *bgp = NULL;
 	enum bgp_path_type path_type;
-	uint8_t uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 
 	int idx = 0;
 
 	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
-					    &bgp);
+					    &bgp, uj);
 	if (!idx)
 		return CMD_WARNING;
 
@@ -9348,7 +9350,7 @@ DEFUN (show_ip_bgp_regexp,
 
 	int idx = 0;
 	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
-					    &bgp);
+					    &bgp, false);
 	if (!idx)
 		return CMD_WARNING;
 
@@ -9377,16 +9379,16 @@ DEFUN (show_ip_bgp_instance_all,
 	afi_t afi = AFI_IP;
 	safi_t safi = SAFI_UNICAST;
 	struct bgp *bgp = NULL;
-
 	int idx = 0;
-	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
-					    &bgp);
-	if (!idx)
-		return CMD_WARNING;
+	bool uj = use_json(argc, argv);
 
-	int uj = use_json(argc, argv);
 	if (uj)
 		argc--;
+
+	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
+					    &bgp, uj);
+	if (!idx)
+		return CMD_WARNING;
 
 	bgp_show_all_instances_routes_vty(vty, afi, safi, uj);
 	return CMD_SUCCESS;
@@ -9458,7 +9460,7 @@ static int bgp_show_route_map(struct vty *vty, struct bgp *bgp,
 
 static int bgp_show_community(struct vty *vty, struct bgp *bgp,
 			      const char *comstr, int exact, afi_t afi,
-			      safi_t safi, uint8_t use_json)
+			      safi_t safi, bool use_json)
 {
 	struct community *com;
 	int ret = 0;
@@ -9517,7 +9519,7 @@ static int bgp_show_prefix_longer(struct vty *vty, struct bgp *bgp,
 }
 
 static struct peer *peer_lookup_in_view(struct vty *vty, struct bgp *bgp,
-					const char *ip_str, uint8_t use_json)
+					const char *ip_str, bool use_json)
 {
 	int ret;
 	struct peer *peer;
@@ -9904,7 +9906,7 @@ static int bgp_peer_count_walker(struct thread *t)
 }
 
 static int bgp_peer_counts(struct vty *vty, struct peer *peer, afi_t afi,
-			   safi_t safi, uint8_t use_json)
+			   safi_t safi, bool use_json)
 {
 	struct peer_pcounts pcounts = {.peer = peer};
 	unsigned int i;
@@ -10014,15 +10016,15 @@ DEFUN (show_ip_bgp_instance_neighbor_prefix_counts,
 	struct peer *peer;
 	int idx = 0;
 	struct bgp *bgp = NULL;
+	bool uj = use_json(argc, argv);
 
-	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
-					    &bgp);
-	if (!idx)
-		return CMD_WARNING;
-
-	int uj = use_json(argc, argv);
 	if (uj)
 		argc--;
+
+	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
+					    &bgp, uj);
+	if (!idx)
+		return CMD_WARNING;
 
 	argv_find(argv, argc, "neighbors", &idx);
 	peer = peer_lookup_in_view(vty, bgp, argv[idx + 1]->arg, uj);
@@ -10050,7 +10052,7 @@ DEFUN (show_ip_bgp_vpn_neighbor_prefix_counts,
 {
 	int idx_peer = 6;
 	struct peer *peer;
-	uint8_t uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 
 	peer = peer_lookup_in_view(vty, NULL, argv[idx_peer]->arg, uj);
 	if (!peer)
@@ -10123,7 +10125,7 @@ DEFUN (show_ip_bgp_l2vpn_evpn_all_route_prefix,
 
 static void show_adj_route(struct vty *vty, struct peer *peer, afi_t afi,
 			   safi_t safi, enum bgp_show_adj_route_type type,
-			   const char *rmap_name, uint8_t use_json,
+			   const char *rmap_name, bool use_json,
 			   json_object *json)
 {
 	struct bgp_table *table;
@@ -10394,7 +10396,7 @@ static void show_adj_route(struct vty *vty, struct peer *peer, afi_t afi,
 
 static int peer_adj_routes(struct vty *vty, struct peer *peer, afi_t afi,
 			   safi_t safi, enum bgp_show_adj_route_type type,
-			   const char *rmap_name, uint8_t use_json)
+			   const char *rmap_name, bool use_json)
 {
 	json_object *json = NULL;
 
@@ -10468,17 +10470,16 @@ DEFUN (show_ip_bgp_instance_neighbor_advertised_route,
 	struct bgp *bgp = NULL;
 	struct peer *peer;
 	enum bgp_show_adj_route_type type = bgp_show_adj_route_advertised;
-
 	int idx = 0;
-	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
-					    &bgp);
-	if (!idx)
-		return CMD_WARNING;
-
-	int uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 
 	if (uj)
 		argc--;
+
+	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
+					    &bgp, uj);
+	if (!idx)
+		return CMD_WARNING;
 
 	/* neighbors <A.B.C.D|X:X::X:X|WORD> */
 	argv_find(argv, argc, "neighbors", &idx);
@@ -10541,7 +10542,7 @@ DEFUN (show_ip_bgp_neighbor_received_prefix_filter,
 	argv_find(argv, argc, "neighbors", &idx);
 	peerstr = argv[++idx]->arg;
 
-	uint8_t uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 
 	ret = str2sockunion(peerstr, &su);
 	if (ret < 0) {
@@ -10585,7 +10586,7 @@ DEFUN (show_ip_bgp_neighbor_received_prefix_filter,
 
 static int bgp_show_neighbor_route(struct vty *vty, struct peer *peer,
 				   afi_t afi, safi_t safi,
-				   enum bgp_show_type type, uint8_t use_json)
+				   enum bgp_show_type type, bool use_json)
 {
 	/* labeled-unicast routes live in the unicast table */
 	if (safi == SAFI_LABELED_UNICAST)
@@ -10625,14 +10626,17 @@ DEFUN (show_ip_bgp_flowspec_routes_detailed,
 	safi_t safi = SAFI_UNICAST;
 	struct bgp *bgp = NULL;
 	int idx = 0;
+	bool uj = use_json(argc, argv);
+
+	if (uj)
+		argc--;
 
 	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
-					    &bgp);
+					    &bgp, uj);
 	if (!idx)
 		return CMD_WARNING;
 
-	return bgp_show(vty, bgp, afi, safi,
-			bgp_show_type_detail, NULL, use_json(argc, argv));
+	return bgp_show(vty, bgp, afi, safi, bgp_show_type_detail, NULL, uj);
 }
 
 DEFUN (show_ip_bgp_neighbor_routes,
@@ -10660,17 +10664,16 @@ DEFUN (show_ip_bgp_neighbor_routes,
 	safi_t safi = SAFI_UNICAST;
 	struct peer *peer;
 	enum bgp_show_type sh_type = bgp_show_type_neighbor;
-
 	int idx = 0;
+	bool uj = use_json(argc, argv);
 
-	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
-					    &bgp);
-	if (!idx)
-		return CMD_WARNING;
-
-	int uj = use_json(argc, argv);
 	if (uj)
 		argc--;
+
+	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
+					    &bgp, uj);
+	if (!idx)
+		return CMD_WARNING;
 
 	/* neighbors <A.B.C.D|X:X::X:X|WORD> */
 	argv_find(argv, argc, "neighbors", &idx);
