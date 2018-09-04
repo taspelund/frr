@@ -855,6 +855,8 @@ int main(int argc, char **argv) {
   ])
 ])
 
+AC_CHECK_FUNCS([pthread_setname_np pthread_set_name_np])
+
 dnl Utility macro to avoid retyping includes all the time
 m4_define([FRR_INCLUDES],
 [#ifdef SUNOS_5
