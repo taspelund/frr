@@ -7,7 +7,7 @@
 ##
 AC_PREREQ(2.60)
 
-AC_INIT(frr, 5.1+clu1, [https://github.com/frrouting/frr/issues])
+AC_INIT(frr, 6.1+clu1, [https://github.com/frrouting/frr/issues])
 PACKAGE_URL="https://frrouting.org/"
 AC_SUBST(PACKAGE_URL)
 PACKAGE_FULLNAME="FRRouting"
@@ -132,25 +132,29 @@ dnl - specifically, options to control warnings
 
 AC_USE_SYSTEM_EXTENSIONS
 AC_DEFUN([AC_C_FLAG], [{
+    m4_pushdef([cachename],[m4_translit([frr_cv_$1],[ =-],[___])])
+    AC_CACHE_CHECK([[whether $CC supports $1]], cachename, [
 	AC_LANG_PUSH(C)
 	ac_c_flag_save="$CFLAGS"
 	CFLAGS="$CFLAGS $1"
-	AC_MSG_CHECKING([[whether $CC supports $1]])
 	AC_COMPILE_IFELSE(
 		[AC_LANG_PROGRAM([[]])],
 		[
-			AC_MSG_RESULT([yes])
-			m4_if([$3], [], [], [
-				CFLAGS="$ac_c_flag_save"
-				$3
-			])
+			cachename=yes
 		], [
-			CFLAGS="$ac_c_flag_save"
-			AC_MSG_RESULT([no])
-			$2
+			cachename=no
 		])
+	CFLAGS="$ac_c_flag_save"
 	AC_LANG_POP(C)
-	}])
+    ])
+    if test "${cachename}" = yes; then
+	m4_if([$3], [], [CFLAGS="$CFLAGS $1"], [$3])
+    else
+	:
+	$2
+    fi
+    m4_popdef([cachename])
+}])
 
 AC_DEFUN([AC_LINK_IFELSE_FLAGS], [{
 	AC_LANG_PUSH(C)
@@ -184,46 +188,6 @@ CC="${CC% -std=gnu99}"
 CC="${CC% -std=c99}"
 
 AC_C_FLAG([-std=gnu11], [CC="$ac_cc"], [CC="$CC -std=gnu11"])
-
-dnl AddressSanitizer support
-AC_ARG_ENABLE([address-sanitizer], AS_HELP_STRING([--enable-address-sanitizer], \
-              [enabled AddressSanitizer support for detecting a wide variety of \
-               memory allocation and deallocation errors]), \
-              [AC_DEFINE(HAVE_ADDRESS_SANITIZER, 1, [enable AddressSanitizer])
-              ASAN_FLAGS="-fsanitize=address"
-              SAN_CLIPPY_FLAGS="-fno-sanitize=all"
-              AC_SUBST([ASAN_FLAGS])
-              AC_SUBST([SAN_CLIPPY_FLAGS])
-              LIBS="-ldl $LIBS"
-              AC_TRY_COMPILE([],[const int i=0;],[AC_MSG_NOTICE([Address Sanitizer Enabled])],
-                                                 [AC_MSG_ERROR([Address Sanitizer not available])])
-              ])
-
-dnl ThreadSanitizer support
-AC_ARG_ENABLE([thread-sanitizer], AS_HELP_STRING([--enable-thread-sanitizer], \
-              [enabled ThreadSanitizer support for detecting data races]), \
-              [AC_DEFINE(HAVE_THREAD_SANITIZER, 1, [enable ThreadSanitizer])
-              TSAN_FLAGS="-fsanitize=thread"
-              SAN_CLIPPY_FLAGS="-fno-sanitize=all"
-              AC_SUBST([TSAN_FLAGS])
-              AC_SUBST([SAN_CLIPPY_FLAGS])
-              LIBS="-ldl $LIBS"
-              AC_TRY_COMPILE([],[const int i=0;],[AC_MSG_NOTICE([Thread Sanitizer Enabled])],
-                                                 [AC_MSG_ERROR([Thread Sanitizer not available])])
-              ])
-
-dnl MemorySanitizer support
-AC_ARG_ENABLE([memory-sanitizer], AS_HELP_STRING([--enable-memory-sanitizer], \
-              [enabled MemorySanitizer support for detecting uninitialized memory reads]), \
-              [AC_DEFINE(HAVE_THREAD_SANITIZER, 1, [enable MemorySanitizer])
-              MSAN_FLAGS="-fsanitize=memory -fPIE -pie"
-              SAN_CLIPPY_FLAGS="-fno-sanitize=all"
-              AC_SUBST([MSAN_FLAGS])
-              AC_SUBST([SAN_CLIPPY_FLAGS])
-              LIBS="-ldl $LIBS"
-              AC_TRY_COMPILE([],[const int i=0;],[AC_MSG_NOTICE([Memory Sanitizer Enabled])],
-                                                 [AC_MSG_ERROR([Memory Sanitizer not available])])
-              ])
 
 dnl if the user has specified any CFLAGS, override our settings
 if test "x${enable_gcov}" = "xyes"; then
@@ -283,19 +247,29 @@ if test x"${enable_werror}" = x"yes" ; then
 fi
 AC_SUBST(WERROR)
 
-dnl need link on this one, not compile
-AC_LANG_PUSH(C)
-ac_ld_flag_save="$LDFLAGS"
-LDFLAGS="$LDFLAGS -rdynamic"
-AC_MSG_CHECKING([[whether linker supports -rdynamic]])
-AC_LINK_IFELSE(
-	[AC_LANG_PROGRAM([[]])],
-	[AC_MSG_RESULT([yes])],
-	[
-		LDFLAGS="$ac_ld_flag_save"
-		AC_MSG_RESULT([no])
-	])
-AC_LANG_POP(C)
+SAN_FLAGS=""
+if test "$enable_address_sanitizer" = "yes"; then
+  AC_C_FLAG([-fsanitize=address], [
+    AC_MSG_ERROR([$CC does not support Address Sanitizer.])
+  ], [
+    SAN_FLAGS="$SAN_FLAGS -fsanitize=address"
+  ])
+fi
+if test "$enable_thread_sanitizer" = "yes"; then
+  AC_C_FLAG([-fsanitize=thread], [
+    AC_MSG_ERROR([$CC does not support Thread Sanitizer.])
+  ], [
+    SAN_FLAGS="$SAN_FLAGS -fsanitize=thread"
+  ])
+fi
+if test "$enable_memory_sanitizer" = "yes"; then
+  AC_C_FLAG([-fsanitize=thread -fPIE -pie], [
+    AC_MSG_ERROR([$CC does not support Thread Sanitizer.])
+  ], [
+    SAN_FLAGS="-fsanitize=memory -fPIE -pie"
+  ])
+fi
+AC_SUBST([SAN_FLAGS])
 
 dnl ----------
 dnl Essentials
@@ -309,6 +283,13 @@ AX_PTHREAD([
   AC_MSG_FAILURE([This FRR version needs pthreads])
 ])
 
+AC_SEARCH_LIBS([pthread_condattr_setclock], [],
+		[frr_cv_pthread_condattr_setclock=yes],
+		[frr_cv_pthread_condattr_setclock=no])
+if test "$frr_cv_pthread_condattr_setclock" = yes; then
+  AC_DEFINE(HAVE_PTHREAD_CONDATTR_SETCLOCK, 1, [Have pthread.h pthread_condattr_setclock])
+fi
+
 dnl --------------
 dnl Check programs
 dnl --------------
@@ -316,11 +297,6 @@ AC_PROG_INSTALL
 AC_PROG_LN_S
 AC_PROG_MAKE_SET
 AC_CHECK_TOOL(AR, ar)
-
-dnl -----------------
-dnl System extensions
-dnl -----------------
-AC_GNU_SOURCE
 
 dnl -------
 dnl libtool
@@ -343,6 +319,8 @@ AC_ARG_ENABLE(vtysh,
   AS_HELP_STRING([--disable-vtysh], [do not build integrated vty shell for FRR]))
 AC_ARG_ENABLE(doc,
   AS_HELP_STRING([--disable-doc], [do not build docs]))
+AC_ARG_ENABLE(doc-html,
+  AS_HELP_STRING([--enable-doc-html], [build HTML docs]))
 AC_ARG_ENABLE(zebra,
   AS_HELP_STRING([--disable-zebra], [do not build zebra daemon]))
 AC_ARG_ENABLE(bgpd,
@@ -375,14 +353,14 @@ AC_ARG_ENABLE(sharpd,
   AS_HELP_STRING([--enable-sharpd], [build sharpd]))
 AC_ARG_ENABLE(staticd,
   AS_HELP_STRING([--disable-staticd], [do not build staticd]))
+AC_ARG_ENABLE(fabricd,
+  AS_HELP_STRING([--disable-fabricd], [do not build fabricd]))
 AC_ARG_ENABLE(bgp-announce,
   AS_HELP_STRING([--disable-bgp-announce,], [turn off BGP route announcement]))
 AC_ARG_ENABLE(bgp-vnc,
   AS_HELP_STRING([--disable-bgp-vnc],[turn off BGP VNC support]))
-AC_ARG_WITH(rfp-path,
-  AS_HELP_STRING([--with-rfp-path[=DIR]],[path to replaced stub RFP used with BGP VNC]))
 AC_ARG_ENABLE(snmp,
-  AS_HELP_STRING([--enable-snmp=ARG], [enable SNMP support (smux or agentx)]))
+  AS_HELP_STRING([--enable-snmp], [enable SNMP support for agentx]))
 AC_ARG_ENABLE(zeromq,
   AS_HELP_STRING([--enable-zeromq], [enable ZeroMQ handler (libfrrzmq)]))
 AC_ARG_WITH(libpam,
@@ -418,8 +396,6 @@ AC_ARG_ENABLE(rusage,
   AS_HELP_STRING([--disable-rusage], [disable using getrusage]))
 AC_ARG_ENABLE(gcc_ultra_verbose,
   AS_HELP_STRING([--enable-gcc-ultra-verbose], [enable ultra verbose GCC warnings]))
-AC_ARG_ENABLE(linux24_tcp_md5,
-  AS_HELP_STRING([--enable-linux24-tcp-md5], [enable support for old, Linux-2.4 RFC2385 patch]))
 AC_ARG_ENABLE(backtrace,
   AS_HELP_STRING([--disable-backtrace,], [disable crash backtraces (default autodetect)]))
 AC_ARG_ENABLE(time-check,
@@ -456,6 +432,12 @@ AC_ARG_ENABLE([gcov],
   AS_HELP_STRING([--enable-gcov], [Add code coverage information]))
 AC_ARG_ENABLE(bfdd,
   AS_HELP_STRING([--disable-bfdd], [do not build bfdd]))
+AC_ARG_ENABLE([address-sanitizer],
+  AS_HELP_STRING([--enable-address-sanitizer], [enable AddressSanitizer support for detecting a wide variety of memory allocation and deallocation errors]))
+AC_ARG_ENABLE([thread-sanitizer],
+  AS_HELP_STRING([--enable-thread-sanitizer], [enable ThreadSanitizer support for detecting data races]))
+AC_ARG_ENABLE([memory-sanitizer],
+  AS_HELP_STRING([--enable-memory-sanitizer], [enable MemorySanitizer support for detecting uninitialized memory reads]))
 
 AS_IF([test "${enable_clippy_only}" != "yes"], [
 AC_CHECK_HEADERS(json-c/json.h)
@@ -527,6 +509,46 @@ AM_CONDITIONAL([FPM], [test "x$enable_fpm" = "xyes"])
 #
 # Python for clippy
 #
+
+AC_DEFUN([FRR_PYTHON_CHECK_WORKING], [
+  AC_MSG_CHECKING([whether we found a working Python version])
+  AC_LINK_IFELSE_FLAGS([$PYTHON_CFLAGS], [$PYTHON_LIBS], [AC_LANG_PROGRAM([
+#include <Python.h>
+#if PY_VERSION_HEX < 0x02070000
+#error python too old
+#endif
+int main(void);
+],
+[
+{
+  Py_Initialize();
+  return 0;
+}
+])], [
+    # some python installs are missing the zlib dependency...
+    PYTHON_LIBS="${PYTHON_LIBS} -lz"
+    AC_LINK_IFELSE_FLAGS([$PYTHON_CFLAGS], [$PYTHON_LIBS], [AC_LANG_PROGRAM([
+#include <Python.h>
+#if PY_VERSION_HEX < 0x02070000
+#error python too old
+#endif
+int main(void);
+],
+[
+{
+  Py_Initialize();
+  return 0;
+}
+])], [
+      m4_if([$1], [], [
+        PYTHONCONFIG=""
+        unset PYTHON_LIBS
+        unset PYTHON_CFLAGS
+      ], [$1])
+    ])
+  ])
+])
+
 AS_IF([test "$host" = "$build"], [
   PYTHONCONFIG=""
 
@@ -534,60 +556,40 @@ AS_IF([test "$host" = "$build"], [
   # 1.  try python3, but respect the user's preference on which minor ver
   # 2.  try python, which might be py3 or py2 again on the user's preference
   # 3.  try python2 (can really only be 2.7 but eh)
-  # 4.  try 3.5 > 3.4 > 3.3 > 3.2 > 2.7 through pkg-config (no user pref)
+  # 4.  try 3.6 > 3.5 > 3.4 > 3.3 > 3.2 > 2.7 through pkg-config (no user pref)
   #
   # (AX_PYTHON_DEVEL has no clue about py3 vs py2)
   # (AX_PYTHON does not do what we need)
 
-  AC_CHECK_TOOLS([PYTHONCONFIG], [python3-config python-config python2-config])
+  AC_CHECK_TOOLS([PYTHONCONFIG], [ \
+	python3-config \
+	python-config \
+	python2-config \
+	python3.6-config \
+	python3.5-config \
+	python3.4-config \
+	python3.3-config \
+	python3.2-config \
+	python2.7-config ])
   if test -n "$PYTHONCONFIG"; then
     PYTHON_CFLAGS="`\"${PYTHONCONFIG}\" --includes`"
-    PYTHON_LIBS="`\"${PYTHONCONFIG}\" --libs`"
+    PYTHON_LIBS="`\"${PYTHONCONFIG}\" --ldflags`"
 
-    AC_MSG_CHECKING([whether we found a working Python version])
-    AC_LINK_IFELSE_FLAGS([$PYTHON_CFLAGS], [$PYTHON_LIBS], [AC_LANG_PROGRAM([
-#include <Python.h>
-#if PY_VERSION_HEX < 0x02070000
-#error python too old
-#endif
-int main(void);
-],
-[
-{
-  Py_Initialize();
-  return 0;
-}
-])], [
-      PYTHONCONFIG=""
-      unset PYTHON_LIBS
-      unset PYTHON_CFLAGS
-    ])
+    FRR_PYTHON_CHECK_WORKING([])
   fi
 
   if test -z "$PYTHONCONFIG"; then
-    PKG_CHECK_MODULES([PYTHON], python-3.5, [], [
-      PKG_CHECK_MODULES([PYTHON], python-3.4, [], [
-        PKG_CHECK_MODULES([PYTHON], python-3.3, [], [
-          PKG_CHECK_MODULES([PYTHON], python-3.2, [], [
-            PKG_CHECK_MODULES([PYTHON], python-2.7, [], [
-              AC_MSG_FAILURE([could not find python-config or pkg-config python, please install Python development files from libpython-dev or similar])
-              ])])])])])
+    PKG_CHECK_MODULES([PYTHON], python-3.6, [], [
+      PKG_CHECK_MODULES([PYTHON], python-3.5, [], [
+        PKG_CHECK_MODULES([PYTHON], python-3.4, [], [
+          PKG_CHECK_MODULES([PYTHON], python-3.3, [], [
+            PKG_CHECK_MODULES([PYTHON], python-3.2, [], [
+              PKG_CHECK_MODULES([PYTHON], python-2.7, [], [
+                AC_MSG_FAILURE([could not find python-config or pkg-config python, please install Python development files from libpython-dev or similar])
+                ])])])])])])
 
 
-    AC_MSG_CHECKING([whether we found a working Python version])
-    AC_LINK_IFELSE_FLAGS([$PYTHON_CFLAGS], [$PYTHON_LIBS], [AC_LANG_PROGRAM([
-#include <Python.h>
-#if PY_VERSION_HEX < 0x02070000
-#error python too old
-#endif
-int main(void);
-],
-[
-{
-  Py_Initialize();
-  return 0;
-}
-])], [
+    FRR_PYTHON_CHECK_WORKING([
       AC_MSG_FAILURE([could not find python-config or pkg-config python, please install Python development files from libpython-dev or similar])
     ])
   fi
@@ -599,27 +601,26 @@ AC_SUBST(PYTHON_LIBS)
 # Logic for protobuf support.
 #
 if test "$enable_protobuf" = "yes"; then
-   have_protobuf=yes
+  # Check for protoc & protoc-c
 
-   # Check for protoc-c
-   AC_CHECK_PROG([PROTOC_C], [protoc-c], [protoc-c], [/bin/false])
-   if test "x$PROTOC_C" = "x/bin/false"; then
-      have_protobuf=no
-   else
-      found_protobuf_c=no
-      PKG_CHECK_MODULES([PROTOBUF_C], libprotobuf-c >= 0.14,
-                     [found_protobuf_c=yes],
-                     [AC_MSG_RESULT([pkg-config did not find libprotobuf-c])])
+  # protoc is not required, it's only for a "be nice" helper target
+  AC_CHECK_PROGS([PROTOC], [protoc], [/bin/false])
 
-      if test "x$found_protobuf_c" = "xyes"; then
-         LDFLAGS="$LDFLAGS $PROTOBUF_C_LIBS"
-         CFLAGS="$CFLAGS $PROTOBUF_C_CFLAGS"
-      else
-        AC_CHECK_HEADER([google/protobuf-c/protobuf-c.h], [],
-                        [have_protobuf=no; AC_MSG_RESULT([Couldn't find google/protobuf-c.h])])
-      fi
-   fi
+  AC_CHECK_PROGS([PROTOC_C], [protoc-c], [/bin/false])
+  if test "$PROTOC_C" = "/bin/false"; then
+    AC_MSG_FAILURE([protobuf requested but protoc-c not found.  Install protobuf-c.])
+  fi
+
+  PKG_CHECK_MODULES([PROTOBUF_C], [libprotobuf-c >= 0.14],, [
+    AC_MSG_FAILURE([protobuf requested but libprotobuf-c not found.  Install protobuf-c.])
+  ])
+  AC_CHECK_HEADER([google/protobuf-c/protobuf-c.h], [], [
+    AC_MSG_FAILURE([protobuf requested but protobuf-c.h not found.  Install protobuf-c.])
+  ])
+
+  AC_DEFINE(HAVE_PROTOBUF,, protobuf)
 fi
+AM_CONDITIONAL([HAVE_PROTOBUF], [test "x$enable_protobuf" = "xyes"])
 
 #
 # Logic for old vpn commans support.
@@ -628,25 +629,9 @@ if test "$enable_oldvpn_commands" = "yes"; then
    AC_DEFINE(KEEP_OLD_VPN_COMMANDS,, [Define for compiling with old vpn commands])
 fi
 
-# Fail if the user explicity enabled protobuf support and we couldn't
-# find the compiler or libraries.
-if test "x$have_protobuf" = "xno" && test "x$enable_protobuf" = "xyes"; then
-   AC_MSG_ERROR([Protobuf enabled explicitly but can't find libraries/tools])
-fi
-
-if test "x$have_protobuf" = "xyes"; then
-   AC_DEFINE(HAVE_PROTOBUF,, protobuf)
-fi
-
-AM_CONDITIONAL([HAVE_PROTOBUF], [test "x$have_protobuf" = "xyes"])
-
 #
 # End of logic for protobuf support.
 #
-
-if test "${enable_linux24_tcp_md5}" = "yes"; then
-  AC_DEFINE(HAVE_TCP_MD5_LINUX24,,Old Linux 2.4 TCP MD5 Signature Patch)
-fi
 
 AC_MSG_CHECKING(if zebra should be configurable to send Route Advertisements)
 if test "${enable_rtadv}" != "no"; then
@@ -830,10 +815,15 @@ int main(int argc, char **argv) {
   ])
 ])
 
+AC_CHECK_HEADERS([pthread_np.h],,, [
+#include <pthread.h>
+])
+AC_CHECK_FUNCS([pthread_setname_np pthread_set_name_np])
+
 dnl Utility macro to avoid retyping includes all the time
 m4_define([FRR_INCLUDES],
 [#ifdef SUNOS_5
-#define _XPG4_2
+#define _POSIX_C_SOURCE 200809L
 #define __EXTENSIONS__
 #endif
 #include <stdio.h>
@@ -926,6 +916,7 @@ case "$host_os" in
 
     AC_DEFINE(SUNOS_5, 1, [SunOS 5])
     AC_DEFINE(SOLARIS_IPV6, 1, Solaris IPv6)
+    AC_DEFINE(_POSIX_C_SOURCE, 200809L, [enable POSIX.1-2008 and XPG7/SUSv4])
 
     AC_CHECK_LIB(socket, main)
     AC_CHECK_LIB(nsl, main)
@@ -1028,6 +1019,10 @@ dnl	 [TODO] on Linux, and in [TODO] on Solaris.
 	              LIBREADLINE="$LIBREADLINE",, "$LIBREADLINE")
          if test $ac_cv_lib_readline_rl_completion_matches = no; then
            AC_DEFINE(rl_completion_matches,completion_matches,Old readline)
+	 fi
+	 AC_SEARCH_LIBS([append_history], [readline], [frr_cv_append_history=yes], [frr_cv_append_history=no])
+	 if test "$frr_cv_append_history" = yes; then
+	   AC_DEFINE(HAVE_APPEND_HISTORY, 1, [Have history.h append_history])
 	 fi
 	 ;;
 esac
@@ -1177,11 +1172,12 @@ case "$host_os" in
     if test $ac_cv_header_net_bpf_h = no; then
       if test $ac_cv_header_sys_dlpi_h = no; then
         AC_MSG_RESULT(none)
-        if test "${enable_isisd}" = yes; then
+        if test "${enable_isisd}" = yes -o "${enable_fabricd}" = yes; then
           AC_MSG_FAILURE([IS-IS support requested but no packet backend found])
         fi
         AC_MSG_WARN([*** IS-IS support will not be built ***])
         enable_isisd="no"
+        enable_fabricd="no"
       else
         AC_MSG_RESULT(DLPI)
       fi
@@ -1319,12 +1315,14 @@ FRR_INCLUDES
 ])dnl
 
 dnl disable doc check
-if test "${enable_doc}" = "no";then
-  DOC=""
-else
-  AC_CHECK_PROGS([SPHINXBUILD], [sphinx-build sphinx-build3 sphinx-build2], [no])
-  DOC="doc"
+AC_CHECK_PROGS([SPHINXBUILD], [sphinx-build sphinx-build3 sphinx-build2], [/bin/false])
+if test "$SPHINXBUILD" = "/bin/false"; then
+  if test "${enable_doc}" = "yes"; then
+    AC_MSG_ERROR([Documentation was explicitly requested with --enable-doc but sphinx-build is not available. Please disable docs or install sphinx.])
+  fi
 fi
+AM_CONDITIONAL(DOC, test "${enable_doc}" != "no" -a "$SPHINXBUILD" != "/bin/false")
+AM_CONDITIONAL(DOC_HTML, test "${enable_doc_html}" = "yes")
 
 dnl --------------------
 dnl Daemon disable check
@@ -1412,6 +1410,7 @@ AM_CONDITIONAL(PIMD, test "${enable_pimd}" != "no")
 AM_CONDITIONAL(PBRD, test "${enable_pbrd}" != "no")
 AM_CONDITIONAL(SHARPD, test "${enable_sharpd}" = "yes")
 AM_CONDITIONAL(STATICD, test "${enable_staticd}" != "no")
+AM_CONDITIONAL(FABRICD, test "${enable_fabricd}" != "no")
 
 if test "${enable_bgp_announce}" = "no";then
   AC_DEFINE(DISABLE_BGP_ANNOUNCE,1,Disable BGP installation to zebra)
@@ -1419,34 +1418,12 @@ else
   AC_DEFINE(DISABLE_BGP_ANNOUNCE,0,Disable BGP installation to zebra)
 fi
 
-if test "${with_rfp_path}" = "yes" || test x"${with_rfp_path}" = x""; then
-  with_rfp_path="bgpd/rfp-example"
-fi
-if test "${with_rfp_path}" != "no"; then
-  VNC_RFP_PATH="${with_rfp_path}"
-  AC_SUBST(VNC_RFP_PATH)
-fi
-
 if test "${enable_bgp_vnc}" != "no";then
   AC_DEFINE(ENABLE_BGP_VNC,1,Enable BGP VNC support)
-  RFPTEST="${with_rfp_path}/rfptest"
-  LIBRFP="${with_rfp_path}/librfp"
-  RFPINC="${with_rfp_path}/librfp"
-else
-  RFPTEST=
-  LIBRFP=
-  RFPINC="bgpd/rfp-example/librfp"
 fi
-# set 
 AM_CONDITIONAL([ENABLE_BGP_VNC], [test x${enable_bgp_vnc} != xno])
 
-AC_SUBST(DOC)
-AC_SUBST(RFPTEST)
-AC_SUBST(LIBRFP)
-AC_SUBST(RFPINC)
-AC_SUBST(BGPD)
 AC_SUBST(SOLARIS)
-AC_SUBST(VTYSH)
 AC_SUBST(CURSES)
 AC_CHECK_LIB(crypt, crypt, [],
 		    [AC_CHECK_LIB(crypto, DES_crypt)])
@@ -1496,14 +1473,13 @@ int main(void);
      yes)
       SNMP_METHOD=agentx
       ;;
-     smux|agentx)
+     agentx)
       SNMP_METHOD="${enable_snmp}"
       ;;
      *)
-      AC_MSG_ERROR([--enable-snmp given with an unknown method (${enable_snmp}). Use smux or agentx])
+      AC_MSG_ERROR([--enable-snmp given with an unknown method (${enable_snmp}). Use yes or agentx])
       ;;
    esac
-   AH_TEMPLATE([SNMP_SMUX], [Use SNMP SMUX to interface with snmpd])
    AH_TEMPLATE([SNMP_AGENTX], [Use SNMP AgentX to interface with snmpd])
    AC_DEFINE_UNQUOTED(AS_TR_CPP(SNMP_${SNMP_METHOD}),,SNMP method to interface with snmpd)
 fi
@@ -1525,8 +1501,8 @@ AC_SEARCH_LIBS(dlopen, [dl dld], [], [
 
 AC_CHECK_HEADERS([link.h])
 
-AC_MSG_CHECKING([for dlinfo(RTLD_DI_ORIGIN)])
-AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+AC_CACHE_CHECK([for dlinfo(RTLD_DI_ORIGIN)], [frr_cv_rtld_di_origin], [
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[
 #include <stdlib.h>
 #ifdef HAVE_LINK_H
 #include <link.h>
@@ -1536,14 +1512,17 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM([[
   char origin[1];
   dlinfo (NULL, RTLD_DI_ORIGIN, &origin);
 ]])], [
-  AC_MSG_RESULT(yes)
-  AC_DEFINE(HAVE_DLINFO_ORIGIN, 1, [Have dlinfo RTLD_DI_ORIGIN])
-], [
-  AC_MSG_RESULT(no)
+    frr_cv_rtld_di_origin=yes
+  ], [
+    frr_cv_rtld_di_origin=no
+  ])
 ])
+if test "$frr_cv_rtld_di_origin" = yes; then
+  AC_DEFINE(HAVE_DLINFO_ORIGIN, 1, [Have dlinfo RTLD_DI_ORIGIN])
+fi
 
-AC_MSG_CHECKING([for dlinfo(RTLD_DI_LINKMAP)])
-AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+AC_CACHE_CHECK([for dlinfo(RTLD_DI_LINKMAP)], [frr_cv_rtld_di_linkmap], [
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[
 #include <stdlib.h>
 #ifdef HAVE_LINK_H
 #include <link.h>
@@ -1553,12 +1532,14 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM([[
   struct link_map *lm = NULL;
   dlinfo (NULL, RTLD_DI_LINKMAP, &lm);
 ]])], [
-  AC_MSG_RESULT(yes)
-  AC_DEFINE(HAVE_DLINFO_LINKMAP, 1, [Have dlinfo RTLD_DI_LINKMAP])
-], [
-  AC_MSG_RESULT(no)
+    frr_cv_rtld_di_linkmap=yes
+  ], [
+    frr_cv_rtld_di_linkmap=no
+  ])
 ])
-
+if test "$frr_cv_rtld_di_linkmap" = yes; then
+  AC_DEFINE(HAVE_DLINFO_LINKMAP, 1, [Have dlinfo RTLD_DI_LINKMAP])
+fi
 
 AM_CONDITIONAL(SNMP, test "x$SNMP_METHOD" = "xagentx")
 
@@ -1813,12 +1794,15 @@ dnl order to check no alternative allocator
 dnl has been specified, which might not provide
 dnl mallinfo, e.g. such as Umem on Solaris.
 dnl -----------------------------------------
-AC_CHECK_HEADERS([malloc.h malloc/malloc.h],,, [FRR_INCLUDES])
+AC_CHECK_HEADERS([malloc.h malloc_np.h malloc/malloc.h],,, [FRR_INCLUDES])
 
-AC_MSG_CHECKING(whether mallinfo is available)
-AC_LINK_IFELSE([AC_LANG_PROGRAM([FRR_INCLUDES [
+AC_CACHE_CHECK([whether mallinfo is available], [frr_cv_mallinfo], [
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([FRR_INCLUDES [
 #ifdef HAVE_MALLOC_H
 #include <malloc.h>
+#endif
+#ifdef HAVE_MALLOC_NP_H
+#include <malloc_np.h>
 #endif
 #ifdef HAVE_MALLOC_MALLOC_H
 #include <malloc/malloc.h>
@@ -1826,11 +1810,14 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM([FRR_INCLUDES [
 ]], [[
 struct mallinfo ac_x; ac_x = mallinfo ();
 ]])], [
-  AC_MSG_RESULT(yes)
-  AC_DEFINE(HAVE_MALLINFO,,mallinfo)
-], [
-  AC_MSG_RESULT(no)
+    frr_cv_mallinfo=yes
+  ], [
+    frr_cv_mallinfo=no
+  ])
 ])
+if test "$frr_cv_mallinfo" = yes; then
+  AC_DEFINE(HAVE_MALLINFO,,mallinfo)
+fi
 
 AC_MSG_CHECKING(whether malloc_usable_size is available)
 AC_LINK_IFELSE([AC_LANG_PROGRAM([FRR_INCLUDES [
@@ -1960,8 +1947,7 @@ dnl Enable RPKI and add librtr to libs
 dnl ------------------------------------
 if test "${enable_rpki}" = "yes"; then
   PKG_CHECK_MODULES(RTRLIB,[rtrlib >= 0.5.0],
-      [AC_DEFINE(HAVE_RPKI,1,Enable RPKI prefix validation for BGP)
-      RPKI=true],
+      [RPKI=true],
       [RPKI=false
       AC_MSG_ERROR([rtrlib was not found on your system or is too old.])]
   )
@@ -1990,18 +1976,11 @@ AC_CACHE_VAL(ac_cv_htonl_works,
 )
 AC_MSG_RESULT($ac_cv_htonl_works)
 
-AC_CONFIG_FILES([Makefile
-	  bgpd/Makefile
-	  vtysh/Makefile
-	  doc/Makefile
-	  doc/user/Makefile
-	  doc/manpages/Makefile
-	  doc/developer/Makefile
-	  tests/Makefile
-	  bgpd/rfp-example/rfptest/Makefile
-	  bgpd/rfp-example/librfp/Makefile
+AC_CONFIG_FILES([Makefile],[sed -e 's/^#AUTODERP# //' -i Makefile])
+
+AC_CONFIG_FILES([
 	  redhat/frr.spec
-	  debian/Makefile
+	  solaris/Makefile
 	  alpine/APKBUILD
 	  snapcraft/snapcraft.yaml
 	  lib/version.h
@@ -2009,14 +1988,6 @@ AC_CONFIG_FILES([Makefile
 	  pkgsrc/bgpd.sh pkgsrc/ospf6d.sh pkgsrc/ospfd.sh
 	  pkgsrc/ripd.sh pkgsrc/ripngd.sh pkgsrc/zebra.sh
 	  pkgsrc/eigrpd.sh])
-
-if test "${enable_bgp_vnc}" != "no"; then
-   if test "${with_rfp_path}" != "bgpd/rfp-example" ; then
-      AC_CONFIG_FILES([${with_rfp_path}/rfptest/Makefile ${with_rfp_path}/librfp/Makefile])
-   fi
-fi
-
-AC_CONFIG_FILES([solaris/Makefile])
 
 AC_CONFIG_FILES([vtysh/extract.pl],[chmod +x vtysh/extract.pl])
 
@@ -2059,9 +2030,9 @@ FRR version             : ${PACKAGE_VERSION}
 host operating system   : ${host_os}
 source code location    : ${srcdir}
 compiler                : ${CC}
-compiler flags          : ${CFLAGS}
+compiler flags          : ${CFLAGS} ${SAN_FLAGS}
 make                    : ${MAKE-make}
-linker flags            : ${LDFLAGS} ${LIBS} ${LIBCAP} ${LIBREADLINE} ${LIBM}
+linker flags            : ${LDFLAGS} ${SAN_FLAGS} ${LIBS} ${LIBCAP} ${LIBREADLINE} ${LIBM}
 state file directory    : ${frr_statedir}
 config file directory   : `eval echo \`echo ${sysconfdir}\``
 example directory       : `eval echo \`echo ${exampledir}\``
@@ -2071,12 +2042,12 @@ group to run as         : ${enable_group}
 group for vty sockets   : ${enable_vty_group}
 config file mask        : ${enable_configfile_mask}
 log file mask           : ${enable_logfile_mask}
-zebra protobuf enabled  : ${have_protobuf:-no}
+zebra protobuf enabled  : ${enable_protobuf:-no}
 
 The above user and group must have read/write access to the state file
 directory and to the config files in the config file directory."
 
 if test "${enable_doc}" != "no";then
-  AS_IF([test "x$SPHINXBUILD" = xno],
+  AS_IF([test "$SPHINXBUILD" = /bin/false],
      AC_MSG_WARN(sphinx-build is missing but required to build documentation))
 fi

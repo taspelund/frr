@@ -472,6 +472,14 @@ int if_is_vrf(struct interface *ifp)
 	return CHECK_FLAG(ifp->status, ZEBRA_INTERFACE_VRF_LOOPBACK);
 }
 
+bool if_is_loopback_or_vrf(struct interface *ifp)
+{
+	if (if_is_loopback(ifp) || if_is_vrf(ifp))
+		return true;
+
+	return false;
+}
+
 /* Does this interface support broadcast ? */
 int if_is_broadcast(struct interface *ifp)
 {
@@ -611,7 +619,7 @@ DEFUN (no_interface_desc,
  *     if not:
  *     - no idea, just get the name in its entirety.
  */
-static struct interface *if_sunwzebra_get(char *name, vrf_id_t vrf_id)
+static struct interface *if_sunwzebra_get(const char *name, vrf_id_t vrf_id)
 {
 	struct interface *ifp;
 	char *cp;
@@ -1141,7 +1149,7 @@ const char *if_link_type_str(enum zebra_link_type llt)
 		llts(ZEBRA_LLT_IEEE802154, "IEEE 802.15.4");
 		llts(ZEBRA_LLT_IEEE802154_PHY, "IEEE 802.15.4 Phy");
 	default:
-		zlog_warn("Unknown value %d", llt);
+		flog_err(LIB_ERR_DEVELOPMENT, "Unknown value %d", llt);
 		return "Unknown type!";
 #undef llts
 	}

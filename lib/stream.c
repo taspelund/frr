@@ -28,9 +28,9 @@
 #include "network.h"
 #include "prefix.h"
 #include "log.h"
+#include "lib_errors.h"
 
 DEFINE_MTYPE_STATIC(LIB, STREAM, "Stream")
-DEFINE_MTYPE_STATIC(LIB, STREAM_DATA, "Stream data")
 DEFINE_MTYPE_STATIC(LIB, STREAM_FIFO, "Stream FIFO")
 
 /* Tests whether a position is valid */
@@ -100,9 +100,7 @@ struct stream *stream_new(size_t size)
 
 	assert(size > 0);
 
-	s = XMALLOC(MTYPE_STREAM, sizeof(struct stream));
-
-	s->data = XMALLOC(MTYPE_STREAM_DATA, size);
+	s = XMALLOC(MTYPE_STREAM, sizeof(struct stream) + size);
 
 	s->getp = s->endp = 0;
 	s->next = NULL;
@@ -116,7 +114,6 @@ void stream_free(struct stream *s)
 	if (!s)
 		return;
 
-	XFREE(MTYPE_STREAM_DATA, s->data);
 	XFREE(MTYPE_STREAM, s);
 }
 
@@ -166,27 +163,33 @@ struct stream *stream_dupcat(struct stream *s1, struct stream *s2,
 	return new;
 }
 
-size_t stream_resize(struct stream *s, size_t newsize)
+size_t stream_resize_inplace(struct stream **sptr, size_t newsize)
 {
-	uint8_t *newdata;
-	STREAM_VERIFY_SANE(s);
+	struct stream *orig = *sptr;
 
-	newdata = XREALLOC(MTYPE_STREAM_DATA, s->data, newsize);
+	STREAM_VERIFY_SANE(orig);
 
-	if (newdata == NULL)
-		return s->size;
+	orig = XREALLOC(MTYPE_STREAM, orig, sizeof(struct stream) + newsize);
 
-	s->data = newdata;
-	s->size = newsize;
+	orig->size = newsize;
 
-	if (s->endp > s->size)
-		s->endp = s->size;
-	if (s->getp > s->endp)
-		s->getp = s->endp;
+	if (orig->endp > orig->size)
+		orig->endp = orig->size;
+	if (orig->getp > orig->endp)
+		orig->getp = orig->endp;
 
-	STREAM_VERIFY_SANE(s);
+	STREAM_VERIFY_SANE(orig);
 
-	return s->size;
+	*sptr = orig;
+	return orig->size;
+}
+
+size_t __attribute__((deprecated))stream_resize_orig(struct stream *s,
+						     size_t newsize)
+{
+	assert("stream_resize: Switch code to use stream_resize_inplace" == NULL);
+
+	return stream_resize_inplace(&s, newsize);
 }
 
 size_t stream_get_getp(struct stream *s)
@@ -267,7 +270,7 @@ void stream_forward_endp(struct stream *s, size_t size)
 }
 
 /* Copy from stream to destination. */
-inline bool stream_get2(void *dst, struct stream *s, size_t size)
+bool stream_get2(void *dst, struct stream *s, size_t size)
 {
 	STREAM_VERIFY_SANE(s);
 
@@ -296,7 +299,7 @@ void stream_get(void *dst, struct stream *s, size_t size)
 }
 
 /* Get next character from the stream. */
-inline bool stream_getc2(struct stream *s, uint8_t *byte)
+bool stream_getc2(struct stream *s, uint8_t *byte)
 {
 	STREAM_VERIFY_SANE(s);
 
@@ -341,7 +344,7 @@ uint8_t stream_getc_from(struct stream *s, size_t from)
 	return c;
 }
 
-inline bool stream_getw2(struct stream *s, uint16_t *word)
+bool stream_getw2(struct stream *s, uint16_t *word)
 {
 	STREAM_VERIFY_SANE(s);
 
@@ -462,7 +465,7 @@ void stream_get_from(void *dst, struct stream *s, size_t from, size_t size)
 	memcpy(dst, s->data + from, size);
 }
 
-inline bool stream_getl2(struct stream *s, uint32_t *l)
+bool stream_getl2(struct stream *s, uint32_t *l)
 {
 	STREAM_VERIFY_SANE(s);
 

@@ -332,8 +332,9 @@ static int pim_sock_read(struct thread *t)
 		if (!ifp || !ifp->info) {
 			if (PIM_DEBUG_PIM_PACKETS)
 				zlog_debug(
-					"%s: Received incoming pim packet on interface not yet configured for pim",
-					__PRETTY_FUNCTION__);
+					"%s: Received incoming pim packet on interface(%s:%d) not yet configured for pim",
+					__PRETTY_FUNCTION__,
+					ifp ? ifp->name : "Unknown", ifindex);
 			goto done;
 		}
 		int fail = pim_pim_packet(ifp, buf, len);
@@ -655,7 +656,7 @@ static int pim_hello_send(struct interface *ifp, uint16_t holdtime)
 {
 	struct pim_interface *pim_ifp = ifp->info;
 
-	if (pim_if_is_loopback(ifp))
+	if (if_is_loopback_or_vrf(ifp))
 		return 0;
 
 	if (hello_send(ifp, holdtime)) {
@@ -757,7 +758,7 @@ void pim_hello_restart_triggered(struct interface *ifp)
 	/*
 	 * No need to ever start loopback or vrf device hello's
 	 */
-	if (pim_if_is_loopback(ifp))
+	if (if_is_loopback_or_vrf(ifp))
 		return;
 
 	/*

@@ -301,7 +301,7 @@ int argv_find_and_parse_safi(struct cmd_token **argv, int argc, int *index,
 int bgp_vty_find_and_parse_afi_safi_bgp(struct vty *vty,
 					struct cmd_token **argv, int argc,
 					int *idx, afi_t *afi, safi_t *safi,
-					struct bgp **bgp)
+					struct bgp **bgp, bool use_json)
 {
 	char *vrf_name = NULL;
 
@@ -312,18 +312,24 @@ int bgp_vty_find_and_parse_afi_safi_bgp(struct vty *vty,
 	if (argv_find(argv, argc, "ip", idx))
 		*afi = AFI_IP;
 
-	if (argv_find(argv, argc, "view", idx)
-	    || argv_find(argv, argc, "vrf", idx)) {
+	if (argv_find(argv, argc, "view", idx))
 		vrf_name = argv[*idx + 1]->arg;
-
+	else if (argv_find(argv, argc, "vrf", idx)) {
+		vrf_name = argv[*idx + 1]->arg;
+		if (strmatch(vrf_name, VRF_DEFAULT_NAME))
+			vrf_name = NULL;
+	}
+	if (vrf_name) {
 		if (strmatch(vrf_name, "all"))
 			*bgp = NULL;
 		else {
 			*bgp = bgp_lookup_by_name(vrf_name);
 			if (!*bgp) {
-				vty_out(vty,
-					"View/Vrf specified is unknown: %s\n",
-					vrf_name);
+				if (use_json)
+					vty_out(vty, "{}\n");
+				else
+					vty_out(vty, "View/Vrf %s is unknown\n",
+						vrf_name);
 				*idx = 0;
 				return 0;
 			}
@@ -331,7 +337,11 @@ int bgp_vty_find_and_parse_afi_safi_bgp(struct vty *vty,
 	} else {
 		*bgp = bgp_get_default();
 		if (!*bgp) {
-			vty_out(vty, "Unable to find default BGP instance\n");
+			if (use_json)
+				vty_out(vty, "{}\n");
+			else
+				vty_out(vty,
+					"Default BGP instance not found\n");
 			*idx = 0;
 			return 0;
 		}
@@ -910,9 +920,12 @@ DEFUN_NOSH (router_bgp,
 		if (argc > 3) {
 			name = argv[idx_vrf]->arg;
 
-			if (!strcmp(argv[idx_view_vrf]->text, "vrf"))
-				inst_type = BGP_INSTANCE_TYPE_VRF;
-			else if (!strcmp(argv[idx_view_vrf]->text, "view"))
+			if (!strcmp(argv[idx_view_vrf]->text, "vrf")) {
+				if (strmatch(name, VRF_DEFAULT_NAME))
+					name = NULL;
+				else
+					inst_type = BGP_INSTANCE_TYPE_VRF;
+			} else if (!strcmp(argv[idx_view_vrf]->text, "view"))
 				inst_type = BGP_INSTANCE_TYPE_VIEW;
 		}
 
@@ -2019,7 +2032,7 @@ DEFUN (no_bgp_fast_external_failover,
 }
 
 /* "bgp enforce-first-as" configuration. */
-#if CONFDATE > 20180517
+#if CONFDATE > 20190517
 CPP_NOTICE("bgpd: remove deprecated '[no] bgp enforce-first-as' commands")
 #endif
 
@@ -7146,13 +7159,17 @@ DEFUN (clear_ip_bgp_all,
 	if (argv_find(argv, argc, "ip", &idx))
 		afi = AFI_IP;
 
-	/* [<view|vrf> VIEWVRFNAME] */
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx)) {
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		idx += 2;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx)) {
+		/* [<view> VIEWVRFNAME] */
 		vrf = argv[idx + 1]->arg;
 		idx += 2;
 	}
-
 	/* ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] */
 	if (argv_find_and_parse_afi(argv, argc, &idx, &afi))
 		argv_find_and_parse_safi(argv, argc, &idx, &safi);
@@ -7217,8 +7234,16 @@ DEFUN (clear_ip_bgp_prefix,
 	int idx = 0;
 
 	/* [<view|vrf> VIEWVRFNAME] */
-	if (argv_find(argv, argc, "VIEWVRFNAME", &idx))
-		vrf = argv[idx]->arg;
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		idx += 2;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx)) {
+		/* [<view> VIEWVRFNAME] */
+		vrf = argv[idx + 1]->arg;
+		idx += 2;
+	}
 
 	prefix = argv[argc - 1]->arg;
 
@@ -7260,16 +7285,23 @@ DEFUN (clear_bgp_instance_ipv6_safi_prefix,
        "Clear bestpath and re-advertise\n"
        "IPv6 prefix\n")
 {
-	int idx_word = 3;
 	int idx_safi = 0;
+	int idx_vrfview = 0;
 	int idx_ipv6_prefix = 0;
 	safi_t safi = SAFI_UNICAST;
 	char *prefix = argv_find(argv, argc, "X:X::X:X/M", &idx_ipv6_prefix) ?
 		argv[idx_ipv6_prefix]->arg : NULL;
-	/* [<view|vrf> VIEWVRFNAME] */
-	char *vrfview = argv_find(argv, argc, "VIEWVRFNAME", &idx_word) ?
-		argv[idx_word]->arg : NULL;
+	char *vrfview = NULL;
 
+	/* [<view|vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx_vrfview)) {
+		vrfview = argv[idx_vrfview + 1]->arg;
+		if (vrfview && strmatch(vrfview, VRF_DEFAULT_NAME))
+			vrfview = NULL;
+	} else if (argv_find(argv, argc, "view", &idx_vrfview)) {
+		/* [<view> VIEWVRFNAME] */
+		vrfview = argv[idx_vrfview + 1]->arg;
+	}
 	argv_find_and_parse_safi(argv, argc, &idx_safi, &safi);
 
 	return bgp_clear_prefix(
@@ -7319,7 +7351,7 @@ DEFUN (show_bgp_vrfs,
 	struct list *inst = bm->bgp;
 	struct listnode *node;
 	struct bgp *bgp;
-	uint8_t uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 	json_object *json = NULL;
 	json_object *json_vrfs = NULL;
 	int count = 0;
@@ -7460,10 +7492,18 @@ DEFUN(show_bgp_martian_nexthop_db, show_bgp_martian_nexthop_db_cmd,
 {
 	struct bgp *bgp = NULL;
 	int idx = 0;
+	char *name = NULL;
 
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx))
-		bgp = bgp_lookup_by_name(argv[idx + 1]->arg);
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		name = argv[idx + 1]->arg;
+		if (name && strmatch(name, VRF_DEFAULT_NAME))
+			name = NULL;
+	} else if (argv_find(argv, argc, "view", &idx))
+		/* [<view> VIEWVRFNAME] */
+		name = argv[idx + 1]->arg;
+	if (name)
+		bgp = bgp_lookup_by_name(name);
 	else
 		bgp = bgp_get_default();
 
@@ -7640,7 +7680,7 @@ static void bgp_show_bestpath_json(struct bgp *bgp, json_object *json)
 
 /* Show BGP peer's summary information. */
 static int bgp_show_summary(struct vty *vty, struct bgp *bgp, int afi, int safi,
-			    uint8_t use_json, json_object *json)
+			    bool use_json, json_object *json)
 {
 	struct peer *peer;
 	struct listnode *node, *nnode;
@@ -8057,14 +8097,14 @@ static int bgp_show_summary(struct vty *vty, struct bgp *bgp, int afi, int safi,
 }
 
 static void bgp_show_summary_afi_safi(struct vty *vty, struct bgp *bgp, int afi,
-				      int safi, uint8_t use_json,
+				      int safi, bool use_json,
 				      json_object *json)
 {
 	int is_first = 1;
 	int afi_wildcard = (afi == AFI_MAX);
 	int safi_wildcard = (safi == SAFI_MAX);
 	int is_wildcard = (afi_wildcard || safi_wildcard);
-	bool json_output = false;
+	bool nbr_output = false;
 
 	if (use_json && is_wildcard)
 		vty_out(vty, "{\n");
@@ -8075,7 +8115,7 @@ static void bgp_show_summary_afi_safi(struct vty *vty, struct bgp *bgp, int afi,
 			safi = 1; /* SAFI_UNICAST */
 		while (safi < SAFI_MAX) {
 			if (bgp_afi_safi_peer_exists(bgp, afi, safi)) {
-				json_output = true;
+				nbr_output = true;
 				if (is_wildcard) {
 					/*
 					 * So limit output to those afi/safi
@@ -8114,22 +8154,28 @@ static void bgp_show_summary_afi_safi(struct vty *vty, struct bgp *bgp, int afi,
 
 	if (use_json && is_wildcard)
 		vty_out(vty, "}\n");
-	else if (use_json && !json_output)
-		vty_out(vty, "{}\n");
+	else if (!nbr_output) {
+		if (use_json)
+			vty_out(vty, "{}\n");
+		else
+			vty_out(vty, "%% No BGP neighbors found\n");
+	}
 }
 
 static void bgp_show_all_instances_summary_vty(struct vty *vty, afi_t afi,
-					       safi_t safi, uint8_t use_json)
+					       safi_t safi, bool use_json)
 {
 	struct listnode *node, *nnode;
 	struct bgp *bgp;
 	json_object *json = NULL;
 	int is_first = 1;
+	bool nbr_output = false;
 
 	if (use_json)
 		vty_out(vty, "{\n");
 
 	for (ALL_LIST_ELEMENTS(bm->bgp, node, nnode, bgp)) {
+		nbr_output = true;
 		if (use_json) {
 			json = json_object_new_object();
 
@@ -8153,10 +8199,12 @@ static void bgp_show_all_instances_summary_vty(struct vty *vty, afi_t afi,
 
 	if (use_json)
 		vty_out(vty, "}\n");
+	else if (!nbr_output)
+		vty_out(vty, "%% BGP instance not found\n");
 }
 
 int bgp_show_summary_vty(struct vty *vty, const char *name, afi_t afi,
-			 safi_t safi, uint8_t use_json)
+			 safi_t safi, bool use_json)
 {
 	struct bgp *bgp;
 
@@ -8173,7 +8221,7 @@ int bgp_show_summary_vty(struct vty *vty, const char *name, afi_t afi,
 					vty_out(vty, "{}\n");
 				else
 					vty_out(vty,
-						"%% No such BGP instance exist\n");
+						"%% BGP instance not found\n");
 				return CMD_WARNING;
 			}
 
@@ -8187,6 +8235,13 @@ int bgp_show_summary_vty(struct vty *vty, const char *name, afi_t afi,
 
 	if (bgp)
 		bgp_show_summary_afi_safi(vty, bgp, afi, safi, use_json, NULL);
+	else {
+		if (use_json)
+			vty_out(vty, "{}\n");
+		else
+			vty_out(vty, "%% BGP instance not found\n");
+		return CMD_WARNING;
+	}
 
 	return CMD_SUCCESS;
 }
@@ -8213,16 +8268,20 @@ DEFUN (show_ip_bgp_summary,
 	/* show [ip] bgp */
 	if (argv_find(argv, argc, "ip", &idx))
 		afi = AFI_IP;
-	/* [<view|vrf> VIEWVRFNAME] */
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx))
-		vrf = argv[++idx]->arg;
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx))
+		/* [<view> VIEWVRFNAME] */
+		vrf = argv[idx + 1]->arg;
 	/* ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] */
 	if (argv_find_and_parse_afi(argv, argc, &idx, &afi)) {
 		argv_find_and_parse_safi(argv, argc, &idx, &safi);
 	}
 
-	int uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 
 	return bgp_show_summary_vty(vty, vrf, afi, safi, uj);
 }
@@ -8304,7 +8363,7 @@ static void bgp_show_peer_afi_orf_cap(struct vty *vty, struct peer *p,
 				      afi_t afi, safi_t safi,
 				      uint16_t adv_smcap, uint16_t adv_rmcap,
 				      uint16_t rcv_smcap, uint16_t rcv_rmcap,
-				      uint8_t use_json, json_object *json_pref)
+				      bool use_json, json_object *json_pref)
 {
 	/* Send-Mode */
 	if (CHECK_FLAG(p->af_cap[afi][safi], adv_smcap)
@@ -8364,7 +8423,7 @@ static void bgp_show_peer_afi_orf_cap(struct vty *vty, struct peer *p,
 }
 
 static void bgp_show_peer_afi(struct vty *vty, struct peer *p, afi_t afi,
-			      safi_t safi, uint8_t use_json,
+			      safi_t safi, bool use_json,
 			      json_object *json_neigh)
 {
 	struct bgp_filter *filter;
@@ -8939,7 +8998,7 @@ static void bgp_show_peer_afi(struct vty *vty, struct peer *p, afi_t afi,
 	}
 }
 
-static void bgp_show_peer(struct vty *vty, struct peer *p, uint8_t use_json,
+static void bgp_show_peer(struct vty *vty, struct peer *p, bool use_json,
 			  json_object *json)
 {
 	struct bgp *bgp;
@@ -10686,12 +10745,13 @@ static void bgp_show_peer(struct vty *vty, struct peer *p, uint8_t use_json,
 
 static int bgp_show_neighbor(struct vty *vty, struct bgp *bgp,
 			     enum show_type type, union sockunion *su,
-			     const char *conf_if, uint8_t use_json,
+			     const char *conf_if, bool use_json,
 			     json_object *json)
 {
 	struct listnode *node, *nnode;
 	struct peer *peer;
 	int find = 0;
+	bool nbr_output = false;
 
 	for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer)) {
 		if (!CHECK_FLAG(peer->flags, PEER_FLAG_CONFIG_NODE))
@@ -10700,6 +10760,7 @@ static int bgp_show_neighbor(struct vty *vty, struct bgp *bgp,
 		switch (type) {
 		case show_all:
 			bgp_show_peer(vty, peer, use_json, json);
+			nbr_output = true;
 			break;
 		case show_peer:
 			if (conf_if) {
@@ -10729,6 +10790,9 @@ static int bgp_show_neighbor(struct vty *vty, struct bgp *bgp,
 			vty_out(vty, "%% No such neighbor in this view/vrf\n");
 	}
 
+	if (type != show_peer && !nbr_output && !use_json)
+		vty_out(vty, "%% No BGP neighbors found\n");
+
 	if (use_json) {
 		vty_out(vty, "%s\n", json_object_to_json_string_ext(
 					     json, JSON_C_TO_STRING_PRETTY));
@@ -10743,18 +10807,20 @@ static int bgp_show_neighbor(struct vty *vty, struct bgp *bgp,
 static void bgp_show_all_instances_neighbors_vty(struct vty *vty,
 						 enum show_type type,
 						 const char *ip_str,
-						 uint8_t use_json)
+						 bool use_json)
 {
 	struct listnode *node, *nnode;
 	struct bgp *bgp;
 	union sockunion su;
 	json_object *json = NULL;
 	int ret, is_first = 1;
+	bool nbr_output = false;
 
 	if (use_json)
 		vty_out(vty, "{\n");
 
 	for (ALL_LIST_ELEMENTS(bm->bgp, node, nnode, bgp)) {
+		nbr_output = true;
 		if (use_json) {
 			if (!(json = json_object_new_object())) {
 				flog_err(
@@ -10807,11 +10873,13 @@ static void bgp_show_all_instances_neighbors_vty(struct vty *vty,
 
 	if (use_json)
 		vty_out(vty, "}\n");
+	else if (!nbr_output)
+		vty_out(vty, "%% BGP instance not found\n");
 }
 
 static int bgp_show_neighbor_vty(struct vty *vty, const char *name,
 				 enum show_type type, const char *ip_str,
-				 uint8_t use_json)
+				 bool use_json)
 {
 	int ret;
 	struct bgp *bgp;
@@ -10828,8 +10896,6 @@ static int bgp_show_neighbor_vty(struct vty *vty, const char *name,
 			if (!bgp) {
 				if (use_json) {
 					json = json_object_new_object();
-					json_object_boolean_true_add(
-						json, "bgpNoSuchInstance");
 					vty_out(vty, "%s\n",
 						json_object_to_json_string_ext(
 							json,
@@ -10837,7 +10903,7 @@ static int bgp_show_neighbor_vty(struct vty *vty, const char *name,
 					json_object_free(json);
 				} else
 					vty_out(vty,
-						"%% No such BGP instance exist\n");
+						"%% BGP instance not found\n");
 
 				return CMD_WARNING;
 			}
@@ -10861,6 +10927,11 @@ static int bgp_show_neighbor_vty(struct vty *vty, const char *name,
 					  json);
 		}
 		json_object_free(json);
+	} else {
+		if (use_json)
+			vty_out(vty, "{}\n");
+		else
+			vty_out(vty, "%% BGP instance not found\n");
 	}
 
 	return CMD_SUCCESS;
@@ -10886,12 +10957,17 @@ DEFUN (show_ip_bgp_neighbors,
 	char *sh_arg = NULL;
 	enum show_type sh_type;
 
-	uint8_t uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 
 	int idx = 0;
 
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx))
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx))
+		/* [<view> VIEWVRFNAME] */
 		vrf = argv[idx + 1]->arg;
 
 	idx++;
@@ -10996,8 +11072,8 @@ DEFUN (show_ip_bgp_attr_info,
 	return CMD_SUCCESS;
 }
 
-static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
-				   afi_t afi, safi_t safi, uint8_t use_json)
+static int bgp_show_route_leak_vty(struct vty *vty, const char *name, afi_t afi,
+				   safi_t safi, bool use_json)
 {
 	struct bgp *bgp;
 	struct listnode *node;
@@ -11013,16 +11089,9 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 
 		json = json_object_new_object();
 
-		/* Provide context for the block */
-		json_object_string_add(json, "vrf", name ? name : "default");
-		json_object_string_add(json, "afiSafi",
-					afi_safi_print(afi, safi));
-
 		bgp = name ? bgp_lookup_by_name(name) : bgp_get_default();
 
 		if (!bgp) {
-			json_object_boolean_true_add(json,
-						     "bgpNoSuchInstance");
 			vty_out(vty, "%s\n",
 				json_object_to_json_string_ext(
 					json,
@@ -11031,6 +11100,11 @@ static int bgp_show_route_leak_vty(struct vty *vty, const char *name,
 
 			return CMD_WARNING;
 		}
+
+		/* Provide context for the block */
+		json_object_string_add(json, "vrf", name ? name : "default");
+		json_object_string_add(json, "afiSafi",
+				       afi_safi_print(afi, safi));
 
 		if (!CHECK_FLAG(bgp->af_flags[afi][safi],
 				BGP_CONFIG_VRF_TO_VRF_IMPORT)) {
@@ -11170,7 +11244,7 @@ DEFUN (show_ip_bgp_route_leak,
 	afi_t afi = AFI_MAX;
 	safi_t safi = SAFI_MAX;
 
-	uint8_t uj = use_json(argc, argv);
+	bool uj = use_json(argc, argv);
 	int idx = 0;
 
 	/* show [ip] bgp */
@@ -11185,8 +11259,11 @@ DEFUN (show_ip_bgp_route_leak,
 		return CMD_WARNING;
 	}
 
-	if (argv_find(argv, argc, "vrf", &idx))
-		vrf = argv[++idx]->arg;
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	}
 	/* ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] */
 	if (argv_find_and_parse_afi(argv, argc, &idx, &afi)) {
 		argv_find_and_parse_safi(argv, argc, &idx, &safi);
@@ -11259,10 +11336,14 @@ DEFUN (show_ip_bgp_updgrps,
 	/* show [ip] bgp */
 	if (argv_find(argv, argc, "ip", &idx))
 		afi = AFI_IP;
-	/* [<view|vrf> VIEWVRFNAME] */
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx))
-		vrf = argv[++idx]->arg;
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx))
+		/* [<view> VIEWVRFNAME] */
+		vrf = argv[idx + 1]->arg;
 	/* ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] */
 	if (argv_find_and_parse_afi(argv, argc, &idx, &afi)) {
 		argv_find_and_parse_safi(argv, argc, &idx, &safi);
@@ -11488,7 +11569,7 @@ static int bgp_show_peer_group_vty(struct vty *vty, const char *name,
 	bgp = name ? bgp_lookup_by_name(name) : bgp_get_default();
 
 	if (!bgp) {
-		vty_out(vty, "%% No such BGP instance exists\n");
+		vty_out(vty, "%% BGP instance not found\n");
 		return CMD_WARNING;
 	}
 
@@ -11550,7 +11631,7 @@ DEFUN (bgp_redistribute_ipv4,
 	}
 
 	bgp_redist_add(bgp, AFI_IP, type, 0);
-	return bgp_redistribute_set(bgp, AFI_IP, type, 0);
+	return bgp_redistribute_set(bgp, AFI_IP, type, 0, false);
 }
 
 ALIAS_HIDDEN(
@@ -11571,6 +11652,7 @@ DEFUN (bgp_redistribute_ipv4_rmap,
 	int idx_word = 3;
 	int type;
 	struct bgp_redist *red;
+	bool changed;
 
 	type = proto_redistnum(AFI_IP, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -11579,8 +11661,8 @@ DEFUN (bgp_redistribute_ipv4_rmap,
 	}
 
 	red = bgp_redist_add(bgp, AFI_IP, type, 0);
-	bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
-	return bgp_redistribute_set(bgp, AFI_IP, type, 0);
+	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	return bgp_redistribute_set(bgp, AFI_IP, type, 0, changed);
 }
 
 ALIAS_HIDDEN(
@@ -11604,6 +11686,7 @@ DEFUN (bgp_redistribute_ipv4_metric,
 	int type;
 	uint32_t metric;
 	struct bgp_redist *red;
+	bool changed;
 
 	type = proto_redistnum(AFI_IP, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -11613,8 +11696,8 @@ DEFUN (bgp_redistribute_ipv4_metric,
 	metric = strtoul(argv[idx_number]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP, type, 0);
-	bgp_redistribute_metric_set(bgp, red, AFI_IP, type, metric);
-	return bgp_redistribute_set(bgp, AFI_IP, type, 0);
+	changed = bgp_redistribute_metric_set(bgp, red, AFI_IP, type, metric);
+	return bgp_redistribute_set(bgp, AFI_IP, type, 0, changed);
 }
 
 ALIAS_HIDDEN(
@@ -11641,6 +11724,7 @@ DEFUN (bgp_redistribute_ipv4_rmap_metric,
 	int type;
 	uint32_t metric;
 	struct bgp_redist *red;
+	bool changed;
 
 	type = proto_redistnum(AFI_IP, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -11650,9 +11734,9 @@ DEFUN (bgp_redistribute_ipv4_rmap_metric,
 	metric = strtoul(argv[idx_number]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP, type, 0);
-	bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
-	bgp_redistribute_metric_set(bgp, red, AFI_IP, type, metric);
-	return bgp_redistribute_set(bgp, AFI_IP, type, 0);
+	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed |= bgp_redistribute_metric_set(bgp, red, AFI_IP, type, metric);
+	return bgp_redistribute_set(bgp, AFI_IP, type, 0, changed);
 }
 
 ALIAS_HIDDEN(
@@ -11683,6 +11767,7 @@ DEFUN (bgp_redistribute_ipv4_metric_rmap,
 	int type;
 	uint32_t metric;
 	struct bgp_redist *red;
+	bool changed;
 
 	type = proto_redistnum(AFI_IP, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -11692,9 +11777,9 @@ DEFUN (bgp_redistribute_ipv4_metric_rmap,
 	metric = strtoul(argv[idx_number]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP, type, 0);
-	bgp_redistribute_metric_set(bgp, red, AFI_IP, type, metric);
-	bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
-	return bgp_redistribute_set(bgp, AFI_IP, type, 0);
+	changed = bgp_redistribute_metric_set(bgp, red, AFI_IP, type, metric);
+	changed |= bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	return bgp_redistribute_set(bgp, AFI_IP, type, 0, changed);
 }
 
 ALIAS_HIDDEN(
@@ -11730,7 +11815,7 @@ DEFUN (bgp_redistribute_ipv4_ospf,
 		protocol = ZEBRA_ROUTE_TABLE;
 
 	bgp_redist_add(bgp, AFI_IP, protocol, instance);
-	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance);
+	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance, false);
 }
 
 ALIAS_HIDDEN(bgp_redistribute_ipv4_ospf, bgp_redistribute_ipv4_ospf_hidden_cmd,
@@ -11757,6 +11842,7 @@ DEFUN (bgp_redistribute_ipv4_ospf_rmap,
 	struct bgp_redist *red;
 	unsigned short instance;
 	int protocol;
+	bool changed;
 
 	if (strncmp(argv[idx_ospf_table]->arg, "o", 1) == 0)
 		protocol = ZEBRA_ROUTE_OSPF;
@@ -11765,8 +11851,8 @@ DEFUN (bgp_redistribute_ipv4_ospf_rmap,
 
 	instance = strtoul(argv[idx_number]->arg, NULL, 10);
 	red = bgp_redist_add(bgp, AFI_IP, protocol, instance);
-	bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
-	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance);
+	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance, changed);
 }
 
 ALIAS_HIDDEN(bgp_redistribute_ipv4_ospf_rmap,
@@ -11797,6 +11883,7 @@ DEFUN (bgp_redistribute_ipv4_ospf_metric,
 	struct bgp_redist *red;
 	unsigned short instance;
 	int protocol;
+	bool changed;
 
 	if (strncmp(argv[idx_ospf_table]->arg, "o", 1) == 0)
 		protocol = ZEBRA_ROUTE_OSPF;
@@ -11807,8 +11894,9 @@ DEFUN (bgp_redistribute_ipv4_ospf_metric,
 	metric = strtoul(argv[idx_number_2]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP, protocol, instance);
-	bgp_redistribute_metric_set(bgp, red, AFI_IP, protocol, metric);
-	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance);
+	changed = bgp_redistribute_metric_set(bgp, red, AFI_IP, protocol,
+						metric);
+	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance, changed);
 }
 
 ALIAS_HIDDEN(bgp_redistribute_ipv4_ospf_metric,
@@ -11842,6 +11930,7 @@ DEFUN (bgp_redistribute_ipv4_ospf_rmap_metric,
 	struct bgp_redist *red;
 	unsigned short instance;
 	int protocol;
+	bool changed;
 
 	if (strncmp(argv[idx_ospf_table]->arg, "o", 1) == 0)
 		protocol = ZEBRA_ROUTE_OSPF;
@@ -11852,9 +11941,10 @@ DEFUN (bgp_redistribute_ipv4_ospf_rmap_metric,
 	metric = strtoul(argv[idx_number_2]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP, protocol, instance);
-	bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
-	bgp_redistribute_metric_set(bgp, red, AFI_IP, protocol, metric);
-	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance);
+	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed |= bgp_redistribute_metric_set(bgp, red, AFI_IP, protocol,
+						metric);
+	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance, changed);
 }
 
 ALIAS_HIDDEN(
@@ -11891,6 +11981,7 @@ DEFUN (bgp_redistribute_ipv4_ospf_metric_rmap,
 	struct bgp_redist *red;
 	unsigned short instance;
 	int protocol;
+	bool changed;
 
 	if (strncmp(argv[idx_ospf_table]->arg, "o", 1) == 0)
 		protocol = ZEBRA_ROUTE_OSPF;
@@ -11901,9 +11992,10 @@ DEFUN (bgp_redistribute_ipv4_ospf_metric_rmap,
 	metric = strtoul(argv[idx_number_2]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP, protocol, instance);
-	bgp_redistribute_metric_set(bgp, red, AFI_IP, protocol, metric);
-	bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
-	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance);
+	changed = bgp_redistribute_metric_set(bgp, red, AFI_IP, protocol,
+						metric);
+	changed |= bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance, changed);
 }
 
 ALIAS_HIDDEN(
@@ -12011,7 +12103,7 @@ DEFUN (bgp_redistribute_ipv6,
 	}
 
 	bgp_redist_add(bgp, AFI_IP6, type, 0);
-	return bgp_redistribute_set(bgp, AFI_IP6, type, 0);
+	return bgp_redistribute_set(bgp, AFI_IP6, type, 0, false);
 }
 
 DEFUN (bgp_redistribute_ipv6_rmap,
@@ -12027,6 +12119,7 @@ DEFUN (bgp_redistribute_ipv6_rmap,
 	int idx_word = 3;
 	int type;
 	struct bgp_redist *red;
+	bool changed;
 
 	type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -12035,8 +12128,8 @@ DEFUN (bgp_redistribute_ipv6_rmap,
 	}
 
 	red = bgp_redist_add(bgp, AFI_IP6, type, 0);
-	bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
-	return bgp_redistribute_set(bgp, AFI_IP6, type, 0);
+	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	return bgp_redistribute_set(bgp, AFI_IP6, type, 0, changed);
 }
 
 DEFUN (bgp_redistribute_ipv6_metric,
@@ -12053,6 +12146,7 @@ DEFUN (bgp_redistribute_ipv6_metric,
 	int type;
 	uint32_t metric;
 	struct bgp_redist *red;
+	bool changed;
 
 	type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -12062,8 +12156,8 @@ DEFUN (bgp_redistribute_ipv6_metric,
 	metric = strtoul(argv[idx_number]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP6, type, 0);
-	bgp_redistribute_metric_set(bgp, red, AFI_IP6, type, metric);
-	return bgp_redistribute_set(bgp, AFI_IP6, type, 0);
+	changed = bgp_redistribute_metric_set(bgp, red, AFI_IP6, type, metric);
+	return bgp_redistribute_set(bgp, AFI_IP6, type, 0, changed);
 }
 
 DEFUN (bgp_redistribute_ipv6_rmap_metric,
@@ -12083,6 +12177,7 @@ DEFUN (bgp_redistribute_ipv6_rmap_metric,
 	int type;
 	uint32_t metric;
 	struct bgp_redist *red;
+	bool changed;
 
 	type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -12092,9 +12187,10 @@ DEFUN (bgp_redistribute_ipv6_rmap_metric,
 	metric = strtoul(argv[idx_number]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP6, type, 0);
-	bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
-	bgp_redistribute_metric_set(bgp, red, AFI_IP6, type, metric);
-	return bgp_redistribute_set(bgp, AFI_IP6, type, 0);
+	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed |= bgp_redistribute_metric_set(bgp, red, AFI_IP6, type,
+						metric);
+	return bgp_redistribute_set(bgp, AFI_IP6, type, 0, changed);
 }
 
 DEFUN (bgp_redistribute_ipv6_metric_rmap,
@@ -12114,6 +12210,7 @@ DEFUN (bgp_redistribute_ipv6_metric_rmap,
 	int type;
 	uint32_t metric;
 	struct bgp_redist *red;
+	bool changed;
 
 	type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -12123,9 +12220,10 @@ DEFUN (bgp_redistribute_ipv6_metric_rmap,
 	metric = strtoul(argv[idx_number]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP6, type, 0);
-	bgp_redistribute_metric_set(bgp, red, AFI_IP6, SAFI_UNICAST, metric);
-	bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
-	return bgp_redistribute_set(bgp, AFI_IP6, type, 0);
+	changed = bgp_redistribute_metric_set(bgp, red, AFI_IP6, SAFI_UNICAST,
+						metric);
+	changed |= bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	return bgp_redistribute_set(bgp, AFI_IP6, type, 0, changed);
 }
 
 DEFUN (no_bgp_redistribute_ipv6,

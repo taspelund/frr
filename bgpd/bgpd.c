@@ -3187,14 +3187,15 @@ int bgp_delete(struct bgp *bgp)
 				.import_redirect_rtlist);
 		bgp->vpn_policy[afi].import_redirect_rtlist = NULL;
 	}
-	/* Remove visibility via the master list - there may however still be
-	 * routes to be processed still referencing the struct bgp.
-	 */
-	listnode_delete(bm->bgp, bgp);
 
 	/* Deregister from Zebra, if needed */
 	if (IS_BGP_INST_KNOWN_TO_ZEBRA(bgp))
 		bgp_zebra_instance_deregister(bgp);
+
+	/* Remove visibility via the master list - there may however still be
+	 * routes to be processed still referencing the struct bgp.
+	 */
+	listnode_delete(bm->bgp, bgp);
 
 	/* Free interfaces in this instance. */
 	bgp_if_finish(bgp);
@@ -6625,22 +6626,11 @@ int peer_clear_soft(struct peer *peer, afi_t afi, safi_t safi,
 }
 
 /* Display peer uptime.*/
-char *peer_uptime(time_t uptime2, char *buf, size_t len, uint8_t use_json,
+char *peer_uptime(time_t uptime2, char *buf, size_t len, bool use_json,
 		  json_object *json)
 {
 	time_t uptime1, epoch_tbuf;
 	struct tm *tm;
-
-	/* Check buffer length. */
-	if (len < BGP_UPTIME_LEN) {
-		if (!use_json) {
-			zlog_warn("peer_uptime (): buffer shortage %lu",
-				  (unsigned long)len);
-			/* XXX: should return status instead of buf... */
-			snprintf(buf, len, "<error> ");
-		}
-		return buf;
-	}
 
 	/* If there is no connection has been done before print `never'. */
 	if (uptime2 == 0) {
@@ -7356,7 +7346,7 @@ static void bgp_config_write_family(struct vty *vty, struct bgp *bgp, afi_t afi,
 }
 
 /* clang-format off */
-#if CONFDATE > 20180517
+#if CONFDATE > 20190517
 CPP_NOTICE("bgpd: remove 'bgp enforce-first-as' config migration from bgp_config_write")
 #endif
 /* clang-format on */
@@ -7745,10 +7735,8 @@ static void bgp_viewvrf_autocomplete(vector comps, struct cmd_token *token)
 	struct listnode *next;
 	struct bgp *bgp;
 
-	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
-		if (vrf->vrf_id != VRF_DEFAULT)
-			vector_set(comps, XSTRDUP(MTYPE_COMPLETION, vrf->name));
-	}
+	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
+		vector_set(comps, XSTRDUP(MTYPE_COMPLETION, vrf->name));
 
 	for (ALL_LIST_ELEMENTS_RO(bm->bgp, next, bgp)) {
 		if (bgp->inst_type != BGP_INSTANCE_TYPE_VIEW)
@@ -7777,8 +7765,8 @@ static void bgp_pthreads_init()
 		.start = bgp_keepalives_start,
 		.stop = bgp_keepalives_stop,
 	};
-	frr_pthread_new(&io, "BGP I/O thread");
-	frr_pthread_new(&ka, "BGP Keepalives thread");
+	frr_pthread_new(&io, "BGP I/O thread", "bgpd_io");
+	frr_pthread_new(&ka, "BGP Keepalives thread", "bgpd_ka");
 }
 
 void bgp_pthreads_run()

@@ -39,6 +39,7 @@
 
 /* default VRF ID value used when VRF backend is not NETNS */
 #define VRF_DEFAULT_INTERNAL 0
+#define VRF_DEFAULT_NAME_INTERNAL "default"
 
 DEFINE_MTYPE_STATIC(LIB, VRF, "VRF")
 DEFINE_MTYPE_STATIC(LIB, VRF_BITMAP, "VRF bit-map")
@@ -56,6 +57,7 @@ struct vrf_name_head vrfs_by_name = RB_INITIALIZER(&vrfs_by_name);
 
 static int vrf_backend;
 static struct zebra_privs_t *vrf_daemon_privs;
+static char vrf_default_name[VRF_NAMSIZ] = VRF_DEFAULT_NAME_INTERNAL;
 
 /*
  * Turn on/off debug code
@@ -69,6 +71,7 @@ struct vrf_master {
 	int (*vrf_delete_hook)(struct vrf *);
 	int (*vrf_enable_hook)(struct vrf *);
 	int (*vrf_disable_hook)(struct vrf *);
+	int (*vrf_update_name_hook)(struct vrf *vrf);
 } vrf_master = {
 	0,
 };
@@ -165,6 +168,13 @@ struct vrf *vrf_get(vrf_id_t vrf_id, const char *name)
 	 */
 	if (name)
 		vrf = vrf_lookup_by_name(name);
+	if (vrf && vrf_id != VRF_UNKNOWN
+	    && vrf->vrf_id != VRF_UNKNOWN
+	    && vrf->vrf_id != vrf_id) {
+		zlog_debug("VRF_GET: avoid %s creation(%u), same name exists (%u)",
+			   name, vrf_id, vrf->vrf_id);
+		return NULL;
+	}
 	/* Try to find VRF both by ID and name */
 	if (!vrf && vrf_id != VRF_UNKNOWN)
 		vrf = vrf_lookup_by_id(vrf_id);
@@ -342,101 +352,111 @@ void *vrf_info_lookup(vrf_id_t vrf_id)
 }
 
 /*
- * VRF bit-map
+ * VRF hash for storing set or not.
  */
-
-#define VRF_BITMAP_NUM_OF_GROUPS            1024
-#define VRF_BITMAP_NUM_OF_BITS_IN_GROUP (UINT32_MAX / VRF_BITMAP_NUM_OF_GROUPS)
-#define VRF_BITMAP_NUM_OF_BYTES_IN_GROUP                                       \
-	(VRF_BITMAP_NUM_OF_BITS_IN_GROUP / CHAR_BIT + 1) /* +1 for ensure */
-
-#define VRF_BITMAP_GROUP(_id) ((_id) / VRF_BITMAP_NUM_OF_BITS_IN_GROUP)
-#define VRF_BITMAP_BIT_OFFSET(_id) ((_id) % VRF_BITMAP_NUM_OF_BITS_IN_GROUP)
-
-#define VRF_BITMAP_INDEX_IN_GROUP(_bit_offset) ((_bit_offset) / CHAR_BIT)
-#define VRF_BITMAP_FLAG(_bit_offset)                                           \
-	(((uint8_t)1) << ((_bit_offset) % CHAR_BIT))
-
-struct vrf_bitmap {
-	uint8_t *groups[VRF_BITMAP_NUM_OF_GROUPS];
+struct vrf_bit_set {
+	vrf_id_t vrf_id;
+	bool set;
 };
+
+static unsigned int vrf_hash_bitmap_key(void *data)
+{
+	struct vrf_bit_set *bit = data;
+
+	return bit->vrf_id;
+}
+
+static int vrf_hash_bitmap_cmp(const void *a, const void *b)
+{
+	const struct vrf_bit_set *bit1 = a;
+	const struct vrf_bit_set *bit2 = b;
+
+	return bit1->vrf_id == bit2->vrf_id;
+}
+
+static void *vrf_hash_bitmap_alloc(void *data)
+{
+	struct vrf_bit_set *copy = data;
+	struct vrf_bit_set *bit;
+
+	bit = XMALLOC(MTYPE_VRF_BITMAP, sizeof(*bit));
+	bit->vrf_id = copy->vrf_id;
+
+	return bit;
+}
+
+static void vrf_hash_bitmap_free(void *data)
+{
+	struct vrf_bit_set *bit = data;
+
+	XFREE(MTYPE_VRF_BITMAP, bit);
+}
 
 vrf_bitmap_t vrf_bitmap_init(void)
 {
-	return (vrf_bitmap_t)XCALLOC(MTYPE_VRF_BITMAP,
-				     sizeof(struct vrf_bitmap));
+	return hash_create_size(32, vrf_hash_bitmap_key, vrf_hash_bitmap_cmp,
+				"VRF BIT HASH");
 }
 
 void vrf_bitmap_free(vrf_bitmap_t bmap)
 {
-	struct vrf_bitmap *bm = (struct vrf_bitmap *)bmap;
-	int i;
+	struct hash *vrf_hash = bmap;
 
-	if (bmap == VRF_BITMAP_NULL)
+	if (vrf_hash == NULL)
 		return;
 
-	for (i = 0; i < VRF_BITMAP_NUM_OF_GROUPS; i++)
-		if (bm->groups[i])
-			XFREE(MTYPE_VRF_BITMAP, bm->groups[i]);
-
-	XFREE(MTYPE_VRF_BITMAP, bm);
+	hash_clean(vrf_hash, vrf_hash_bitmap_free);
+	hash_free(vrf_hash);
 }
 
 void vrf_bitmap_set(vrf_bitmap_t bmap, vrf_id_t vrf_id)
 {
-	struct vrf_bitmap *bm = (struct vrf_bitmap *)bmap;
-	uint8_t group = VRF_BITMAP_GROUP(vrf_id);
-	uint8_t offset = VRF_BITMAP_BIT_OFFSET(vrf_id);
+	struct vrf_bit_set lookup = { .vrf_id = vrf_id };
+	struct hash *vrf_hash = bmap;
+	struct vrf_bit_set *bit;
 
-	if (bmap == VRF_BITMAP_NULL || vrf_id == VRF_UNKNOWN)
+	if (vrf_hash == NULL || vrf_id == VRF_UNKNOWN)
 		return;
 
-	if (bm->groups[group] == NULL)
-		bm->groups[group] = XCALLOC(MTYPE_VRF_BITMAP,
-					    VRF_BITMAP_NUM_OF_BYTES_IN_GROUP);
-
-	SET_FLAG(bm->groups[group][VRF_BITMAP_INDEX_IN_GROUP(offset)],
-		 VRF_BITMAP_FLAG(offset));
+	bit = hash_get(vrf_hash, &lookup, vrf_hash_bitmap_alloc);
+	bit->set = true;
 }
 
 void vrf_bitmap_unset(vrf_bitmap_t bmap, vrf_id_t vrf_id)
 {
-	struct vrf_bitmap *bm = (struct vrf_bitmap *)bmap;
-	uint8_t group = VRF_BITMAP_GROUP(vrf_id);
-	uint8_t offset = VRF_BITMAP_BIT_OFFSET(vrf_id);
+	struct vrf_bit_set lookup = { .vrf_id = vrf_id };
+	struct hash *vrf_hash = bmap;
+	struct vrf_bit_set *bit;
 
-	if (bmap == VRF_BITMAP_NULL || vrf_id == VRF_UNKNOWN
-	    || bm->groups[group] == NULL)
+	if (vrf_hash == NULL || vrf_id == VRF_UNKNOWN)
 		return;
 
-	UNSET_FLAG(bm->groups[group][VRF_BITMAP_INDEX_IN_GROUP(offset)],
-		   VRF_BITMAP_FLAG(offset));
+	bit = hash_get(vrf_hash, &lookup, vrf_hash_bitmap_alloc);
+	bit->set = false;
 }
 
 int vrf_bitmap_check(vrf_bitmap_t bmap, vrf_id_t vrf_id)
 {
-	struct vrf_bitmap *bm = (struct vrf_bitmap *)bmap;
-	uint8_t group = VRF_BITMAP_GROUP(vrf_id);
-	uint8_t offset = VRF_BITMAP_BIT_OFFSET(vrf_id);
+	struct vrf_bit_set lookup = { .vrf_id = vrf_id };
+	struct hash *vrf_hash = bmap;
+	struct vrf_bit_set *bit;
 
-	if (bmap == VRF_BITMAP_NULL || vrf_id == VRF_UNKNOWN
-	    || bm->groups[group] == NULL)
+	if (vrf_hash == NULL || vrf_id == VRF_UNKNOWN)
 		return 0;
 
-	return CHECK_FLAG(bm->groups[group][VRF_BITMAP_INDEX_IN_GROUP(offset)],
-			  VRF_BITMAP_FLAG(offset))
-		       ? 1
-		       : 0;
+	bit = hash_lookup(vrf_hash, &lookup);
+	if (bit)
+		return bit->set;
+
+	return 0;
 }
 
 static void vrf_autocomplete(vector comps, struct cmd_token *token)
 {
 	struct vrf *vrf = NULL;
 
-	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
-		if (vrf->vrf_id != VRF_DEFAULT)
-			vector_set(comps, XSTRDUP(MTYPE_COMPLETION, vrf->name));
-	}
+	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
+		vector_set(comps, XSTRDUP(MTYPE_COMPLETION, vrf->name));
 }
 
 static const struct cmd_variable_handler vrf_var_handlers[] = {
@@ -449,7 +469,8 @@ static const struct cmd_variable_handler vrf_var_handlers[] = {
 
 /* Initialize VRF module. */
 void vrf_init(int (*create)(struct vrf *), int (*enable)(struct vrf *),
-	      int (*disable)(struct vrf *), int (*delete)(struct vrf *))
+	      int (*disable)(struct vrf *), int (*delete)(struct vrf *),
+	      int ((*update)(struct vrf *)))
 {
 	struct vrf *default_vrf;
 
@@ -463,6 +484,7 @@ void vrf_init(int (*create)(struct vrf *), int (*enable)(struct vrf *),
 	vrf_master.vrf_enable_hook = enable;
 	vrf_master.vrf_disable_hook = disable;
 	vrf_master.vrf_delete_hook = delete;
+	vrf_master.vrf_update_name_hook = update;
 
 	/* The default VRF always exists. */
 	default_vrf = vrf_get(VRF_DEFAULT, VRF_DEFAULT_NAME);
@@ -471,6 +493,9 @@ void vrf_init(int (*create)(struct vrf *), int (*enable)(struct vrf *),
 			  "vrf_init: failed to create the default VRF!");
 		exit(1);
 	}
+	if (vrf_is_backend_netns())
+		strlcpy(default_vrf->data.l.netns_name,
+			VRF_DEFAULT_NAME, NS_NAMSIZ);
 
 	/* Enable the default VRF. */
 	if (!vrf_enable(default_vrf)) {
@@ -864,12 +889,40 @@ void vrf_cmd_init(int (*writefunc)(struct vty *vty),
 	}
 }
 
+void vrf_set_default_name(const char *default_name)
+{
+	struct vrf *def_vrf;
+	struct vrf *vrf_with_default_name = NULL;
+
+	def_vrf = vrf_lookup_by_id(VRF_DEFAULT);
+	assert(default_name);
+	vrf_with_default_name = vrf_lookup_by_name(default_name);
+	if (vrf_with_default_name && vrf_with_default_name != def_vrf) {
+		/* vrf name already used by an other VRF */
+		zlog_debug("VRF: %s, avoid changing name to %s, same name exists (%u)",
+			   vrf_with_default_name->name, default_name,
+			   vrf_with_default_name->vrf_id);
+		return;
+	}
+	snprintf(vrf_default_name, VRF_NAMSIZ, "%s", default_name);
+	if (def_vrf) {
+		RB_REMOVE(vrf_name_head, &vrfs_by_name, def_vrf);
+		strlcpy(def_vrf->data.l.netns_name,
+			vrf_default_name, NS_NAMSIZ);
+		strlcpy(def_vrf->name, vrf_default_name, sizeof(def_vrf->name));
+		RB_INSERT(vrf_name_head, &vrfs_by_name, def_vrf);
+		if (vrf_master.vrf_update_name_hook)
+			(*vrf_master.vrf_update_name_hook)(def_vrf);
+	}
+}
+
+const char *vrf_get_default_name(void)
+{
+	return vrf_default_name;
+}
+
 vrf_id_t vrf_get_default_id(void)
 {
-	struct vrf *vrf = vrf_lookup_by_name(VRF_DEFAULT_NAME);
-
-	if (vrf)
-		return vrf->vrf_id;
 	/* backend netns is only known by zebra
 	 * for other daemons, we return VRF_DEFAULT_INTERNAL
 	 */
