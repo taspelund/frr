@@ -718,8 +718,6 @@ static void ospf_finish_final(struct ospf *ospf)
 	ospf_lsdb_free(ospf->lsdb);
 
 	for (rn = route_top(ospf->maxage_lsa); rn; rn = route_next(rn)) {
-		struct ospf_lsa *lsa;
-
 		if ((lsa = rn->info) != NULL) {
 			ospf_lsa_unlock(&lsa);
 			rn->info = NULL;
@@ -755,7 +753,6 @@ static void ospf_finish_final(struct ospf *ospf)
 
 	for (i = ZEBRA_ROUTE_SYSTEM; i <= ZEBRA_ROUTE_MAX; i++) {
 		struct list *ext_list;
-		struct listnode *node;
 		struct ospf_external *ext;
 
 		ext_list = ospf->external[i];
