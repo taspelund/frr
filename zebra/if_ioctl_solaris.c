@@ -65,7 +65,7 @@ static int interface_list_ioctl(int af)
 	}
 
 	if (sock < 0) {
-		flog_err_sys(LIB_ERR_SOCKET, "Can't make %s socket stream: %s",
+		flog_err_sys(EC_LIB_SOCKET, "Can't make %s socket stream: %s",
 			     (af == AF_INET ? "AF_INET" : "AF_INET6"),
 			     safe_strerror(errno));
 		return -1;
@@ -82,7 +82,7 @@ calculate_lifc_len:
 	}
 
 	if (ret < 0) {
-		flog_err_sys(LIB_ERR_SYSTEM_CALL,
+		flog_err_sys(EC_LIB_SYSTEM_CALL,
 			     "interface_list_ioctl: SIOCGLIFNUM failed %s",
 			     safe_strerror(save_errno));
 		close(sock);
@@ -117,7 +117,7 @@ calculate_lifc_len:
 		if (errno == EINVAL)
 			goto calculate_lifc_len;
 
-		flog_err_sys(LIB_ERR_SYSTEM_CALL, "SIOCGLIFCONF: %s",
+		flog_err_sys(EC_LIB_SYSTEM_CALL, "SIOCGLIFCONF: %s",
 			     safe_strerror(errno));
 		goto end;
 	}
@@ -209,7 +209,7 @@ static int if_get_index(struct interface *ifp)
 		ret = -1;
 
 	if (ret < 0) {
-		flog_err_sys(LIB_ERR_SYSTEM_CALL, "SIOCGLIFINDEX(%s) failed",
+		flog_err_sys(EC_LIB_SYSTEM_CALL, "SIOCGLIFINDEX(%s) failed",
 			     ifp->name);
 		return ret;
 	}
@@ -272,7 +272,7 @@ static int if_get_addr(struct interface *ifp, struct sockaddr *addr,
 
 		if (ret < 0) {
 			if (errno != EADDRNOTAVAIL) {
-				flog_err_sys(LIB_ERR_SYSTEM_CALL,
+				flog_err_sys(EC_LIB_SYSTEM_CALL,
 					     "SIOCGLIFNETMASK (%s) fail: %s",
 					     ifp->name, safe_strerror(errno));
 				return ret;
@@ -293,7 +293,7 @@ static int if_get_addr(struct interface *ifp, struct sockaddr *addr,
 			if (ifp->flags & IFF_POINTOPOINT)
 				prefixlen = IPV6_MAX_BITLEN;
 			else
-				flog_err_sys(LIB_ERR_SYSTEM_CALL,
+				flog_err_sys(EC_LIB_SYSTEM_CALL,
 					     "SIOCGLIFSUBNET (%s) fail: %s",
 					     ifp->name, safe_strerror(errno));
 		} else {
