@@ -517,15 +517,15 @@ static void frr_mkdir(const char *path, bool strip)
 		if (errno == EEXIST)
 			return;
 
-		flog_err(EC_LIB_SYSTEM_CALL, "failed to mkdir \"%s\": %s",
-			 path, strerror(errno));
+		flog_err(EC_LIB_SYSTEM_CALL, "failed to mkdir \"%s\": %s", path,
+			 strerror(errno));
 		return;
 	}
 
 	zprivs_get_ids(&ids);
 	if (chown(path, ids.uid_normal, ids.gid_normal))
-		flog_err(EC_LIB_SYSTEM_CALL, "failed to chown \"%s\": %s",
-			 path, strerror(errno));
+		flog_err(EC_LIB_SYSTEM_CALL, "failed to chown \"%s\": %s", path,
+			 strerror(errno));
 }
 
 static struct thread_master *master;

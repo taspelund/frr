@@ -89,9 +89,9 @@ static int ack_lsp(struct isis_lsp_hdr *hdr, struct isis_circuit *circuit,
 	retval = circuit->tx(circuit, level);
 	if (retval != ISIS_OK)
 		flog_err(EC_ISIS_PACKET,
-			  "ISIS-Upd (%s): Send L%d LSP PSNP on %s failed",
-			  circuit->area->area_tag, level,
-			  circuit->interface->name);
+			 "ISIS-Upd (%s): Send L%d LSP PSNP on %s failed",
+			 circuit->area->area_tag, level,
+			 circuit->interface->name);
 
 	return retval;
 }
@@ -618,8 +618,8 @@ static int process_hello(uint8_t pdu_type, struct isis_circuit *circuit,
 
 	if (!p2p_hello && !(level & iih.circ_type)) {
 		flog_err(EC_ISIS_PACKET,
-			  "Level %d LAN Hello with Circuit Type %d", level,
-			  iih.circ_type);
+			 "Level %d LAN Hello with Circuit Type %d", level,
+			 iih.circ_type);
 		return ISIS_ERROR;
 	}
 
@@ -1369,13 +1369,13 @@ int isis_handle_pdu(struct isis_circuit *circuit, uint8_t *ssnpa)
 
 	if (idrp == ISO9542_ESIS) {
 		flog_err(EC_LIB_DEVELOPMENT,
-			  "No support for ES-IS packet IDRP=%" PRIx8, idrp);
+			 "No support for ES-IS packet IDRP=%" PRIx8, idrp);
 		return ISIS_ERROR;
 	}
 
 	if (idrp != ISO10589_ISIS) {
 		flog_err(EC_ISIS_PACKET, "Not an IS-IS packet IDRP=%" PRIx8,
-			  idrp);
+			 idrp);
 		return ISIS_ERROR;
 	}
 
@@ -1401,9 +1401,9 @@ int isis_handle_pdu(struct isis_circuit *circuit, uint8_t *ssnpa)
 
 	if (length != expected_length) {
 		flog_err(EC_ISIS_PACKET,
-			  "Exepected fixed header length = %" PRIu8
-			  " but got %" PRIu8,
-			  expected_length, length);
+			 "Exepected fixed header length = %" PRIu8
+			 " but got %" PRIu8,
+			 expected_length, length);
 		return ISIS_ERROR;
 	}
 
@@ -1653,9 +1653,9 @@ int send_hello(struct isis_circuit *circuit, int level)
 	retval = circuit->tx(circuit, level);
 	if (retval != ISIS_OK)
 		flog_err(EC_ISIS_PACKET,
-			  "ISIS-Adj (%s): Send L%d IIH on %s failed",
-			  circuit->area->area_tag, level,
-			  circuit->interface->name);
+			 "ISIS-Adj (%s): Send L%d IIH on %s failed",
+			 circuit->area->area_tag, level,
+			 circuit->interface->name);
 
 	return retval;
 }
@@ -1851,9 +1851,9 @@ int send_csnp(struct isis_circuit *circuit, int level)
 		int retval = circuit->tx(circuit, level);
 		if (retval != ISIS_OK) {
 			flog_err(EC_ISIS_PACKET,
-				  "ISIS-Snp (%s): Send L%d CSNP on %s failed",
-				  circuit->area->area_tag, level,
-				  circuit->interface->name);
+				 "ISIS-Snp (%s): Send L%d CSNP on %s failed",
+				 circuit->area->area_tag, level,
+				 circuit->interface->name);
 			isis_free_tlvs(tlvs);
 			return retval;
 		}
@@ -2016,9 +2016,9 @@ static int send_psnp(int level, struct isis_circuit *circuit)
 		int retval = circuit->tx(circuit, level);
 		if (retval != ISIS_OK) {
 			flog_err(EC_ISIS_PACKET,
-				  "ISIS-Snp (%s): Send L%d PSNP on %s failed",
-				  circuit->area->area_tag, level,
-				  circuit->interface->name);
+				 "ISIS-Snp (%s): Send L%d PSNP on %s failed",
+				 circuit->area->area_tag, level,
+				 circuit->interface->name);
 			isis_free_tlvs(tlvs);
 			return retval;
 		}
@@ -2160,11 +2160,11 @@ int send_lsp(struct thread *thread)
 	retval = circuit->tx(circuit, lsp->level);
 	if (retval != ISIS_OK) {
 		flog_err(EC_ISIS_PACKET,
-			  "ISIS-Upd (%s): Send L%d LSP on %s failed %s",
-			  circuit->area->area_tag, lsp->level,
-			  circuit->interface->name,
-			  (retval == ISIS_WARNING) ? "temporarily"
-						   : "permanently");
+			 "ISIS-Upd (%s): Send L%d LSP on %s failed %s",
+			 circuit->area->area_tag, lsp->level,
+			 circuit->interface->name,
+			 (retval == ISIS_WARNING) ? "temporarily"
+						  : "permanently");
 	}
 
 out:
