@@ -666,7 +666,6 @@ void rfapiPrintBi(void *stream, struct bgp_info *bi)
 		   HVTYNL);
 	}
 	if (bi->extra && bi->extra->vnc.import.aux_prefix.family) {
-		char buf[BUFSIZ];
 		const char *sp;
 
 		sp = rfapi_ntop(bi->extra->vnc.import.aux_prefix.family,
@@ -2005,7 +2004,8 @@ register_add(struct vty *vty, struct cmd_token *carg_prefix,
 					"Missing parameter for local-next-hop\n");
 				return CMD_WARNING_CONFIG_FAILED;
 			}
-			++argv, --argc;
+			++argv;
+			--argc;
 			arg_lnh = argv[0]->arg;
 		}
 		if (strmatch(argv[0]->text, "local-cost")) {
@@ -2019,7 +2019,8 @@ register_add(struct vty *vty, struct cmd_token *carg_prefix,
 					"Missing parameter for local-cost\n");
 				return CMD_WARNING_CONFIG_FAILED;
 			}
-			++argv, --argc;
+			++argv;
+			--argc;
 			arg_lnh_cost = argv[0]->arg;
 		}
 	}
@@ -3179,8 +3180,6 @@ static int rfapiDeleteLocalPrefixesByRFD(struct rfapi_local_reg_delete_arg *cda,
 			list_delete_all_node(adb_delete_list);
 
 			if (!(pPrefix && !RFAPI_0_PREFIX(pPrefix))) {
-				void *cursor;
-
 				/*
 				 * Caller didn't specify a prefix, or specified
 				 * (0/32 or 0/128)

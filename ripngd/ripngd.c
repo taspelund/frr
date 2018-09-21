@@ -95,7 +95,7 @@ static int ripng_make_socket(void)
 
 	sock = socket(AF_INET6, SOCK_DGRAM, 0);
 	if (sock < 0) {
-		flog_err_sys(LIB_ERR_SOCKET, "Can't make ripng socket");
+		flog_err_sys(EC_LIB_SOCKET, "Can't make ripng socket");
 		return sock;
 	}
 
@@ -199,14 +199,13 @@ int ripng_send_packet(caddr_t buf, int bufsize, struct sockaddr_in6 *to,
 
 	if (ret < 0) {
 		if (to)
-			flog_err_sys(LIB_ERR_SOCKET,
+			flog_err_sys(EC_LIB_SOCKET,
 				     "RIPng send fail on %s to %s: %s",
 				     ifp->name, inet6_ntoa(to->sin6_addr),
 				     safe_strerror(errno));
 		else
-			flog_err_sys(LIB_ERR_SOCKET,
-				     "RIPng send fail on %s: %s", ifp->name,
-				     safe_strerror(errno));
+			flog_err_sys(EC_LIB_SOCKET, "RIPng send fail on %s: %s",
+				     ifp->name, safe_strerror(errno));
 	}
 
 	return ret;
@@ -706,8 +705,6 @@ static void ripng_route_process(struct rte *rte, struct sockaddr_in6 *from,
 
 	/* Modify entry. */
 	if (ri->routemap[RIPNG_FILTER_IN]) {
-		int ret;
-
 		ret = route_map_apply(ri->routemap[RIPNG_FILTER_IN],
 				      (struct prefix *)&p, RMAP_RIPNG,
 				      &newinfo);
@@ -1618,8 +1615,6 @@ void ripng_output_process(struct interface *ifp, struct sockaddr_in6 *to,
 
 			/* Interface route-map */
 			if (ri->routemap[RIPNG_FILTER_OUT]) {
-				int ret;
-
 				ret = route_map_apply(
 					ri->routemap[RIPNG_FILTER_OUT],
 					(struct prefix *)p, RMAP_RIPNG, rinfo);
@@ -1636,8 +1631,6 @@ void ripng_output_process(struct interface *ifp, struct sockaddr_in6 *to,
 
 			/* Redistribute route-map. */
 			if (ripng->route_map[rinfo->type].name) {
-				int ret;
-
 				ret = route_map_apply(
 					ripng->route_map[rinfo->type].map,
 					(struct prefix *)p, RMAP_RIPNG, rinfo);
@@ -1724,7 +1717,6 @@ void ripng_output_process(struct interface *ifp, struct sockaddr_in6 *to,
 
 			/* Interface route-map */
 			if (ri->routemap[RIPNG_FILTER_OUT]) {
-				int ret;
 				struct ripng_info newinfo;
 
 				/* let's cast the aggregate structure to

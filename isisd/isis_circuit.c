@@ -568,7 +568,7 @@ int isis_circuit_up(struct isis_circuit *circuit)
 
 	if (circuit->area->lsp_mtu > isis_circuit_pdu_size(circuit)) {
 		flog_err(
-			ISIS_ERR_CONFIG,
+			EC_ISIS_CONFIG,
 			"Interface MTU %zu on %s is too low to support area lsp mtu %u!",
 			isis_circuit_pdu_size(circuit),
 			circuit->interface->name, circuit->area->lsp_mtu);
@@ -580,7 +580,7 @@ int isis_circuit_up(struct isis_circuit *circuit)
 		circuit->circuit_id = isis_circuit_id_gen(isis, circuit->interface);
 		if (!circuit->circuit_id) {
 			flog_err(
-				ISIS_ERR_CONFIG,
+				EC_ISIS_CONFIG,
 				"There are already 255 broadcast circuits active!");
 			return ISIS_ERROR;
 		}
@@ -897,16 +897,16 @@ void isis_circuit_print_vty(struct isis_circuit *circuit, struct vty *vty,
 			vty_out(vty, "    IP Prefix(es):\n");
 			for (ALL_LIST_ELEMENTS_RO(circuit->ip_addrs, node,
 						  ip_addr)) {
-				prefix2str(ip_addr, buf, sizeof(buf)),
-					vty_out(vty, "      %s\n", buf);
+				prefix2str(ip_addr, buf, sizeof(buf));
+				vty_out(vty, "      %s\n", buf);
 			}
 		}
 		if (circuit->ipv6_link && listcount(circuit->ipv6_link) > 0) {
 			vty_out(vty, "    IPv6 Link-Locals:\n");
 			for (ALL_LIST_ELEMENTS_RO(circuit->ipv6_link, node,
 						  ip_addr)) {
-				prefix2str(ip_addr, (char *)buf, BUFSIZ),
-					vty_out(vty, "      %s\n", buf);
+				prefix2str(ip_addr, (char *)buf, BUFSIZ);
+				vty_out(vty, "      %s\n", buf);
 			}
 		}
 		if (circuit->ipv6_non_link
@@ -914,8 +914,8 @@ void isis_circuit_print_vty(struct isis_circuit *circuit, struct vty *vty,
 			vty_out(vty, "    IPv6 Prefixes:\n");
 			for (ALL_LIST_ELEMENTS_RO(circuit->ipv6_non_link, node,
 						  ip_addr)) {
-				prefix2str(ip_addr, (char *)buf, BUFSIZ),
-					vty_out(vty, "      %s\n", buf);
+				prefix2str(ip_addr, (char *)buf, BUFSIZ);
+				vty_out(vty, "      %s\n", buf);
 			}
 		}
 

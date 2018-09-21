@@ -355,7 +355,7 @@ static void bgp_pcount_adjust(struct bgp_node *rn, struct bgp_info *ri)
 		if (ri->peer->pcount[table->afi][table->safi])
 			ri->peer->pcount[table->afi][table->safi]--;
 		else
-			flog_err(LIB_ERR_DEVELOPMENT,
+			flog_err(EC_LIB_DEVELOPMENT,
 				 "Asked to decrement 0 prefix count for peer");
 	} else if (BGP_INFO_COUNTABLE(ri)
 		   && !CHECK_FLAG(ri->flags, BGP_INFO_COUNTED)) {
@@ -4040,7 +4040,6 @@ void bgp_clear_stale_route(struct peer *peer, afi_t afi, safi_t safi)
 		for (rn = bgp_table_top(peer->bgp->rib[afi][safi]); rn;
 		     rn = bgp_route_next(rn)) {
 			struct bgp_node *rm;
-			struct bgp_info *ri;
 
 			/* look for neighbor in tables */
 			if ((table = rn->info) == NULL)
@@ -4217,7 +4216,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 		/* Prefix length check. */
 		if (p.prefixlen > prefix_blen(&p) * 8) {
 			flog_err(
-				BGP_ERR_UPDATE_RCV,
+				EC_BGP_UPDATE_RCV,
 				"%s [Error] Update packet error (wrong prefix length %d for afi %u)",
 				peer->host, p.prefixlen, packet->afi);
 			return -1;
@@ -4229,7 +4228,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 		/* When packet overflow occur return immediately. */
 		if (pnt + psize > lim) {
 			flog_err(
-				BGP_ERR_UPDATE_RCV,
+				EC_BGP_UPDATE_RCV,
 				"%s [Error] Update packet error (prefix length %d overflows packet)",
 				peer->host, p.prefixlen);
 			return -1;
@@ -4239,7 +4238,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 		 * prefix */
 		if (psize > (ssize_t)sizeof(p.u)) {
 			flog_err(
-				BGP_ERR_UPDATE_RCV,
+				EC_BGP_UPDATE_RCV,
 				"%s [Error] Update packet error (prefix length %d too large for prefix storage %zu)",
 				peer->host, p.prefixlen, sizeof(p.u));
 			return -1;
@@ -4261,7 +4260,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 				 * ignored.
 				 */
 				flog_err(
-					BGP_ERR_UPDATE_RCV,
+					EC_BGP_UPDATE_RCV,
 					"%s: IPv4 unicast NLRI is multicast address %s, ignoring",
 					peer->host, inet_ntoa(p.u.prefix4));
 				continue;
@@ -4274,7 +4273,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 				char buf[BUFSIZ];
 
 				flog_err(
-					BGP_ERR_UPDATE_RCV,
+					EC_BGP_UPDATE_RCV,
 					"%s: IPv6 unicast NLRI is link-local address %s, ignoring",
 					peer->host,
 					inet_ntop(AF_INET6, &p.u.prefix6, buf,
@@ -4286,7 +4285,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 				char buf[BUFSIZ];
 
 				flog_err(
-					BGP_ERR_UPDATE_RCV,
+					EC_BGP_UPDATE_RCV,
 					"%s: IPv6 unicast NLRI is multicast address %s, ignoring",
 					peer->host,
 					inet_ntop(AF_INET6, &p.u.prefix6, buf,
@@ -4316,7 +4315,7 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 	/* Packet length consistency check. */
 	if (pnt != lim) {
 		flog_err(
-			BGP_ERR_UPDATE_RCV,
+			EC_BGP_UPDATE_RCV,
 			"%s [Error] Update packet error (prefix length mismatch with total length)",
 			peer->host);
 		return -1;
@@ -4728,7 +4727,6 @@ static void bgp_static_update_safi(struct bgp *bgp, struct prefix *p,
 			break;
 
 	if (ri) {
-		union gw_addr add;
 		memset(&add, 0, sizeof(union gw_addr));
 		if (attrhash_cmp(ri->attr, attr_new)
 		    && overlay_index_equal(afi, ri, bgp_static->eth_s_id, &add)
@@ -5456,7 +5454,8 @@ static void bgp_aggregate_free(struct bgp_aggregate *aggregate)
 	XFREE(MTYPE_BGP_AGGREGATE, aggregate);
 }
 
-static int bgp_aggregate_info_same(struct bgp_info *ri, struct aspath *aspath,
+static int bgp_aggregate_info_same(struct bgp_info *ri, uint8_t origin,
+				   struct aspath *aspath,
 				   struct community *comm)
 {
 	static struct aspath *ae = NULL;
@@ -5465,6 +5464,9 @@ static int bgp_aggregate_info_same(struct bgp_info *ri, struct aspath *aspath,
 		ae = aspath_empty();
 
 	if (!ri)
+		return 0;
+
+	if (origin != ri->attr->origin)
 		return 0;
 
 	if (!aspath_cmp(ri->attr->aspath, (aspath) ? aspath : ae))
@@ -5501,7 +5503,8 @@ static void bgp_aggregate_install(struct bgp *bgp, afi_t afi, safi_t safi,
 		 * If the aggregate information has not changed
 		 * no need to re-install it again.
 		 */
-		if (bgp_aggregate_info_same(rn->info, aspath, community)) {
+		if (bgp_aggregate_info_same(rn->info, origin, aspath,
+					    community)) {
 			bgp_unlock_node(rn);
 
 			if (aspath)
@@ -8286,8 +8289,7 @@ static int bgp_show_table(struct vty *vty, struct bgp *bgp, safi_t safi,
 					continue;
 			}
 			if (type == bgp_show_type_prefix_longer) {
-				struct prefix *p = output_arg;
-
+				p = output_arg;
 				if (!prefix_match(p, &rn->p))
 					continue;
 			}
@@ -9888,12 +9890,14 @@ static int bgp_peer_count_walker(struct thread *t)
 			if (CHECK_FLAG(ri->flags, BGP_INFO_COUNTED)) {
 				pc->count[PCOUNT_COUNTED]++;
 				if (CHECK_FLAG(ri->flags, BGP_INFO_UNUSEABLE))
-					flog_err(LIB_ERR_DEVELOPMENT,
-						 "Attempting to count but flags say it is unusable");
+					flog_err(
+						EC_LIB_DEVELOPMENT,
+						"Attempting to count but flags say it is unusable");
 			} else {
 				if (!CHECK_FLAG(ri->flags, BGP_INFO_UNUSEABLE))
-					flog_err(LIB_ERR_DEVELOPMENT,
-						 "Not counted but flags say we should");
+					flog_err(
+						EC_LIB_DEVELOPMENT,
+						"Not counted but flags say we should");
 			}
 		}
 	}

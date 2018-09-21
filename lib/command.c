@@ -618,8 +618,8 @@ static int cmd_try_do_shortcut(enum node_type node, char *first_word)
  */
 static int compare_completions(const void *fst, const void *snd)
 {
-	struct cmd_token *first = *(struct cmd_token **)fst,
-			 *secnd = *(struct cmd_token **)snd;
+	const struct cmd_token *first = *(const struct cmd_token * const *)fst,
+			       *secnd = *(const struct cmd_token * const *)snd;
 	return strcmp(first->text, secnd->text);
 }
 
@@ -2421,7 +2421,7 @@ static int set_log_file(struct vty *vty, const char *fname, int loglevel)
 		cwd[MAXPATHLEN] = '\0';
 
 		if (getcwd(cwd, MAXPATHLEN) == NULL) {
-			flog_err_sys(LIB_ERR_SYSTEM_CALL,
+			flog_err_sys(EC_LIB_SYSTEM_CALL,
 				     "config_log_file: Unable to alloc mem!");
 			return CMD_WARNING_CONFIG_FAILED;
 		}

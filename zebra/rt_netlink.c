@@ -64,6 +64,7 @@
 #include "zebra/rt_netlink.h"
 #include "zebra/zebra_mroute.h"
 #include "zebra/zebra_vxlan.h"
+#include "zebra/zebra_errors.h"
 
 #ifndef AF_MPLS
 #define AF_MPLS 28
@@ -156,8 +157,9 @@ static inline int zebra2proto(int proto)
 		 * is intentionally a warn because we should see
 		 * this as part of development of a new protocol
 		 */
-		zlog_warn("%s: Please add this protocol(%d) to proper rt_netlink.c handling",
-			  __PRETTY_FUNCTION__, proto);
+		zlog_debug(
+			"%s: Please add this protocol(%d) to proper rt_netlink.c handling",
+			__PRETTY_FUNCTION__, proto);
 		proto = RTPROT_ZEBRA;
 		break;
 	}
@@ -216,9 +218,9 @@ static inline int proto2zebra(int proto, int family)
 		 * is intentionally a warn because we should see
 		 * this as part of development of a new protocol
 		 */
-		zlog_warn("%s: Please add this protocol(%d) to proper rt_netlink.c handling",
-			  __PRETTY_FUNCTION__,
-			  proto);
+		zlog_debug(
+			"%s: Please add this protocol(%d) to proper rt_netlink.c handling",
+			__PRETTY_FUNCTION__, proto);
 		proto = ZEBRA_ROUTE_KERNEL;
 		break;
 	}
@@ -432,8 +434,10 @@ static int netlink_route_change_read_unicast(struct nlmsghdr *h, ns_id_t ns_id,
 
 		if (rtm->rtm_src_len != 0) {
 			char buf[PREFIX_STRLEN];
-			zlog_warn("unsupported IPv4 sourcedest route (dest %s vrf %u)",
-				  prefix2str(&p, buf, sizeof(buf)), vrf_id);
+			flog_warn(
+				EC_ZEBRA_UNSUPPORTED_V4_SRCDEST,
+				"unsupported IPv4 sourcedest route (dest %s vrf %u)",
+				prefix2str(&p, buf, sizeof(buf)), vrf_id);
 			return 0;
 		}
 
@@ -581,7 +585,7 @@ static int netlink_route_change_read_unicast(struct nlmsghdr *h, ns_id_t ns_id,
 
 			for (;;) {
 				struct nexthop *nh = NULL;
-				vrf_id_t nh_vrf_id;
+
 				if (len < (int)sizeof(*rtnh)
 				    || rtnh->rtnh_len > len)
 					break;
@@ -600,7 +604,8 @@ static int netlink_route_change_read_unicast(struct nlmsghdr *h, ns_id_t ns_id,
 					if (ifp)
 						nh_vrf_id = ifp->vrf_id;
 					else {
-						zlog_warn(
+						flog_warn(
+							EC_ZEBRA_UNKNOWN_INTERFACE,
 							"%s: Unknown interface %u specified, defaulting to VRF_DEFAULT",
 							__PRETTY_FUNCTION__,
 							index);
@@ -823,14 +828,18 @@ int netlink_route_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 	if (!(h->nlmsg_type == RTM_NEWROUTE || h->nlmsg_type == RTM_DELROUTE)) {
 		/* If this is not route add/delete message print warning. */
-		zlog_warn("Kernel message: %d NS %u\n", h->nlmsg_type, ns_id);
+		zlog_debug("Kernel message: %s NS %u\n",
+			   nl_msg_type_to_str(h->nlmsg_type), ns_id);
 		return 0;
 	}
 
-	if (!(rtm->rtm_family == AF_INET || rtm->rtm_family == AF_INET6)) {
-		zlog_warn(
-			"Invalid address family: %u received from kernel route change: %u",
-			rtm->rtm_family, h->nlmsg_type);
+	if (!(rtm->rtm_family == AF_INET ||
+	      rtm->rtm_family == AF_INET6 ||
+	      rtm->rtm_family == RTNL_FAMILY_IPMR )) {
+		flog_warn(
+			EC_ZEBRA_UNKNOWN_FAMILY,
+			"Invalid address family: %u received from kernel route change: %s",
+			rtm->rtm_family, nl_msg_type_to_str(h->nlmsg_type));
 		return 0;
 	}
 
@@ -1758,6 +1767,7 @@ skip:
 
 int kernel_get_ipmr_sg_stats(struct zebra_vrf *zvrf, void *in)
 {
+	uint32_t actual_table;
 	int suc = 0;
 	struct mcast_route_data *mr = (struct mcast_route_data *)in;
 	struct {
@@ -1783,7 +1793,23 @@ int kernel_get_ipmr_sg_stats(struct zebra_vrf *zvrf, void *in)
 	addattr_l(&req.n, sizeof(req), RTA_OIF, &mroute->ifindex, 4);
 	addattr_l(&req.n, sizeof(req), RTA_SRC, &mroute->sg.src.s_addr, 4);
 	addattr_l(&req.n, sizeof(req), RTA_DST, &mroute->sg.grp.s_addr, 4);
-	addattr_l(&req.n, sizeof(req), RTA_TABLE, &zvrf->table_id, 4);
+	/*
+	 * What?
+	 *
+	 * So during the namespace cleanup we started storing
+	 * the zvrf table_id for the default table as RT_TABLE_MAIN
+	 * which is what the normal routing table for ip routing is.
+	 * This change caused this to break our lookups of sg data
+	 * because prior to this change the zvrf->table_id was 0
+	 * and when the pim multicast kernel code saw a 0,
+	 * it was auto-translated to RT_TABLE_DEFAULT.  But since
+	 * we are now passing in RT_TABLE_MAIN there is no auto-translation
+	 * and the kernel goes screw you and the delicious cookies you
+	 * are trying to give me.  So now we have this little hack.
+	 */
+	actual_table = (zvrf->table_id == RT_TABLE_MAIN) ? RT_TABLE_DEFAULT :
+		zvrf->table_id;
+	addattr_l(&req.n, sizeof(req), RTA_TABLE, &actual_table, 4);
 
 	suc = netlink_talk(netlink_route_change_read_multicast, &req.n,
 			   &zns->netlink_cmd, zns, 0);
@@ -1957,10 +1983,10 @@ static int netlink_macfdb_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 
 	zif = (struct zebra_if *)ifp->info;
 	if ((br_if = zif->brslave_info.br_if) == NULL) {
-		zlog_warn("%s family %s IF %s(%u) brIF %u - no bridge master",
-			  nl_msg_type_to_str(h->nlmsg_type),
-			  nl_family_to_str(ndm->ndm_family), ifp->name,
-			  ndm->ndm_ifindex, zif->brslave_info.bridge_ifindex);
+		zlog_debug("%s family %s IF %s(%u) brIF %u - no bridge master",
+			   nl_msg_type_to_str(h->nlmsg_type),
+			   nl_family_to_str(ndm->ndm_family), ifp->name,
+			   ndm->ndm_ifindex, zif->brslave_info.bridge_ifindex);
 		return 0;
 	}
 
@@ -1969,15 +1995,15 @@ static int netlink_macfdb_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 	netlink_parse_rtattr(tb, NDA_MAX, NDA_RTA(ndm), len);
 
 	if (!tb[NDA_LLADDR]) {
-		zlog_warn("%s family %s IF %s(%u) brIF %u - no LLADDR",
-			  nl_msg_type_to_str(h->nlmsg_type),
-			  nl_family_to_str(ndm->ndm_family), ifp->name,
-			  ndm->ndm_ifindex, zif->brslave_info.bridge_ifindex);
+		zlog_debug("%s family %s IF %s(%u) brIF %u - no LLADDR",
+			   nl_msg_type_to_str(h->nlmsg_type),
+			   nl_family_to_str(ndm->ndm_family), ifp->name,
+			   ndm->ndm_ifindex, zif->brslave_info.bridge_ifindex);
 		return 0;
 	}
 
 	if (RTA_PAYLOAD(tb[NDA_LLADDR]) != ETH_ALEN) {
-		zlog_warn(
+		zlog_debug(
 			"%s family %s IF %s(%u) brIF %u - LLADDR is not MAC, len %lu",
 			nl_msg_type_to_str(h->nlmsg_type),
 			nl_family_to_str(ndm->ndm_family), ifp->name,
@@ -2173,9 +2199,9 @@ static int netlink_macfdb_update(struct interface *ifp, vlanid_t vid,
 	zns = zvrf->zns;
 	zif = ifp->info;
 	if ((br_if = zif->brslave_info.br_if) == NULL) {
-		zlog_warn("MAC %s on IF %s(%u) - no mapping to bridge",
-			  (cmd == RTM_NEWNEIGH) ? "add" : "del", ifp->name,
-			  ifp->ifindex);
+		zlog_debug("MAC %s on IF %s(%u) - no mapping to bridge",
+			   (cmd == RTM_NEWNEIGH) ? "add" : "del", ifp->name,
+			   ifp->ifindex);
 		return -1;
 	}
 
@@ -2258,10 +2284,10 @@ static int netlink_ipneigh_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 	netlink_parse_rtattr(tb, NDA_MAX, NDA_RTA(ndm), len);
 
 	if (!tb[NDA_DST]) {
-		zlog_warn("%s family %s IF %s(%u) - no DST",
-			  nl_msg_type_to_str(h->nlmsg_type),
-			  nl_family_to_str(ndm->ndm_family), ifp->name,
-			  ndm->ndm_ifindex);
+		zlog_debug("%s family %s IF %s(%u) - no DST",
+			   nl_msg_type_to_str(h->nlmsg_type),
+			   nl_family_to_str(ndm->ndm_family), ifp->name,
+			   ndm->ndm_ifindex);
 		return 0;
 	}
 
@@ -2271,7 +2297,7 @@ static int netlink_ipneigh_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 
 	/* Drop some "permanent" entries. */
 	if (ndm->ndm_state & NUD_PERMANENT) {
-		char buf[16] = "169.254.0.1";
+		char b[16] = "169.254.0.1";
 		struct in_addr ipv4_ll;
 
 		if (ndm->ndm_family != AF_INET)
@@ -2283,7 +2309,7 @@ static int netlink_ipneigh_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 		if (h->nlmsg_type != RTM_DELNEIGH)
 			return 0;
 
-		inet_pton(AF_INET, buf, &ipv4_ll);
+		inet_pton(AF_INET, b, &ipv4_ll);
 		if (ipv4_ll.s_addr != ip.ip._v4_addr.s_addr)
 			return 0;
 
@@ -2317,7 +2343,7 @@ static int netlink_ipneigh_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 	if (h->nlmsg_type == RTM_NEWNEIGH) {
 		if (tb[NDA_LLADDR]) {
 			if (RTA_PAYLOAD(tb[NDA_LLADDR]) != ETH_ALEN) {
-				zlog_warn(
+				zlog_debug(
 					"%s family %s IF %s(%u) - LLADDR is not MAC, len %lu",
 					nl_msg_type_to_str(h->nlmsg_type),
 					nl_family_to_str(ndm->ndm_family),
@@ -2479,9 +2505,10 @@ int netlink_neigh_change(struct nlmsghdr *h, ns_id_t ns_id)
 	if (ndm->ndm_family == AF_INET || ndm->ndm_family == AF_INET6)
 		return netlink_ipneigh_change(h, len, ns_id);
 	else {
-		zlog_warn(
-			"Invalid address family: %u received from kernel neighbor change: %u",
-			ndm->ndm_family, h->nlmsg_type);
+		flog_warn(
+			EC_ZEBRA_UNKNOWN_FAMILY,
+			"Invalid address family: %u received from kernel neighbor change: %s",
+			ndm->ndm_family, nl_msg_type_to_str(h->nlmsg_type));
 		return 0;
 	}
 

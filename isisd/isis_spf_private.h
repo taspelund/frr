@@ -106,8 +106,8 @@ static int isis_vertex_queue_hash_cmp(const void *a, const void *b)
 		if (prefix_cmp(&va->N.ip.dest, &vb->N.ip.dest))
 			return 0;
 
-		return prefix_cmp((struct prefix *)&va->N.ip.src,
-				  (struct prefix *)&vb->N.ip.src) == 0;
+		return prefix_cmp((const struct prefix *)&va->N.ip.src,
+				  (const struct prefix *)&vb->N.ip.src) == 0;
 	}
 
 	return memcmp(va->N.id, vb->N.id, ISIS_SYS_ID_LEN + 1) == 0;
@@ -321,7 +321,7 @@ static void isis_vertex_id_init(struct isis_vertex *vertex, const void *id,
 	} else if (VTYPE_IP(vtype)) {
 		memcpy(&vertex->N.ip, id, sizeof(vertex->N.ip));
 	} else {
-		flog_err(LIB_ERR_DEVELOPMENT, "Unknown Vertex Type");
+		flog_err(EC_LIB_DEVELOPMENT, "Unknown Vertex Type");
 	}
 }
 

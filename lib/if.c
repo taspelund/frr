@@ -63,7 +63,7 @@ int ptm_enable = 0;
  * before all numbers.  Examples: de0 < de1, de100 < fxp0 < xl0, devpty <
  * devpty0, de0 < del0
  */
-int if_cmp_name_func(char *p1, char *p2)
+int if_cmp_name_func(const char *p1, const char *p2)
 {
 	unsigned int l1, l2;
 	long int x1, x2;
@@ -99,8 +99,8 @@ int if_cmp_name_func(char *p1, char *p2)
 		if (!*p2)
 			return 1;
 
-		x1 = strtol(p1, &p1, 10);
-		x2 = strtol(p2, &p2, 10);
+		x1 = strtol(p1, (char **)&p1, 10);
+		x2 = strtol(p2, (char **)&p2, 10);
 
 		/* let's compare numbers now */
 		if (x1 < x2)
@@ -121,7 +121,7 @@ int if_cmp_name_func(char *p1, char *p2)
 static int if_cmp_func(const struct interface *ifp1,
 		       const struct interface *ifp2)
 {
-	return if_cmp_name_func((char *)ifp1->name, (char *)ifp2->name);
+	return if_cmp_name_func(ifp1->name, ifp2->name);
 }
 
 static int if_cmp_index_func(const struct interface *ifp1,
@@ -371,37 +371,47 @@ struct interface *if_lookup_prefix(struct prefix *prefix, vrf_id_t vrf_id)
    one. */
 struct interface *if_get_by_name(const char *name, vrf_id_t vrf_id, int vty)
 {
-	struct interface *ifp;
+	struct interface *ifp = NULL;
 
-	ifp = if_lookup_by_name(name, vrf_id);
-	if (ifp)
-		return ifp;
-	/* Not Found on same VRF. If the interface command
-	 * was entered in vty without a VRF (passed as VRF_DEFAULT),
-	 * accept the ifp we found. If a vrf was entered and there is
-	 * a mismatch, reject it if from vty.
-	 */
-	ifp = if_lookup_by_name_all_vrf(name);
-	if (!ifp)
-		return if_create(name, vrf_id);
-	if (vty) {
-		if (vrf_id == VRF_DEFAULT)
+	if (vrf_is_mapped_on_netns(vrf_lookup_by_id(vrf_id))) {
+		ifp = if_lookup_by_name(name, vrf_id);
+		if (ifp)
 			return ifp;
-		return NULL;
-	}
-	/* if vrf backend uses NETNS, then
-	 * this should not be considered as an update
-	 * then create the new interface
-	 */
-	if (ifp->vrf_id != vrf_id && vrf_is_mapped_on_netns(
-					vrf_lookup_by_id(vrf_id)))
+		if (vty) {
+			/* If the interface command was entered in vty without a
+			 * VRF (passed as VRF_DEFAULT), search an interface with
+			 * this name in all VRs
+			 */
+			if (vrf_id == VRF_DEFAULT)
+				return if_lookup_by_name_all_vrf(name);
+			return NULL;
+		}
 		return if_create(name, vrf_id);
-	/* If it came from the kernel
-	 * or by way of zclient, believe it and update
-	 * the ifp accordingly.
-	 */
-	if_update_to_new_vrf(ifp, vrf_id);
-	return ifp;
+	}
+	/* vrf is based on vrf-lite */
+	ifp = if_lookup_by_name_all_vrf(name);
+	if (ifp) {
+		if (ifp->vrf_id == vrf_id)
+			return ifp;
+		/* Found a match on a different VRF. If the interface command
+		 * was entered in vty without a VRF (passed as VRF_DEFAULT),
+		 * accept the ifp we found. If a vrf was entered and there is a
+		 * mismatch, reject it if from vty. If it came from the kernel
+		 * or by way of zclient, believe it and update the ifp
+		 * accordingly.
+		 */
+		if (vty) {
+			if (vrf_id == VRF_DEFAULT)
+				return ifp;
+			return NULL;
+		}
+		/* If it came from the kernel or by way of zclient, believe it
+		 * and update the ifp accordingly.
+		 */
+		if_update_to_new_vrf(ifp, vrf_id);
+		return ifp;
+	}
+	return if_create(name, vrf_id);
 }
 
 void if_set_index(struct interface *ifp, ifindex_t ifindex)
@@ -1149,7 +1159,7 @@ const char *if_link_type_str(enum zebra_link_type llt)
 		llts(ZEBRA_LLT_IEEE802154, "IEEE 802.15.4");
 		llts(ZEBRA_LLT_IEEE802154_PHY, "IEEE 802.15.4 Phy");
 	default:
-		flog_err(LIB_ERR_DEVELOPMENT, "Unknown value %d", llt);
+		flog_err(EC_LIB_DEVELOPMENT, "Unknown value %d", llt);
 		return "Unknown type!";
 #undef llts
 	}

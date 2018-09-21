@@ -287,6 +287,7 @@ static int bgp_interface_down(int command, struct zclient *zclient,
 	struct nbr_connected *nc;
 	struct listnode *node, *nnode;
 	struct bgp *bgp;
+	struct peer *peer;
 
 	bgp = bgp_lookup_by_vrf_id(vrf_id);
 	if (!bgp)
@@ -307,11 +308,7 @@ static int bgp_interface_down(int command, struct zclient *zclient,
 		bgp_nbr_connected_delete(bgp, nc, 1);
 
 	/* Fast external-failover */
-	{
-		struct peer *peer;
-
-		if (CHECK_FLAG(bgp->flags, BGP_FLAG_NO_FAST_EXT_FAILOVER))
-			return 0;
+	if (!CHECK_FLAG(bgp->flags, BGP_FLAG_NO_FAST_EXT_FAILOVER)) {
 
 		for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer)) {
 #if defined(HAVE_CUMULUS)
@@ -474,6 +471,7 @@ static int bgp_interface_vrf_update(int command, struct zclient *zclient,
 	struct nbr_connected *nc;
 	struct listnode *node, *nnode;
 	struct bgp *bgp;
+	struct peer *peer;
 
 	ifp = zebra_interface_vrf_update_read(zclient->ibuf, vrf_id,
 					      &new_vrf_id);
@@ -495,12 +493,7 @@ static int bgp_interface_vrf_update(int command, struct zclient *zclient,
 		bgp_nbr_connected_delete(bgp, nc, 1);
 
 	/* Fast external-failover */
-	{
-		struct peer *peer;
-
-		if (CHECK_FLAG(bgp->flags, BGP_FLAG_NO_FAST_EXT_FAILOVER))
-			return 0;
-
+	if (!CHECK_FLAG(bgp->flags, BGP_FLAG_NO_FAST_EXT_FAILOVER)) {
 		for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer)) {
 			if ((peer->ttl != 1) && (peer->gtsm_hops != 1))
 				continue;
@@ -777,8 +770,9 @@ static int if_get_ipv4_address(struct interface *ifp, struct in_addr *addr)
 	return 0;
 }
 
-int bgp_nexthop_set(union sockunion *local, union sockunion *remote,
-		    struct bgp_nexthop *nexthop, struct peer *peer)
+
+bool bgp_zebra_nexthop_set(union sockunion *local, union sockunion *remote,
+			   struct bgp_nexthop *nexthop, struct peer *peer)
 {
 	int ret = 0;
 	struct interface *ifp = NULL;
@@ -786,9 +780,9 @@ int bgp_nexthop_set(union sockunion *local, union sockunion *remote,
 	memset(nexthop, 0, sizeof(struct bgp_nexthop));
 
 	if (!local)
-		return -1;
+		return false;
 	if (!remote)
-		return -1;
+		return false;
 
 	if (local->sa.sa_family == AF_INET) {
 		nexthop->v4 = local->sin.sin_addr;
@@ -815,8 +809,24 @@ int bgp_nexthop_set(union sockunion *local, union sockunion *remote,
 						      peer->bgp->vrf_id);
 	}
 
-	if (!ifp)
-		return -1;
+	if (!ifp) {
+		/*
+		 * BGP views do not currently get proper data
+		 * from zebra( when attached ) to be able to
+		 * properly resolve nexthops, so give this
+		 * instance type a pass.
+		 */
+		if (peer->bgp->inst_type == BGP_INSTANCE_TYPE_VIEW)
+			return true;
+		/*
+		 * If we have no interface data but we have established
+		 * some connection w/ zebra than something has gone
+		 * terribly terribly wrong here, so say this failed
+		 * If we do not any zebra connection then not
+		 * having a ifp pointer is ok.
+		 */
+		return zclient_num_connects ? false : true;
+	}
 
 	nexthop->ifp = ifp;
 
@@ -912,7 +922,7 @@ int bgp_nexthop_set(union sockunion *local, union sockunion *remote,
 
 	/* If we have identified the local interface, there is no error for now.
 	 */
-	return 0;
+	return true;
 }
 
 static struct in6_addr *bgp_info_to_ipv6_nexthop(struct bgp_info *info,
@@ -1078,8 +1088,8 @@ int bgp_zebra_get_table_range(uint32_t chunk_size,
 		return -1;
 	ret = tm_get_table_chunk(zclient, chunk_size, start, end);
 	if (ret < 0) {
-		flog_err(BGP_ERR_TABLE_CHUNK,
-			  "BGP: Error getting table chunk %u", chunk_size);
+		flog_err(EC_BGP_TABLE_CHUNK,
+			 "BGP: Error getting table chunk %u", chunk_size);
 		return -1;
 	}
 	zlog_info("BGP: Table Manager returns range from chunk %u is [%u %u]",
@@ -2390,10 +2400,10 @@ static int bgp_zebra_process_local_macip(int command, struct zclient *zclient,
 	ipa_len = stream_getl(s);
 	if (ipa_len != 0 && ipa_len != IPV4_MAX_BYTELEN
 	    && ipa_len != IPV6_MAX_BYTELEN) {
-		flog_err(BGP_ERR_MACIP_LEN,
-			  "%u:Recv MACIP %s with invalid IP addr length %d",
-			  vrf_id, (command == ZEBRA_MACIP_ADD) ? "Add" : "Del",
-			  ipa_len);
+		flog_err(EC_BGP_MACIP_LEN,
+			 "%u:Recv MACIP %s with invalid IP addr length %d",
+			 vrf_id, (command == ZEBRA_MACIP_ADD) ? "Add" : "Del",
+			 ipa_len);
 		return -1;
 	}
 
@@ -2487,13 +2497,13 @@ static void bgp_zebra_process_label_chunk(
 	STREAM_GETL(s, last);
 
 	if (zclient->redist_default != proto) {
-		flog_err(BGP_ERR_LM_ERROR, "Got LM msg with wrong proto %u",
-			  proto);
+		flog_err(EC_BGP_LM_ERROR, "Got LM msg with wrong proto %u",
+			 proto);
 		return;
 	}
 	if (zclient->instance != instance) {
-		flog_err(BGP_ERR_LM_ERROR, "Got LM msg with wrong instance %u",
-			  proto);
+		flog_err(EC_BGP_LM_ERROR, "Got LM msg with wrong instance %u",
+			 proto);
 		return;
 	}
 
@@ -2501,8 +2511,8 @@ static void bgp_zebra_process_label_chunk(
 		first < MPLS_LABEL_UNRESERVED_MIN ||
 		last > MPLS_LABEL_UNRESERVED_MAX) {
 
-		flog_err(BGP_ERR_LM_ERROR, "%s: Invalid Label chunk: %u - %u",
-			  __func__, first, last);
+		flog_err(EC_BGP_LM_ERROR, "%s: Invalid Label chunk: %u - %u",
+			 __func__, first, last);
 		return;
 	}
 	if (BGP_DEBUG(zebra, ZEBRA)) {

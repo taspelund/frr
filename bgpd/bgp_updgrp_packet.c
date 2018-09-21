@@ -427,7 +427,8 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 				break;
 			default:
 				/* TODO: handle IPv6 nexthops */
-				zlog_warn(
+				flog_warn(
+					EC_BGP_INVALID_NEXTHOP_LENGTH,
 					"%s: %s: invalid MP nexthop length (AFI IP): %u",
 					__func__, peer->host, nhlen);
 				stream_free(s);
@@ -532,7 +533,8 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 				break;
 			default:
 				/* TODO: handle IPv4 nexthops */
-				zlog_warn(
+				flog_warn(
+					EC_BGP_INVALID_NEXTHOP_LENGTH,
 					"%s: %s: invalid MP nexthop length (AFI IP6): %u",
 					__func__, peer->host, nhlen);
 				stream_free(s);
@@ -788,7 +790,7 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 			 * return */
 			if (space_remaining < space_needed) {
 				flog_err(
-					BGP_ERR_UPDGRP_ATTR_LEN,
+					EC_BGP_UPDGRP_ATTR_LEN,
 					"u%" PRIu64 ":s%" PRIu64
 					" attributes too long, cannot send UPDATE",
 					subgrp->update_group->id, subgrp->id);

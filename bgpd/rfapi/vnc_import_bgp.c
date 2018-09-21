@@ -603,8 +603,8 @@ static void vnc_import_bgp_add_route_mode_resolve_nve(
 	 */
 
 	if (!afi) {
-		flog_err(LIB_ERR_DEVELOPMENT, "%s: can't get afi of prefix",
-			  __func__);
+		flog_err(EC_LIB_DEVELOPMENT, "%s: can't get afi of prefix",
+			 __func__);
 		return;
 	}
 
@@ -720,8 +720,8 @@ static void vnc_import_bgp_add_route_mode_plain(struct bgp *bgp,
 	}
 
 	if (!afi) {
-		flog_err(LIB_ERR_DEVELOPMENT, "%s: can't get afi of prefix",
-			  __func__);
+		flog_err(EC_LIB_DEVELOPMENT, "%s: can't get afi of prefix",
+			 __func__);
 		return;
 	}
 
@@ -908,8 +908,8 @@ vnc_import_bgp_add_route_mode_nvegroup(struct bgp *bgp, struct prefix *prefix,
 	assert(rfg);
 
 	if (!afi) {
-		flog_err(LIB_ERR_DEVELOPMENT, "%s: can't get afi of prefix",
-			  __func__);
+		flog_err(EC_LIB_DEVELOPMENT, "%s: can't get afi of prefix",
+			 __func__);
 		return;
 	}
 
@@ -1010,13 +1010,13 @@ vnc_import_bgp_add_route_mode_nvegroup(struct bgp *bgp, struct prefix *prefix,
 	bgp_attr_dup(&hattr, attr); /* hattr becomes a ghost attr */
 
 	if (rmap) {
-		struct bgp_info info;
+		struct bgp_info binfo;
 		route_map_result_t ret;
 
-		memset(&info, 0, sizeof(info));
-		info.peer = peer;
-		info.attr = &hattr;
-		ret = route_map_apply(rmap, prefix, RMAP_BGP, &info);
+		memset(&binfo, 0, sizeof(binfo));
+		binfo.peer = peer;
+		binfo.attr = &hattr;
+		ret = route_map_apply(rmap, prefix, RMAP_BGP, &binfo);
 		if (ret == RMAP_DENYMATCH) {
 			bgp_attr_flush(&hattr);
 			vnc_zlog_debug_verbose(
@@ -2398,11 +2398,11 @@ void vnc_import_bgp_exterior_add_route_interior(
 	}
 	if (list_adopted) {
 		struct listnode *node;
-		struct agg_node *bi_exterior;
+		struct agg_node *an_bi_exterior;
 
-		for (ALL_LIST_ELEMENTS_RO(list_adopted, node, bi_exterior)) {
+		for (ALL_LIST_ELEMENTS_RO(list_adopted, node, an_bi_exterior)) {
 			skiplist_delete(it->monitor_exterior_orphans,
-					bi_exterior, NULL);
+					an_bi_exterior, NULL);
 		}
 		list_delete_and_null(&list_adopted);
 	}
@@ -2634,8 +2634,8 @@ void vnc_import_bgp_add_route(struct bgp *bgp, struct prefix *prefix,
 	VNC_RHNCK(enter);
 
 	if (!afi) {
-		flog_err(LIB_ERR_DEVELOPMENT, "%s: can't get afi of prefix",
-			  __func__);
+		flog_err(EC_LIB_DEVELOPMENT, "%s: can't get afi of prefix",
+			 __func__);
 		return;
 	}
 

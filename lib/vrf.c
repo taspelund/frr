@@ -489,18 +489,24 @@ void vrf_init(int (*create)(struct vrf *), int (*enable)(struct vrf *),
 	/* The default VRF always exists. */
 	default_vrf = vrf_get(VRF_DEFAULT, VRF_DEFAULT_NAME);
 	if (!default_vrf) {
-		flog_err(LIB_ERR_VRF_START,
-			  "vrf_init: failed to create the default VRF!");
+		flog_err(EC_LIB_VRF_START,
+			 "vrf_init: failed to create the default VRF!");
 		exit(1);
 	}
-	if (vrf_is_backend_netns())
+	if (vrf_is_backend_netns()) {
+		struct ns *ns;
+
 		strlcpy(default_vrf->data.l.netns_name,
 			VRF_DEFAULT_NAME, NS_NAMSIZ);
+		ns = ns_lookup(ns_get_default_id());
+		ns->vrf_ctxt = default_vrf;
+		default_vrf->ns_ctxt = ns;
+	}
 
 	/* Enable the default VRF. */
 	if (!vrf_enable(default_vrf)) {
-		flog_err(LIB_ERR_VRF_START,
-			  "vrf_init: failed to enable the default VRF!");
+		flog_err(EC_LIB_VRF_START,
+			 "vrf_init: failed to enable the default VRF!");
 		exit(1);
 	}
 
@@ -570,7 +576,7 @@ int vrf_socket(int domain, int type, int protocol, vrf_id_t vrf_id,
 
 	ret = vrf_switch_to_netns(vrf_id);
 	if (ret < 0)
-		flog_err_sys(LIB_ERR_SOCKET, "%s: Can't switch to VRF %u (%s)",
+		flog_err_sys(EC_LIB_SOCKET, "%s: Can't switch to VRF %u (%s)",
 			     __func__, vrf_id, safe_strerror(errno));
 
 	if (ret > 0 && interfacename && vrf_default_accepts_vrf(type)) {
@@ -584,7 +590,7 @@ int vrf_socket(int domain, int type, int protocol, vrf_id_t vrf_id,
 	save_errno = errno;
 	ret2 = vrf_switchback_to_initial();
 	if (ret2 < 0)
-		flog_err_sys(LIB_ERR_SOCKET,
+		flog_err_sys(EC_LIB_SOCKET,
 			     "%s: Can't switchback from VRF %u (%s)", __func__,
 			     vrf_id, safe_strerror(errno));
 	errno = save_errno;
@@ -624,7 +630,8 @@ int vrf_handler_create(struct vty *vty, const char *vrfname,
 				"%% VRF name %s invalid: length exceeds %d bytes\n",
 				vrfname, VRF_NAMSIZ);
 		else
-			zlog_warn(
+			flog_warn(
+				EC_LIB_VRF_LENGTH,
 				"%% VRF name %s invalid: length exceeds %d bytes\n",
 				vrfname, VRF_NAMSIZ);
 		return CMD_WARNING_CONFIG_FAILED;
@@ -653,7 +660,7 @@ int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf, char *pathname,
 				"VRF %u is already configured with VRF %s\n",
 				vrf->vrf_id, vrf->name);
 		else
-			zlog_warn("VRF %u is already configured with VRF %s\n",
+			zlog_info("VRF %u is already configured with VRF %s\n",
 				  vrf->vrf_id, vrf->name);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
@@ -665,7 +672,7 @@ int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf, char *pathname,
 					"VRF %u already configured with NETNS %s\n",
 					vrf->vrf_id, ns->name);
 			else
-				zlog_warn(
+				zlog_info(
 					"VRF %u already configured with NETNS %s",
 					vrf->vrf_id, ns->name);
 			return CMD_WARNING_CONFIG_FAILED;
@@ -683,7 +690,7 @@ int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf, char *pathname,
 				" with VRF %u(%s)\n",
 				ns->name, vrf2->vrf_id, vrf2->name);
 		else
-			zlog_warn("NS %s is already configured with VRF %u(%s)",
+			zlog_info("NS %s is already configured with VRF %u(%s)",
 				  ns->name, vrf2->vrf_id, vrf2->name);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
@@ -699,7 +706,7 @@ int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf, char *pathname,
 			vty_out(vty, "Can not associate NS %u with NETNS %s\n",
 				ns->ns_id, ns->name);
 		else
-			zlog_warn("Can not associate NS %u with NETNS %s",
+			zlog_info("Can not associate NS %u with NETNS %s",
 				  ns->ns_id, ns->name);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
@@ -710,8 +717,6 @@ int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf, char *pathname,
 int vrf_is_mapped_on_netns(struct vrf *vrf)
 {
 	if (!vrf || vrf->data.l.netns_name[0] == '\0')
-		return 0;
-	if (vrf->vrf_id == VRF_DEFAULT)
 		return 0;
 	return 1;
 }
@@ -956,13 +961,13 @@ int vrf_getaddrinfo(const char *node, const char *service,
 
 	ret = vrf_switch_to_netns(vrf_id);
 	if (ret < 0)
-		flog_err_sys(LIB_ERR_SOCKET, "%s: Can't switch to VRF %u (%s)",
+		flog_err_sys(EC_LIB_SOCKET, "%s: Can't switch to VRF %u (%s)",
 			     __func__, vrf_id, safe_strerror(errno));
 	ret = getaddrinfo(node, service, hints, res);
 	save_errno = errno;
 	ret2 = vrf_switchback_to_initial();
 	if (ret2 < 0)
-		flog_err_sys(LIB_ERR_SOCKET,
+		flog_err_sys(EC_LIB_SOCKET,
 			     "%s: Can't switchback from VRF %u (%s)", __func__,
 			     vrf_id, safe_strerror(errno));
 	errno = save_errno;
@@ -975,7 +980,7 @@ int vrf_ioctl(vrf_id_t vrf_id, int d, unsigned long request, char *params)
 
 	ret = vrf_switch_to_netns(vrf_id);
 	if (ret < 0) {
-		flog_err_sys(LIB_ERR_SOCKET, "%s: Can't switch to VRF %u (%s)",
+		flog_err_sys(EC_LIB_SOCKET, "%s: Can't switch to VRF %u (%s)",
 			     __func__, vrf_id, safe_strerror(errno));
 		return 0;
 	}
@@ -983,7 +988,7 @@ int vrf_ioctl(vrf_id_t vrf_id, int d, unsigned long request, char *params)
 	saved_errno = errno;
 	ret = vrf_switchback_to_initial();
 	if (ret < 0)
-		flog_err_sys(LIB_ERR_SOCKET,
+		flog_err_sys(EC_LIB_SOCKET,
 			     "%s: Can't switchback from VRF %u (%s)", __func__,
 			     vrf_id, safe_strerror(errno));
 	errno = saved_errno;
@@ -997,13 +1002,13 @@ int vrf_sockunion_socket(const union sockunion *su, vrf_id_t vrf_id,
 
 	ret = vrf_switch_to_netns(vrf_id);
 	if (ret < 0)
-		flog_err_sys(LIB_ERR_SOCKET, "%s: Can't switch to VRF %u (%s)",
+		flog_err_sys(EC_LIB_SOCKET, "%s: Can't switch to VRF %u (%s)",
 			     __func__, vrf_id, safe_strerror(errno));
 	ret = sockunion_socket(su);
 	save_errno = errno;
 	ret2 = vrf_switchback_to_initial();
 	if (ret2 < 0)
-		flog_err_sys(LIB_ERR_SOCKET,
+		flog_err_sys(EC_LIB_SOCKET,
 			     "%s: Can't switchback from VRF %u (%s)", __func__,
 			     vrf_id, safe_strerror(errno));
 	errno = save_errno;

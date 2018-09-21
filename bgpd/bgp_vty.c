@@ -7369,7 +7369,7 @@ DEFUN (show_bgp_vrfs,
 	for (ALL_LIST_ELEMENTS_RO(inst, node, bgp)) {
 		const char *name, *type;
 		struct peer *peer;
-		struct listnode *node, *nnode;
+		struct listnode *node2, *nnode2;
 		int peers_cfg, peers_estb;
 		json_object *json_vrf = NULL;
 
@@ -7389,7 +7389,7 @@ DEFUN (show_bgp_vrfs,
 			json_vrf = json_object_new_object();
 
 
-		for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer)) {
+		for (ALL_LIST_ELEMENTS(bgp->peer, node2, nnode2, peer)) {
 			if (!CHECK_FLAG(peer->flags, PEER_FLAG_CONFIG_NODE))
 				continue;
 			peers_cfg++;
@@ -10824,7 +10824,7 @@ static void bgp_show_all_instances_neighbors_vty(struct vty *vty,
 		if (use_json) {
 			if (!(json = json_object_new_object())) {
 				flog_err(
-					BGP_ERR_JSON_MEM_ERROR,
+					EC_BGP_JSON_MEM_ERROR,
 					"Unable to allocate memory for JSON object");
 				vty_out(vty,
 					"{\"error\": {\"message:\": \"Unable to allocate memory for JSON object\"}}}\n");

@@ -930,7 +930,10 @@ static int vty_prefix_list_install(struct vty *vty, afi_t afi, const char *name,
 		char buf_tmp[PREFIX2STR_BUFFER];
 		prefix2str(&p, buf, sizeof(buf));
 		prefix2str(&p_tmp, buf_tmp, sizeof(buf_tmp));
-		zlog_warn(
+		vty_out(vty,
+			"%% Prefix-list %s prefix changed from %s to %s to match length\n",
+			name, buf, buf_tmp);
+		zlog_info(
 			"Prefix-list %s prefix changed from %s to %s to match length",
 			name, buf, buf_tmp);
 		p = p_tmp;
@@ -1249,13 +1252,13 @@ static int vty_show_prefix_list_prefix(struct vty *vty, afi_t afi,
 			if (pentry->any)
 				vty_out(vty, "any");
 			else {
-				struct prefix *p = &pentry->prefix;
+				struct prefix *pf = &pentry->prefix;
 				char buf[BUFSIZ];
 
 				vty_out(vty, "%s/%d",
-					inet_ntop(p->family, p->u.val, buf,
+					inet_ntop(pf->family, pf->u.val, buf,
 						  BUFSIZ),
-					p->prefixlen);
+					pf->prefixlen);
 
 				if (pentry->ge)
 					vty_out(vty, " ge %d", pentry->ge);

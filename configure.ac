@@ -57,7 +57,7 @@ AM_CONDITIONAL([BUILD_CLIPPY], [$build_clippy])
 
 # Disable portability warnings -- our automake code (in particular
 # common.am) uses some constructs specific to gmake.
-AM_INIT_AUTOMAKE([1.12 -Wno-portability])
+AM_INIT_AUTOMAKE([1.12 -Wno-portability foreign])
 m4_ifndef([AM_SILENT_RULES], [m4_define([AM_SILENT_RULES],[])])
 AM_SILENT_RULES([yes])
 AC_CONFIG_HEADERS(config.h)
@@ -231,6 +231,7 @@ if test x"${enable_gcc_ultra_verbose}" = x"yes" ; then
   AC_C_FLAG([-Wunreachable-code])
   AC_C_FLAG([-Wpacked])
   AC_C_FLAG([-Wpadded])
+  AC_C_FLAG([-Wshadow])
 else
   AC_C_FLAG([-Wno-unused-result])
 fi

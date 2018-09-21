@@ -272,6 +272,34 @@ bool frr_zclient_addr(struct sockaddr_storage *sa, socklen_t *sa_len,
 
 static struct frr_daemon_info *di = NULL;
 
+static void frr_guard_daemon(void)
+{
+	int fd;
+	struct flock lock;
+	const char *path = di->pid_file;
+
+	fd = open(path, O_RDWR);
+	if (fd != -1) {
+		memset(&lock, 0, sizeof(lock));
+		lock.l_type = F_WRLCK;
+		lock.l_whence = SEEK_SET;
+		if (fcntl(fd, F_GETLK, &lock) < 0) {
+			flog_err_sys(
+				EC_LIB_SYSTEM_CALL,
+				"Could not do F_GETLK pid_file %s (%s), exiting",
+				path, safe_strerror(errno));
+			exit(1);
+		} else if (lock.l_type == F_WRLCK) {
+			flog_err_sys(
+				EC_LIB_SYSTEM_CALL,
+				"Process %d has a write lock on file %s already! Error: (%s)",
+				lock.l_pid, path, safe_strerror(errno));
+			exit(1);
+		}
+		close(fd);
+	}
+}
+
 void frr_preinit(struct frr_daemon_info *daemon, int argc, char **argv)
 {
 	di = daemon;
@@ -544,13 +572,15 @@ static void frr_mkdir(const char *path, bool strip)
 		if (errno == EEXIST)
 			return;
 
-		zlog_warn("failed to mkdir \"%s\": %s", path, strerror(errno));
+		flog_err(EC_LIB_SYSTEM_CALL, "failed to mkdir \"%s\": %s", path,
+			 strerror(errno));
 		return;
 	}
 
 	zprivs_get_ids(&ids);
 	if (chown(path, ids.uid_normal, ids.gid_normal))
-		zlog_warn("failed to chown \"%s\": %s", path, strerror(errno));
+		flog_err(EC_LIB_SYSTEM_CALL, "failed to chown \"%s\": %s", path,
+			 strerror(errno));
 }
 
 static struct thread_master *master;
@@ -621,6 +651,9 @@ struct thread_master *frr_init(void)
 	}
 
 	zprivs_init(di->privs);
+
+	/* Guard to prevent a second instance of this daemon */
+	frr_guard_daemon();
 
 	master = thread_master_create(NULL);
 	signal_init(master, di->n_signals, di->signals);
@@ -862,7 +895,7 @@ static void frr_terminal_close(int isexit)
 
 	nullfd = open("/dev/null", O_RDONLY | O_NOCTTY);
 	if (nullfd == -1) {
-		flog_err_sys(LIB_ERR_SYSTEM_CALL,
+		flog_err_sys(EC_LIB_SYSTEM_CALL,
 			     "%s: failed to open /dev/null: %s", __func__,
 			     safe_strerror(errno));
 	} else {
@@ -935,7 +968,7 @@ void frr_run(struct thread_master *master)
 	} else if (di->daemon_mode) {
 		int nullfd = open("/dev/null", O_RDONLY | O_NOCTTY);
 		if (nullfd == -1) {
-			flog_err_sys(LIB_ERR_SYSTEM_CALL,
+			flog_err_sys(EC_LIB_SYSTEM_CALL,
 				     "%s: failed to open /dev/null: %s",
 				     __func__, safe_strerror(errno));
 		} else {

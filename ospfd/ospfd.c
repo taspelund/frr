@@ -308,12 +308,8 @@ static struct ospf *ospf_new(unsigned short instance, const char *name)
 			 new->lsa_refresh_interval, &new->t_lsa_refresher);
 	new->lsa_refresher_started = monotime(NULL);
 
-	if ((new->ibuf = stream_new(OSPF_MAX_PACKET_SIZE + 1)) == NULL) {
-		zlog_err(
-			"ospf_new: fatal error: stream_new(%u) failed allocating ibuf",
-			OSPF_MAX_PACKET_SIZE + 1);
-		exit(1);
-	}
+	new->ibuf = stream_new(OSPF_MAX_PACKET_SIZE + 1);
+
 	new->t_read = NULL;
 	new->oi_write_q = list_new();
 	new->write_oi_count = OSPF_WRITE_INTERFACE_COUNT_DEFAULT;
@@ -328,7 +324,8 @@ static struct ospf *ospf_new(unsigned short instance, const char *name)
 	new->fd = -1;
 	if ((ospf_sock_init(new)) < 0) {
 		if (new->vrf_id != VRF_UNKNOWN)
-			zlog_warn(
+			flog_err(
+				EC_LIB_SOCKET,
 				"%s: ospf_sock_init is unable to open a socket",
 				__func__);
 		return new;
@@ -722,8 +719,6 @@ static void ospf_finish_final(struct ospf *ospf)
 	ospf_lsdb_free(ospf->lsdb);
 
 	for (rn = route_top(ospf->maxage_lsa); rn; rn = route_next(rn)) {
-		struct ospf_lsa *lsa;
-
 		if ((lsa = rn->info) != NULL) {
 			ospf_lsa_unlock(&lsa);
 			rn->info = NULL;
@@ -759,7 +754,6 @@ static void ospf_finish_final(struct ospf *ospf)
 
 	for (i = ZEBRA_ROUTE_SYSTEM; i <= ZEBRA_ROUTE_MAX; i++) {
 		struct list *ext_list;
-		struct listnode *node;
 		struct ospf_external *ext;
 
 		ext_list = ospf->external[i];

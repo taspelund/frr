@@ -459,8 +459,6 @@ void del_vnc_route(struct rfapi_descriptor *rfd,
 	rfapiProcessWithdraw(peer, rfd, p, prd, NULL, afi, safi, type, kill);
 
 	if (bi) {
-		char buf[PREFIX_STRLEN];
-
 		prefix2str(p, buf, sizeof(buf));
 		vnc_zlog_debug_verbose(
 			"%s: Found route (safi=%d) to delete at prefix %s",
@@ -3944,8 +3942,8 @@ void *rfapi_rfp_init_group_config_ptr_vty(void *rfp_start_val,
 							    size);
 		break;
 	default:
-		flog_err(LIB_ERR_DEVELOPMENT, "%s: Unknown group type=%d",
-			  __func__, type);
+		flog_err(EC_LIB_DEVELOPMENT, "%s: Unknown group type=%d",
+			 __func__, type);
 		/* should never happen */
 		assert("Unknown type" == NULL);
 		break;
@@ -4059,8 +4057,8 @@ void *rfapi_rfp_get_group_config_ptr_name(
 							 criteria, search_cb);
 		break;
 	default:
-		flog_err(LIB_ERR_DEVELOPMENT, "%s: Unknown group type=%d",
-			  __func__, type);
+		flog_err(EC_LIB_DEVELOPMENT, "%s: Unknown group type=%d",
+			 __func__, type);
 		/* should never happen */
 		assert("Unknown type" == NULL);
 		break;

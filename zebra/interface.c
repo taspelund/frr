@@ -49,6 +49,7 @@
 #include "zebra/rt_netlink.h"
 #include "zebra/interface.h"
 #include "zebra/zebra_vxlan.h"
+#include "zebra/zebra_errors.h"
 
 #define ZEBRA_PTM_SUPPORT
 
@@ -202,7 +203,6 @@ struct interface *if_link_per_ns(struct zebra_ns *ns, struct interface *ifp)
 	if (rn->info) {
 		ifp = (struct interface *)rn->info;
 		route_unlock_node(rn); /* get */
-		ifp->node = rn;
 		return ifp;
 	}
 
@@ -250,30 +250,6 @@ struct interface *if_lookup_by_name_per_ns(struct zebra_ns *ns,
 			return (ifp);
 	}
 
-	return NULL;
-}
-
-/* this function must be used only if the vrf backend
- * is a netns backend
- */
-struct interface *if_lookup_by_name_not_ns(ns_id_t ns_id,
-					   const char *ifname)
-{
-	struct interface *ifp;
-	struct ns *ns;
-
-	RB_FOREACH (ns, ns_head, &ns_tree) {
-		if (ns->ns_id == ns_id)
-			continue;
-		/* if_delete_update has removed interface
-		 * from zns->if_table
-		 * so to look for interface, use the vrf list
-		 */
-		ifp = if_lookup_by_name(ifname, (vrf_id_t)ns->ns_id);
-		if (!ifp)
-			continue;
-		return ifp;
-	}
 	return NULL;
 }
 
@@ -336,9 +312,9 @@ int if_subnet_delete(struct interface *ifp, struct connected *ifc)
 	/* Get address derived subnet node. */
 	rn = route_node_lookup(zebra_if->ipv4_subnets, &cp);
 	if (!(rn && rn->info)) {
-		zlog_warn(
-			"Trying to remove an address from an unknown subnet."
-			" (please report this bug)");
+		flog_warn(EC_ZEBRA_REMOVE_ADDR_UNKNOWN_SUBNET,
+			  "Trying to remove an address from an unknown subnet."
+			  " (please report this bug)");
 		return -1;
 	}
 	route_unlock_node(rn);
@@ -350,7 +326,8 @@ int if_subnet_delete(struct interface *ifp, struct connected *ifc)
 	 * In any case, we shouldn't decrement the lock counter if the address
 	 * is unknown. */
 	if (!listnode_lookup(addr_list, ifc)) {
-		zlog_warn(
+		flog_warn(
+			EC_ZEBRA_REMOVE_UNREGISTERED_ADDR,
 			"Trying to remove an address from a subnet where it is not"
 			" currently registered. (please report this bug)");
 		return -1;
@@ -496,7 +473,8 @@ static void if_addr_wakeup(struct interface *ifp)
 
 				ret = if_set_prefix(ifp, ifc);
 				if (ret < 0) {
-					zlog_warn(
+					flog_err_sys(
+						EC_ZEBRA_IFACE_ADDR_ADD_FAILED,
 						"Can't set interface's address: %s",
 						safe_strerror(errno));
 					continue;
@@ -518,7 +496,8 @@ static void if_addr_wakeup(struct interface *ifp)
 
 				ret = if_prefix_add_ipv6(ifp, ifc);
 				if (ret < 0) {
-					zlog_warn(
+					flog_err_sys(
+						EC_ZEBRA_IFACE_ADDR_ADD_FAILED,
 						"Can't set interface's address: %s",
 						safe_strerror(errno));
 					continue;
@@ -720,7 +699,7 @@ void if_delete_update(struct interface *ifp)
 
 	if (if_is_up(ifp)) {
 		flog_err(
-			LIB_ERR_INTERFACE,
+			EC_LIB_INTERFACE,
 			"interface %s vrf %u index %d is still up while being deleted.",
 			ifp->name, ifp->vrf_id, ifp->ifindex);
 		return;
@@ -753,8 +732,12 @@ void if_delete_update(struct interface *ifp)
 	ifp->node = NULL;
 
 	/* if the ifp is in a vrf, move it to default so vrf can be deleted if
-	 * desired */
-	if (ifp->vrf_id)
+	 * desired. This operation is not done for netns implementation to avoid
+	 * collision with interface with the same name in the default vrf (can
+	 * occur with this implementation whereas it is not possible with
+	 * vrf-lite).
+	 */
+	if (ifp->vrf_id && !vrf_is_backend_netns())
 		if_handle_vrf_change(ifp, VRF_DEFAULT);
 
 	/* Reset some zebra interface params to default values. */
@@ -908,7 +891,8 @@ void if_up(struct interface *ifp)
 
 	/* Notify the protocol daemons. */
 	if (ifp->ptm_enable && (ifp->ptm_status == ZEBRA_PTM_STATUS_DOWN)) {
-		zlog_warn("%s: interface %s hasn't passed ptm check\n",
+		flog_warn(EC_ZEBRA_PTM_NOT_READY,
+			  "%s: interface %s hasn't passed ptm check\n",
 			  __func__, ifp->name);
 		return;
 	}
@@ -2917,13 +2901,13 @@ static int link_params_config_write(struct vty *vty, struct interface *ifp)
 
 static int if_config_write(struct vty *vty)
 {
-	struct vrf *vrf;
+	struct vrf *vrf0;
 	struct interface *ifp;
 
 	zebra_ptm_write(vty);
 
-	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
-		FOR_ALL_INTERFACES (vrf, ifp) {
+	RB_FOREACH (vrf0, vrf_name_head, &vrfs_by_name)
+		FOR_ALL_INTERFACES (vrf0, ifp) {
 			struct zebra_if *if_data;
 			struct listnode *addrnode;
 			struct connected *ifc;

@@ -118,7 +118,8 @@ struct rnh *zebra_add_rnh(struct prefix *p, vrf_id_t vrfid, rnh_type_t type,
 	table = get_rnh_table(vrfid, PREFIX_FAMILY(p), type);
 	if (!table) {
 		prefix2str(p, buf, sizeof(buf));
-		zlog_warn("%u: Add RNH %s type %d - table not found", vrfid,
+		flog_warn(EC_ZEBRA_RNH_NO_TABLE,
+			  "%u: Add RNH %s type %d - table not found", vrfid,
 			  buf, type);
 		exists = false;
 		return NULL;
@@ -249,7 +250,7 @@ static void addr2hostprefix(int af, const union g_addr *addr,
 		break;
 	default:
 		memset(prefix, 0, sizeof(*prefix));
-		zlog_warn("%s: unknown address family %d", __func__, af);
+		zlog_debug("%s: unknown address family %d", __func__, af);
 		break;
 	}
 }
@@ -870,9 +871,9 @@ static int send_client(struct rnh *rnh, struct zserv *client, rnh_type_t type,
 		stream_put(s, &rn->p.u.prefix6, IPV6_MAX_BYTELEN);
 		break;
 	default:
-		flog_err(ZEBRA_ERR_RNH_UNKNOWN_FAMILY,
-			  "%s: Unknown family (%d) notification attempted\n",
-			  __FUNCTION__, rn->p.family);
+		flog_err(EC_ZEBRA_RNH_UNKNOWN_FAMILY,
+			 "%s: Unknown family (%d) notification attempted\n",
+			 __FUNCTION__, rn->p.family);
 		break;
 	}
 	if (re) {

@@ -436,8 +436,6 @@ static void rip_rte_process(struct rte *rte, struct sockaddr_in *from,
 
 	/* Modify entry according to the interface routemap. */
 	if (ri->routemap[RIP_FILTER_IN]) {
-		int ret;
-
 		/* The object should be of the type of rip_info */
 		ret = route_map_apply(ri->routemap[RIP_FILTER_IN],
 				      (struct prefix *)&p, RMAP_RIP, &newinfo);
@@ -1058,9 +1056,10 @@ static void rip_auth_md5_set(struct stream *s, struct rip_interface *ri,
 
 	/* Check packet length. */
 	if (len < (RIP_HEADER_SIZE + RIP_RTE_SIZE)) {
-		flog_err(RIP_ERR_PACKET,
-			  "rip_auth_md5_set(): packet length %ld is less than minimum length.",
-			  len);
+		flog_err(
+			EC_RIP_PACKET,
+			"rip_auth_md5_set(): packet length %ld is less than minimum length.",
+			len);
 		return;
 	}
 
@@ -1341,7 +1340,7 @@ static int rip_create_socket(void)
 	/* Make datagram socket. */
 	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock < 0) {
-		flog_err_sys(LIB_ERR_SOCKET, "Cannot create UDP socket: %s",
+		flog_err_sys(EC_LIB_SOCKET, "Cannot create UDP socket: %s",
 			     safe_strerror(errno));
 		exit(1);
 	}

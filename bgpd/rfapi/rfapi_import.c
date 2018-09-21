@@ -3033,7 +3033,7 @@ static void rfapiBgpInfoFilteredImportEncap(
 		break;
 
 	default:
-		flog_err(LIB_ERR_DEVELOPMENT, "%s: bad afi %d", __func__, afi);
+		flog_err(EC_LIB_DEVELOPMENT, "%s: bad afi %d", __func__, afi);
 		return;
 	}
 
@@ -3492,7 +3492,7 @@ void rfapiBgpInfoFilteredImportVPN(
 		break;
 
 	default:
-		flog_err(LIB_ERR_DEVELOPMENT, "%s: bad afi %d", __func__, afi);
+		flog_err(EC_LIB_DEVELOPMENT, "%s: bad afi %d", __func__, afi);
 		return;
 	}
 
@@ -3678,12 +3678,12 @@ void rfapiBgpInfoFilteredImportVPN(
 		rfapiCopyUnEncap2VPN(ern->info, info_new);
 		agg_unlock_node(ern); /* undo lock in route_note_match */
 	} else {
-		char buf[PREFIX_STRLEN];
+		char bpf[PREFIX_STRLEN];
 
-		prefix2str(&vn_prefix, buf, sizeof(buf));
+		prefix2str(&vn_prefix, bpf, sizeof(bpf));
 		/* Not a big deal, just means VPN route got here first */
 		vnc_zlog_debug_verbose("%s: no encap route for vn addr %s",
-				       __func__, buf);
+				       __func__, bpf);
 		info_new->extra->vnc.import.un_family = 0;
 	}
 
@@ -3897,8 +3897,7 @@ rfapiBgpInfoFilteredImportFunction(safi_t safi)
 
 	default:
 		/* not expected */
-		flog_err(LIB_ERR_DEVELOPMENT, "%s: bad safi %d", __func__,
-			  safi);
+		flog_err(EC_LIB_DEVELOPMENT, "%s: bad safi %d", __func__, safi);
 		return rfapiBgpInfoFilteredImportBadSafi;
 	}
 }
