@@ -8846,11 +8846,11 @@ static int bgp_show_route_in_table(struct vty *vty, struct bgp *bgp,
 				}
 				display++;
 
-				if (pathtype == BGP_PATH_ALL
-				    || (pathtype == BGP_PATH_BESTPATH
+				if (pathtype == BGP_PATH_SHOW_ALL
+				    || (pathtype == BGP_PATH_SHOW_BESTPATH
 					&& CHECK_FLAG(ri->flags,
 						      BGP_INFO_SELECTED))
-				    || (pathtype == BGP_PATH_MULTIPATH
+				    || (pathtype == BGP_PATH_SHOW_MULTIPATH
 					&& (CHECK_FLAG(ri->flags,
 						       BGP_INFO_MULTIPATH)
 					    || CHECK_FLAG(ri->flags,
@@ -8883,12 +8883,14 @@ static int bgp_show_route_in_table(struct vty *vty, struct bgp *bgp,
 					}
 					display++;
 
-					if (pathtype == BGP_PATH_ALL
-					    || (pathtype == BGP_PATH_BESTPATH
+					if (pathtype == BGP_PATH_SHOW_ALL
+					    || (pathtype
+							== BGP_PATH_SHOW_BESTPATH
 						&& CHECK_FLAG(
 							   ri->flags,
 							   BGP_INFO_SELECTED))
-					    || (pathtype == BGP_PATH_MULTIPATH
+					    || (pathtype
+							== BGP_PATH_SHOW_MULTIPATH
 						&& (CHECK_FLAG(
 							    ri->flags,
 							    BGP_INFO_MULTIPATH)
@@ -9341,11 +9343,11 @@ DEFUN (show_ip_bgp_route,
 
 	/* [<bestpath|multipath>] */
 	if (argv_find(argv, argc, "bestpath", &idx))
-		path_type = BGP_PATH_BESTPATH;
+		path_type = BGP_PATH_SHOW_BESTPATH;
 	else if (argv_find(argv, argc, "multipath", &idx))
-		path_type = BGP_PATH_MULTIPATH;
+		path_type = BGP_PATH_SHOW_MULTIPATH;
 	else
-		path_type = BGP_PATH_ALL;
+		path_type = BGP_PATH_SHOW_ALL;
 
 	return bgp_show_route(vty, bgp, prefix, afi, safi, NULL, prefix_check,
 			      path_type, uj);
@@ -10112,7 +10114,7 @@ DEFUN (show_ip_bgp_vpn_all_route_prefix,
 	}
 
 	return bgp_show_route(vty, bgp, network, AFI_IP, SAFI_MPLS_VPN, NULL, 0,
-			      BGP_PATH_ALL, use_json(argc, argv));
+			      BGP_PATH_SHOW_ALL, use_json(argc, argv));
 }
 #endif /* KEEP_OLD_VPN_COMMANDS */
 
@@ -10141,7 +10143,7 @@ DEFUN (show_ip_bgp_l2vpn_evpn_all_route_prefix,
 		return CMD_WARNING;
 	}
 	return bgp_show_route(vty, NULL, network, AFI_L2VPN, SAFI_EVPN, NULL, 0,
-			      BGP_PATH_ALL, use_json(argc, argv));
+			      BGP_PATH_SHOW_ALL, use_json(argc, argv));
 }
 
 static void show_adj_route(struct vty *vty, struct peer *peer, afi_t afi,
@@ -10754,7 +10756,7 @@ DEFUN (show_bgp_afi_vpn_rd_route,
 	}
 
 	return bgp_show_route(vty, NULL, argv[6]->arg, afi, SAFI_MPLS_VPN, &prd,
-			      0, BGP_PATH_ALL, use_json(argc, argv));
+			      0, BGP_PATH_SHOW_ALL, use_json(argc, argv));
 }
 
 static struct bgp_distance *bgp_distance_new(void)
