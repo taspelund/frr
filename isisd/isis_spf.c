@@ -223,7 +223,7 @@ static void isis_vertex_queue_free(struct isis_vertex_queue *queue)
 		skiplist_free(queue->l.slist);
 		queue->l.slist = NULL;
 	} else
-		list_delete_and_null(&queue->l.list);
+		list_delete(&queue->l.list);
 }
 
 static unsigned int isis_vertex_queue_count(struct isis_vertex_queue *queue)
@@ -459,8 +459,8 @@ static struct isis_vertex *isis_vertex_new(union isis_N *n,
 
 static void isis_vertex_del(struct isis_vertex *vertex)
 {
-	list_delete_and_null(&vertex->Adj_N);
-	list_delete_and_null(&vertex->parents);
+	list_delete(&vertex->Adj_N);
+	list_delete(&vertex->parents);
 
 	memset(vertex, 0, sizeof(struct isis_vertex));
 	XFREE(MTYPE_ISIS_VERTEX, vertex);
@@ -1071,7 +1071,7 @@ static int isis_spf_preload_tent(struct isis_spftree *spftree,
 			adjdb = circuit->u.bc.adjdb[spftree->level - 1];
 			isis_adj_build_up_list(adjdb, adj_list);
 			if (listcount(adj_list) == 0) {
-				list_delete_and_null(&adj_list);
+				list_delete(&adj_list);
 				if (isis->debugs & DEBUG_SPF_EVENTS)
 					zlog_debug(
 						"ISIS-Spf: no L%d adjacencies on circuit %s",
@@ -1135,7 +1135,7 @@ static int isis_spf_preload_tent(struct isis_spftree *spftree,
 						"isis_spf_preload_tent unknow adj type");
 				}
 			}
-			list_delete_and_null(&adj_list);
+			list_delete(&adj_list);
 			/*
 			 * Add the pseudonode
 			 */
