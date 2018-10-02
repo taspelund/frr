@@ -250,7 +250,7 @@ static route_map_result_t route_match_peer(void *rule,
 	if (type == RMAP_BGP) {
 		pc = rule;
 		su = &pc->su;
-		peer = ((struct bgp_info *)object)->peer;
+		peer = ((struct bgp_path_info *)object)->peer;
 
 		if (pc->interface) {
 			if (!peer->conf_if)
@@ -380,7 +380,7 @@ static route_map_result_t route_match_ip_next_hop(void *rule,
 						  void *object)
 {
 	struct access_list *alist;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct prefix_ipv4 p;
 
 	if (type == RMAP_BGP && prefix->family == AF_INET) {
@@ -427,7 +427,7 @@ static route_map_result_t route_match_ip_route_source(void *rule,
 						      void *object)
 {
 	struct access_list *alist;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct peer *peer;
 	struct prefix_ipv4 p;
 
@@ -513,7 +513,7 @@ route_match_ip_next_hop_prefix_list(void *rule, const struct prefix *prefix,
 				    route_map_object_t type, void *object)
 {
 	struct prefix_list *plist;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct prefix_ipv4 p;
 
 	if (type == RMAP_BGP && prefix->family == AF_INET) {
@@ -556,7 +556,7 @@ route_match_ip_route_source_prefix_list(void *rule,
 					route_map_object_t type, void *object)
 {
 	struct prefix_list *plist;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct peer *peer;
 	struct prefix_ipv4 p;
 
@@ -674,11 +674,11 @@ static route_map_result_t route_match_vni(void *rule,
 					  route_map_object_t type, void *object)
 {
 	vni_t vni = 0;
-	struct bgp_info *bgp_info = NULL;
+	struct bgp_path_info *bgp_info = NULL;
 
 	if (type == RMAP_BGP) {
 		vni = *((vni_t *)rule);
-		bgp_info = (struct bgp_info *)object;
+		bgp_info = (struct bgp_path_info *)object;
 
 		if (bgp_info->extra == NULL)
 			return RMAP_NOMATCH;
@@ -778,7 +778,7 @@ static route_map_result_t route_match_local_pref(void *rule,
 						 void *object)
 {
 	uint32_t *local_pref;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		local_pref = rule;
@@ -838,7 +838,7 @@ static route_map_result_t route_match_metric(void *rule,
 					     void *object)
 {
 	struct rmap_value *rv;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		rv = rule;
@@ -863,7 +863,7 @@ static route_map_result_t route_match_aspath(void *rule,
 {
 
 	struct as_list *as_list;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		as_list = as_list_lookup((char *)rule);
@@ -911,7 +911,7 @@ static route_map_result_t route_match_community(void *rule,
 						void *object)
 {
 	struct community_list *list;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct rmap_community *rcom;
 
 	if (type == RMAP_BGP) {
@@ -979,7 +979,7 @@ static route_map_result_t route_match_lcommunity(void *rule,
 						 void *object)
 {
 	struct community_list *list;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct rmap_community *rcom;
 
 	if (type == RMAP_BGP) {
@@ -1040,7 +1040,7 @@ static route_map_result_t route_match_ecommunity(void *rule,
 						 void *object)
 {
 	struct community_list *list;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		bgp_info = object;
@@ -1083,7 +1083,7 @@ static route_map_result_t route_match_origin(void *rule,
 					     void *object)
 {
 	uint8_t *origin;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		origin = rule;
@@ -1186,7 +1186,7 @@ static route_map_result_t route_match_interface(void *rule,
 						void *object)
 {
 	struct interface *ifp;
-	struct bgp_info *info;
+	struct bgp_path_info *info;
 
 	if (type == RMAP_BGP) {
 		info = object;
@@ -1232,7 +1232,7 @@ static route_map_result_t route_match_tag(void *rule,
 					  route_map_object_t type, void *object)
 {
 	route_tag_t *tag;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		tag = rule;
@@ -1266,7 +1266,7 @@ static route_map_result_t route_set_ip_nexthop(void *rule,
 					       void *object)
 {
 	struct rmap_ip_nexthop_set *rins = rule;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct peer *peer;
 
 	if (type == RMAP_BGP) {
@@ -1374,7 +1374,7 @@ static route_map_result_t route_set_local_pref(void *rule,
 					       void *object)
 {
 	struct rmap_value *rv;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	uint32_t locpref = 0;
 
 	if (type == RMAP_BGP) {
@@ -1409,7 +1409,7 @@ static route_map_result_t route_set_weight(void *rule,
 					   void *object)
 {
 	struct rmap_value *rv;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		/* Fetch routemap's rule information. */
@@ -1438,7 +1438,7 @@ static route_map_result_t route_set_metric(void *rule,
 					   void *object)
 {
 	struct rmap_value *rv;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	uint32_t med = 0;
 
 	if (type == RMAP_BGP) {
@@ -1472,7 +1472,7 @@ static route_map_result_t route_set_aspath_prepend(void *rule,
 {
 	struct aspath *aspath;
 	struct aspath *new;
-	struct bgp_info *binfo;
+	struct bgp_path_info *binfo;
 
 	if (type == RMAP_BGP) {
 		binfo = object;
@@ -1534,7 +1534,7 @@ static route_map_result_t route_set_aspath_exclude(void *rule,
 						   void *object)
 {
 	struct aspath *new_path, *exclude_path;
-	struct bgp_info *binfo;
+	struct bgp_path_info *binfo;
 
 	if (type == RMAP_BGP) {
 		exclude_path = rule;
@@ -1569,7 +1569,7 @@ static route_map_result_t route_set_community(void *rule,
 					      void *object)
 {
 	struct rmap_com_set *rcs;
-	struct bgp_info *binfo;
+	struct bgp_path_info *binfo;
 	struct attr *attr;
 	struct community *new = NULL;
 	struct community *old;
@@ -1685,7 +1685,7 @@ static route_map_result_t route_set_lcommunity(void *rule,
 					       void *object)
 {
 	struct rmap_lcom_set *rcs;
-	struct bgp_info *binfo;
+	struct bgp_path_info *binfo;
 	struct attr *attr;
 	struct lcommunity *new = NULL;
 	struct lcommunity *old;
@@ -1801,7 +1801,7 @@ static route_map_result_t route_set_lcommunity_delete(void *rule,
 	struct lcommunity *merge;
 	struct lcommunity *new;
 	struct lcommunity *old;
-	struct bgp_info *binfo;
+	struct bgp_path_info *binfo;
 
 	if (type == RMAP_BGP) {
 		if (!rule)
@@ -1886,7 +1886,7 @@ static route_map_result_t route_set_community_delete(
 	struct community *merge;
 	struct community *new;
 	struct community *old;
-	struct bgp_info *binfo;
+	struct bgp_path_info *binfo;
 
 	if (type == RMAP_BGP) {
 		if (!rule)
@@ -1968,7 +1968,7 @@ static route_map_result_t route_set_ecommunity(void *rule,
 	struct ecommunity *ecom;
 	struct ecommunity *new_ecom;
 	struct ecommunity *old_ecom;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		ecom = rule;
@@ -2054,7 +2054,7 @@ static route_map_result_t route_set_origin(void *rule,
 					   void *object)
 {
 	uint8_t *origin;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		origin = rule;
@@ -2103,7 +2103,7 @@ static route_map_result_t route_set_atomic_aggregate(void *rule,
 						     route_map_object_t type,
 						     void *object)
 {
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		bgp_info = object;
@@ -2143,7 +2143,7 @@ static route_map_result_t route_set_aggregator_as(void *rule,
 						  route_map_object_t type,
 						  void *object)
 {
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct aggregator *aggregator;
 
 	if (type == RMAP_BGP) {
@@ -2191,13 +2191,13 @@ struct route_map_rule_cmd route_set_aggregator_as_cmd = {
 	route_set_aggregator_as_compile, route_set_aggregator_as_free,
 };
 
-/* Set tag to object. object must be pointer to struct bgp_info */
+/* Set tag to object. object must be pointer to struct bgp_path_info */
 static route_map_result_t route_set_tag(void *rule,
 					const struct prefix *prefix,
 					route_map_object_t type, void *object)
 {
 	route_tag_t *tag;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		tag = rule;
@@ -2216,14 +2216,14 @@ static struct route_map_rule_cmd route_set_tag_cmd = {
 	route_map_rule_tag_free,
 };
 
-/* Set label-index to object. object must be pointer to struct bgp_info */
+/* Set label-index to object. object must be pointer to struct bgp_path_info */
 static route_map_result_t route_set_label_index(void *rule,
 						const struct prefix *prefix,
 						route_map_object_t type,
 						void *object)
 {
 	struct rmap_value *rv;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	uint32_t label_index;
 
 	if (type == RMAP_BGP) {
@@ -2293,7 +2293,7 @@ static route_map_result_t route_match_ipv6_next_hop(void *rule,
 						    void *object)
 {
 	struct in6_addr *addr = rule;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		bgp_info = object;
@@ -2381,7 +2381,7 @@ static route_map_result_t route_set_ipv6_nexthop_global(void *rule,
 							void *object)
 {
 	struct in6_addr *address;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		/* Fetch routemap's rule information. */
@@ -2439,7 +2439,7 @@ static route_map_result_t
 route_set_ipv6_nexthop_prefer_global(void *rule, const struct prefix *prefix,
 				     route_map_object_t type, void *object)
 {
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct peer *peer;
 
 	if (type == RMAP_BGP) {
@@ -2495,7 +2495,7 @@ static route_map_result_t route_set_ipv6_nexthop_local(void *rule,
 						       void *object)
 {
 	struct in6_addr *address;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		/* Fetch routemap's rule information. */
@@ -2558,7 +2558,7 @@ static route_map_result_t route_set_ipv6_nexthop_peer(void *rule,
 						      void *object)
 {
 	struct in6_addr peer_address;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 	struct peer *peer;
 
 	if (type == RMAP_BGP) {
@@ -2637,7 +2637,7 @@ static route_map_result_t route_set_vpnv4_nexthop(void *rule,
 						  void *object)
 {
 	struct in_addr *address;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		/* Fetch routemap's rule information. */
@@ -2677,7 +2677,7 @@ static route_map_result_t route_set_vpnv6_nexthop(void *rule,
 						  void *object)
 {
 	struct in6_addr *address;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		/* Fetch routemap's rule information. */
@@ -2733,7 +2733,7 @@ static route_map_result_t route_set_originator_id(void *rule,
 						  void *object)
 {
 	struct in_addr *address;
-	struct bgp_info *bgp_info;
+	struct bgp_path_info *bgp_info;
 
 	if (type == RMAP_BGP) {
 		address = rule;
