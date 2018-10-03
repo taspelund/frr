@@ -1185,17 +1185,17 @@ static route_map_result_t route_match_interface(void *rule,
 						void *object)
 {
 	struct interface *ifp;
-	struct bgp_path_info *info;
+	struct bgp_path_info *path;
 
 	if (type == RMAP_BGP) {
-		info = object;
+		path = object;
 
-		if (!info || !info->attr)
+		if (!path || !path->attr)
 			return RMAP_NOMATCH;
 
 		ifp = if_lookup_by_name_all_vrf((char *)rule);
 
-		if (ifp == NULL || ifp->ifindex != info->attr->nh_ifindex)
+		if (ifp == NULL || ifp->ifindex != path->attr->nh_ifindex)
 			return RMAP_NOMATCH;
 
 		return RMAP_MATCH;
