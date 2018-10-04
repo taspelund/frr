@@ -433,6 +433,11 @@ struct bgp {
 
 	struct bgp_evpn_info *evpn_info;
 
+	/*
+	 * Flooding mechanism for BUM packets for VxLAN-EVPN.
+	 */
+	enum vxlan_flood_control vxlan_flood_ctrl;
+
 	/* Hash table of Import RTs to EVIs */
 	struct hash *import_rt_hash;
 

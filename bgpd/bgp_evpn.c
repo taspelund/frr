@@ -1776,11 +1776,15 @@ static int update_routes_for_vni(struct bgp *bgp, struct bgpevpn *vpn)
 
 	/* Update and advertise the type-3 route (only one) followed by the
 	 * locally learnt type-2 routes (MACIP) - for this VNI.
+	 *
+	 * RT-3 only if doing head-end replication
 	 */
-	build_evpn_type3_prefix(&p, vpn->originator_ip);
-	ret = update_evpn_route(bgp, vpn, &p, 0, 0);
-	if (ret)
-		return ret;
+	if (bgp->vxlan_flood_ctrl == VXLAN_FLOOD_HEAD_END_REPL) {
+		build_evpn_type3_prefix(&p, vpn->originator_ip);
+		ret = update_evpn_route(bgp, vpn, &p, 0, 0);
+		if (ret)
+			return ret;
+	}
 
 	return update_all_type2_routes(bgp, vpn);
 }
@@ -2743,27 +2747,32 @@ static int update_advertise_vni_routes(struct bgp *bgp, struct bgpevpn *vpn)
 	/* Locate type-3 route for VNI in the per-VNI table and use its
 	 * attributes to create and advertise the type-3 route for this VNI
 	 * in the global table.
+	 *
+	 * RT-3 only if doing head-end replication
 	 */
-	build_evpn_type3_prefix(&p, vpn->originator_ip);
-	rn = bgp_node_lookup(vpn->route_table, (struct prefix *)&p);
-	if (!rn) /* unexpected */
-		return 0;
-	for (ri = rn->info; ri; ri = ri->next)
-		if (ri->peer == bgp->peer_self && ri->type == ZEBRA_ROUTE_BGP
-		    && ri->sub_type == BGP_ROUTE_STATIC)
-			break;
-	if (!ri) /* unexpected */
-		return 0;
-	attr = ri->attr;
+	if (bgp->vxlan_flood_ctrl == VXLAN_FLOOD_HEAD_END_REPL) {
+		build_evpn_type3_prefix(&p, vpn->originator_ip);
+		rn = bgp_node_lookup(vpn->route_table, (struct prefix *)&p);
+		if (!rn) /* unexpected */
+			return 0;
+		for (ri = rn->info; ri; ri = ri->next)
+			if (ri->peer == bgp->peer_self &&
+			    ri->type == ZEBRA_ROUTE_BGP
+			    && ri->sub_type == BGP_ROUTE_STATIC)
+				break;
+		if (!ri) /* unexpected */
+			return 0;
+		attr = ri->attr;
 
-	global_rn = bgp_afi_node_get(bgp->rib[afi][safi], afi, safi,
-				     (struct prefix *)&p, &vpn->prd);
-	update_evpn_route_entry(bgp, vpn, afi, safi, global_rn, attr, 1, &ri,
-				0, mac_mobility_seqnum(attr));
+		global_rn = bgp_afi_node_get(bgp->rib[afi][safi], afi, safi,
+					     (struct prefix *)&p, &vpn->prd);
+		update_evpn_route_entry(bgp, vpn, afi, safi, global_rn, attr,
+					1, &ri, 0, mac_mobility_seqnum(attr));
 
-	/* Schedule for processing and unlock node. */
-	bgp_process(bgp, global_rn, afi, safi);
-	bgp_unlock_node(global_rn);
+		/* Schedule for processing and unlock node. */
+		bgp_process(bgp, global_rn, afi, safi);
+		bgp_unlock_node(global_rn);
+	}
 
 	/* Now, walk this VNI's route table and use the route and its attribute
 	 * to create and schedule route in global table.
@@ -2889,6 +2898,42 @@ static void withdraw_router_id_vni(struct hash_backet *backet, struct bgp *bgp)
 		return;
 
 	delete_withdraw_vni_routes(bgp, vpn);
+}
+
+/*
+ * Create RT-3 for a VNI and schedule for processing and advertisement.
+ * This is invoked upon flooding mode changing to head-end replication.
+ */
+static void create_advertise_type3(struct hash_backet *backet, void *data)
+{
+	struct bgpevpn *vpn = backet->data;
+	struct bgp *bgp = data;
+	struct prefix_evpn p;
+
+	if (!vpn || !is_vni_live(vpn))
+		return;
+
+	build_evpn_type3_prefix(&p, vpn->originator_ip);
+	if (update_evpn_route(bgp, vpn, &p, 0, 0))
+		flog_err(BGP_ERR_EVPN_ROUTE_CREATE,
+			 "Type3 route creation failure for VNI %u", vpn->vni);
+}
+
+/*
+ * Delete RT-3 for a VNI and schedule for processing and withdrawal.
+ * This is invoked upon flooding mode changing to drop BUM packets.
+ */
+static void delete_withdraw_type3(struct hash_backet *backet, void *data)
+{
+	struct bgpevpn *vpn = backet->data;
+	struct bgp *bgp = data;
+	struct prefix_evpn p;
+
+	if (!vpn || !is_vni_live(vpn))
+		return;
+
+	build_evpn_type3_prefix(&p, vpn->originator_ip);
+	delete_evpn_route(bgp, vpn, &p);
 }
 
 /*
@@ -4625,13 +4670,19 @@ int bgp_evpn_local_vni_add(struct bgp *bgp, vni_t vni,
 	/* filter routes as nexthop database has changed */
 	bgp_filter_evpn_routes_upon_martian_nh_change(bgp);
 
-	/* Create EVPN type-3 route and schedule for processing. */
-	build_evpn_type3_prefix(&p, vpn->originator_ip);
-	if (update_evpn_route(bgp, vpn, &p, 0, 0)) {
-		flog_err(BGP_ERR_EVPN_ROUTE_CREATE,
-			  "%u: Type3 route creation failure for VNI %u",
-			  bgp->vrf_id, vni);
-		return -1;
+	/*
+	 * Create EVPN type-3 route and schedule for processing.
+	 *
+	 * RT-3 only if doing head-end replication
+	 */
+	if (bgp->vxlan_flood_ctrl == VXLAN_FLOOD_HEAD_END_REPL) {
+		build_evpn_type3_prefix(&p, vpn->originator_ip);
+		if (update_evpn_route(bgp, vpn, &p, 0, 0)) {
+			flog_err(BGP_ERR_EVPN_ROUTE_CREATE,
+				 "%u: Type3 route creation failure for VNI %u",
+				 bgp->vrf_id, vni);
+			return -1;
+		}
 	}
 
 	/* If we have learnt and retained remote routes (VTEPs, MACs) for this
@@ -4645,6 +4696,26 @@ int bgp_evpn_local_vni_add(struct bgp *bgp, vni_t vni,
 	bgp_zebra_advertise_gw_macip(bgp, vpn->advertise_gw_macip, vpn->vni);
 
 	return 0;
+}
+
+/*
+ * Handle change in setting for BUM handling. The supported values
+ * are head-end replication and dropping all BUM packets. Any change
+ * should be registered with zebra. Also, if doing head-end replication,
+ * need to advertise local VNIs as EVPN RT-3 wheras, if BUM packets are
+ * to be dropped, the RT-3s must be withdrawn.
+ */
+void bgp_evpn_flood_control_change(struct bgp *bgp)
+{
+	zlog_info("L2VPN EVPN BUM handling is %s",
+		  bgp->vxlan_flood_ctrl == VXLAN_FLOOD_HEAD_END_REPL ?
+		  "Flooding" : "Flooding Disabled");
+
+	bgp_zebra_vxlan_flood_control(bgp, bgp->vxlan_flood_ctrl);
+	if (bgp->vxlan_flood_ctrl == VXLAN_FLOOD_HEAD_END_REPL)
+		hash_iterate(bgp->vnihash, create_advertise_type3, bgp);
+	else if (bgp->vxlan_flood_ctrl == VXLAN_FLOOD_DISABLED)
+		hash_iterate(bgp->vnihash, delete_withdraw_type3, bgp);
 }
 
 /*
@@ -4726,6 +4797,9 @@ void bgp_evpn_init(struct bgp *bgp)
 	bgp->evpn_info->dad_freeze_time = 0;
 	/* Initialize zebra vxlan */
 	bgp_zebra_dup_addr_detection(bgp);
+
+	/* Default BUM handling is to do head-end replication. */
+	bgp->vxlan_flood_ctrl = VXLAN_FLOOD_HEAD_END_REPL;
 }
 
 void bgp_evpn_vrf_delete(struct bgp *bgp_vrf)
