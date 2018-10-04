@@ -2901,6 +2901,9 @@ static inline void zserv_handle_commands(struct zserv *client, uint16_t command,
 	case ZEBRA_REMOTE_VTEP_DEL:
 		zebra_vxlan_remote_vtep_del(client, length, zvrf);
 		break;
+	case ZEBRA_VXLAN_FLOOD_CONTROL:
+		zebra_vxlan_flood_control(client, length, zvrf);
+		break;
 	case ZEBRA_REMOTE_MACIP_ADD:
 		zebra_vxlan_remote_macip_add(client, length, zvrf);
 		break;

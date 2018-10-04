@@ -22,6 +22,8 @@
 #if !defined(__ZEBRA_VRF_H__)
 #define __ZEBRA_VRF_H__
 
+#include "vxlan.h"
+
 #include <zebra/zebra_ns.h>
 #include <zebra/zebra_pw.h>
 #include <lib/vxlan.h>
@@ -124,6 +126,11 @@ struct zebra_vrf {
 	uint32_t dad_max_moves;
 	bool dad_freeze;
 	uint32_t dad_freeze_time;
+
+	/*
+	 * Flooding mechanism for BUM packets for VxLAN-EVPN.
+	 */
+	enum vxlan_flood_control vxlan_flood_ctrl;
 
 	/* Route Installs */
 	uint64_t installs;

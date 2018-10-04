@@ -974,6 +974,7 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_RULE_ADD),
 	DESC_ENTRY(ZEBRA_RULE_DELETE),
 	DESC_ENTRY(ZEBRA_RULE_NOTIFY_OWNER),
+	DESC_ENTRY(ZEBRA_VXLAN_FLOOD_CONTROL),
 };
 #undef DESC_ENTRY
 
