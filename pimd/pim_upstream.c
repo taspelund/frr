@@ -19,8 +19,6 @@
 
 #include <zebra.h>
 
-#include "zebra/rib.h"
-
 #include "log.h"
 #include "zclient.h"
 #include "memory.h"
@@ -82,7 +80,7 @@ static void pim_upstream_remove_children(struct pim_instance *pim,
 		if (child)
 			child->parent = NULL;
 	}
-	list_delete_and_null(&up->sources);
+	list_delete(&up->sources);
 }
 
 /*
@@ -204,11 +202,11 @@ struct pim_upstream *pim_upstream_del(struct pim_instance *pim,
 
 	for (ALL_LIST_ELEMENTS(up->ifchannels, node, nnode, ch))
 		pim_ifchannel_delete(ch);
-	list_delete_and_null(&up->ifchannels);
+	list_delete(&up->ifchannels);
 
 	pim_upstream_remove_children(pim, up);
 	if (up->sources)
-		list_delete_and_null(&up->sources);
+		list_delete(&up->sources);
 
 	if (up->parent && up->parent->sources)
 		listnode_delete(up->parent->sources, up);
@@ -685,9 +683,9 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 
 		pim_upstream_remove_children(pim, up);
 		if (up->sources)
-			list_delete_and_null(&up->sources);
+			list_delete(&up->sources);
 
-		list_delete_and_null(&up->ifchannels);
+		list_delete(&up->ifchannels);
 
 		hash_release(pim->upstream_hash, up);
 		XFREE(MTYPE_PIM_UPSTREAM, up);
@@ -1536,14 +1534,15 @@ unsigned int pim_upstream_hash_key(void *arg)
 
 void pim_upstream_terminate(struct pim_instance *pim)
 {
-	struct listnode *node, *nnode;
 	struct pim_upstream *up;
 
 	if (pim->upstream_list) {
-		for (ALL_LIST_ELEMENTS(pim->upstream_list, node, nnode, up))
+		while (pim->upstream_list->count) {
+			up = listnode_head(pim->upstream_list);
 			pim_upstream_del(pim, up, __PRETTY_FUNCTION__);
+		}
 
-		list_delete_and_null(&pim->upstream_list);
+		list_delete(&pim->upstream_list);
 	}
 
 	if (pim->upstream_hash)

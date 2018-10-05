@@ -890,13 +890,16 @@ static int netlink_request_route(struct zebra_ns *zns, int family, int type)
 int netlink_route_read(struct zebra_ns *zns)
 {
 	int ret;
+	struct zebra_dplane_info dp_info;
+
+	zebra_dplane_info_from_zns(&dp_info, zns, true /*is_cmd*/);
 
 	/* Get IPv4 routing table. */
 	ret = netlink_request_route(zns, AF_INET, RTM_GETROUTE);
 	if (ret < 0)
 		return ret;
 	ret = netlink_parse_info(netlink_route_change_read_unicast,
-				 &zns->netlink_cmd, zns, 0, 1);
+				 &zns->netlink_cmd, &dp_info, 0, 1);
 	if (ret < 0)
 		return ret;
 
@@ -905,7 +908,7 @@ int netlink_route_read(struct zebra_ns *zns)
 	if (ret < 0)
 		return ret;
 	ret = netlink_parse_info(netlink_route_change_read_unicast,
-				 &zns->netlink_cmd, zns, 0, 1);
+				 &zns->netlink_cmd, &dp_info, 0, 1);
 	if (ret < 0)
 		return ret;
 
@@ -1818,11 +1821,11 @@ int kernel_get_ipmr_sg_stats(struct zebra_vrf *zvrf, void *in)
 	return suc;
 }
 
-enum dp_req_result kernel_route_rib(struct route_node *rn,
-				    const struct prefix *p,
-				    const struct prefix *src_p,
-				    struct route_entry *old,
-				    struct route_entry *new)
+enum zebra_dplane_result kernel_route_rib(struct route_node *rn,
+					  const struct prefix *p,
+					  const struct prefix *src_p,
+					  struct route_entry *old,
+					  struct route_entry *new)
 {
 	int ret = 0;
 
@@ -1852,20 +1855,20 @@ enum dp_req_result kernel_route_rib(struct route_node *rn,
 						      new, 0);
 		}
 		kernel_route_rib_pass_fail(rn, p, new,
-					   (!ret) ? DP_INSTALL_SUCCESS
-						  : DP_INSTALL_FAILURE);
-		return DP_REQUEST_SUCCESS;
+					   (!ret) ? ZEBRA_DPLANE_INSTALL_SUCCESS
+						  : ZEBRA_DPLANE_INSTALL_FAILURE);
+		return ZEBRA_DPLANE_REQUEST_SUCCESS;
 	}
 
 	if (old) {
 		ret = netlink_route_multipath(RTM_DELROUTE, p, src_p, old, 0);
 
 		kernel_route_rib_pass_fail(rn, p, old,
-					   (!ret) ? DP_DELETE_SUCCESS
-						  : DP_DELETE_FAILURE);
+					   (!ret) ? ZEBRA_DPLANE_DELETE_SUCCESS
+						  : ZEBRA_DPLANE_DELETE_FAILURE);
 	}
 
-	return DP_REQUEST_SUCCESS;
+	return ZEBRA_DPLANE_REQUEST_SUCCESS;
 }
 
 int kernel_neigh_update(int add, int ifindex, uint32_t addr, char *lla,
@@ -1959,7 +1962,7 @@ static int netlink_macfdb_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 	char buf[ETHER_ADDR_STRLEN];
 	char vid_buf[20];
 	char dst_buf[30];
-	uint8_t sticky = 0;
+	bool sticky;
 
 	ndm = NLMSG_DATA(h);
 
@@ -2030,7 +2033,7 @@ static int netlink_macfdb_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 		sprintf(dst_buf, " dst %s", inet_ntoa(vtep_ip.u.prefix4));
 	}
 
-	sticky = (ndm->ndm_state & NUD_NOARP) ? 1 : 0;
+	sticky = !!(ndm->ndm_state & NUD_NOARP);
 
 	if (IS_ZEBRA_DEBUG_KERNEL)
 		zlog_debug("Rx %s family %s IF %s(%u)%s %sMAC %s%s",
@@ -2102,8 +2105,8 @@ static int netlink_macfdb_table(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 }
 
 /* Request for MAC FDB information from the kernel */
-static int netlink_request_macs(struct zebra_ns *zns, int family, int type,
-				ifindex_t master_ifindex)
+static int netlink_request_macs(struct nlsock *netlink_cmd, int family,
+				int type, ifindex_t master_ifindex)
 {
 	struct {
 		struct nlmsghdr n;
@@ -2119,7 +2122,7 @@ static int netlink_request_macs(struct zebra_ns *zns, int family, int type,
 	if (master_ifindex)
 		addattr32(&req.n, sizeof(req), IFLA_MASTER, master_ifindex);
 
-	return netlink_request(&zns->netlink_cmd, &req.n);
+	return netlink_request(netlink_cmd, &req.n);
 }
 
 /*
@@ -2129,15 +2132,19 @@ static int netlink_request_macs(struct zebra_ns *zns, int family, int type,
 int netlink_macfdb_read(struct zebra_ns *zns)
 {
 	int ret;
+	struct zebra_dplane_info dp_info;
+
+	zebra_dplane_info_from_zns(&dp_info, zns, true /*is_cmd*/);
 
 	/* Get bridge FDB table. */
-	ret = netlink_request_macs(zns, AF_BRIDGE, RTM_GETNEIGH, 0);
+	ret = netlink_request_macs(&zns->netlink_cmd, AF_BRIDGE, RTM_GETNEIGH,
+				   0);
 	if (ret < 0)
 		return ret;
 	/* We are reading entire table. */
 	filter_vlan = 0;
-	ret = netlink_parse_info(netlink_macfdb_table, &zns->netlink_cmd, zns,
-				 0, 1);
+	ret = netlink_parse_info(netlink_macfdb_table, &zns->netlink_cmd,
+				 &dp_info, 0, 1);
 
 	return ret;
 }
@@ -2152,8 +2159,10 @@ int netlink_macfdb_read_for_bridge(struct zebra_ns *zns, struct interface *ifp,
 	struct zebra_if *br_zif;
 	struct zebra_if *zif;
 	struct zebra_l2info_vxlan *vxl;
+	struct zebra_dplane_info dp_info;
 	int ret = 0;
 
+	zebra_dplane_info_from_zns(&dp_info, zns, true /*is_cmd*/);
 
 	/* Save VLAN we're filtering on, if needed. */
 	br_zif = (struct zebra_if *)br_if->info;
@@ -2164,12 +2173,12 @@ int netlink_macfdb_read_for_bridge(struct zebra_ns *zns, struct interface *ifp,
 
 	/* Get bridge FDB table for specific bridge - we do the VLAN filtering.
 	 */
-	ret = netlink_request_macs(zns, AF_BRIDGE, RTM_GETNEIGH,
+	ret = netlink_request_macs(&zns->netlink_cmd, AF_BRIDGE, RTM_GETNEIGH,
 				   br_if->ifindex);
 	if (ret < 0)
 		return ret;
-	ret = netlink_parse_info(netlink_macfdb_table, &zns->netlink_cmd, zns,
-				 0, 0);
+	ret = netlink_parse_info(netlink_macfdb_table, &zns->netlink_cmd,
+				 &dp_info, 0, 0);
 
 	/* Reset VLAN filter. */
 	filter_vlan = 0;
@@ -2178,7 +2187,7 @@ int netlink_macfdb_read_for_bridge(struct zebra_ns *zns, struct interface *ifp,
 
 static int netlink_macfdb_update(struct interface *ifp, vlanid_t vid,
 				 struct ethaddr *mac, struct in_addr vtep_ip,
-				 int local, int cmd, uint8_t sticky)
+				 int cmd, bool sticky)
 {
 	struct zebra_ns *zns;
 	struct {
@@ -2191,7 +2200,7 @@ static int netlink_macfdb_update(struct interface *ifp, vlanid_t vid,
 	struct interface *br_if;
 	struct zebra_if *br_zif;
 	char buf[ETHER_ADDR_STRLEN];
-	int vid_present = 0, dst_present = 0;
+	int vid_present = 0;
 	char vid_buf[20];
 	char dst_buf[30];
 	struct zebra_vrf *zvrf = zebra_vrf_lookup_by_id(ifp->vrf_id);
@@ -2223,12 +2232,9 @@ static int netlink_macfdb_update(struct interface *ifp, vlanid_t vid,
 
 	addattr_l(&req.n, sizeof(req), NDA_LLADDR, mac, 6);
 	req.ndm.ndm_ifindex = ifp->ifindex;
-	if (!local) {
-		dst_alen = 4; // TODO: hardcoded
-		addattr_l(&req.n, sizeof(req), NDA_DST, &vtep_ip, dst_alen);
-		dst_present = 1;
-		sprintf(dst_buf, " dst %s", inet_ntoa(vtep_ip));
-	}
+	dst_alen = 4; // TODO: hardcoded
+	addattr_l(&req.n, sizeof(req), NDA_DST, &vtep_ip, dst_alen);
+	sprintf(dst_buf, " dst %s", inet_ntoa(vtep_ip));
 	br_zif = (struct zebra_if *)br_if->info;
 	if (IS_ZEBRA_IF_BRIDGE_VLAN_AWARE(br_zif) && vid > 0) {
 		addattr16(&req.n, sizeof(req), NDA_VLAN, vid);
@@ -2243,8 +2249,7 @@ static int netlink_macfdb_update(struct interface *ifp, vlanid_t vid,
 			   nl_family_to_str(req.ndm.ndm_family), ifp->name,
 			   ifp->ifindex, vid_present ? vid_buf : "",
 			   sticky ? "sticky " : "",
-			   prefix_mac2str(mac, buf, sizeof(buf)),
-			   dst_present ? dst_buf : "");
+			   prefix_mac2str(mac, buf, sizeof(buf)), dst_buf);
 
 	return netlink_talk(netlink_talk_filter, &req.n, &zns->netlink_cmd, zns,
 			    0);
@@ -2266,8 +2271,8 @@ static int netlink_ipneigh_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 	char buf[ETHER_ADDR_STRLEN];
 	char buf2[INET6_ADDRSTRLEN];
 	int mac_present = 0;
-	uint8_t ext_learned;
-	uint8_t router_flag;
+	bool is_ext;
+	bool is_router;
 
 	ndm = NLMSG_DATA(h);
 
@@ -2357,8 +2362,8 @@ static int netlink_ipneigh_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 			memcpy(&mac, RTA_DATA(tb[NDA_LLADDR]), ETH_ALEN);
 		}
 
-		ext_learned = (ndm->ndm_flags & NTF_EXT_LEARNED) ? 1 : 0;
-		router_flag = (ndm->ndm_flags & NTF_ROUTER) ? 1 : 0;
+		is_ext = !!(ndm->ndm_flags & NTF_EXT_LEARNED);
+		is_router = !!(ndm->ndm_flags & NTF_ROUTER);
 
 		if (IS_ZEBRA_DEBUG_KERNEL)
 			zlog_debug(
@@ -2381,7 +2386,7 @@ static int netlink_ipneigh_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 		if (ndm->ndm_state & NUD_VALID)
 			return zebra_vxlan_handle_kernel_neigh_update(
 				ifp, link_if, &ip, &mac, ndm->ndm_state,
-				ext_learned, router_flag);
+				is_ext, is_router);
 
 		return zebra_vxlan_handle_kernel_neigh_del(ifp, link_if, &ip);
 	}
@@ -2421,8 +2426,8 @@ static int netlink_neigh_table(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 }
 
 /* Request for IP neighbor information from the kernel */
-static int netlink_request_neigh(struct zebra_ns *zns, int family, int type,
-				 ifindex_t ifindex)
+static int netlink_request_neigh(struct nlsock *netlink_cmd, int family,
+				 int type, ifindex_t ifindex)
 {
 	struct {
 		struct nlmsghdr n;
@@ -2438,7 +2443,7 @@ static int netlink_request_neigh(struct zebra_ns *zns, int family, int type,
 	if (ifindex)
 		addattr32(&req.n, sizeof(req), NDA_IFINDEX, ifindex);
 
-	return netlink_request(&zns->netlink_cmd, &req.n);
+	return netlink_request(netlink_cmd, &req.n);
 }
 
 /*
@@ -2448,13 +2453,17 @@ static int netlink_request_neigh(struct zebra_ns *zns, int family, int type,
 int netlink_neigh_read(struct zebra_ns *zns)
 {
 	int ret;
+	struct zebra_dplane_info dp_info;
+
+	zebra_dplane_info_from_zns(&dp_info, zns, true /*is_cmd*/);
 
 	/* Get IP neighbor table. */
-	ret = netlink_request_neigh(zns, AF_UNSPEC, RTM_GETNEIGH, 0);
+	ret = netlink_request_neigh(&zns->netlink_cmd, AF_UNSPEC, RTM_GETNEIGH,
+				    0);
 	if (ret < 0)
 		return ret;
-	ret = netlink_parse_info(netlink_neigh_table, &zns->netlink_cmd, zns, 0,
-				 1);
+	ret = netlink_parse_info(netlink_neigh_table, &zns->netlink_cmd,
+				 &dp_info, 0, 1);
 
 	return ret;
 }
@@ -2466,13 +2475,16 @@ int netlink_neigh_read(struct zebra_ns *zns)
 int netlink_neigh_read_for_vlan(struct zebra_ns *zns, struct interface *vlan_if)
 {
 	int ret = 0;
+	struct zebra_dplane_info dp_info;
 
-	ret = netlink_request_neigh(zns, AF_UNSPEC, RTM_GETNEIGH,
+	zebra_dplane_info_from_zns(&dp_info, zns, true /*is_cmd*/);
+
+	ret = netlink_request_neigh(&zns->netlink_cmd, AF_UNSPEC, RTM_GETNEIGH,
 				    vlan_if->ifindex);
 	if (ret < 0)
 		return ret;
-	ret = netlink_parse_info(netlink_neigh_table, &zns->netlink_cmd, zns, 0,
-				 0);
+	ret = netlink_parse_info(netlink_neigh_table, &zns->netlink_cmd,
+				 &dp_info, 0, 0);
 
 	return ret;
 }
@@ -2563,17 +2575,16 @@ static int netlink_neigh_update2(struct interface *ifp, struct ipaddr *ip,
 }
 
 int kernel_add_mac(struct interface *ifp, vlanid_t vid, struct ethaddr *mac,
-		   struct in_addr vtep_ip, uint8_t sticky)
+		   struct in_addr vtep_ip, bool sticky)
 {
-	return netlink_macfdb_update(ifp, vid, mac, vtep_ip, 0, RTM_NEWNEIGH,
+	return netlink_macfdb_update(ifp, vid, mac, vtep_ip, RTM_NEWNEIGH,
 				     sticky);
 }
 
 int kernel_del_mac(struct interface *ifp, vlanid_t vid, struct ethaddr *mac,
-		   struct in_addr vtep_ip, int local)
+		   struct in_addr vtep_ip)
 {
-	return netlink_macfdb_update(ifp, vid, mac, vtep_ip, local,
-				     RTM_DELNEIGH, 0);
+	return netlink_macfdb_update(ifp, vid, mac, vtep_ip, RTM_DELNEIGH, 0);
 }
 
 int kernel_add_neigh(struct interface *ifp, struct ipaddr *ip,

@@ -750,6 +750,7 @@ DEFUN (ospf_area_range_not_advertise,
 	ospf_area_range_set(ospf, area_id, &p, 0);
 	ospf_area_display_format_set(ospf, ospf_area_get(ospf, area_id),
 				     format);
+	ospf_area_range_substitute_unset(ospf, area_id, &p);
 
 	return CMD_SUCCESS;
 }
@@ -8201,6 +8202,8 @@ DEFUN (no_ospf_redistribute_source,
 		return CMD_SUCCESS;
 
 	ospf_routemap_unset(red);
+	ospf_redist_del(ospf, source, 0);
+
 	return ospf_redistribute_unset(ospf, source, 0);
 }
 
@@ -8315,6 +8318,8 @@ DEFUN (no_ospf_redistribute_instance_source,
 		return CMD_SUCCESS;
 
 	ospf_routemap_unset(red);
+	ospf_redist_del(ospf, source, instance);
+
 	return ospf_redistribute_unset(ospf, source, instance);
 }
 
@@ -8447,6 +8452,8 @@ DEFUN (no_ospf_default_information_originate,
 		return CMD_SUCCESS;
 
 	ospf_routemap_unset(red);
+	ospf_redist_del(ospf, DEFAULT_ROUTE, 0);
+
 	return ospf_redistribute_default_unset(ospf);
 }
 

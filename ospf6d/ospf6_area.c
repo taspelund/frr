@@ -277,7 +277,7 @@ void ospf6_area_delete(struct ospf6_area *oa)
 	for (ALL_LIST_ELEMENTS_RO(oa->if_list, n, oi))
 		oi->area = NULL;
 
-	list_delete_and_null(&oa->if_list);
+	list_delete(&oa->if_list);
 
 	ospf6_lsdb_delete(oa->lsdb);
 	ospf6_lsdb_delete(oa->lsdb_self);
@@ -441,6 +441,7 @@ DEFUN (area_range,
 			SET_FLAG(range->flag, OSPF6_ROUTE_DO_NOT_ADVERTISE);
 		} else if (strmatch(argv[idx_type]->text, "advertise")) {
 			UNSET_FLAG(range->flag, OSPF6_ROUTE_DO_NOT_ADVERTISE);
+			cost = range->path.u.cost_config;
 		} else {
 			cost = strtoul(argv[5]->arg, NULL, 10);
 			UNSET_FLAG(range->flag, OSPF6_ROUTE_DO_NOT_ADVERTISE);

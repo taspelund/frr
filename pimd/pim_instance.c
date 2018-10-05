@@ -42,11 +42,11 @@ static void pim_instance_terminate(struct pim_instance *pim)
 	}
 
 	if (pim->static_routes)
-		list_delete_and_null(&pim->static_routes);
-
-	pim_rp_free(pim);
+		list_delete(&pim->static_routes);
 
 	pim_upstream_terminate(pim);
+
+	pim_rp_free(pim);
 
 	/* Traverse and cleanup rpf_hash */
 	if (pim->rpf_hash) {

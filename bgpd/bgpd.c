@@ -1802,6 +1802,7 @@ static void peer_group2peer_config_copy_af(struct peer_group *group,
 static int peer_activate_af(struct peer *peer, afi_t afi, safi_t safi)
 {
 	int active;
+	struct peer *other;
 
 	if (CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		flog_err(EC_BGP_PEER_GROUP, "%s was called for peer-group %s",
@@ -1850,6 +1851,23 @@ static int peer_activate_af(struct peer *peer, afi_t afi, safi_t safi)
 		if (peer->status == OpenSent || peer->status == OpenConfirm) {
 			peer->last_reset = PEER_DOWN_AF_ACTIVATE;
 			bgp_notify_send(peer, BGP_NOTIFY_CEASE,
+					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		}
+		/*
+		 * If we are turning on a AFI/SAFI locally and we've
+		 * started bringing a peer up, we need to tell
+		 * the other peer to restart because we might loose
+		 * configuration here because when the doppelganger
+		 * gets to a established state due to how
+		 * we resolve we could just overwrite the afi/safi
+		 * activation.
+		 */
+		other = peer->doppelganger;
+		if (other
+		    && (other->status == OpenSent
+			|| other->status == OpenConfirm)) {
+			other->last_reset = PEER_DOWN_AF_ACTIVATE;
+			bgp_notify_send(other, BGP_NOTIFY_CEASE,
 					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
 		}
 	}
@@ -2426,14 +2444,14 @@ int peer_group_delete(struct peer_group *group)
 			peer_delete(other);
 		}
 	}
-	list_delete_and_null(&group->peer);
+	list_delete(&group->peer);
 
 	for (afi = AFI_IP; afi < AFI_MAX; afi++) {
 		for (ALL_LIST_ELEMENTS(group->listen_range[afi], node, nnode,
 				       prefix)) {
 			prefix_free(prefix);
 		}
-		list_delete_and_null(&group->listen_range[afi]);
+		list_delete(&group->listen_range[afi]);
 	}
 
 	XFREE(MTYPE_PEER_GROUP_HOST, group->name);
@@ -3221,8 +3239,8 @@ void bgp_free(struct bgp *bgp)
 
 	QOBJ_UNREG(bgp);
 
-	list_delete_and_null(&bgp->group);
-	list_delete_and_null(&bgp->peer);
+	list_delete(&bgp->group);
+	list_delete(&bgp->peer);
 
 	if (bgp->peerhash) {
 		hash_free(bgp->peerhash);
@@ -3264,9 +3282,9 @@ void bgp_free(struct bgp *bgp)
 		vpn_policy_direction_t dir;
 
 		if (bgp->vpn_policy[afi].import_vrf)
-			list_delete_and_null(&bgp->vpn_policy[afi].import_vrf);
+			list_delete(&bgp->vpn_policy[afi].import_vrf);
 		if (bgp->vpn_policy[afi].export_vrf)
-			list_delete_and_null(&bgp->vpn_policy[afi].export_vrf);
+			list_delete(&bgp->vpn_policy[afi].export_vrf);
 
 		dir = BGP_VPN_POLICY_DIR_FROMVPN;
 		if (bgp->vpn_policy[afi].rtlist[dir])
@@ -7750,35 +7768,36 @@ static const struct cmd_variable_handler bgp_viewvrf_var_handlers[] = {
 	{.completions = NULL},
 };
 
+struct frr_pthread *bgp_pth_io;
+struct frr_pthread *bgp_pth_ka;
+
 static void bgp_pthreads_init()
 {
+	assert(!bgp_pth_io);
+	assert(!bgp_pth_ka);
+
 	frr_pthread_init();
 
 	struct frr_pthread_attr io = {
-		.id = PTHREAD_IO,
 		.start = frr_pthread_attr_default.start,
 		.stop = frr_pthread_attr_default.stop,
 	};
 	struct frr_pthread_attr ka = {
-		.id = PTHREAD_KEEPALIVES,
 		.start = bgp_keepalives_start,
 		.stop = bgp_keepalives_stop,
 	};
-	frr_pthread_new(&io, "BGP I/O thread", "bgpd_io");
-	frr_pthread_new(&ka, "BGP Keepalives thread", "bgpd_ka");
+	bgp_pth_io = frr_pthread_new(&io, "BGP I/O thread", "bgpd_io");
+	bgp_pth_ka = frr_pthread_new(&ka, "BGP Keepalives thread", "bgpd_ka");
 }
 
 void bgp_pthreads_run()
 {
-	struct frr_pthread *io = frr_pthread_get(PTHREAD_IO);
-	struct frr_pthread *ka = frr_pthread_get(PTHREAD_KEEPALIVES);
-
-	frr_pthread_run(io, NULL);
-	frr_pthread_run(ka, NULL);
+	frr_pthread_run(bgp_pth_io, NULL);
+	frr_pthread_run(bgp_pth_ka, NULL);
 
 	/* Wait until threads are ready. */
-	frr_pthread_wait_running(io);
-	frr_pthread_wait_running(ka);
+	frr_pthread_wait_running(bgp_pth_io);
+	frr_pthread_wait_running(bgp_pth_ka);
 }
 
 void bgp_pthreads_finish()
@@ -7787,7 +7806,7 @@ void bgp_pthreads_finish()
 	frr_pthread_finish();
 }
 
-void bgp_init(void)
+void bgp_init(unsigned short instance)
 {
 
 	/* allocates some vital data structures used by peer commands in
@@ -7797,7 +7816,7 @@ void bgp_init(void)
 	bgp_pthreads_init();
 
 	/* Init zebra. */
-	bgp_zebra_init(bm->master);
+	bgp_zebra_init(bm->master, instance);
 
 #if ENABLE_BGP_VNC
 	vnc_zebra_init(bm->master);
@@ -7863,7 +7882,7 @@ void bgp_terminate(void)
 	bgp_close();
 
 	if (bm->listen_sockets)
-		list_delete_and_null(&bm->listen_sockets);
+		list_delete(&bm->listen_sockets);
 
 	for (ALL_LIST_ELEMENTS(bm->bgp, mnode, mnnode, bgp))
 		for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer))

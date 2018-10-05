@@ -59,6 +59,7 @@ static char pidfile_default[512];
 static char vtypath_default[256];
 
 bool debug_memstats_at_exit = 0;
+static bool nodetach_term, nodetach_daemon;
 
 static char comb_optstr[256];
 static struct option comb_lo[64];
@@ -272,34 +273,6 @@ bool frr_zclient_addr(struct sockaddr_storage *sa, socklen_t *sa_len,
 
 static struct frr_daemon_info *di = NULL;
 
-static void frr_guard_daemon(void)
-{
-	int fd;
-	struct flock lock;
-	const char *path = di->pid_file;
-
-	fd = open(path, O_RDWR);
-	if (fd != -1) {
-		memset(&lock, 0, sizeof(lock));
-		lock.l_type = F_WRLCK;
-		lock.l_whence = SEEK_SET;
-		if (fcntl(fd, F_GETLK, &lock) < 0) {
-			flog_err_sys(
-				EC_LIB_SYSTEM_CALL,
-				"Could not do F_GETLK pid_file %s (%s), exiting",
-				path, safe_strerror(errno));
-			exit(1);
-		} else if (lock.l_type == F_WRLCK) {
-			flog_err_sys(
-				EC_LIB_SYSTEM_CALL,
-				"Process %d has a write lock on file %s already! Error: (%s)",
-				lock.l_pid, path, safe_strerror(errno));
-			exit(1);
-		}
-		close(fd);
-	}
-}
-
 void frr_preinit(struct frr_daemon_info *daemon, int argc, char **argv)
 {
 	di = daemon;
@@ -320,6 +293,8 @@ void frr_preinit(struct frr_daemon_info *daemon, int argc, char **argv)
 		opt_extend(&os_zclient);
 	if (!(di->flags & FRR_NO_TCPVTY))
 		opt_extend(&os_vty);
+	if (di->flags & FRR_DETACH_LATER)
+		nodetach_daemon = true;
 
 	snprintf(config_default, sizeof(config_default), "%s/%s.conf",
 		 frr_sysconfdir, di->name);
@@ -652,9 +627,6 @@ struct thread_master *frr_init(void)
 
 	zprivs_init(di->privs);
 
-	/* Guard to prevent a second instance of this daemon */
-	frr_guard_daemon();
-
 	master = thread_master_create(NULL);
 	signal_init(master, di->n_signals, di->signals);
 
@@ -831,13 +803,16 @@ void frr_config_fork(void)
 {
 	hook_call(frr_late_init, master);
 
-	/* Don't start execution if we are in dry-run mode */
-	if (di->dryrun) {
-		frr_config_read_in(NULL);
-		exit(0);
-	}
+	if (!(di->flags & FRR_NO_CFG_PID_DRY)) {
+		/* Don't start execution if we are in dry-run mode */
+		if (di->dryrun) {
+			frr_config_read_in(NULL);
+			exit(0);
+		}
 
-	thread_add_event(master, frr_config_read_in, NULL, 0, &di->read_in);
+		thread_add_event(master, frr_config_read_in, NULL, 0,
+				 &di->read_in);
+	}
 
 	if (di->daemon_mode || di->terminal)
 		frr_daemonize();
@@ -847,7 +822,7 @@ void frr_config_fork(void)
 	pid_output(di->pid_file);
 }
 
-void frr_vty_serv(void)
+static void frr_vty_serv(void)
 {
 	/* allow explicit override of vty_path in the future
 	 * (not currently set anywhere) */
@@ -874,14 +849,22 @@ void frr_vty_serv(void)
 	vty_serv_sock(di->vty_addr, di->vty_port, di->vty_path);
 }
 
+static void frr_check_detach(void)
+{
+	if (nodetach_term || nodetach_daemon)
+		return;
+
+	if (daemon_ctl_sock != -1)
+		close(daemon_ctl_sock);
+	daemon_ctl_sock = -1;
+}
+
 static void frr_terminal_close(int isexit)
 {
 	int nullfd;
 
-	if (daemon_ctl_sock != -1) {
-		close(daemon_ctl_sock);
-		daemon_ctl_sock = -1;
-	}
+	nodetach_term = false;
+	frr_check_detach();
 
 	if (!di->daemon_mode || isexit) {
 		printf("\n%s exiting\n", di->name);
@@ -945,6 +928,12 @@ out:
 	return 0;
 }
 
+void frr_detach(void)
+{
+	nodetach_daemon = false;
+	frr_check_detach();
+}
+
 void frr_run(struct thread_master *master)
 {
 	char instanceinfo[64] = "";
@@ -959,6 +948,8 @@ void frr_run(struct thread_master *master)
 		    instanceinfo, di->vty_port, di->startinfo);
 
 	if (di->terminal) {
+		nodetach_term = true;
+
 		vty_stdio(frr_terminal_close);
 		if (daemon_ctl_sock != -1) {
 			set_nonblocking(daemon_ctl_sock);
@@ -978,9 +969,7 @@ void frr_run(struct thread_master *master)
 			close(nullfd);
 		}
 
-		if (daemon_ctl_sock != -1)
-			close(daemon_ctl_sock);
-		daemon_ctl_sock = -1;
+		frr_check_detach();
 	}
 
 	/* end fixed stderr startup logging */
@@ -1036,4 +1025,26 @@ void frr_fini(void)
 		log_memstats(fp, di->name);
 		fclose(fp);
 	}
+}
+
+#ifdef INTERP
+static const char interp[]
+	__attribute__((section(".interp"), used)) = INTERP;
+#endif
+/*
+ * executable entry point for libfrr.so
+ *
+ * note that libc initialization is skipped for this so the set of functions
+ * that can be called is rather limited
+ */
+extern void _libfrr_version(void)
+	__attribute__((visibility("hidden"), noreturn));
+void _libfrr_version(void)
+{
+	const char banner[] =
+		FRR_FULL_NAME " " FRR_VERSION ".\n"
+		FRR_COPYRIGHT GIT_INFO "\n"
+		"configured with:\n    " FRR_CONFIG_ARGS "\n";
+	write(1, banner, sizeof(banner) - 1);
+	_exit(0);
 }

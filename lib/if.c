@@ -206,8 +206,8 @@ void if_delete(struct interface *ifp)
 
 	if_delete_retain(ifp);
 
-	list_delete_and_null(&ifp->connected);
-	list_delete_and_null(&ifp->nbr_connected);
+	list_delete(&ifp->connected);
+	list_delete(&ifp->nbr_connected);
 
 	if_link_params_free(ifp);
 
@@ -656,7 +656,8 @@ DEFUN_NOSH (interface,
 	int idx_ifname = 1;
 	int idx_vrf = 3;
 	const char *ifname = argv[idx_ifname]->arg;
-	const char *vrfname = (argc > 2) ? argv[idx_vrf]->arg : NULL;
+	const char *vrfname =
+		(argc > 2) ? argv[idx_vrf]->arg : VRF_DEFAULT_NAME;
 
 	struct interface *ifp;
 	vrf_id_t vrf_id = VRF_DEFAULT;
@@ -681,7 +682,8 @@ DEFUN_NOSH (interface,
 #endif /* SUNOS_5 */
 
 	if (!ifp) {
-		vty_out(vty, "%% interface %s not in %s\n", ifname, vrfname);
+		vty_out(vty, "%% interface %s not in %s vrf\n", ifname,
+			vrfname);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 	VTY_PUSH_CONTEXT(INTERFACE_NODE, ifp);

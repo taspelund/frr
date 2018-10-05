@@ -203,7 +203,15 @@ elif test "x${enable_dev_build}" = "xyes"; then
       AC_C_FLAG([-g3])
       AC_C_FLAG([-O0])
    fi
+   if test "x${enable_lua}" = "xyes"; then
+      AC_CHECK_LIB([lua], [lua_newstate],
+      [LIBS="$LIBS -llua"])
+      AC_DEFINE(HAVE_LUA,,Lua enabled for development)
+   fi
 else
+   if test "x${enable_lua}" = "xyes"; then
+      AC_MSG_ERROR([Lua is not meant to be built/used outside of development at this time])
+   fi
    if test "z$orig_cflags" = "z"; then
       AC_C_FLAG([-g])
       AC_C_FLAG([-Os], [
@@ -302,7 +310,18 @@ AC_CHECK_TOOL(AR, ar)
 dnl -------
 dnl libtool
 dnl -------
+AC_ARG_ENABLE(static-bin,
+  AS_HELP_STRING([--enable-static-bin], [link binaries statically]))
 LT_INIT
+_LT_CONFIG_LIBTOOL([
+  patch -N -i "${srcdir}/m4/libtool-whole-archive.patch" libtool >&AS_MESSAGE_LOG_FD || \
+    AC_MSG_WARN([Could not patch libtool for static linking support.  Loading modules into a statically linked daemon will fail.])
+])
+if test "$enable_static_bin" = "yes"; then
+  AC_LDFLAGS="-static"
+fi
+AC_SUBST(AC_LDFLAGS)
+AM_CONDITIONAL([STATIC_BIN], [test "x$enable_static_bin" = "xyes"])
 
 dnl ----------------------
 dnl Packages configuration
@@ -453,6 +472,9 @@ fi
 
 AC_ARG_ENABLE([dev_build],
     AS_HELP_STRING([--enable-dev-build], [build for development]))
+
+AC_ARG_ENABLE([lua],
+    AS_HELP_STRING([--enable-lua], [Build Lua scripting]))
 
 if test x"${enable_time_check}" != x"no" ; then
   if test x"${enable_time_check}" = x"yes" -o x"${enable_time_check}" = x ; then
@@ -729,6 +751,20 @@ if test "x$with_pkg_git_version" = "xyes"; then
 	fi
 fi
 AM_CONDITIONAL([GIT_VERSION], [test "x$with_pkg_git_version" = "xyes"])
+
+AC_CHECK_TOOL([OBJCOPY], [objcopy], [:])
+AC_CACHE_CHECK([for .interp value to use], [frr_cv_interp], [
+  frr_cv_interp=""
+  AC_LINK_IFELSE([AC_LANG_SOURCE([[int main() { return 0; }]])], [
+    if $OBJCOPY -j.interp -Obinary conftest conftest.interp; then
+      frr_cv_interp="`xargs -0 echo < conftest.interp`"
+    fi
+    test -f conftest.interp && rm conftest.interp
+  ])
+])
+if test -n "$frr_cv_interp"; then
+  AC_DEFINE_UNQUOTED(INTERP, ["$frr_cv_interp"], [.interp value])
+fi
 
 dnl ------------------------------------
 dnl Check C keywords and standard  types
@@ -1126,6 +1162,7 @@ if test x"$LIBM" = x ; then
   AC_MSG_WARN([Unable to find working pow function - bgpd may not link])
 fi
 LIBS="$TMPLIBS"
+
 AC_SUBST(LIBM)
 
 AC_CHECK_FUNCS([ppoll], [
@@ -1926,6 +1963,7 @@ for I in 1 2 3 4 5 6 7 8 9 10; do
 	eval vtysh_bin="\"$vtysh_bin\""
 done
 AC_DEFINE_UNQUOTED(VTYSH_BIN_PATH, "$vtysh_bin",path to vtysh binary)
+AC_SUBST(vtysh_bin)
 
 CFG_SYSCONF="$sysconfdir"
 CFG_SBIN="$sbindir"
@@ -1991,6 +2029,7 @@ AC_CONFIG_FILES([
 	  pkgsrc/eigrpd.sh])
 
 AC_CONFIG_FILES([vtysh/extract.pl],[chmod +x vtysh/extract.pl])
+AC_CONFIG_FILES([tools/frr],[chmod +x tools/frr])
 
 AC_CONFIG_COMMANDS([lib/route_types.h], [
 	dst="${ac_abs_top_builddir}/lib/route_types.h"
