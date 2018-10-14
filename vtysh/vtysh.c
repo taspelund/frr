@@ -2238,7 +2238,7 @@ DEFUN (vtysh_show_work_queues,
 
 DEFUN (vtysh_show_work_queues_daemon,
        vtysh_show_work_queues_daemon_cmd,
-       "show work-queues <zebra|ripd|ripngd|ospfd|ospf6d|bgpd|isisd|pbrd>",
+       "show work-queues <zebra|ripd|ripngd|ospfd|ospf6d|bgpd|isisd|pbrd|pimd|staticd>",
        SHOW_STR
        "Work Queue information\n"
        "For the zebra daemon\n"
@@ -2248,7 +2248,9 @@ DEFUN (vtysh_show_work_queues_daemon,
        "For the ospfv6 daemon\n"
        "For the bgp daemon\n"
        "For the isis daemon\n"
-       "For the pbr daemon\n")
+       "For the pbr daemon\n"
+       "For the pim daemon\n"
+       "For the static daemon\n")
 {
 	int idx_protocol = 2;
 	unsigned int i;
@@ -2586,7 +2588,7 @@ DEFUNSH(VTYSH_ALL, no_vtysh_config_enable_password,
 
 DEFUN (vtysh_write_terminal,
        vtysh_write_terminal_cmd,
-       "write terminal [<zebra|ripd|ripngd|ospfd|ospf6d|ldpd|bgpd|isisd|pimd>]",
+       "write terminal [<zebra|ripd|ripngd|ospfd|ospf6d|ldpd|bgpd|isisd|pimd|staticd>]",
        "Write running configuration to memory, network, or terminal\n"
        "Write to terminal\n"
        "For the zebra daemon\n"
@@ -2597,7 +2599,8 @@ DEFUN (vtysh_write_terminal,
        "For the ldpd daemon\n"
        "For the bgp daemon\n"
        "For the isis daemon\n"
-       "For the pim daemon\n")
+       "For the pim daemon\n"
+       "For the static daemon\n")
 {
 	unsigned int i;
 	char line[] = "do write terminal\n";
@@ -2623,7 +2626,7 @@ DEFUN (vtysh_write_terminal,
 
 DEFUN (vtysh_show_running_config,
        vtysh_show_running_config_cmd,
-       "show running-config [<zebra|ripd|ripngd|ospfd|ospf6d|ldpd|bgpd|isisd|pimd>]",
+       "show running-config [<zebra|ripd|ripngd|ospfd|ospf6d|ldpd|bgpd|isisd|pimd|staticd>]",
        SHOW_STR
        "Current operating configuration\n"
        "For the zebra daemon\n"
@@ -2634,7 +2637,8 @@ DEFUN (vtysh_show_running_config,
        "For the ldp daemon\n"
        "For the bgp daemon\n"
        "For the isis daemon\n"
-       "For the pim daemon\n")
+       "For the pim daemon\n"
+       "For the static daemon\n")
 {
 	return vtysh_write_terminal(self, vty, argc, argv);
 }
