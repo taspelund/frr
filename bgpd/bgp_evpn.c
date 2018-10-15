@@ -92,6 +92,14 @@ static int vni_hash_cmp(const void *p1, const void *p2)
 	return (vpn1->vni == vpn2->vni);
 }
 
+static int vni_list_cmp(void *p1, void *p2)
+{
+	const struct bgpevpn *vpn1 = p1;
+	const struct bgpevpn *vpn2 = p2;
+
+	return vpn1->vni - vpn2->vni;
+}
+
 /*
  * Make vrf import route target hash key.
  */
@@ -4704,8 +4712,7 @@ void bgp_evpn_init(struct bgp *bgp)
 	bgp->vrf_export_rtl->cmp =
 		(int (*)(void *, void *))evpn_route_target_cmp;
 	bgp->l2vnis = list_new();
-	bgp->l2vnis->cmp =
-		(int (*)(void *, void *))vni_hash_cmp;
+	bgp->l2vnis->cmp = vni_list_cmp;
 
 }
 
