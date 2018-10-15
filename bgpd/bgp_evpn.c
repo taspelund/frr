@@ -4713,7 +4713,17 @@ void bgp_evpn_init(struct bgp *bgp)
 		(int (*)(void *, void *))evpn_route_target_cmp;
 	bgp->l2vnis = list_new();
 	bgp->l2vnis->cmp = vni_list_cmp;
-
+	/* By default Duplicate Address Dection is enabled.
+	 * Max-moves (N) 5, detection time (M) 180
+	 * default action is warning-only
+	 * freeze action permanently freezes address,
+	 * and freeze time (auto-recovery) is disabled.
+	 */
+	bgp->evpn_info->dup_addr_detect = true;
+	bgp->evpn_info->dad_time = EVPN_DAD_DEFAULT_TIME;
+	bgp->evpn_info->dad_max_moves = EVPN_DAD_DEFAULT_MAX_MOVES;
+	bgp->evpn_info->dad_freeze = false;
+	bgp->evpn_info->dad_freeze_time = 0;
 }
 
 void bgp_evpn_vrf_delete(struct bgp *bgp_vrf)

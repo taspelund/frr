@@ -431,6 +431,8 @@ struct bgp {
 	/* EVPN enable - advertise local VNIs and their MACs etc. */
 	int advertise_all_vni;
 
+	struct bgp_evpn_info *evpn_info;
+
 	/* Hash table of Import RTs to EVIs */
 	struct hash *import_rt_hash;
 
