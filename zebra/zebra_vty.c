@@ -3210,6 +3210,47 @@ DEFUN (show_evpn_mac_vni_vtep,
 	return CMD_SUCCESS;
 }
 
+DEFPY (show_evpn_mac_vni_dad,
+       show_evpn_mac_vni_dad_cmd,
+       "show evpn mac vni " CMD_VNI_RANGE " duplicate",
+       SHOW_STR
+       "EVPN\n"
+       "MAC addresses\n"
+       "VxLAN Network Identifier\n"
+       "VNI number\n"
+       "Duplicate address list\n")
+{
+	struct zebra_vrf *zvrf;
+	vni_t vni;
+
+	vni = strtoul(argv[4]->arg, NULL, 10);
+	zvrf = vrf_info_lookup(VRF_DEFAULT);
+
+	zebra_vxlan_print_macs_vni_dad(vty, zvrf, vni);
+
+	return CMD_SUCCESS;
+}
+
+DEFPY (show_evpn_neigh_vni_dad,
+       show_evpn_neigh_vni_dad_cmd,
+       "show evpn arp-cache vni " CMD_VNI_RANGE "duplicate",
+       SHOW_STR
+       "EVPN\n"
+       "ARP and ND cache\n"
+       "VxLAN Network Identifier\n"
+       "VNI number\n"
+       "Duplicate address list\n")
+{
+	struct zebra_vrf *zvrf;
+	vni_t vni;
+
+	vni = strtoul(argv[4]->arg, NULL, 10);
+	zvrf = vrf_info_lookup(VRF_DEFAULT);
+	zebra_vxlan_print_neigh_vni_dad(vty, zvrf, vni);
+	return CMD_SUCCESS;
+}
+
+
 DEFUN (show_evpn_neigh_vni,
        show_evpn_neigh_vni_cmd,
        "show evpn arp-cache vni " CMD_VNI_RANGE "[json]",
@@ -3304,6 +3345,54 @@ DEFUN (show_evpn_neigh_vni_vtep,
 	zebra_vxlan_print_neigh_vni_vtep(vty, zvrf, vni, vtep_ip, uj);
 	return CMD_SUCCESS;
 }
+
+DEFPY (clear_evpn_dup_addr,
+       clear_evpn_dup_addr_cmd,
+       "clear evpn dup-addr vni <all$vni_all |" CMD_VNI_RANGE"$vni_val [mac M:A:C$mac_val | ip <A.B.C.D|X:X::X:X>]>",
+       CLEAR_STR
+       "EVPN\n"
+       "Duplicate address \n"
+       "VxLAN Network Identifier\n"
+       "VNI number\n"
+       "All VNIs\n"
+       "MAC\n"
+       "MAC address (e.g., 00:e0:ec:20:12:62)\n"
+       "IP\n"
+       "IPv4 address\n"
+       "IPv6 address\n")
+{
+	struct zebra_vrf *zvrf;
+	vni_t vni = 0;
+	struct ipaddr host_ip = {.ipa_type = IPADDR_NONE };
+
+	zvrf = vrf_info_lookup(VRF_DEFAULT);
+	if (vni_val) {
+		vni = strtoul(vni_val, NULL, 10);
+
+		if (mac_val_str)
+			zebra_vxlan_clear_dup_detect_vni_mac(vty, zvrf, vni,
+							&mac_val->eth_addr);
+		else if (ip) {
+			if (sockunion_family(ip) == AF_INET) {
+				host_ip.ipa_type = IPADDR_V4;
+				host_ip.ipaddr_v4.s_addr = sockunion2ip(ip);
+			} else {
+				host_ip.ipa_type = IPADDR_V6;
+				memcpy(&host_ip.ipaddr_v6, &ip->sin6.sin6_addr,
+				       sizeof(struct in6_addr));
+			}
+			zebra_vxlan_clear_dup_detect_vni_ip(vty, zvrf, vni,
+							    &host_ip);
+		} else
+			zebra_vxlan_clear_dup_detect_vni(vty, zvrf, vni);
+
+	} else {
+		zebra_vxlan_clear_dup_detect_vni_all(vty, zvrf);
+	}
+
+	return CMD_SUCCESS;
+}
+
 
 /* Static ip route configuration write function. */
 static int zebra_ip_config(struct vty *vty)
@@ -3802,10 +3891,13 @@ void zebra_vty_init(void)
 	install_element(VIEW_NODE, &show_evpn_mac_vni_all_vtep_cmd);
 	install_element(VIEW_NODE, &show_evpn_mac_vni_mac_cmd);
 	install_element(VIEW_NODE, &show_evpn_mac_vni_vtep_cmd);
+	install_element(VIEW_NODE, &show_evpn_mac_vni_dad_cmd);
 	install_element(VIEW_NODE, &show_evpn_neigh_vni_cmd);
 	install_element(VIEW_NODE, &show_evpn_neigh_vni_all_cmd);
 	install_element(VIEW_NODE, &show_evpn_neigh_vni_neigh_cmd);
 	install_element(VIEW_NODE, &show_evpn_neigh_vni_vtep_cmd);
+	install_element(VIEW_NODE, &show_evpn_neigh_vni_dad_cmd);
+	install_element(ENABLE_NODE, &clear_evpn_dup_addr_cmd);
 
 	install_element(CONFIG_NODE, &default_vrf_vni_mapping_cmd);
 	install_element(CONFIG_NODE, &no_default_vrf_vni_mapping_cmd);

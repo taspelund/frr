@@ -82,6 +82,8 @@ extern void zebra_vxlan_print_macs_vni_vtep(struct vty *vty,
 					    struct zebra_vrf *zvrf, vni_t vni,
 					    struct in_addr vtep_ip,
 					    bool use_json);
+extern void zebra_vxlan_print_macs_vni_dad(struct vty *vty,
+					   struct zebra_vrf *zvrf, vni_t vni);
 extern void zebra_vxlan_print_neigh_vni(struct vty *vty, struct zebra_vrf *zvrf,
 					vni_t vni, bool use_json);
 extern void zebra_vxlan_print_neigh_all_vni(struct vty *vty,
@@ -95,6 +97,8 @@ extern void zebra_vxlan_print_neigh_vni_vtep(struct vty *vty,
 					     struct zebra_vrf *zvrf, vni_t vni,
 					     struct in_addr vtep_ip,
 					     bool use_json);
+extern void zebra_vxlan_print_neigh_vni_dad(struct vty *vty,
+					struct zebra_vrf *zvrf, vni_t vni);
 extern void zebra_vxlan_print_vni(struct vty *vty, struct zebra_vrf *zvrf,
 				  vni_t vni, bool use_json);
 extern void zebra_vxlan_print_vnis(struct vty *vty, struct zebra_vrf *zvrf,
@@ -126,6 +130,9 @@ extern int zebra_vxlan_remote_macip_add(struct zserv *client,
 					u_short length, struct zebra_vrf *zvrf);
 extern int zebra_vxlan_remote_macip_del(struct zserv *client,
 					u_short length, struct zebra_vrf *zvrf);
+extern int zebra_vxlan_dup_addr_detection(struct zserv *client,
+					  uint8_t length,
+					  struct zebra_vrf *zvrf);
 extern int zebra_vxlan_local_mac_add_update(struct interface *ifp,
 					    struct interface *br_if,
 					    struct ethaddr *mac, vlanid_t vid,
@@ -173,5 +180,17 @@ extern void zebra_vxlan_evpn_vrf_route_add(vrf_id_t vrf_id,
 extern void zebra_vxlan_evpn_vrf_route_del(vrf_id_t vrf_id,
 					   struct ipaddr *vtep_ip,
 					   struct prefix *host_prefix);
+extern void zebra_vxlan_clear_dup_detect_vni_mac(struct vty *vty,
+						 struct zebra_vrf *zvrf,
+						 vni_t vni,
+						 struct ethaddr *macaddr);
+extern void zebra_vxlan_clear_dup_detect_vni_ip(struct vty *vty,
+						struct zebra_vrf *zvrf,
+						vni_t vni, struct ipaddr *ip);
+extern void zebra_vxlan_clear_dup_detect_vni_all(struct vty *vty,
+						 struct zebra_vrf *zvrf);
+extern void zebra_vxlan_clear_dup_detect_vni(struct vty *vty,
+					     struct zebra_vrf *zvrf,
+					     vni_t vni);
 
 #endif /* _ZEBRA_VXLAN_H */

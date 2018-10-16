@@ -118,6 +118,13 @@ struct zebra_vrf {
 	/* l3-vni info */
 	vni_t l3vni;
 
+	bool dup_addr_detect;
+
+	uint32_t dad_time;
+	uint32_t dad_max_moves;
+	bool dad_freeze;
+	uint32_t dad_freeze_time;
+
 	/* Route Installs */
 	uint64_t installs;
 	uint64_t removals;
