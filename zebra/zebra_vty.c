@@ -100,6 +100,7 @@ struct static_hold_route {
 	char *tag_str;
 	char *distance_str;
 	char *label_str;
+	bool onlink;
 };
 
 static struct list *static_list;
@@ -215,7 +216,7 @@ static int zebra_static_route_holdem(struct zebra_vrf *zvrf,
 				     const char *gate_str, const char *ifname,
 				     const char *flag_str, const char *tag_str,
 				     const char *distance_str,
-				     const char *label_str)
+				     const char *label_str, bool onlink)
 {
 	struct static_hold_route *shr, *lookup;
 	struct listnode *node;
@@ -225,6 +226,7 @@ static int zebra_static_route_holdem(struct zebra_vrf *zvrf,
 	shr->nhvrf_name = XSTRDUP(MTYPE_STATIC_ROUTE, nh_zvrf->vrf->name);
 	shr->afi = afi;
 	shr->safi = safi;
+	shr->onlink = onlink;
 	if (dest_str)
 		shr->dest_str = XSTRDUP(MTYPE_STATIC_ROUTE, dest_str);
 	if (mask_str)
@@ -282,7 +284,7 @@ static int zebra_static_route_leak(struct vty *vty,
 				   const char *gate_str, const char *ifname,
 				   const char *flag_str, const char *tag_str,
 				   const char *distance_str,
-				   const char *label_str)
+				   const char *label_str, bool onlink)
 {
 	int ret;
 	u_char distance;
@@ -312,7 +314,7 @@ static int zebra_static_route_leak(struct vty *vty,
 		return zebra_static_route_holdem(
 			zvrf, nh_zvrf, afi, safi, negate, dest_str, mask_str,
 			src_str, gate_str, ifname, flag_str, tag_str,
-			distance_str, label_str);
+			distance_str, label_str, onlink);
 	}
 	switch (afi) {
 	case AFI_IP:
@@ -495,7 +497,7 @@ static int zebra_static_route_leak(struct vty *vty,
 	if (!negate) {
 		static_add_route(afi, safi, type, &p, src_p, gatep, ifname,
 				 bh_type, tag, distance, zvrf, nh_zvrf,
-				 &snh_label);
+				 &snh_label, onlink);
 		/* Mark as having FRR configuration */
 		vrf_set_user_cfged(zvrf->vrf);
 	} else {
@@ -567,7 +569,7 @@ static int zebra_static_route(struct vty *vty, afi_t afi, safi_t safi,
 	return zebra_static_route_leak(vty, zvrf, zvrf, afi, safi,
 				       negate, dest_str, mask_str, src_str,
 				       gate_str, ifname, flag_str, tag_str,
-				       distance_str, label_str);
+				       distance_str, label_str, false);
 }
 
 void static_config_install_delayed_routes(struct zebra_vrf *zvrf)
@@ -592,7 +594,7 @@ void static_config_install_delayed_routes(struct zebra_vrf *zvrf)
 			NULL, ozvrf, nh_zvrf, shr->afi, shr->safi, NULL,
 			shr->dest_str, shr->mask_str, shr->src_str,
 			shr->gate_str, shr->ifname, shr->flag_str, shr->tag_str,
-			shr->distance_str, shr->label_str);
+			shr->distance_str, shr->label_str, shr->onlink);
 
 		if (installed != CMD_SUCCESS)
 			zlog_debug(
@@ -776,7 +778,7 @@ DEFPY(ip_route_blackhole_vrf,
 	return zebra_static_route_leak(vty, zvrf, zvrf,
 				       AFI_IP, SAFI_UNICAST, no, prefix,
 				       mask_str, NULL, NULL, NULL, flag,
-				       tag_str, distance_str, label);
+				       tag_str, distance_str, label, false);
 }
 
 DEFPY(ip_route_address_interface,
@@ -791,6 +793,7 @@ DEFPY(ip_route_address_interface,
 	  |vrf NAME                                    \
 	  |label WORD                                  \
 	  |nexthop-vrf NAME                            \
+	  |onlink$onlink                               \
           }]",
       NO_STR IP_STR
       "Establish static routes\n"
@@ -805,7 +808,8 @@ DEFPY(ip_route_address_interface,
       "Distance value for this route\n"
       VRF_CMD_HELP_STR
       MPLS_LABEL_HELPSTR
-      VRF_CMD_HELP_STR)
+      VRF_CMD_HELP_STR
+      "Treat the nexthop as directly attached to the interface")
 {
 	struct zebra_vrf *zvrf;
 	struct zebra_vrf *nh_zvrf;
@@ -834,10 +838,10 @@ DEFPY(ip_route_address_interface,
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	return zebra_static_route_leak(vty, zvrf, nh_zvrf,
-				       AFI_IP, SAFI_UNICAST, no, prefix,
-				       mask_str, NULL, gate_str, ifname, flag,
-				       tag_str, distance_str, label);
+	return zebra_static_route_leak(vty, zvrf, nh_zvrf, AFI_IP, SAFI_UNICAST,
+				       no, prefix, mask_str, NULL, gate_str,
+				       ifname, flag, tag_str, distance_str,
+				       label, !!onlink);
 }
 
 DEFPY(ip_route_address_interface_vrf,
@@ -851,6 +855,7 @@ DEFPY(ip_route_address_interface_vrf,
 	  |(1-255)$distance                            \
 	  |label WORD                                  \
 	  |nexthop-vrf NAME                            \
+	  |onlink$onlink                               \
           }]",
       NO_STR IP_STR
       "Establish static routes\n"
@@ -864,7 +869,8 @@ DEFPY(ip_route_address_interface_vrf,
       "Tag value\n"
       "Distance value for this route\n"
       MPLS_LABEL_HELPSTR
-      VRF_CMD_HELP_STR)
+      VRF_CMD_HELP_STR
+      "Treat the nexthop as directly attached to the interface")
 {
 	VTY_DECLVAR_CONTEXT(vrf, vrf);
 	const char *flag = NULL;
@@ -890,7 +896,7 @@ DEFPY(ip_route_address_interface_vrf,
 	return zebra_static_route_leak(vty, zvrf, nh_zvrf,
 				       AFI_IP, SAFI_UNICAST, no, prefix,
 				       mask_str, NULL, gate_str, ifname, flag,
-				       tag_str, distance_str, label);
+				       tag_str, distance_str, label, !!onlink);
 }
 
 DEFPY(ip_route,
@@ -904,6 +910,7 @@ DEFPY(ip_route,
 	  |vrf NAME                                    \
 	  |label WORD                                  \
 	  |nexthop-vrf NAME                            \
+	  |onlink$onlink                               \
           }]",
       NO_STR IP_STR
       "Establish static routes\n"
@@ -917,7 +924,8 @@ DEFPY(ip_route,
       "Distance value for this route\n"
       VRF_CMD_HELP_STR
       MPLS_LABEL_HELPSTR
-      VRF_CMD_HELP_STR)
+      VRF_CMD_HELP_STR
+      "Treat the nexthop as directly attached to the interface")
 {
 	struct zebra_vrf *zvrf;
 	struct zebra_vrf *nh_zvrf;
@@ -947,10 +955,10 @@ DEFPY(ip_route,
 	}
 
 
-	return zebra_static_route_leak(vty, zvrf, nh_zvrf,
-				       AFI_IP, SAFI_UNICAST, no, prefix,
-				       mask_str, NULL, gate_str, ifname, flag,
-				       tag_str, distance_str, label);
+	return zebra_static_route_leak(vty, zvrf, nh_zvrf, AFI_IP, SAFI_UNICAST,
+				       no, prefix, mask_str, NULL, gate_str,
+				       ifname, flag, tag_str, distance_str,
+				       label, !!onlink);
 }
 
 DEFPY(ip_route_vrf,
@@ -998,10 +1006,10 @@ DEFPY(ip_route_vrf,
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	return zebra_static_route_leak(vty, zvrf, nh_zvrf,
-				       AFI_IP, SAFI_UNICAST, no, prefix,
-				       mask_str, NULL, gate_str, ifname, flag,
-				       tag_str, distance_str, label);
+	return zebra_static_route_leak(vty, zvrf, nh_zvrf, AFI_IP, SAFI_UNICAST,
+				       no, prefix, mask_str, NULL, gate_str,
+				       ifname, flag, tag_str, distance_str,
+				       label, false);
 }
 
 /* New RIB.  Detailed information for IPv4 route. */
@@ -2415,7 +2423,7 @@ DEFPY(ipv6_route_blackhole_vrf,
 	return zebra_static_route_leak(vty, zvrf, zvrf,
 				       AFI_IP6, SAFI_UNICAST, no, prefix_str,
 				       NULL, from_str, NULL, NULL, flag,
-				       tag_str, distance_str, label);
+				       tag_str, distance_str, label, false);
 }
 
 DEFPY(ipv6_route_address_interface,
@@ -2429,6 +2437,7 @@ DEFPY(ipv6_route_address_interface,
             |vrf NAME                                      \
             |label WORD                                    \
             |nexthop-vrf NAME                              \
+	    |onlink$onlink                                 \
           }]",
       NO_STR
       IPV6_STR
@@ -2443,7 +2452,8 @@ DEFPY(ipv6_route_address_interface,
       "Distance value for this prefix\n"
       VRF_CMD_HELP_STR
       MPLS_LABEL_HELPSTR
-      VRF_CMD_HELP_STR)
+      VRF_CMD_HELP_STR
+      "Treat the nexthop as directly attached to the interface")
 {
 	struct zebra_vrf *zvrf;
 	struct zebra_vrf *nh_zvrf;
@@ -2469,7 +2479,7 @@ DEFPY(ipv6_route_address_interface,
 	return zebra_static_route_leak(vty, zvrf, nh_zvrf,
 				       AFI_IP6, SAFI_UNICAST, no, prefix_str,
 				       NULL, from_str, gate_str, ifname, NULL,
-				       tag_str, distance_str, label);
+				       tag_str, distance_str, label, !!onlink);
 }
 
 DEFPY(ipv6_route_address_interface_vrf,
@@ -2482,6 +2492,7 @@ DEFPY(ipv6_route_address_interface_vrf,
             |(1-255)$distance                              \
             |label WORD                                    \
             |nexthop-vrf NAME                              \
+	    |onlink$onlink                                 \
           }]",
       NO_STR
       IPV6_STR
@@ -2495,7 +2506,8 @@ DEFPY(ipv6_route_address_interface_vrf,
       "Tag value\n"
       "Distance value for this prefix\n"
       MPLS_LABEL_HELPSTR
-      VRF_CMD_HELP_STR)
+      VRF_CMD_HELP_STR
+      "Treat the nexthop as directly attached to the interface")
 {
 	VTY_DECLVAR_CONTEXT(vrf, vrf);
 	struct zebra_vrf *zvrf = vrf->info;
@@ -2515,7 +2527,7 @@ DEFPY(ipv6_route_address_interface_vrf,
 	return zebra_static_route_leak(vty, zvrf, nh_zvrf,
 				       AFI_IP6, SAFI_UNICAST, no, prefix_str,
 				       NULL, from_str, gate_str, ifname, NULL,
-				       tag_str, distance_str, label);
+				       tag_str, distance_str, label, !!onlink);
 }
 
 DEFPY(ipv6_route,
@@ -2568,7 +2580,7 @@ DEFPY(ipv6_route,
 	return zebra_static_route_leak(vty, zvrf, nh_zvrf,
 				       AFI_IP6, SAFI_UNICAST, no, prefix_str,
 				       NULL, from_str, gate_str, ifname, NULL,
-				       tag_str, distance_str, label);
+				       tag_str, distance_str, label, false);
 }
 
 DEFPY(ipv6_route_vrf,
@@ -2613,7 +2625,7 @@ DEFPY(ipv6_route_vrf,
 	return zebra_static_route_leak(vty, zvrf, nh_zvrf,
 				       AFI_IP6, SAFI_UNICAST, no, prefix_str,
 				       NULL, from_str, gate_str, ifname, NULL,
-				       tag_str, distance_str, label);
+				       tag_str, distance_str, label, false);
 }
 
 /*
