@@ -124,16 +124,16 @@ static unsigned isis_vertex_queue_hash_key(void *vp)
 	return jhash(vertex->N.id, ISIS_SYS_ID_LEN + 1, 0x55aa5a5a);
 }
 
-static int isis_vertex_queue_hash_cmp(const void *a, const void *b)
+static bool isis_vertex_queue_hash_cmp(const void *a, const void *b)
 {
 	const struct isis_vertex *va = a, *vb = b;
 
 	if (va->type != vb->type)
-		return 0;
+		return false;
 
 	if (VTYPE_IP(va->type)) {
 		if (prefix_cmp(&va->N.ip.dest, &vb->N.ip.dest))
-			return 0;
+			return false;
 
 		return prefix_cmp((struct prefix *)&va->N.ip.src,
 				  (struct prefix *)&vb->N.ip.src) == 0;

@@ -47,7 +47,7 @@ static struct hash *frr_pthread_hash;
 static pthread_mutex_t frr_pthread_hash_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /* frr_pthread_hash->hash_cmp */
-static int frr_pthread_hash_cmp(const void *value1, const void *value2)
+static bool frr_pthread_hash_cmp(const void *value1, const void *value2)
 {
 	const struct frr_pthread *tq1 = value1;
 	const struct frr_pthread *tq2 = value2;
