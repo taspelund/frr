@@ -1660,7 +1660,8 @@ int bgp_redistribute_resend(struct bgp *bgp, afi_t afi, int type,
 }
 
 /* Redistribute with route-map specification.  */
-int bgp_redistribute_rmap_set(struct bgp_redist *red, const char *name)
+int bgp_redistribute_rmap_set(struct bgp_redist *red, const char *name,
+			      struct route_map *route_map)
 {
 	if (red->rmap.name && (strcmp(red->rmap.name, name) == 0))
 		return 0;
@@ -1668,7 +1669,7 @@ int bgp_redistribute_rmap_set(struct bgp_redist *red, const char *name)
 	if (red->rmap.name)
 		XFREE(MTYPE_ROUTE_MAP_NAME, red->rmap.name);
 	red->rmap.name = XSTRDUP(MTYPE_ROUTE_MAP_NAME, name);
-	red->rmap.map = route_map_lookup_by_name(name);
+	red->rmap.map = route_map;
 
 	return 1;
 }
@@ -1931,6 +1932,29 @@ int bgp_zebra_advertise_gw_macip(struct bgp *bgp, int advertise, vni_t vni)
 	return zclient_send_message(zclient);
 }
 
+int bgp_zebra_vxlan_flood_control(struct bgp *bgp,
+				  enum vxlan_flood_control flood_ctrl)
+{
+	struct stream *s;
+
+	/* Check socket. */
+	if (!zclient || zclient->sock < 0)
+		return 0;
+
+	/* Don't try to register if Zebra doesn't know of this instance. */
+	if (!IS_BGP_INST_KNOWN_TO_ZEBRA(bgp))
+		return 0;
+
+	s = zclient->obuf;
+	stream_reset(s);
+
+	zclient_create_header(s, ZEBRA_VXLAN_FLOOD_CONTROL, bgp->vrf_id);
+	stream_putc(s, flood_ctrl);
+	stream_putw_at(s, 0, stream_get_endp(s));
+
+	return zclient_send_message(zclient);
+}
+
 int bgp_zebra_advertise_all_vni(struct bgp *bgp, int advertise)
 {
 	struct stream *s;
@@ -1948,6 +1972,10 @@ int bgp_zebra_advertise_all_vni(struct bgp *bgp, int advertise)
 
 	zclient_create_header(s, ZEBRA_ADVERTISE_ALL_VNI, bgp->vrf_id);
 	stream_putc(s, advertise);
+	/* Also inform current BUM handling setting. This is really
+	 * relevant only when 'advertise' is set.
+	 */
+	stream_putc(s, bgp->vxlan_flood_ctrl);
 	stream_putw_at(s, 0, stream_get_endp(s));
 
 	return zclient_send_message(zclient);
