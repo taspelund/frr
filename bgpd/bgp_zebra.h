@@ -63,6 +63,7 @@ extern int bgp_zebra_advertise_subnet(struct bgp *bgp, int advertise,
 				      vni_t vni);
 extern int bgp_zebra_advertise_gw_macip(struct bgp *, int, vni_t);
 extern int bgp_zebra_advertise_all_vni(struct bgp *, int);
+extern int bgp_zebra_dup_addr_detection(struct bgp *bgp);
 
 extern int bgp_zebra_num_connects(void);
 

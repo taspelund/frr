@@ -4724,6 +4724,8 @@ void bgp_evpn_init(struct bgp *bgp)
 	bgp->evpn_info->dad_max_moves = EVPN_DAD_DEFAULT_MAX_MOVES;
 	bgp->evpn_info->dad_freeze = false;
 	bgp->evpn_info->dad_freeze_time = 0;
+	/* Initialize zebra vxlan */
+	bgp_zebra_dup_addr_detection(bgp);
 }
 
 void bgp_evpn_vrf_delete(struct bgp *bgp_vrf)

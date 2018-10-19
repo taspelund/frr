@@ -38,6 +38,10 @@
 #include "bgpd/bgp_errors.h"
 #include "bgpd/bgp_ecommunity.h"
 
+#ifndef VTYSH_EXTRACT_PL
+#include "bgpd/bgp_evpn_vty_clippy.c"
+#endif
+
 #define SHOW_DISPLAY_STANDARD 0
 #define SHOW_DISPLAY_TAGS 1
 #define SHOW_DISPLAY_OVERLAY 2
@@ -2736,6 +2740,127 @@ DEFUN (no_bgp_evpn_default_originate,
 	return CMD_SUCCESS;
 }
 
+DEFPY (dup_addr_detection,
+       dup_addr_detection_cmd,
+       "dup-addr-detection [max-moves (2-1000)$max_moves_val time (2-1800)$time_val]",
+       "Duplicate address detection\n"
+       "Max allowed moved before address detected as duplicate\n"
+       "Num of max allowed moves (2-1000) default 5\n"
+       "Duplicate address detection time\n"
+       "Time in seconds (2-1800) default 180\n")
+{
+	struct bgp *bgp_vrf = VTY_GET_CONTEXT(bgp);
+
+	if (!bgp_vrf)
+		return CMD_WARNING;
+
+	bgp_vrf->evpn_info->dup_addr_detect = true;
+
+	if (time_val)
+		bgp_vrf->evpn_info->dad_time = time_val;
+	if (max_moves_val)
+		bgp_vrf->evpn_info->dad_max_moves = max_moves_val;
+
+	bgp_zebra_dup_addr_detection(bgp_vrf);
+
+	return CMD_SUCCESS;
+}
+
+DEFPY (dup_addr_detection_auto_recovery,
+       dup_addr_detection_auto_recovery_cmd,
+       "dup-addr-detection freeze <permanent |(30-3600)$freeze_time_val>",
+       "Duplicate address detection\n"
+       "Duplicate address detection freeze\n"
+       "Duplicate address detection permanent freeze\n"
+       "Duplicate address detection freeze time (30-3600)\n")
+{
+	struct bgp *bgp_vrf = VTY_GET_CONTEXT(bgp);
+
+	if (!bgp_vrf)
+		return CMD_WARNING;
+
+	bgp_vrf->evpn_info->dup_addr_detect = true;
+	bgp_vrf->evpn_info->dad_freeze = true;
+	bgp_vrf->evpn_info->dad_freeze_time = freeze_time_val;
+
+	bgp_zebra_dup_addr_detection(bgp_vrf);
+
+	return CMD_SUCCESS;
+}
+
+DEFPY (no_dup_addr_detection,
+       no_dup_addr_detection_cmd,
+       "no dup-addr-detection [max-moves (2-1000)$max_moves_val time (2-1800)$time_val | freeze <permanent$permanent_val | (30-3600)$freeze_time_val>]",
+       NO_STR
+       "Duplicate address detection\n"
+       "Max allowed moved before address detected as duplicate\n"
+       "Num of max allowed moves (2-1000) default 5\n"
+       "Duplicate address detection time\n"
+       "Time in seconds (2-1800) default 180\n"
+       "Duplicate address detection freeze\n"
+       "Duplicate address detection permanent freeze\n"
+       "Duplicate address detection freeze time (30-3600)\n")
+{
+	struct bgp *bgp_vrf = VTY_GET_CONTEXT(bgp);
+
+	if (!bgp_vrf)
+		return CMD_WARNING;
+
+	if (argc == 2) {
+		if (!bgp_vrf->evpn_info->dup_addr_detect)
+			return CMD_SUCCESS;
+		/* Reset all parameters to default. */
+		bgp_vrf->evpn_info->dup_addr_detect = false;
+		bgp_vrf->evpn_info->dad_time = EVPN_DAD_DEFAULT_TIME;
+		bgp_vrf->evpn_info->dad_max_moves = EVPN_DAD_DEFAULT_MAX_MOVES;
+		bgp_vrf->evpn_info->dad_freeze = false;
+		bgp_vrf->evpn_info->dad_freeze_time = 0;
+	} else {
+		if (max_moves_val) {
+			if (bgp_vrf->evpn_info->dad_max_moves != max_moves_val) {
+				vty_out(vty,
+				"%% Value does not match with config\n");
+				return CMD_WARNING_CONFIG_FAILED;
+			}
+			bgp_vrf->evpn_info->dad_max_moves =
+				EVPN_DAD_DEFAULT_MAX_MOVES;
+		}
+
+		if (time_val) {
+			if (bgp_vrf->evpn_info->dad_time != time_val) {
+				vty_out(vty,
+				"%% Value does not match with config\n");
+				return CMD_WARNING_CONFIG_FAILED;
+			}
+			bgp_vrf->evpn_info->dad_time = EVPN_DAD_DEFAULT_TIME;
+		}
+
+		if (freeze_time_val) {
+			if (bgp_vrf->evpn_info->dad_freeze_time
+			    != freeze_time_val) {
+				vty_out(vty,
+				"%% Value does not match with config\n");
+				return CMD_WARNING_CONFIG_FAILED;
+			}
+			bgp_vrf->evpn_info->dad_freeze_time = 0;
+			bgp_vrf->evpn_info->dad_freeze = false;
+		}
+
+		if (permanent_val) {
+			if (bgp_vrf->evpn_info->dad_freeze_time) {
+				vty_out(vty,
+				"%% Value does not match with config\n");
+				return CMD_WARNING_CONFIG_FAILED;
+			}
+			bgp_vrf->evpn_info->dad_freeze = false;
+		}
+	}
+
+	bgp_zebra_dup_addr_detection(bgp_vrf);
+
+	return CMD_SUCCESS;
+}
+
 DEFUN_HIDDEN (bgp_evpn_advertise_vni_subnet,
 	      bgp_evpn_advertise_vni_subnet_cmd,
 	      "advertise-subnet",
@@ -4480,6 +4605,27 @@ void bgp_config_write_evpn_info(struct vty *vty, struct bgp *bgp, afi_t afi,
 	if (bgp->advertise_gw_macip)
 		vty_out(vty, "  advertise-default-gw\n");
 
+	if (!bgp->evpn_info->dup_addr_detect)
+		vty_out(vty, "  no dup-addr-detection\n");
+
+	if (bgp->evpn_info->dad_max_moves !=
+		EVPN_DAD_DEFAULT_MAX_MOVES ||
+		bgp->evpn_info->dad_time != EVPN_DAD_DEFAULT_TIME)
+		vty_out(vty, "  dup-addr-detection max-moves %u time %u\n",
+			bgp->evpn_info->dad_max_moves,
+			bgp->evpn_info->dad_time);
+
+	if (bgp->evpn_info->dad_freeze) {
+		if (bgp->evpn_info->dad_freeze_time)
+			vty_out(vty,
+				"  dup-addr-detection freeze %u\n",
+				bgp->evpn_info->dad_freeze_time);
+		else
+			vty_out(vty,
+				"  dup-addr-detection freeze permanent\n");
+	}
+
+
 	if (CHECK_FLAG(bgp->af_flags[AFI_L2VPN][SAFI_EVPN],
 		       BGP_L2VPN_EVPN_ADVERTISE_IPV4_UNICAST)) {
 		if (bgp->adv_cmd_rmap[AFI_IP][SAFI_UNICAST].name)
@@ -4571,6 +4717,9 @@ void bgp_ethernetvpn_init(void)
 	install_element(BGP_EVPN_NODE, &no_bgp_evpn_advertise_type5_cmd);
 	install_element(BGP_EVPN_NODE, &bgp_evpn_default_originate_cmd);
 	install_element(BGP_EVPN_NODE, &no_bgp_evpn_default_originate_cmd);
+	install_element(BGP_EVPN_NODE, &dup_addr_detection_cmd);
+	install_element(BGP_EVPN_NODE, &dup_addr_detection_auto_recovery_cmd);
+	install_element(BGP_EVPN_NODE, &no_dup_addr_detection_cmd);
 
 	/* "show bgp l2vpn evpn" commands. */
 	install_element(VIEW_NODE, &show_bgp_l2vpn_evpn_vni_cmd);
