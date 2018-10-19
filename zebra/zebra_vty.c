@@ -75,9 +75,6 @@ static void vty_show_ip_route_summary_prefix(struct vty *vty,
 	struct vrf *A = VTY_GET_CONTEXT(vrf);                                  \
 	struct zebra_vrf *B = (vrf) ? vrf->info : NULL;
 
-/* VNI range as per RFC 7432 */
-#define CMD_VNI_RANGE "(1-16777215)"
-
 DEFUN (ip_multicast_mode,
        ip_multicast_mode_cmd,
        "ip multicast rpf-lookup-mode <urib-only|mrib-only|mrib-then-urib|lower-distance|longer-prefix>",
