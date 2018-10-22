@@ -807,17 +807,26 @@ static void add_mac_mobility_to_attr(u_int32_t seq_num, struct attr *attr)
 
 /* Install EVPN route into zebra. */
 static int evpn_zebra_install(struct bgp *bgp, struct bgpevpn *vpn,
-			      struct prefix_evpn *p,
-			      struct in_addr remote_vtep_ip, uint8_t flags,
-			      uint32_t seq)
+			      struct prefix_evpn *p, struct bgp_info *ri)
 {
 	int ret;
+	uint8_t flags;
 
-	if (p->prefix.route_type == BGP_EVPN_MAC_IP_ROUTE)
-		ret = bgp_zebra_send_remote_macip(bgp, vpn, p, remote_vtep_ip,
-						  1, flags, seq);
-	else
+	if (p->prefix.route_type == BGP_EVPN_MAC_IP_ROUTE) {
+		flags = 0;
+		if (ri->attr->sticky)
+				SET_FLAG(flags, ZEBRA_MACIP_TYPE_STICKY);
+		if (ri->attr->default_gw)
+				SET_FLAG(flags, ZEBRA_MACIP_TYPE_GW);
+		if (IS_EVPN_PREFIX_IPADDR_V6(p) &&
+						ri->attr->router_flag)
+				SET_FLAG(flags, ZEBRA_MACIP_TYPE_ROUTER_FLAG);
+		ret = bgp_zebra_send_remote_macip(bgp, vpn, p,
+					ri->attr->nexthop, 1, flags,
+					mac_mobility_seqnum(ri->attr));
+	} else {
 		ret = bgp_zebra_send_remote_vtep(bgp, vpn, p, 1);
+	}
 
 	return ret;
 }
@@ -886,15 +895,12 @@ static int evpn_route_select_install(struct bgp *bgp, struct bgpevpn *vpn,
 	afi_t afi = AFI_L2VPN;
 	safi_t safi = SAFI_EVPN;
 	int ret = 0;
-	u_char			flags = 0;
-	struct prefix_evpn *evp;
 
 	/* Compute the best path. */
 	bgp_best_selection(bgp, rn, &bgp->maxpaths[afi][safi], &old_and_new,
 			   afi, safi);
 	old_select = old_and_new.old;
 	new_select = old_and_new.new;
-	evp = (struct prefix_evpn *)&rn->p;
 	/* If the best path hasn't changed - see if there is still something to
 	 * update
 	 * to zebra RIB.
@@ -906,18 +912,8 @@ static int evpn_route_select_install(struct bgp *bgp, struct bgpevpn *vpn,
 	    && !CHECK_FLAG(old_select->flags, BGP_INFO_ATTR_CHANGED)
 	    && !bgp->addpath_tx_used[afi][safi]) {
 		if (bgp_zebra_has_route_changed(rn, old_select)) {
-			if (old_select->attr->sticky)
-				SET_FLAG(flags, ZEBRA_MACIP_TYPE_STICKY);
-			if (old_select->attr->default_gw)
-				SET_FLAG(flags, ZEBRA_MACIP_TYPE_GW);
-			if (IS_EVPN_PREFIX_IPADDR_V6(evp) &&
-			    old_select->attr->router_flag)
-				SET_FLAG(flags, ZEBRA_MACIP_TYPE_ROUTER_FLAG);
-
 			ret = evpn_zebra_install(
-				bgp, vpn, (struct prefix_evpn *)&rn->p,
-				old_select->attr->nexthop, flags,
-				mac_mobility_seqnum(old_select->attr));
+				bgp, vpn, (struct prefix_evpn *)&rn->p, old_select);
 		}
 		UNSET_FLAG(old_select->flags, BGP_INFO_MULTIPATH_CHG);
 		bgp_zebra_clear_route_change_flags(rn);
@@ -943,18 +939,8 @@ static int evpn_route_select_install(struct bgp *bgp, struct bgpevpn *vpn,
 
 	if (new_select && new_select->type == ZEBRA_ROUTE_BGP
 	    && new_select->sub_type == BGP_ROUTE_IMPORTED) {
-		flags = 0;
-		if (new_select->attr->sticky)
-			SET_FLAG(flags, ZEBRA_MACIP_TYPE_STICKY);
-		if (new_select->attr->default_gw)
-			SET_FLAG(flags, ZEBRA_MACIP_TYPE_GW);
-		if (IS_EVPN_PREFIX_IPADDR_V6(evp) &&
-		    new_select->attr->router_flag)
-			SET_FLAG(flags, ZEBRA_MACIP_TYPE_ROUTER_FLAG);
-
 		ret = evpn_zebra_install(bgp, vpn, (struct prefix_evpn *)&rn->p,
-					 new_select->attr->nexthop, flags,
-					 mac_mobility_seqnum(new_select->attr));
+					 new_select);
 
 		/* If an old best existed and it was a "local" route, the only
 		 * reason
@@ -1294,7 +1280,6 @@ static void evpn_cleanup_local_non_best_route(struct bgp *bgp,
 {
 	struct bgp_info *tmp_ri;
 	struct bgp_info *curr_select = NULL;
-	u_char flags = 0;
 	char buf[PREFIX_STRLEN];
 
 	if (CHECK_FLAG(local_ri->flags, BGP_INFO_SELECTED)) {
@@ -1320,15 +1305,9 @@ static void evpn_cleanup_local_non_best_route(struct bgp *bgp,
 	}
 	if (curr_select && curr_select->type == ZEBRA_ROUTE_BGP
 			&& curr_select->sub_type == BGP_ROUTE_IMPORTED) {
-			if (curr_select->attr->sticky)
-				SET_FLAG(flags, ZEBRA_MACIP_TYPE_STICKY);
-			if (curr_select->attr->default_gw)
-				SET_FLAG(flags, ZEBRA_MACIP_TYPE_GW);
 			evpn_zebra_install(bgp, vpn,
 					(struct prefix_evpn *)&rn->p,
-					curr_select->attr->nexthop,
-					flags,
-					mac_mobility_seqnum(curr_select->attr));
+					curr_select);
 	}
 }
 
