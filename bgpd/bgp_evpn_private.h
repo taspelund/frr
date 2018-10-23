@@ -131,7 +131,7 @@ struct bgp_evpn_info {
 	bool dup_addr_detect;
 
 	/* Detection time(M) */
-	uint32_t dad_time;
+	int dad_time;
 	/* Detection max moves(N) */
 	uint32_t dad_max_moves;
 	/* Permanent freeze */

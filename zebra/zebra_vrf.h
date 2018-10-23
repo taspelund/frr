@@ -122,7 +122,7 @@ struct zebra_vrf {
 
 	bool dup_addr_detect;
 
-	uint32_t dad_time;
+	int dad_time;
 	uint32_t dad_max_moves;
 	bool dad_freeze;
 	uint32_t dad_freeze_time;

@@ -6225,7 +6225,7 @@ int zebra_vxlan_dup_addr_detection(struct zserv *client, uint8_t length,
 					  struct zebra_vrf *zvrf)
 {
 	struct stream *s;
-	uint32_t time = 0;
+	int time = 0;
 	uint32_t max_moves = 0;
 	uint32_t freeze_time = 0;
 	bool dup_addr_detect = false;
