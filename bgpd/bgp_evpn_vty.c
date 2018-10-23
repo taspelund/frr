@@ -2806,13 +2806,14 @@ DEFPY (dup_addr_detection_auto_recovery,
        "Duplicate address detection freeze time (30-3600)\n")
 {
 	struct bgp *bgp_vrf = VTY_GET_CONTEXT(bgp);
+	uint32_t freeze_time = freeze_time_val;
 
 	if (!bgp_vrf)
 		return CMD_WARNING;
 
 	bgp_vrf->evpn_info->dup_addr_detect = true;
 	bgp_vrf->evpn_info->dad_freeze = true;
-	bgp_vrf->evpn_info->dad_freeze_time = freeze_time_val;
+	bgp_vrf->evpn_info->dad_freeze_time = freeze_time;
 
 	bgp_zebra_dup_addr_detection(bgp_vrf);
 
@@ -2833,6 +2834,8 @@ DEFPY (no_dup_addr_detection,
        "Duplicate address detection freeze time (30-3600)\n")
 {
 	struct bgp *bgp_vrf = VTY_GET_CONTEXT(bgp);
+	uint32_t max_moves = (uint32_t)max_moves_val;
+	uint32_t freeze_time = (uint32_t)freeze_time_val;
 
 	if (!bgp_vrf)
 		return CMD_WARNING;
@@ -2847,8 +2850,8 @@ DEFPY (no_dup_addr_detection,
 		bgp_vrf->evpn_info->dad_freeze = false;
 		bgp_vrf->evpn_info->dad_freeze_time = 0;
 	} else {
-		if (max_moves_val) {
-			if (bgp_vrf->evpn_info->dad_max_moves != max_moves_val) {
+		if (max_moves) {
+			if (bgp_vrf->evpn_info->dad_max_moves != max_moves) {
 				vty_out(vty,
 				"%% Value does not match with config\n");
 				return CMD_WARNING_CONFIG_FAILED;
@@ -2866,9 +2869,9 @@ DEFPY (no_dup_addr_detection,
 			bgp_vrf->evpn_info->dad_time = EVPN_DAD_DEFAULT_TIME;
 		}
 
-		if (freeze_time_val) {
+		if (freeze_time) {
 			if (bgp_vrf->evpn_info->dad_freeze_time
-			    != freeze_time_val) {
+			    != freeze_time) {
 				vty_out(vty,
 				"%% Value does not match with config\n");
 				return CMD_WARNING_CONFIG_FAILED;
