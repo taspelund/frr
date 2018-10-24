@@ -1403,45 +1403,45 @@ static route_map_result_t route_set_ip_nexthop(void *rule,
 	struct bgp_path_info *path;
 	struct peer *peer;
 
-	if (type == RMAP_BGP) {
-		path = object;
-		peer = path->peer;
+	if (type != RMAP_BGP)
+		return RMAP_OKAY;
 
-		if (rins->unchanged) {
-			SET_FLAG(path->attr->rmap_change_flags,
-				 BATTR_RMAP_NEXTHOP_UNCHANGED);
-		} else if (rins->peer_address) {
-			if ((CHECK_FLAG(peer->rmap_type, PEER_RMAP_TYPE_IN)
-			     || CHECK_FLAG(peer->rmap_type,
-					   PEER_RMAP_TYPE_IMPORT))
-			    && peer->su_remote
-			    && sockunion_family(peer->su_remote) == AF_INET) {
-				path->attr->nexthop.s_addr =
-					sockunion2ip(peer->su_remote);
-				path->attr->flag |=
-					ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP);
-			} else if (CHECK_FLAG(peer->rmap_type,
-					      PEER_RMAP_TYPE_OUT)) {
-				/* The next hop value will be set as part of
-				 * packet rewrite.
-				 * Set the flags here to indicate that rewrite
-				 * needs to be done.
-				 * Also, clear the value.
-				 */
-				SET_FLAG(path->attr->rmap_change_flags,
-					 BATTR_RMAP_NEXTHOP_PEER_ADDRESS);
-				path->attr->nexthop.s_addr = 0;
-			}
-		} else {
-			/* Set next hop value. */
+	if (prefix->family == AF_INET6)
+		return RMAP_OKAY;
+
+	path = object;
+	peer = path->peer;
+
+	if (rins->unchanged) {
+		SET_FLAG(path->attr->rmap_change_flags,
+			 BATTR_RMAP_NEXTHOP_UNCHANGED);
+	} else if (rins->peer_address) {
+		if ((CHECK_FLAG(peer->rmap_type, PEER_RMAP_TYPE_IN)
+		     || CHECK_FLAG(peer->rmap_type, PEER_RMAP_TYPE_IMPORT))
+		    && peer->su_remote
+		    && sockunion_family(peer->su_remote) == AF_INET) {
+			path->attr->nexthop.s_addr =
+				sockunion2ip(peer->su_remote);
 			path->attr->flag |= ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP);
-			path->attr->nexthop = *rins->address;
+		} else if (CHECK_FLAG(peer->rmap_type, PEER_RMAP_TYPE_OUT)) {
+			/* The next hop value will be set as part of
+			 * packet rewrite.  Set the flags here to indicate
+			 * that rewrite needs to be done.
+			 * Also, clear the value.
+			 */
 			SET_FLAG(path->attr->rmap_change_flags,
-				 BATTR_RMAP_IPV4_NHOP_CHANGED);
-			/* case for MP-BGP : MPLS VPN */
-			path->attr->mp_nexthop_global_in = *rins->address;
-			path->attr->mp_nexthop_len = sizeof(*rins->address);
+				 BATTR_RMAP_NEXTHOP_PEER_ADDRESS);
+			path->attr->nexthop.s_addr = 0;
 		}
+	} else {
+		/* Set next hop value. */
+		path->attr->flag |= ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP);
+		path->attr->nexthop = *rins->address;
+		SET_FLAG(path->attr->rmap_change_flags,
+			 BATTR_RMAP_IPV4_NHOP_CHANGED);
+		/* case for MP-BGP : MPLS VPN */
+		path->attr->mp_nexthop_global_in = *rins->address;
+		path->attr->mp_nexthop_len = sizeof(*rins->address);
 	}
 
 	return RMAP_OKAY;
@@ -1717,7 +1717,7 @@ static route_map_result_t route_set_community(void *rule,
 			attr->community = NULL;
 			/* See the longer comment down below. */
 			if (old && old->refcnt == 0)
-				community_free(old);
+				community_free(&old);
 			return RMAP_OKAY;
 		}
 
@@ -1726,7 +1726,7 @@ static route_map_result_t route_set_community(void *rule,
 			merge = community_merge(community_dup(old), rcs->com);
 
 			new = community_uniq_sort(merge);
-			community_free(merge);
+			community_free(&merge);
 		} else
 			new = community_dup(rcs->com);
 
@@ -1736,7 +1736,7 @@ static route_map_result_t route_set_community(void *rule,
 		 * Really need to cleanup attribute caching sometime.
 		 */
 		if (old && old->refcnt == 0)
-			community_free(old);
+			community_free(&old);
 
 		/* will be interned by caller if required */
 		attr->community = new;
@@ -1790,7 +1790,7 @@ static void route_set_community_free(void *rule)
 	struct rmap_com_set *rcs = rule;
 
 	if (rcs->com)
-		community_free(rcs->com);
+		community_free(&rcs->com);
 	XFREE(MTYPE_ROUTE_MAP_COMPILED, rcs);
 }
 
@@ -2031,7 +2031,7 @@ static route_map_result_t route_set_community_delete(
 			merge = community_list_match_delete(community_dup(old),
 							    list);
 			new = community_uniq_sort(merge);
-			community_free(merge);
+			community_free(&merge);
 
 			/* HACK: if the old community is not intern'd,
 			 * we should free it here, or all reference to it may be
@@ -2039,13 +2039,13 @@ static route_map_result_t route_set_community_delete(
 			 * Really need to cleanup attribute caching sometime.
 			 */
 			if (old->refcnt == 0)
-				community_free(old);
+				community_free(&old);
 
 			if (new->size == 0) {
 				path->attr->community = NULL;
 				path->attr->flag &=
 					~ATTR_FLAG_BIT(BGP_ATTR_COMMUNITIES);
-				community_free(new);
+				community_free(&new);
 			} else {
 				path->attr->community = new;
 				path->attr->flag |=
@@ -4171,7 +4171,7 @@ DEFUN (set_community,
 		ret = generic_set_add(vty, VTY_GET_CONTEXT(route_map_index),
 				      "community", str);
 
-	community_free(com);
+	community_free(&com);
 
 	return ret;
 }

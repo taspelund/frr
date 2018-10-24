@@ -601,9 +601,20 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 					__PRETTY_FUNCTION__);
 			return resolved;
 		} else {
+			if (IS_ZEBRA_DEBUG_RIB_DETAILED) {
+				zlog_debug("\t%s: Route Type %s has not turned on recursion",
+					   __PRETTY_FUNCTION__,
+					   zebra_route_string(re->type));
+				if (re->type == ZEBRA_ROUTE_BGP &&
+				    !CHECK_FLAG(re->flags, ZEBRA_FLAG_IBGP))
+					zlog_debug("\tEBGP: see \"disable-ebgp-connected-route-check\" or \"disable-connected-check\"");
+			}
 			return 0;
 		}
 	}
+	if (IS_ZEBRA_DEBUG_RIB_DETAILED)
+		zlog_debug("\t%s: Nexthop did not lookup in table",
+			   __PRETTY_FUNCTION__);
 	return 0;
 }
 
@@ -866,6 +877,9 @@ int rib_lookup_ipv4_route(struct prefix_ipv4 *p, union sockunion *qgate,
 
 #define RIB_SYSTEM_ROUTE(R)                                                    \
 	((R)->type == ZEBRA_ROUTE_KERNEL || (R)->type == ZEBRA_ROUTE_CONNECT)
+
+#define RIB_KERNEL_ROUTE(R)						\
+	((R)->type == ZEBRA_ROUTE_KERNEL)
 
 /* This function verifies reachability of one given nexthop, which can be
  * numbered or unnumbered, IPv4 or IPv6. The result is unconditionally stored
@@ -1397,8 +1411,15 @@ static void rib_process_del_fib(struct zebra_vrf *zvrf, struct route_node *rn,
 	}
 
 	/* Update nexthop for route, reset changed flag. */
-	nexthop_active_update(rn, old, 1);
-	UNSET_FLAG(old->status, ROUTE_ENTRY_CHANGED);
+	/* Note: this code also handles the Linux case when an interface goes
+	 * down, causing the kernel to delete routes without sending DELROUTE
+	 * notifications
+	 */
+	if (!nexthop_active_update(rn, old, 1) &&
+	    (RIB_KERNEL_ROUTE(old)))
+		SET_FLAG(old->status, ROUTE_ENTRY_REMOVED);
+	else
+		UNSET_FLAG(old->status, ROUTE_ENTRY_CHANGED);
 }
 
 static void rib_process_update_fib(struct zebra_vrf *zvrf,
