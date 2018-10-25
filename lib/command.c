@@ -1325,7 +1325,9 @@ int command_config_read_one_line(struct vty *vty,
 		}
 	}
 
-	if (ret != CMD_SUCCESS && ret != CMD_WARNING) {
+	if (ret != CMD_SUCCESS &&
+	    ret != CMD_WARNING &&
+	    ret != CMD_SUCCESS_DAEMON) {
 		struct vty_error *ve = XCALLOC(MTYPE_TMP, sizeof(*ve));
 
 		memcpy(ve->error_buf, vty->buf, VTY_BUFSIZ);
