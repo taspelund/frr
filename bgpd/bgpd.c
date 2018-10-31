@@ -85,8 +85,10 @@
 #include "bgpd/bgp_flowspec.h"
 #include "bgpd/bgp_labelpool.h"
 #include "bgpd/bgp_pbr.h"
+#include "bgpd/bgp_evpn_private.h"
 
 DEFINE_MTYPE_STATIC(BGPD, PEER_TX_SHUTDOWN_MSG, "Peer shutdown message (TX)");
+DEFINE_MTYPE_STATIC(BGPD, BGP_EVPN_INFO, "BGP EVPN instance information");
 DEFINE_QOBJ_TYPE(bgp_master)
 DEFINE_QOBJ_TYPE(bgp)
 DEFINE_QOBJ_TYPE(peer)
@@ -2906,6 +2908,9 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 	/* assign a unique rd id for auto derivation of vrf's RD */
 	bf_assign_index(bm->rd_idspace, bgp->vrf_rd_id);
 
+	bgp->evpn_info = XCALLOC(MTYPE_BGP_EVPN_INFO,
+				 sizeof(struct bgp_evpn_info));
+
 	bgp_evpn_init(bgp);
 	bgp_pbr_init(bgp);
 	return bgp;
@@ -3295,6 +3300,7 @@ void bgp_free(struct bgp *bgp)
 
 	bgp_evpn_cleanup(bgp);
 	bgp_pbr_cleanup(bgp);
+	XFREE(MTYPE_BGP_EVPN_INFO, bgp->evpn_info);
 
 	for (afi = AFI_IP; afi < AFI_MAX; afi++) {
 		vpn_policy_direction_t dir;
