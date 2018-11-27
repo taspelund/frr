@@ -41,7 +41,6 @@
 #include "vrf.h"
 #include "bfd.h"
 #include "libfrr.h"
-#include "vxlan.h"
 #include "ns.h"
 
 #include "bgpd/bgpd.h"
@@ -71,10 +70,14 @@
 static const struct option longopts[] = {
 	{"bgp_port", required_argument, NULL, 'p'},
 	{"listenon", required_argument, NULL, 'l'},
+#if CONFDATE > 20190521
+	CPP_NOTICE("-r / --retain has reached deprecation EOL, remove")
+#endif
 	{"retain", no_argument, NULL, 'r'},
 	{"no_kernel", no_argument, NULL, 'n'},
 	{"skip_runas", no_argument, NULL, 'S'},
 	{"ecmp", required_argument, NULL, 'e'},
+	{"int_num", required_argument, NULL, 'I'},
 	{0}};
 
 /* signal definitions */
@@ -104,13 +107,9 @@ static struct quagga_signal_t bgp_signals[] = {
 	},
 };
 
-/* Route retain mode flag. */
-static int retain_mode = 0;
-
 /* privileges */
-static zebra_capabilities_t _caps_p[] = {
-	ZCAP_BIND, ZCAP_NET_RAW, ZCAP_NET_ADMIN,
-};
+static zebra_capabilities_t _caps_p[] = {ZCAP_BIND, ZCAP_NET_RAW,
+					 ZCAP_NET_ADMIN, ZCAP_SYS_ADMIN};
 
 struct zebra_privs_t bgpd_privs = {
 #if defined(FRR_USER) && defined(FRR_GROUP)
@@ -147,9 +146,10 @@ void sighup(void)
 __attribute__((__noreturn__)) void sigint(void)
 {
 	zlog_notice("Terminating on signal");
+	assert(bm->terminating == false);
+	bm->terminating = true;	/* global flag that shutting down */
 
-	if (!retain_mode)
-		bgp_terminate();
+	bgp_terminate();
 
 	bgp_exit(0);
 
@@ -234,7 +234,7 @@ static __attribute__((__noreturn__)) void bgp_exit(int status)
 	bgp_zebra_destroy();
 
 	bf_free(bm->rd_idspace);
-	list_delete_and_null(&bm->bgp);
+	list_delete(&bm->bgp);
 	memset(bm, 0, sizeof(*bm));
 
 	frr_fini();
@@ -349,6 +349,11 @@ FRR_DAEMON_INFO(bgpd, BGP, .vty_port = BGP_VTY_PORT,
 
 		.privs = &bgpd_privs, )
 
+#if CONFDATE > 20190521
+CPP_NOTICE("-r / --retain has reached deprecation EOL, remove")
+#endif
+#define DEPRECATED_OPTIONS "r"
+
 /* Main routine of bgpd. Treatment of argument and start bgp finite
    state machine is handled at here. */
 int main(int argc, char **argv)
@@ -360,20 +365,28 @@ int main(int argc, char **argv)
 	char *bgp_address = NULL;
 	int no_fib_flag = 0;
 	int skip_runas = 0;
+	int instance = 0;
 
 	frr_preinit(&bgpd_di, argc, argv);
 	frr_opt_add(
-		"p:l:rSne:", longopts,
-		"  -p, --bgp_port     Set bgp protocol's port number\n"
+		"p:l:Sne:I:" DEPRECATED_OPTIONS, longopts,
+		"  -p, --bgp_port     Set BGP listen port number (0 means do not listen).\n"
 		"  -l, --listenon     Listen on specified address (implies -n)\n"
-		"  -r, --retain       When program terminates, retain added route by bgpd.\n"
 		"  -n, --no_kernel    Do not install route to kernel.\n"
 		"  -S, --skip_runas   Skip capabilities checks, and changing user and group IDs.\n"
-		"  -e, --ecmp         Specify ECMP to use.\n");
+		"  -e, --ecmp         Specify ECMP to use.\n"
+		"  -I, --int_num      Set instance number (label-manager)\n");
 
 	/* Command line argument treatment. */
 	while (1) {
 		opt = frr_getopt(argc, argv, 0);
+
+		if (opt && opt < 128 && strchr(DEPRECATED_OPTIONS, opt)) {
+			fprintf(stderr,
+				"The -%c option no longer exists.\nPlease refer to the manual.\n",
+				opt);
+			continue;
+		}
 
 		if (opt == EOF)
 			break;
@@ -383,7 +396,7 @@ int main(int argc, char **argv)
 			break;
 		case 'p':
 			tmp_port = atoi(optarg);
-			if (tmp_port <= 0 || tmp_port > 0xffff)
+			if (tmp_port < 0 || tmp_port > 0xffff)
 				bgp_port = BGP_PORT_DEFAULT;
 			else
 				bgp_port = tmp_port;
@@ -393,14 +406,11 @@ int main(int argc, char **argv)
 			if (multipath_num > MULTIPATH_NUM
 			    || multipath_num <= 0) {
 				flog_err(
-					BGP_ERR_MULTIPATH,
+					EC_BGP_MULTIPATH,
 					"Multipath Number specified must be less than %d and greater than 0",
 					MULTIPATH_NUM);
 				return 1;
 			}
-			break;
-		case 'r':
-			retain_mode = 1;
 			break;
 		case 'l':
 			bgp_address = optarg;
@@ -411,6 +421,12 @@ int main(int argc, char **argv)
 			break;
 		case 'S':
 			skip_runas = 1;
+			break;
+		case 'I':
+			instance = atoi(optarg);
+			if (instance > (unsigned short)-1)
+				zlog_err("Instance %i out of range (0..%u)",
+					 instance, (unsigned short)-1);
 			break;
 		default:
 			frr_help_exit(1);
@@ -423,6 +439,8 @@ int main(int argc, char **argv)
 	/* BGP master init. */
 	bgp_master_init(frr_init());
 	bm->port = bgp_port;
+	if (bgp_port == 0)
+		bgp_option_set(BGP_OPT_NO_LISTEN);
 	bm->address = bgp_address;
 	if (no_fib_flag)
 		bgp_option_set(BGP_OPT_NO_FIB);
@@ -432,7 +450,7 @@ int main(int argc, char **argv)
 	bgp_vrf_init();
 
 	/* BGP related initialization.  */
-	bgp_init();
+	bgp_init((unsigned short)instance);
 
 	snprintf(bgpd_di.startinfo, sizeof(bgpd_di.startinfo), ", bgp@%s:%d",
 		 (bm->address ? bm->address : "<all>"), bm->port);

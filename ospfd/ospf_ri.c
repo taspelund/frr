@@ -91,13 +91,13 @@ struct ospf_ri_sr_info {
 struct ospf_router_info {
 	bool enabled;
 
-	u_int8_t registered;
-	u_int8_t scope;
+	uint8_t registered;
+	uint8_t scope;
 
 /* Flags to manage this router information. */
 #define RIFLG_LSA_ENGAGED		0x1
 #define RIFLG_LSA_FORCED_REFRESH	0x2
-	u_int32_t flags;
+	uint32_t flags;
 
 	/* area pointer if flooding is Type 10 Null if flooding is AS scope */
 	struct ospf_area *area;
@@ -164,7 +164,7 @@ int ospf_router_info_init(void)
 	return 0;
 }
 
-static int ospf_router_info_register(u_int8_t scope)
+static int ospf_router_info_register(uint8_t scope)
 {
 	int rc = 0;
 
@@ -177,20 +177,18 @@ static int ospf_router_info_register(u_int8_t scope)
 		scope, OPAQUE_TYPE_ROUTER_INFORMATION_LSA,
 		NULL, /* new interface */
 		NULL, /* del interface */
-		ospf_router_info_ism_change,
-		ospf_router_info_nsm_change,
+		ospf_router_info_ism_change, ospf_router_info_nsm_change,
 		ospf_router_info_config_write_router,
 		NULL, /* Config. write interface */
 		NULL, /* Config. write debug */
-		ospf_router_info_show_info,
-		ospf_router_info_lsa_originate,
-		ospf_router_info_lsa_refresh,
-		ospf_router_info_lsa_update,
+		ospf_router_info_show_info, ospf_router_info_lsa_originate,
+		ospf_router_info_lsa_refresh, ospf_router_info_lsa_update,
 		NULL); /* del_lsa_hook */
 
 	if (rc != 0) {
-		flog_warn(OSPF_WARN_OPAQUE_REGISTRATION,
-			  "ospf_router_info_init: Failed to register functions");
+		flog_warn(
+			EC_OSPF_OPAQUE_REGISTRATION,
+			"ospf_router_info_init: Failed to register functions");
 		return rc;
 	}
 
@@ -204,7 +202,8 @@ static int ospf_router_info_unregister()
 
 	if ((OspfRI.scope != OSPF_OPAQUE_AS_LSA)
 	    && (OspfRI.scope != OSPF_OPAQUE_AREA_LSA)) {
-		assert("Unable to unregister Router Info functions: Wrong scope!" == NULL);
+		assert("Unable to unregister Router Info functions: Wrong scope!"
+		       == NULL);
 		return -1;
 	}
 
@@ -218,8 +217,8 @@ static int ospf_router_info_unregister()
 void ospf_router_info_term(void)
 {
 
-	list_delete_and_null(&OspfRI.pce_info.pce_domain);
-	list_delete_and_null(&OspfRI.pce_info.pce_neighbor);
+	list_delete(&OspfRI.pce_info.pce_domain);
+	list_delete(&OspfRI.pce_info.pce_neighbor);
 
 	OspfRI.enabled = false;
 
@@ -263,7 +262,7 @@ struct scope_info ospf_router_info_get_flooding_scope(void)
  *------------------------------------------------------------------------*/
 
 static void set_router_info_capabilities(struct ri_tlv_router_cap *ric,
-					 u_int32_t cap)
+					 uint32_t cap)
 {
 	ric->header.type = htons(RI_TLV_CAPABILITIES);
 	ric->header.length = htons(RI_TLV_LENGTH);
@@ -273,7 +272,7 @@ static void set_router_info_capabilities(struct ri_tlv_router_cap *ric,
 
 static int set_pce_header(struct ospf_pce_info *pce)
 {
-	u_int16_t length = 0;
+	uint16_t length = 0;
 	struct listnode *node;
 	struct ri_pce_subtlv_domain *domain;
 	struct ri_pce_subtlv_neighbor *neighbor;
@@ -329,7 +328,7 @@ static void set_pce_address(struct in_addr ipv4, struct ospf_pce_info *pce)
 	return;
 }
 
-static void set_pce_path_scope(u_int32_t scope, struct ospf_pce_info *pce)
+static void set_pce_path_scope(uint32_t scope, struct ospf_pce_info *pce)
 {
 
 	/* Set PCE Scope */
@@ -340,7 +339,7 @@ static void set_pce_path_scope(u_int32_t scope, struct ospf_pce_info *pce)
 	return;
 }
 
-static void set_pce_domain(u_int16_t type, u_int32_t domain,
+static void set_pce_domain(uint16_t type, uint32_t domain,
 			   struct ospf_pce_info *pce)
 {
 
@@ -361,7 +360,7 @@ static void set_pce_domain(u_int16_t type, u_int32_t domain,
 	return;
 }
 
-static void unset_pce_domain(u_int16_t type, u_int32_t domain,
+static void unset_pce_domain(uint16_t type, uint32_t domain,
 			     struct ospf_pce_info *pce)
 {
 	struct listnode *node;
@@ -390,7 +389,7 @@ static void unset_pce_domain(u_int16_t type, u_int32_t domain,
 	}
 }
 
-static void set_pce_neighbor(u_int16_t type, u_int32_t domain,
+static void set_pce_neighbor(uint16_t type, uint32_t domain,
 			     struct ospf_pce_info *pce)
 {
 
@@ -411,7 +410,7 @@ static void set_pce_neighbor(u_int16_t type, u_int32_t domain,
 	return;
 }
 
-static void unset_pce_neighbor(u_int16_t type, u_int32_t domain,
+static void unset_pce_neighbor(uint16_t type, uint32_t domain,
 			       struct ospf_pce_info *pce)
 {
 	struct listnode *node;
@@ -441,7 +440,7 @@ static void unset_pce_neighbor(u_int16_t type, u_int32_t domain,
 	}
 }
 
-static void set_pce_cap_flag(u_int32_t cap, struct ospf_pce_info *pce)
+static void set_pce_cap_flag(uint32_t cap, struct ospf_pce_info *pce)
 {
 
 	/* Set PCE Capabilities flag */
@@ -465,7 +464,6 @@ static void set_sr_algorithm(uint8_t algo)
 	/* Set TLV type and length == only 1 Algorithm */
 	TLV_TYPE(OspfRI.sr_info.algo) = htons(RI_SR_TLV_SR_ALGORITHM);
 	TLV_LEN(OspfRI.sr_info.algo) = htons(sizeof(uint8_t));
-
 }
 
 /* unset Aglogithm SubTLV */
@@ -478,7 +476,6 @@ static void unset_sr_algorithm(uint8_t algo)
 	/* Unset TLV type and length */
 	TLV_TYPE(OspfRI.sr_info.algo) = htons(0);
 	TLV_LEN(OspfRI.sr_info.algo) = htons(0);
-
 }
 
 /* Segment Routing Global Block SubTLV - section 3.2 */
@@ -494,7 +491,6 @@ static void set_sr_sid_label_range(struct sr_srgb srgb)
 	TLV_TYPE(OspfRI.sr_info.range.lower) = htons(SUBTLV_SID_LABEL);
 	TLV_LEN(OspfRI.sr_info.range.lower) = htons(SID_RANGE_LABEL_LENGTH);
 	OspfRI.sr_info.range.lower.value = htonl(SET_LABEL(srgb.lower_bound));
-
 }
 
 /* Unset this SRGB SubTLV */
@@ -505,7 +501,6 @@ static void unset_sr_sid_label_range(void)
 	TLV_LEN(OspfRI.sr_info.range) = htons(0);
 	TLV_TYPE(OspfRI.sr_info.range.lower) = htons(0);
 	TLV_LEN(OspfRI.sr_info.range.lower) = htons(0);
-
 }
 
 /* Set Maximum Stack Depth for this router */
@@ -514,7 +509,6 @@ static void set_sr_node_msd(uint8_t msd)
 	TLV_TYPE(OspfRI.sr_info.msd) = htons(RI_SR_TLV_NODE_MSD);
 	TLV_LEN(OspfRI.sr_info.msd) = htons(sizeof(uint32_t));
 	OspfRI.sr_info.msd.value = msd;
-
 }
 
 /* Unset this router MSD */
@@ -522,15 +516,15 @@ static void unset_sr_node_msd(void)
 {
 	TLV_TYPE(OspfRI.sr_info.msd) = htons(0);
 	TLV_LEN(OspfRI.sr_info.msd) = htons(0);
-
 }
 
-static void unset_param(struct tlv_header *tlv)
+static void unset_param(void *tlv_buffer)
 {
+	struct tlv_header *tlv = (struct tlv_header *)tlv_buffer;
 
 	tlv->type = 0;
 	/* Fill the Value to 0 */
-	memset(TLV_DATA(tlv), 0, TLV_BODY_SIZE(tlv));
+	memset(TLV_DATA(tlv_buffer), 0, TLV_BODY_SIZE(tlv));
 	tlv->length = 0;
 
 	return;
@@ -538,7 +532,7 @@ static void unset_param(struct tlv_header *tlv)
 
 static void initialize_params(struct ospf_router_info *ori)
 {
-	u_int32_t cap = 0;
+	uint32_t cap = 0;
 	struct ospf *top;
 
 	/*
@@ -621,7 +615,7 @@ void ospf_router_info_update_sr(bool enable, struct sr_srgb srgb, uint8_t msd)
 
 	if (IS_DEBUG_OSPF_SR)
 		zlog_debug("RI-> %s Routing Information for Segment Routing",
-			enable ? "Enable" : "Disable");
+			   enable ? "Enable" : "Disable");
 
 	/* Unset or Set SR parameters */
 	if (!enable) {
@@ -709,7 +703,7 @@ static void ospf_router_info_lsa_body_set(struct stream *s)
 	if (OspfRI.pce_info.enabled) {
 
 		/* Compute PCE Info header first */
-		set_pce_header (&OspfRI.pce_info);
+		set_pce_header(&OspfRI.pce_info);
 
 		/* Build PCE TLV */
 		build_tlv_header(s, &OspfRI.pce_info.pce_header.header);
@@ -744,10 +738,10 @@ static struct ospf_lsa *ospf_router_info_lsa_new()
 	struct stream *s;
 	struct lsa_header *lsah;
 	struct ospf_lsa *new = NULL;
-	u_char options, lsa_type;
+	uint8_t options, lsa_type;
 	struct in_addr lsa_id;
-	u_int32_t tmp;
-	u_int16_t length;
+	uint32_t tmp;
+	uint16_t length;
 
 	/* Create a stream for LSA. */
 	s = stream_new(OSPF_MAX_LSA_SIZE);
@@ -781,8 +775,7 @@ static struct ospf_lsa *ospf_router_info_lsa_new()
 	lsah->length = htons(length);
 
 	/* Now, create an OSPF LSA instance. */
-	new = ospf_lsa_new();
-	new->data = ospf_lsa_data_new(length);
+	new = ospf_lsa_new_and_data(length);
 
 	new->area = OspfRI.area; /* Area must be null if the Opaque type is AS
 				    scope, fulfill otherwise */
@@ -836,7 +829,7 @@ static int ospf_router_info_lsa_originate1(void *arg)
 	/* Install this LSA into LSDB. */
 	if (ospf_lsa_install(top, NULL /*oi */, new) == NULL) {
 		flog_warn(
-			OSPF_WARN_LSA_INSTALL_FAILURE,
+			EC_OSPF_LSA_INSTALL_FAILURE,
 			"ospf_router_info_lsa_originate1: ospf_lsa_install() ?");
 		ospf_lsa_unlock(&new);
 		return rc;
@@ -886,7 +879,7 @@ static int ospf_router_info_lsa_originate(void *arg)
 	} else {
 		if (!is_mandated_params_set(OspfRI))
 			flog_warn(
-				OSPF_WARN_LSA,
+				EC_OSPF_LSA,
 				"ospf_router_info_lsa_originate: lacks mandated ROUTER INFORMATION parameters");
 
 		/* Ok, let's try to originate an LSA */
@@ -918,7 +911,7 @@ static struct ospf_lsa *ospf_router_info_lsa_refresh(struct ospf_lsa *lsa)
 	/* Verify that the Router Information ID is supported */
 	if (GET_OPAQUE_ID(ntohl(lsa->data->id.s_addr)) != 0) {
 		flog_warn(
-			OSPF_WARN_LSA,
+			EC_OSPF_LSA,
 			"ospf_router_info_lsa_refresh: Unsupported Router Information ID");
 		return NULL;
 	}
@@ -939,7 +932,7 @@ static struct ospf_lsa *ospf_router_info_lsa_refresh(struct ospf_lsa *lsa)
 	/* Given "lsa" will be freed in the next function. */
 	top = ospf_lookup_by_vrf_id(lsa->vrf_id);
 	if (ospf_lsa_install(top, NULL /*oi */, new) == NULL) {
-		flog_warn(OSPF_WARN_LSA_INSTALL_FAILURE,
+		flog_warn(EC_OSPF_LSA_INSTALL_FAILURE,
 			  "ospf_router_info_lsa_refresh: ospf_lsa_install() ?");
 		ospf_lsa_unlock(&new);
 		return new;
@@ -967,7 +960,7 @@ static void ospf_router_info_lsa_schedule(enum lsa_opcode opcode)
 	struct ospf_lsa lsa;
 	struct lsa_header lsah;
 	struct ospf *top;
-	u_int32_t tmp;
+	uint32_t tmp;
 
 	memset(&lsa, 0, sizeof(lsa));
 	memset(&lsah, 0, sizeof(lsah));
@@ -978,16 +971,18 @@ static void ospf_router_info_lsa_schedule(enum lsa_opcode opcode)
 		   opcode == FLUSH_THIS_LSA ? "Flush" : "");
 
 	/* Check LSA flags state coherence */
-	if (!CHECK_FLAG(OspfRI.flags, RIFLG_LSA_ENGAGED) && (opcode != REORIGINATE_THIS_LSA))
+	if (!CHECK_FLAG(OspfRI.flags, RIFLG_LSA_ENGAGED)
+	    && (opcode != REORIGINATE_THIS_LSA))
 		return;
 
-	if (CHECK_FLAG(OspfRI.flags, RIFLG_LSA_ENGAGED) && (opcode == REORIGINATE_THIS_LSA))
+	if (CHECK_FLAG(OspfRI.flags, RIFLG_LSA_ENGAGED)
+	    && (opcode == REORIGINATE_THIS_LSA))
 		opcode = REFRESH_THIS_LSA;
 
 	top = ospf_lookup_by_vrf_id(VRF_DEFAULT);
 	if ((OspfRI.scope == OSPF_OPAQUE_AREA_LSA) && (OspfRI.area == NULL)) {
 		flog_warn(
-			OSPF_WARN_LSA,
+			EC_OSPF_LSA,
 			"ospf_router_info_lsa_schedule(): Router Info is Area scope flooding but area is not set");
 		OspfRI.area = ospf_area_lookup_by_area_id(top, OspfRI.area_id);
 	}
@@ -1028,7 +1023,7 @@ static int ospf_router_info_lsa_update(struct ospf_lsa *lsa)
 
 	/* Sanity Check */
 	if (lsa == NULL) {
-		flog_warn(OSPF_WARN_LSA, "OSPF-RI (%s): Abort! LSA is NULL",
+		flog_warn(EC_OSPF_LSA, "OSPF-RI (%s): Abort! LSA is NULL",
 			  __func__);
 		return -1;
 	}
@@ -1039,8 +1034,8 @@ static int ospf_router_info_lsa_update(struct ospf_lsa *lsa)
 		return 0;
 
 	/* Process only Router Information LSA */
-	if (GET_OPAQUE_TYPE(ntohl(lsa->data->id.s_addr)) !=
-			OPAQUE_TYPE_ROUTER_INFORMATION_LSA)
+	if (GET_OPAQUE_TYPE(ntohl(lsa->data->id.s_addr))
+	    != OPAQUE_TYPE_ROUTER_INFORMATION_LSA)
 		return 0;
 
 	/* Check if it is not my LSA */
@@ -1064,8 +1059,7 @@ static int ospf_router_info_lsa_update(struct ospf_lsa *lsa)
  * Followings are vty session control functions.
  *------------------------------------------------------------------------*/
 
-static u_int16_t show_vty_router_cap(struct vty *vty,
-				     struct tlv_header *tlvh)
+static uint16_t show_vty_router_cap(struct vty *vty, struct tlv_header *tlvh)
 {
 	struct ri_tlv_router_cap *top = (struct ri_tlv_router_cap *)tlvh;
 
@@ -1078,8 +1072,8 @@ static u_int16_t show_vty_router_cap(struct vty *vty,
 	return TLV_SIZE(tlvh);
 }
 
-static u_int16_t show_vty_pce_subtlv_address(struct vty *vty,
-					     struct tlv_header *tlvh)
+static uint16_t show_vty_pce_subtlv_address(struct vty *vty,
+					    struct tlv_header *tlvh)
 {
 	struct ri_pce_subtlv_address *top =
 		(struct ri_pce_subtlv_address *)tlvh;
@@ -1104,8 +1098,8 @@ static u_int16_t show_vty_pce_subtlv_address(struct vty *vty,
 	return TLV_SIZE(tlvh);
 }
 
-static u_int16_t show_vty_pce_subtlv_path_scope(struct vty *vty,
-						struct tlv_header *tlvh)
+static uint16_t show_vty_pce_subtlv_path_scope(struct vty *vty,
+					       struct tlv_header *tlvh)
 {
 	struct ri_pce_subtlv_path_scope *top =
 		(struct ri_pce_subtlv_path_scope *)tlvh;
@@ -1118,8 +1112,8 @@ static u_int16_t show_vty_pce_subtlv_path_scope(struct vty *vty,
 	return TLV_SIZE(tlvh);
 }
 
-static u_int16_t show_vty_pce_subtlv_domain(struct vty *vty,
-					    struct tlv_header *tlvh)
+static uint16_t show_vty_pce_subtlv_domain(struct vty *vty,
+					   struct tlv_header *tlvh)
 {
 	struct ri_pce_subtlv_domain *top = (struct ri_pce_subtlv_domain *)tlvh;
 	struct in_addr tmp;
@@ -1140,8 +1134,8 @@ static u_int16_t show_vty_pce_subtlv_domain(struct vty *vty,
 	return TLV_SIZE(tlvh);
 }
 
-static u_int16_t show_vty_pce_subtlv_neighbor(struct vty *vty,
-					      struct tlv_header *tlvh)
+static uint16_t show_vty_pce_subtlv_neighbor(struct vty *vty,
+					     struct tlv_header *tlvh)
 {
 
 	struct ri_pce_subtlv_neighbor *top =
@@ -1166,8 +1160,8 @@ static u_int16_t show_vty_pce_subtlv_neighbor(struct vty *vty,
 	return TLV_SIZE(tlvh);
 }
 
-static u_int16_t show_vty_pce_subtlv_cap_flag(struct vty *vty,
-					      struct tlv_header *tlvh)
+static uint16_t show_vty_pce_subtlv_cap_flag(struct vty *vty,
+					     struct tlv_header *tlvh)
 {
 	struct ri_pce_subtlv_cap_flag *top =
 		(struct ri_pce_subtlv_cap_flag *)tlvh;
@@ -1182,8 +1176,7 @@ static u_int16_t show_vty_pce_subtlv_cap_flag(struct vty *vty,
 	return TLV_SIZE(tlvh);
 }
 
-static u_int16_t show_vty_unknown_tlv(struct vty *vty,
-				      struct tlv_header *tlvh)
+static uint16_t show_vty_unknown_tlv(struct vty *vty, struct tlv_header *tlvh)
 {
 	if (vty != NULL)
 		vty_out(vty, "  Unknown TLV: [type(0x%x), length(0x%x)]\n",
@@ -1195,11 +1188,11 @@ static u_int16_t show_vty_unknown_tlv(struct vty *vty,
 	return TLV_SIZE(tlvh);
 }
 
-static u_int16_t show_vty_pce_info(struct vty *vty, struct tlv_header *ri,
-				   uint32_t total)
+static uint16_t show_vty_pce_info(struct vty *vty, struct tlv_header *ri,
+				  uint32_t total)
 {
 	struct tlv_header *tlvh;
-	u_int16_t sum = 0;
+	uint16_t sum = 0;
 
 	for (tlvh = ri; sum < total; tlvh = TLV_HDR_NEXT(tlvh)) {
 		switch (ntohs(tlvh->type)) {
@@ -1323,7 +1316,7 @@ static void ospf_router_info_show_info(struct vty *vty, struct ospf_lsa *lsa)
 {
 	struct lsa_header *lsah = (struct lsa_header *)lsa->data;
 	struct tlv_header *tlvh;
-	u_int16_t length = 0, sum = 0;
+	uint16_t length = 0, sum = 0;
 
 	/* Initialize TLV browsing */
 	length = ntohs(lsah->length) - OSPF_LSA_HEADER_SIZE;
@@ -1433,7 +1426,7 @@ DEFUN (router_info,
 	int idx_ipv4 = 2;
 	char *area = (argc == 3) ? argv[idx_ipv4]->arg : NULL;
 
-	u_int8_t scope;
+	uint8_t scope;
 
 	if (OspfRI.enabled)
 		return CMD_SUCCESS;
@@ -1456,7 +1449,7 @@ DEFUN (router_info,
 		vty_out(vty,
 			"%% Unable to register Router Information callbacks.");
 		flog_err(
-			OSPF_ERR_INIT_FAIL,
+			EC_OSPF_INIT_FAIL,
 			"Unable to register Router Information callbacks. Abort!");
 		return CMD_WARNING_CONFIG_FAILED;
 	}
@@ -1481,8 +1474,8 @@ DEFUN (router_info,
 
 	/* Refresh RI LSA if already engaged */
 	if (CHECK_FLAG(OspfRI.flags, RIFLG_LSA_ENGAGED)) {
-		zlog_debug ("RI-> Refresh LSA following configuration");
-		ospf_router_info_lsa_schedule (REFRESH_THIS_LSA);
+		zlog_debug("RI-> Refresh LSA following configuration");
+		ospf_router_info_lsa_schedule(REFRESH_THIS_LSA);
 	} else {
 		zlog_debug("RI-> Initial origination following configuration");
 		ospf_router_info_lsa_schedule(REORIGINATE_THIS_LSA);
@@ -1565,7 +1558,7 @@ DEFUN (no_pce_address,
        "PCE address in IPv4 address format\n")
 {
 
-	unset_param(&OspfRI.pce_info.pce_address.header);
+	unset_param(&OspfRI.pce_info.pce_address);
 
 	/* Refresh RI LSA if already engaged */
 	if (CHECK_FLAG(OspfRI.flags, RIFLG_LSA_ENGAGED))
@@ -1615,7 +1608,7 @@ DEFUN (no_pce_path_scope,
        "32-bit Hexadecimal value\n")
 {
 
-	unset_param(&OspfRI.pce_info.pce_address.header);
+	unset_param(&OspfRI.pce_info.pce_address);
 
 	/* Refresh RI LSA if already engaged */
 	if (CHECK_FLAG(OspfRI.flags, RIFLG_LSA_ENGAGED))
@@ -1642,7 +1635,7 @@ DEFUN (pce_domain,
 	if (!ospf_ri_enabled(vty))
 		return CMD_WARNING_CONFIG_FAILED;
 
-	if (sscanf(argv[idx_number]->arg, "%d", &as) != 1) {
+	if (sscanf(argv[idx_number]->arg, "%" SCNu32, &as) != 1) {
 		vty_out(vty, "pce_domain: fscanf: %s\n", safe_strerror(errno));
 		return CMD_WARNING_CONFIG_FAILED;
 	}
@@ -1677,7 +1670,7 @@ DEFUN (no_pce_domain,
 	uint32_t as;
 	struct ospf_pce_info *pce = &OspfRI.pce_info;
 
-	if (sscanf(argv[idx_number]->arg, "%d", &as) != 1) {
+	if (sscanf(argv[idx_number]->arg, "%" SCNu32, &as) != 1) {
 		vty_out(vty, "no_pce_domain: fscanf: %s\n",
 			safe_strerror(errno));
 		return CMD_WARNING_CONFIG_FAILED;
@@ -1711,7 +1704,7 @@ DEFUN (pce_neigbhor,
 	if (!ospf_ri_enabled(vty))
 		return CMD_WARNING_CONFIG_FAILED;
 
-	if (sscanf(argv[idx_number]->arg, "%d", &as) != 1) {
+	if (sscanf(argv[idx_number]->arg, "%" SCNu32, &as) != 1) {
 		vty_out(vty, "pce_neighbor: fscanf: %s\n",
 			safe_strerror(errno));
 		return CMD_WARNING_CONFIG_FAILED;
@@ -1747,7 +1740,7 @@ DEFUN (no_pce_neighbor,
 	uint32_t as;
 	struct ospf_pce_info *pce = &OspfRI.pce_info;
 
-	if (sscanf(argv[idx_number]->arg, "%d", &as) != 1) {
+	if (sscanf(argv[idx_number]->arg, "%" SCNu32, &as) != 1) {
 		vty_out(vty, "no_pce_neighbor: fscanf: %s\n",
 			safe_strerror(errno));
 		return CMD_WARNING_CONFIG_FAILED;
@@ -1804,7 +1797,7 @@ DEFUN (no_pce_cap_flag,
        "Disable PCE capabilities\n")
 {
 
-	unset_param(&OspfRI.pce_info.pce_cap_flag.header);
+	unset_param(&OspfRI.pce_info.pce_cap_flag);
 
 	/* Refresh RI LSA if already engaged */
 	if (CHECK_FLAG(OspfRI.flags, RIFLG_LSA_ENGAGED))
@@ -1876,8 +1869,7 @@ DEFUN (show_ip_opsf_router_info_pce,
 						     &pce->pce_cap_flag.header);
 
 	} else {
-		vty_out(vty,
-			"  PCE info is disabled on this router\n");
+		vty_out(vty, "  PCE info is disabled on this router\n");
 	}
 
 	return CMD_SUCCESS;

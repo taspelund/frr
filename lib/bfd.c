@@ -84,8 +84,8 @@ void bfd_info_free(struct bfd_info **bfd_info)
  * bfd_validate_param - Validate the BFD paramter information.
  */
 int bfd_validate_param(struct vty *vty, const char *dm_str, const char *rx_str,
-		       const char *tx_str, u_int8_t *dm_val, u_int32_t *rx_val,
-		       u_int32_t *tx_val)
+		       const char *tx_str, uint8_t *dm_val, uint32_t *rx_val,
+		       uint32_t *tx_val)
 {
 	*dm_val = strtoul(dm_str, NULL, 10);
 	*rx_val = strtoul(rx_str, NULL, 10);
@@ -96,9 +96,8 @@ int bfd_validate_param(struct vty *vty, const char *dm_str, const char *rx_str,
 /*
  * bfd_set_param - Set the configured BFD paramter values
  */
-void bfd_set_param(struct bfd_info **bfd_info, u_int32_t min_rx,
-		   u_int32_t min_tx, u_int8_t detect_mult, int defaults,
-		   int *command)
+void bfd_set_param(struct bfd_info **bfd_info, uint32_t min_rx, uint32_t min_tx,
+		   uint8_t detect_mult, int defaults, int *command)
 {
 	if (!*bfd_info) {
 		*bfd_info = bfd_info_create();

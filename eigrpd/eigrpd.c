@@ -97,7 +97,7 @@ void eigrp_router_id_update(struct eigrp *eigrp)
 {
 	struct vrf *vrf = vrf_lookup_by_id(VRF_DEFAULT);
 	struct interface *ifp;
-	u_int32_t router_id, router_id_old;
+	uint32_t router_id, router_id_old;
 
 	router_id_old = eigrp->router_id;
 
@@ -162,8 +162,9 @@ static struct eigrp *eigrp_new(const char *AS)
 	eigrp->networks = eigrp_topology_new();
 
 	if ((eigrp_socket = eigrp_sock_init()) < 0) {
-		flog_err(LIB_ERR_SOCKET,
-			 "eigrp_new: fatal error: eigrp_sock_init was unable to open a socket");
+		flog_err_sys(
+			EC_LIB_SOCKET,
+			"eigrp_new: fatal error: eigrp_sock_init was unable to open a socket");
 		exit(1);
 	}
 
@@ -277,16 +278,16 @@ void eigrp_finish_final(struct eigrp *eigrp)
 	THREAD_OFF(eigrp->t_read);
 	close(eigrp->fd);
 
-	list_delete_and_null(&eigrp->eiflist);
-	list_delete_and_null(&eigrp->oi_write_q);
+	list_delete(&eigrp->eiflist);
+	list_delete(&eigrp->oi_write_q);
 
 	eigrp_topology_cleanup(eigrp->topology_table);
 	eigrp_topology_free(eigrp->topology_table);
 
 	eigrp_nbr_delete(eigrp->neighbor_self);
 
-	list_delete_and_null(&eigrp->topology_changes_externalIPV4);
-	list_delete_and_null(&eigrp->topology_changes_internalIPV4);
+	list_delete(&eigrp->topology_changes_externalIPV4);
+	list_delete(&eigrp->topology_changes_internalIPV4);
 
 	eigrp_delete(eigrp);
 

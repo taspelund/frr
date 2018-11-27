@@ -39,6 +39,7 @@
 #include "zebra/interface.h"
 #include "zebra/ioctl_solaris.h"
 #include "zebra/rib.h"
+#include "zebra/zebra_errors.h"
 
 static int if_get_addr(struct interface *, struct sockaddr *, const char *);
 static void interface_info_ioctl(struct interface *);
@@ -59,31 +60,29 @@ static int interface_list_ioctl(int af)
 	size_t needed, lastneeded = 0;
 	char *buf = NULL;
 
-	if (zserv_privs.change(ZPRIVS_RAISE))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't raise privileges");
+	frr_elevate_privs(&zserv_privs) {
+		sock = socket(af, SOCK_DGRAM, 0);
+	}
 
-	sock = socket(af, SOCK_DGRAM, 0);
 	if (sock < 0) {
-		flog_err_sys(LIB_ERR_SOCKET, "Can't make %s socket stream: %s",
+		flog_err_sys(EC_LIB_SOCKET, "Can't make %s socket stream: %s",
 			     (af == AF_INET ? "AF_INET" : "AF_INET6"),
 			     safe_strerror(errno));
-		if (zserv_privs.change(ZPRIVS_LOWER))
-			flog_err(LIB_ERR_PRIVILEGES, "Can't lower privileges");
-
 		return -1;
 	}
 
-calculate_lifc_len: /* must hold privileges to enter here */
-	lifn.lifn_family = af;
-	lifn.lifn_flags = LIFC_NOXMIT; /* we want NOXMIT interfaces too */
-	ret = ioctl(sock, SIOCGLIFNUM, &lifn);
-	save_errno = errno;
+calculate_lifc_len:
+	frr_elevate_privs(&zserv_privs) {
+		lifn.lifn_family = af;
+		lifn.lifn_flags = LIFC_NOXMIT;
+		/* we want NOXMIT interfaces too */
+		ret = ioctl(sock, SIOCGLIFNUM, &lifn);
+		save_errno = errno;
 
-	if (zserv_privs.change(ZPRIVS_LOWER))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't lower privileges");
+	}
 
 	if (ret < 0) {
-		flog_err_sys(LIB_ERR_SYSTEM_CALL,
+		flog_err_sys(EC_LIB_SYSTEM_CALL,
 			     "interface_list_ioctl: SIOCGLIFNUM failed %s",
 			     safe_strerror(save_errno));
 		close(sock);
@@ -110,27 +109,18 @@ calculate_lifc_len: /* must hold privileges to enter here */
 	lifconf.lifc_len = needed;
 	lifconf.lifc_buf = buf;
 
-	if (zserv_privs.change(ZPRIVS_RAISE))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't raise privileges");
-
-	ret = ioctl(sock, SIOCGLIFCONF, &lifconf);
+	frr_elevate_privs(&zserv_privs) {
+		ret = ioctl(sock, SIOCGLIFCONF, &lifconf);
+	}
 
 	if (ret < 0) {
 		if (errno == EINVAL)
-			goto calculate_lifc_len; /* deliberately hold privileges
-						    */
+			goto calculate_lifc_len;
 
-		flog_err_sys(LIB_ERR_SYSTEM_CALL, "SIOCGLIFCONF: %s",
+		flog_err_sys(EC_LIB_SYSTEM_CALL, "SIOCGLIFCONF: %s",
 			     safe_strerror(errno));
-
-		if (zserv_privs.change(ZPRIVS_LOWER))
-			flog_err(LIB_ERR_PRIVILEGES, "Can't lower privileges");
-
 		goto end;
 	}
-
-	if (zserv_privs.change(ZPRIVS_LOWER))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't lower privileges");
 
 	/* Allocate interface. */
 	lifreq = lifconf.lifc_req;
@@ -219,7 +209,7 @@ static int if_get_index(struct interface *ifp)
 		ret = -1;
 
 	if (ret < 0) {
-		flog_err_sys(LIB_ERR_SYSTEM_CALL, "SIOCGLIFINDEX(%s) failed",
+		flog_err_sys(EC_LIB_SYSTEM_CALL, "SIOCGLIFINDEX(%s) failed",
 			     ifp->name);
 		return ret;
 	}
@@ -251,7 +241,7 @@ static int if_get_addr(struct interface *ifp, struct sockaddr *addr,
 	struct lifreq lifreq;
 	struct sockaddr_storage mask, dest;
 	char *dest_pnt = NULL;
-	u_char prefixlen = 0;
+	uint8_t prefixlen = 0;
 	afi_t af;
 	int flags = 0;
 
@@ -282,7 +272,7 @@ static int if_get_addr(struct interface *ifp, struct sockaddr *addr,
 
 		if (ret < 0) {
 			if (errno != EADDRNOTAVAIL) {
-				flog_err_sys(LIB_ERR_SYSTEM_CALL,
+				flog_err_sys(EC_LIB_SYSTEM_CALL,
 					     "SIOCGLIFNETMASK (%s) fail: %s",
 					     ifp->name, safe_strerror(errno));
 				return ret;
@@ -303,7 +293,7 @@ static int if_get_addr(struct interface *ifp, struct sockaddr *addr,
 			if (ifp->flags & IFF_POINTOPOINT)
 				prefixlen = IPV6_MAX_BITLEN;
 			else
-				flog_err_sys(LIB_ERR_SYSTEM_CALL,
+				flog_err_sys(EC_LIB_SYSTEM_CALL,
 					     "SIOCGLIFSUBNET (%s) fail: %s",
 					     ifp->name, safe_strerror(errno));
 		} else {
@@ -316,7 +306,7 @@ static int if_get_addr(struct interface *ifp, struct sockaddr *addr,
 		connected_add_ipv4(ifp, flags, &SIN(addr)->sin_addr, prefixlen,
 				   (struct in_addr *)dest_pnt, label);
 	else if (af == AF_INET6)
-		connected_add_ipv6(ifp, flags, &SIN6(addr)->sin6_addr,
+		connected_add_ipv6(ifp, flags, &SIN6(addr)->sin6_addr, NULL,
 				   prefixlen, label);
 
 	return 0;

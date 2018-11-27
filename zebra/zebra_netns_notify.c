@@ -72,18 +72,19 @@ static void zebra_ns_notify_create_context_from_entry_name(const char *name)
 	char *netnspath = ns_netns_pathname(NULL, name);
 	struct vrf *vrf;
 	int ret;
-	ns_id_t ns_id;
+	ns_id_t ns_id, ns_id_external;
 
 	if (netnspath == NULL)
 		return;
 
-	if (zserv_privs.change(ZPRIVS_RAISE))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't raise privileges");
-	ns_id = zebra_ns_id_get(netnspath);
-	if (zserv_privs.change(ZPRIVS_LOWER))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't lower privileges");
+	frr_elevate_privs(&zserv_privs) {
+		ns_id = zebra_ns_id_get(netnspath);
+	}
+	if (ns_id == NS_UNKNOWN)
+		return;
+	ns_id_external = ns_map_nsid_with_external(ns_id, true);
 	/* if VRF with NS ID already present */
-	vrf = vrf_lookup_by_id((vrf_id_t)ns_id);
+	vrf = vrf_lookup_by_id((vrf_id_t)ns_id_external);
 	if (vrf) {
 		zlog_debug(
 			"NS notify : same NSID used by VRF %s. Ignore NS %s creation",
@@ -91,18 +92,23 @@ static void zebra_ns_notify_create_context_from_entry_name(const char *name)
 		return;
 	}
 	if (vrf_handler_create(NULL, name, &vrf) != CMD_SUCCESS) {
-		flog_warn(ZEBRA_ERR_NS_VRF_CREATION_FAILED,
+		flog_warn(EC_ZEBRA_NS_VRF_CREATION_FAILED,
 			  "NS notify : failed to create VRF %s", name);
+		ns_map_nsid_with_external(ns_id, false);
 		return;
 	}
-	ret = vrf_netns_handler_create(NULL, vrf, netnspath, ns_id);
+	frr_elevate_privs(&zserv_privs) {
+		ret = vrf_netns_handler_create(NULL, vrf, netnspath,
+					       ns_id_external, ns_id);
+	}
 	if (ret != CMD_SUCCESS) {
-		flog_warn(ZEBRA_ERR_NS_VRF_CREATION_FAILED,
+		flog_warn(EC_ZEBRA_NS_VRF_CREATION_FAILED,
 			  "NS notify : failed to create NS %s", netnspath);
+		ns_map_nsid_with_external(ns_id, false);
+		vrf_delete(vrf);
 		return;
 	}
-	zlog_info("NS notify : created VRF %s NS %s",
-		   name, netnspath);
+	zlog_info("NS notify : created VRF %s NS %s", name, netnspath);
 }
 
 static int zebra_ns_continue_read(struct zebra_netns_info *zns_info,
@@ -116,10 +122,35 @@ static int zebra_ns_continue_read(struct zebra_netns_info *zns_info,
 		return 0;
 	}
 	thread_add_timer_msec(zebrad.master, zebra_ns_ready_read,
-			      (void *)zns_info,
-			      ZEBRA_NS_POLLING_INTERVAL_MSEC, NULL);
+			      (void *)zns_info, ZEBRA_NS_POLLING_INTERVAL_MSEC,
+			      NULL);
 	return 0;
 }
+
+static int zebra_ns_delete(char *name)
+{
+	struct vrf *vrf = vrf_lookup_by_name(name);
+	struct ns *ns;
+
+	if (!vrf) {
+		flog_warn(EC_ZEBRA_NS_DELETION_FAILED_NO_VRF,
+			  "NS notify : no VRF found using NS %s", name);
+		return 0;
+	}
+	/* Clear configured flag and invoke delete. */
+	UNSET_FLAG(vrf->status, VRF_CONFIGURED);
+	ns = (struct ns *)vrf->ns_ctxt;
+	/* the deletion order is the same
+	 * as the one used when siging signal is received
+	 */
+	vrf_delete(vrf);
+	if (ns)
+		ns_delete(ns);
+
+	zlog_info("NS notify : deleted VRF %s", name);
+	return 0;
+}
+
 
 static int zebra_ns_ready_read(struct thread *t)
 {
@@ -136,20 +167,16 @@ static int zebra_ns_ready_read(struct thread *t)
 	netnspath = zns_info->netnspath;
 	if (--zns_info->retries == 0)
 		stop_retry = 1;
-	if (zserv_privs.change(ZPRIVS_RAISE))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't raise privileges");
-	err = ns_switch_to_netns(netnspath);
-	if (zserv_privs.change(ZPRIVS_LOWER))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't lower privileges");
+	frr_elevate_privs(&zserv_privs) {
+		err = ns_switch_to_netns(netnspath);
+	}
 	if (err < 0)
 		return zebra_ns_continue_read(zns_info, stop_retry);
 
 	/* go back to default ns */
-	if (zserv_privs.change(ZPRIVS_RAISE))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't raise privileges");
-	err = ns_switchback_to_initial();
-	if (zserv_privs.change(ZPRIVS_LOWER))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't lower privileges");
+	frr_elevate_privs(&zserv_privs) {
+		err = ns_switchback_to_initial();
+	}
 	if (err < 0)
 		return zebra_ns_continue_read(zns_info, stop_retry);
 
@@ -165,25 +192,39 @@ static int zebra_ns_notify_read(struct thread *t)
 	char buf[BUFSIZ];
 	ssize_t len;
 
-	zebra_netns_notify_current = thread_add_read(zebrad.master,
-						     zebra_ns_notify_read,
-						     NULL, fd_monitor, NULL);
+	zebra_netns_notify_current = thread_add_read(
+		zebrad.master, zebra_ns_notify_read, NULL, fd_monitor, NULL);
 	len = read(fd_monitor, buf, sizeof(buf));
 	if (len < 0) {
-		flog_err_sys(ZEBRA_ERR_NS_NOTIFY_READ,
+		flog_err_sys(EC_ZEBRA_NS_NOTIFY_READ,
 			     "NS notify read: failed to read (%s)",
 			     safe_strerror(errno));
 		return 0;
 	}
-	for (event = (struct inotify_event *)buf;
-	     (char *)event < &buf[len];
-	     event = (struct inotify_event *)((char *)event +
-					      sizeof(*event) + event->len)) {
+	for (event = (struct inotify_event *)buf; (char *)event < &buf[len];
+	     event = (struct inotify_event *)((char *)event + sizeof(*event)
+					      + event->len)) {
 		char *netnspath;
 		struct zebra_netns_info *netnsinfo;
 
-		if (!(event->mask & IN_CREATE))
+		if (!(event->mask & (IN_CREATE | IN_DELETE)))
 			continue;
+		if (event->mask & IN_DELETE)
+			return zebra_ns_delete(event->name);
+
+		if (offsetof(struct inotify_event, name) + event->len
+		    >= sizeof(buf)) {
+			flog_err(EC_ZEBRA_NS_NOTIFY_READ,
+				 "NS notify read: buffer underflow");
+			break;
+		}
+
+		if (strnlen(event->name, event->len) == event->len) {
+			flog_err(EC_ZEBRA_NS_NOTIFY_READ,
+				 "NS notify error: bad event name");
+			break;
+		}
+
 		netnspath = ns_netns_pathname(NULL, event->name);
 		if (!netnspath)
 			continue;
@@ -193,7 +234,7 @@ static int zebra_ns_notify_read(struct thread *t)
 		netnsinfo->retries = ZEBRA_NS_POLLING_MAX_RETRIES;
 		netnsinfo->netnspath = netnspath;
 		thread_add_timer_msec(zebrad.master, zebra_ns_ready_read,
-				       (void *)netnsinfo, 0, NULL);
+				      (void *)netnsinfo, 0, NULL);
 	}
 	return 0;
 }
@@ -204,7 +245,7 @@ void zebra_ns_notify_parse(void)
 	DIR *srcdir = opendir(NS_RUN_DIR);
 
 	if (srcdir == NULL) {
-		flog_err_sys(LIB_ERR_SYSTEM_CALL,
+		flog_err_sys(EC_LIB_SYSTEM_CALL,
 			     "NS parsing init: failed to parse %s", NS_RUN_DIR);
 		return;
 	}
@@ -212,11 +253,11 @@ void zebra_ns_notify_parse(void)
 		struct stat st;
 
 		if (strcmp(dent->d_name, ".") == 0
-		   || strcmp(dent->d_name, "..") == 0)
+		    || strcmp(dent->d_name, "..") == 0)
 			continue;
 		if (fstatat(dirfd(srcdir), dent->d_name, &st, 0) < 0) {
 			flog_err_sys(
-				LIB_ERR_SYSTEM_CALL,
+				EC_LIB_SYSTEM_CALL,
 				"NS parsing init: failed to parse entry %s",
 				dent->d_name);
 			continue;
@@ -239,18 +280,18 @@ void zebra_ns_notify_init(void)
 	fd_monitor = inotify_init();
 	if (fd_monitor < 0) {
 		flog_err_sys(
-			LIB_ERR_SYSTEM_CALL,
+			EC_LIB_SYSTEM_CALL,
 			"NS notify init: failed to initialize inotify (%s)",
 			safe_strerror(errno));
 	}
-	if (inotify_add_watch(fd_monitor, NS_RUN_DIR, IN_CREATE) < 0) {
-		flog_err_sys(LIB_ERR_SYSTEM_CALL,
+	if (inotify_add_watch(fd_monitor, NS_RUN_DIR,
+			      IN_CREATE | IN_DELETE) < 0) {
+		flog_err_sys(EC_LIB_SYSTEM_CALL,
 			     "NS notify watch: failed to add watch (%s)",
 			     safe_strerror(errno));
 	}
-	zebra_netns_notify_current = thread_add_read(zebrad.master,
-						     zebra_ns_notify_read,
-						     NULL, fd_monitor, NULL);
+	zebra_netns_notify_current = thread_add_read(
+		zebrad.master, zebra_ns_notify_read, NULL, fd_monitor, NULL);
 }
 
 void zebra_ns_notify_close(void)

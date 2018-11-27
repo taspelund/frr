@@ -72,18 +72,16 @@ int nexthop_same_no_recurse(const struct nexthop *next1,
 	return 1;
 }
 
-int
-nexthop_same_firsthop (struct nexthop *next1, struct nexthop *next2)
+int nexthop_same_firsthop(struct nexthop *next1, struct nexthop *next2)
 {
 	int type1 = NEXTHOP_FIRSTHOPTYPE(next1->type);
 	int type2 = NEXTHOP_FIRSTHOPTYPE(next2->type);
 
 	if (type1 != type2)
 		return 0;
-	switch (type1)
-	{
+	switch (type1) {
 	case NEXTHOP_TYPE_IPV4_IFINDEX:
-		if (! IPV4_ADDR_SAME (&next1->gate.ipv4, &next2->gate.ipv4))
+		if (!IPV4_ADDR_SAME(&next1->gate.ipv4, &next2->gate.ipv4))
 			return 0;
 		if (next1->ifindex != next2->ifindex)
 			return 0;
@@ -93,7 +91,7 @@ nexthop_same_firsthop (struct nexthop *next1, struct nexthop *next2)
 			return 0;
 		break;
 	case NEXTHOP_TYPE_IPV6_IFINDEX:
-		if (! IPV6_ADDR_SAME (&next1->gate.ipv6, &next2->gate.ipv6))
+		if (!IPV6_ADDR_SAME(&next1->gate.ipv6, &next2->gate.ipv6))
 			return 0;
 		if (next1->ifindex != next2->ifindex)
 			return 0;
@@ -219,7 +217,7 @@ bool nexthop_same(const struct nexthop *nh1, const struct nexthop *nh2)
 
 /* Update nexthop with label information. */
 void nexthop_add_labels(struct nexthop *nexthop, enum lsp_types_t type,
-			u_int8_t num_labels, mpls_label_t *label)
+			uint8_t num_labels, mpls_label_t *label)
 {
 	struct mpls_label_stack *nh_label;
 	int i;

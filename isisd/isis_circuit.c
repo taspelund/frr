@@ -206,7 +206,7 @@ void isis_circuit_add_addr(struct isis_circuit *circuit,
 	struct prefix_ipv6 *ipv6;
 
 	if (connected->address->family == AF_INET) {
-		u_int32_t addr = connected->address->u.prefix4.s_addr;
+		uint32_t addr = connected->address->u.prefix4.s_addr;
 		addr = ntohl(addr);
 		if (IPV4_NET0(addr) || IPV4_NET127(addr) || IN_CLASSD(addr)
 		    || IPV4_LINKLOCAL(addr))
@@ -354,14 +354,14 @@ void isis_circuit_del_addr(struct isis_circuit *circuit,
 			for (ALL_LIST_ELEMENTS_RO(circuit->ipv6_link, node,
 						  ip6)) {
 				prefix2str((struct prefix *)ip6, (char *)buf,
-					   BUFSIZ);
+					   sizeof(buf));
 				zlog_warn("  %s", buf);
 			}
 			zlog_warn(" -----");
 			for (ALL_LIST_ELEMENTS_RO(circuit->ipv6_non_link, node,
 						  ip6)) {
 				prefix2str((struct prefix *)ip6, (char *)buf,
-					   BUFSIZ);
+					   sizeof(buf));
 				zlog_warn("  %s", buf);
 			}
 			zlog_warn("End of addresses");
@@ -395,7 +395,8 @@ static uint8_t isis_circuit_id_gen(struct isis *isis, struct interface *ifp)
 	}
 
 	if (i == 256) {
-		zlog_warn("Could not allocate a circuit id for '%s'", ifp->name);
+		zlog_warn("Could not allocate a circuit id for '%s'",
+			  ifp->name);
 		return 0;
 	}
 
@@ -448,17 +449,17 @@ void isis_circuit_if_del(struct isis_circuit *circuit, struct interface *ifp)
 
 	if (circuit->ip_addrs) {
 		assert(listcount(circuit->ip_addrs) == 0);
-		list_delete_and_null(&circuit->ip_addrs);
+		list_delete(&circuit->ip_addrs);
 	}
 
 	if (circuit->ipv6_link) {
 		assert(listcount(circuit->ipv6_link) == 0);
-		list_delete_and_null(&circuit->ipv6_link);
+		list_delete(&circuit->ipv6_link);
 	}
 
 	if (circuit->ipv6_non_link) {
 		assert(listcount(circuit->ipv6_non_link) == 0);
-		list_delete_and_null(&circuit->ipv6_non_link);
+		list_delete(&circuit->ipv6_non_link);
 	}
 
 	circuit->circ_type = CIRCUIT_T_UNKNOWN;
@@ -535,7 +536,7 @@ void isis_circuit_stream(struct isis_circuit *circuit, struct stream **stream)
 		*stream = stream_new(stream_size);
 	} else {
 		if (STREAM_SIZE(*stream) != stream_size)
-			stream_resize(*stream, stream_size);
+			stream_resize_inplace(stream, stream_size);
 		stream_reset(*stream);
 	}
 }
@@ -567,7 +568,7 @@ int isis_circuit_up(struct isis_circuit *circuit)
 
 	if (circuit->area->lsp_mtu > isis_circuit_pdu_size(circuit)) {
 		flog_err(
-			ISIS_ERR_CONFIG,
+			EC_ISIS_CONFIG,
 			"Interface MTU %zu on %s is too low to support area lsp mtu %u!",
 			isis_circuit_pdu_size(circuit),
 			circuit->interface->name, circuit->area->lsp_mtu);
@@ -579,7 +580,7 @@ int isis_circuit_up(struct isis_circuit *circuit)
 		circuit->circuit_id = isis_circuit_id_gen(isis, circuit->interface);
 		if (!circuit->circuit_id) {
 			flog_err(
-				ISIS_ERR_CONFIG,
+				EC_ISIS_CONFIG,
 				"There are already 255 broadcast circuits active!");
 			return ISIS_ERROR;
 		}
@@ -637,7 +638,7 @@ int isis_circuit_up(struct isis_circuit *circuit)
 			thread_add_timer(master, isis_run_dr_l2, circuit,
 					 2 * circuit->hello_interval[1],
 					 &circuit->u.bc.t_run_dr[1]);
-	} else {
+	} else if (circuit->circ_type == CIRCUIT_T_P2P) {
 		/* initializing the hello send threads
 		 * for a ptp IF
 		 */
@@ -681,31 +682,28 @@ int isis_circuit_up(struct isis_circuit *circuit)
 
 void isis_circuit_down(struct isis_circuit *circuit)
 {
-	if (circuit->state != C_STATE_UP)
-		return;
-
 	/* Clear the flags for all the lsps of the circuit. */
 	isis_circuit_update_all_srmflags(circuit, 0);
 
 	if (circuit->circ_type == CIRCUIT_T_BROADCAST) {
 		/* destroy neighbour lists */
 		if (circuit->u.bc.lan_neighs[0]) {
-			list_delete_and_null(&circuit->u.bc.lan_neighs[0]);
+			list_delete(&circuit->u.bc.lan_neighs[0]);
 			circuit->u.bc.lan_neighs[0] = NULL;
 		}
 		if (circuit->u.bc.lan_neighs[1]) {
-			list_delete_and_null(&circuit->u.bc.lan_neighs[1]);
+			list_delete(&circuit->u.bc.lan_neighs[1]);
 			circuit->u.bc.lan_neighs[1] = NULL;
 		}
 		/* destroy adjacency databases */
 		if (circuit->u.bc.adjdb[0]) {
 			circuit->u.bc.adjdb[0]->del = isis_delete_adj;
-			list_delete_and_null(&circuit->u.bc.adjdb[0]);
+			list_delete(&circuit->u.bc.adjdb[0]);
 			circuit->u.bc.adjdb[0] = NULL;
 		}
 		if (circuit->u.bc.adjdb[1]) {
 			circuit->u.bc.adjdb[1]->del = isis_delete_adj;
-			list_delete_and_null(&circuit->u.bc.adjdb[1]);
+			list_delete(&circuit->u.bc.adjdb[1]);
 			circuit->u.bc.adjdb[1] = NULL;
 		}
 		if (circuit->u.bc.is_dr[0]) {
@@ -746,7 +744,7 @@ void isis_circuit_down(struct isis_circuit *circuit)
 	THREAD_OFF(circuit->t_read);
 
 	if (circuit->lsp_queue) {
-		list_delete_and_null(&circuit->lsp_queue);
+		list_delete(&circuit->lsp_queue);
 	}
 
 	if (circuit->lsp_hash) {
@@ -755,10 +753,12 @@ void isis_circuit_down(struct isis_circuit *circuit)
 	}
 
 	/* send one gratuitous hello to spead up convergence */
-	if (circuit->is_type & IS_LEVEL_1)
-		send_hello(circuit, IS_LEVEL_1);
-	if (circuit->is_type & IS_LEVEL_2)
-		send_hello(circuit, IS_LEVEL_2);
+	if (circuit->state == C_STATE_UP) {
+		if (circuit->is_type & IS_LEVEL_1)
+			send_hello(circuit, IS_LEVEL_1);
+		if (circuit->is_type & IS_LEVEL_2)
+			send_hello(circuit, IS_LEVEL_2);
+	}
 
 	circuit->upadjcount[0] = 0;
 	circuit->upadjcount[1] = 0;
@@ -904,16 +904,16 @@ void isis_circuit_print_vty(struct isis_circuit *circuit, struct vty *vty,
 			vty_out(vty, "    IP Prefix(es):\n");
 			for (ALL_LIST_ELEMENTS_RO(circuit->ip_addrs, node,
 						  ip_addr)) {
-				prefix2str(ip_addr, buf, sizeof(buf)),
-					vty_out(vty, "      %s\n", buf);
+				prefix2str(ip_addr, buf, sizeof(buf));
+				vty_out(vty, "      %s\n", buf);
 			}
 		}
 		if (circuit->ipv6_link && listcount(circuit->ipv6_link) > 0) {
 			vty_out(vty, "    IPv6 Link-Locals:\n");
 			for (ALL_LIST_ELEMENTS_RO(circuit->ipv6_link, node,
 						  ip_addr)) {
-				prefix2str(ip_addr, (char *)buf, BUFSIZ),
-					vty_out(vty, "      %s\n", buf);
+				prefix2str(ip_addr, (char *)buf, BUFSIZ);
+				vty_out(vty, "      %s\n", buf);
 			}
 		}
 		if (circuit->ipv6_non_link
@@ -921,8 +921,8 @@ void isis_circuit_print_vty(struct isis_circuit *circuit, struct vty *vty,
 			vty_out(vty, "    IPv6 Prefixes:\n");
 			for (ALL_LIST_ELEMENTS_RO(circuit->ipv6_non_link, node,
 						  ip_addr)) {
-				prefix2str(ip_addr, (char *)buf, BUFSIZ),
-					vty_out(vty, "      %s\n", buf);
+				prefix2str(ip_addr, (char *)buf, BUFSIZ);
+				vty_out(vty, "      %s\n", buf);
 			}
 		}
 
@@ -1133,11 +1133,6 @@ int isis_interface_config_write(struct vty *vty)
 					}
 				}
 			}
-
-			if (host.obfuscate)
-				caesar(true, (char *)circuit->passwd.passwd,
-				       ISIS_PASSWD_OBFUSCATION_KEY);
-
 			if (circuit->passwd.type == ISIS_PASSWD_TYPE_HMAC_MD5) {
 				vty_out(vty, " isis password md5 %s\n",
 					circuit->passwd.passwd);
@@ -1148,9 +1143,6 @@ int isis_interface_config_write(struct vty *vty)
 					circuit->passwd.passwd);
 				write++;
 			}
-			if (host.obfuscate)
-				caesar(false, (char *)circuit->passwd.passwd,
-				       ISIS_PASSWD_OBFUSCATION_KEY);
 			write += circuit_write_mt_settings(circuit, vty);
 		}
 		vty_endframe(vty, "!\n");
@@ -1242,7 +1234,7 @@ ferr_r isis_circuit_passwd_unset(struct isis_circuit *circuit)
 }
 
 static int isis_circuit_passwd_set(struct isis_circuit *circuit,
-				   u_char passwd_type, const char *passwd)
+				   uint8_t passwd_type, const char *passwd)
 {
 	int len;
 
@@ -1256,9 +1248,6 @@ static int isis_circuit_passwd_set(struct isis_circuit *circuit,
 
 	circuit->passwd.len = len;
 	strncpy((char *)circuit->passwd.passwd, passwd, 255);
-	if (host.obfuscate)
-		caesar(false, (char *)circuit->passwd.passwd,
-		       ISIS_PASSWD_OBFUSCATION_KEY);
 	circuit->passwd.type = passwd_type;
 	return ferr_ok();
 }
@@ -1362,7 +1351,8 @@ void isis_circuit_schedule_lsp_send(struct isis_circuit *circuit)
 {
 	if (circuit->t_send_lsp)
 		return;
-	circuit->t_send_lsp = thread_add_event(master, send_lsp, circuit, 0, NULL);
+	circuit->t_send_lsp =
+		thread_add_event(master, send_lsp, circuit, 0, NULL);
 }
 
 void isis_circuit_queue_lsp(struct isis_circuit *circuit, struct isis_lsp *lsp)

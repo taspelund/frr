@@ -179,9 +179,8 @@ static void time_print(FILE *fp, struct timestamp_control *ctl)
 
 
 static void vzlog_file(struct zlog *zl, struct timestamp_control *tsctl,
-		       const char *proto_str, int record_priority,
-		       int priority, FILE *fp, const char *format,
-		       va_list args)
+		       const char *proto_str, int record_priority, int priority,
+		       FILE *fp, const char *format, va_list args)
 {
 	va_list ac;
 
@@ -239,8 +238,8 @@ void vzlog(int priority, const char *format, va_list args)
 
 	/* File output. */
 	if ((priority <= zl->maxlvl[ZLOG_DEST_FILE]) && zl->fp)
-		vzlog_file(zl, &tsctl, proto_str, zl->record_priority,
-				priority, zl->fp, format, args);
+		vzlog_file(zl, &tsctl, proto_str, zl->record_priority, priority,
+			   zl->fp, format, args);
 
 	/* fixed-config logging to stderr while we're stating up & haven't
 	 * daemonized / reached mainloop yet
@@ -248,11 +247,11 @@ void vzlog(int priority, const char *format, va_list args)
 	 * note the "else" on stdout output -- we don't want to print the same
 	 * message to both stderr and stdout. */
 	if (zlog_startup_stderr && priority <= LOG_WARNING)
-		vzlog_file(zl, &tsctl, proto_str, 1,
-				priority, stderr, format, args);
+		vzlog_file(zl, &tsctl, proto_str, 1, priority, stderr, format,
+			   args);
 	else if (priority <= zl->maxlvl[ZLOG_DEST_STDOUT])
-		vzlog_file(zl, &tsctl, proto_str, zl->record_priority,
-				priority, stdout, format, args);
+		vzlog_file(zl, &tsctl, proto_str, zl->record_priority, priority,
+			   stdout, format, args);
 
 	/* Terminal monitor. */
 	if (priority <= zl->maxlvl[ZLOG_DEST_MONITOR])
@@ -299,7 +298,7 @@ static char *str_append(char *dst, int len, const char *src)
 	return dst;
 }
 
-static char *num_append(char *s, int len, u_long x)
+static char *num_append(char *s, int len, unsigned long x)
 {
 	char buf[30];
 	char *t;
@@ -315,7 +314,7 @@ static char *num_append(char *s, int len, u_long x)
 }
 
 #if defined(SA_SIGINFO) || defined(HAVE_STACK_TRACE)
-static char *hex_append(char *s, int len, u_long x)
+static char *hex_append(char *s, int len, unsigned long x)
 {
 	char buf[30];
 	char *t;
@@ -324,7 +323,7 @@ static char *hex_append(char *s, int len, u_long x)
 		return str_append(s, len, "0");
 	*(t = &buf[sizeof(buf) - 1]) = '\0';
 	while (x && (t > buf)) {
-		u_int cc = (x % 16);
+		unsigned int cc = (x % 16);
 		*--t = ((cc < 10) ? ('0' + cc) : ('a' + cc - 10));
 		x /= 16;
 	}
@@ -449,10 +448,10 @@ void zlog_signal(int signo, const char *action
 	s = num_append(LOC, now);
 #ifdef SA_SIGINFO
 	s = str_append(LOC, " (si_addr 0x");
-	s = hex_append(LOC, (u_long)(siginfo->si_addr));
+	s = hex_append(LOC, (unsigned long)(siginfo->si_addr));
 	if (program_counter) {
 		s = str_append(LOC, ", PC 0x");
-		s = hex_append(LOC, (u_long)program_counter);
+		s = hex_append(LOC, (unsigned long)program_counter);
 	}
 	s = str_append(LOC, "); ");
 #else  /* SA_SIGINFO */
@@ -599,7 +598,8 @@ void zlog_backtrace_sigsafe(int priority, void *program_counter)
 					s = str_append(LOC, "[bt ");
 					s = num_append(LOC, i);
 					s = str_append(LOC, "] 0x");
-					s = hex_append(LOC, (u_long)(array[i]));
+					s = hex_append(
+						LOC, (unsigned long)(array[i]));
 				}
 				*s = '\0';
 				if (priority
@@ -633,16 +633,17 @@ void zlog_backtrace(int priority)
 
 	size = backtrace(array, array_size(array));
 	if (size <= 0 || (size_t)size > array_size(array)) {
-		flog_err(LIB_ERR_SYSTEM_CALL,
-			  "Cannot get backtrace, returned invalid # of frames %d "
-			  "(valid range is between 1 and %lu)",
-			  size, (unsigned long)(array_size(array)));
+		flog_err_sys(
+			EC_LIB_SYSTEM_CALL,
+			"Cannot get backtrace, returned invalid # of frames %d "
+			"(valid range is between 1 and %lu)",
+			size, (unsigned long)(array_size(array)));
 		return;
 	}
 	zlog(priority, "Backtrace for %d stack frames:", size);
 	if (!(strings = backtrace_symbols(array, size))) {
-		flog_err(LIB_ERR_SYSTEM_CALL,
-			  "Cannot get backtrace symbols (out of memory?)");
+		flog_err_sys(EC_LIB_SYSTEM_CALL,
+			     "Cannot get backtrace symbols (out of memory?)");
 		for (i = 0; i < size; i++)
 			zlog(priority, "[bt %d] %p", i, array[i]);
 	} else {
@@ -683,6 +684,23 @@ ZLOG_FUNC(zlog_debug, LOG_DEBUG)
 
 #undef ZLOG_FUNC
 
+void zlog_err_id(uint32_t id, const char *format, ...)
+{
+	va_list args;
+	va_start(args, format);
+	if (zlog_default && zlog_default->error_code) {
+		char newfmt[strlen(format) + 32];
+
+		snprintf(newfmt, sizeof(newfmt), "[EC %"PRIu32"] %s", id,
+			 format);
+		vzlog(LOG_ERR, newfmt, args);
+	} else {
+		vzlog(LOG_ERR, format, args);
+	}
+	va_end(args);
+}
+
+
 void zlog_thread_info(int log_level)
 {
 	struct thread *tc;
@@ -715,20 +733,20 @@ void _zlog_assert_failed(const char *assertion, const char *file,
 
 void memory_oom(size_t size, const char *name)
 {
-	flog_err(LIB_ERR_SYSTEM_CALL,
-		  "out of memory: failed to allocate %zu bytes for %s"
-		  "object",
-		  size, name);
+	flog_err_sys(EC_LIB_SYSTEM_CALL,
+		     "out of memory: failed to allocate %zu bytes for %s"
+		     "object",
+		     size, name);
 	zlog_backtrace(LOG_ERR);
 	abort();
 }
 
 /* Open log stream */
-void openzlog(const char *progname, const char *protoname, u_short instance,
-	      int syslog_flags, int syslog_facility)
+void openzlog(const char *progname, const char *protoname,
+	      unsigned short instance, int syslog_flags, int syslog_facility)
 {
 	struct zlog *zl;
-	u_int i;
+	unsigned int i;
 
 	zl = XCALLOC(MTYPE_ZLOG, sizeof(struct zlog));
 
@@ -867,10 +885,11 @@ int zlog_rotate(void)
 		save_errno = errno;
 		umask(oldumask);
 		if (zl->fp == NULL) {
+
 			pthread_mutex_unlock(&loglock);
 
 			flog_err_sys(
-				LIB_ERR_SYSTEM_CALL,
+				EC_LIB_SYSTEM_CALL,
 				"Log rotate failed: cannot open file %s for append: %s",
 				zl->filename, safe_strerror(save_errno));
 			ret = -1;
@@ -906,10 +925,6 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_ROUTE_ADD),
 	DESC_ENTRY(ZEBRA_ROUTE_DELETE),
 	DESC_ENTRY(ZEBRA_ROUTE_NOTIFY_OWNER),
-	DESC_ENTRY(ZEBRA_IPV4_ROUTE_ADD),
-	DESC_ENTRY(ZEBRA_IPV4_ROUTE_DELETE),
-	DESC_ENTRY(ZEBRA_IPV6_ROUTE_ADD),
-	DESC_ENTRY(ZEBRA_IPV6_ROUTE_DELETE),
 	DESC_ENTRY(ZEBRA_REDISTRIBUTE_ADD),
 	DESC_ENTRY(ZEBRA_REDISTRIBUTE_DELETE),
 	DESC_ENTRY(ZEBRA_REDISTRIBUTE_DEFAULT_ADD),
@@ -927,7 +942,6 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_IMPORT_ROUTE_REGISTER),
 	DESC_ENTRY(ZEBRA_IMPORT_ROUTE_UNREGISTER),
 	DESC_ENTRY(ZEBRA_IMPORT_CHECK_UPDATE),
-	DESC_ENTRY(ZEBRA_IPV4_ROUTE_IPV6_NEXTHOP_ADD),
 	DESC_ENTRY(ZEBRA_BFD_DEST_REGISTER),
 	DESC_ENTRY(ZEBRA_BFD_DEST_DEREGISTER),
 	DESC_ENTRY(ZEBRA_BFD_DEST_UPDATE),
@@ -948,11 +962,14 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_MPLS_LABELS_DELETE),
 	DESC_ENTRY(ZEBRA_IPMR_ROUTE_STATS),
 	DESC_ENTRY(ZEBRA_LABEL_MANAGER_CONNECT),
+	DESC_ENTRY(ZEBRA_LABEL_MANAGER_CONNECT_ASYNC),
 	DESC_ENTRY(ZEBRA_GET_LABEL_CHUNK),
 	DESC_ENTRY(ZEBRA_RELEASE_LABEL_CHUNK),
 	DESC_ENTRY(ZEBRA_ADVERTISE_ALL_VNI),
 	DESC_ENTRY(ZEBRA_ADVERTISE_DEFAULT_GW),
 	DESC_ENTRY(ZEBRA_ADVERTISE_SUBNET),
+	DESC_ENTRY(ZEBRA_LOCAL_ES_ADD),
+	DESC_ENTRY(ZEBRA_LOCAL_ES_DEL),
 	DESC_ENTRY(ZEBRA_VNI_ADD),
 	DESC_ENTRY(ZEBRA_VNI_DEL),
 	DESC_ENTRY(ZEBRA_L3VNI_ADD),
@@ -961,7 +978,6 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_REMOTE_VTEP_DEL),
 	DESC_ENTRY(ZEBRA_MACIP_ADD),
 	DESC_ENTRY(ZEBRA_MACIP_DEL),
-	DESC_ENTRY(ZEBRA_DUPLICATE_ADDR_DETECTION),
 	DESC_ENTRY(ZEBRA_IP_PREFIX_ROUTE_ADD),
 	DESC_ENTRY(ZEBRA_IP_PREFIX_ROUTE_DEL),
 	DESC_ENTRY(ZEBRA_REMOTE_MACIP_ADD),
@@ -974,19 +990,26 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_RULE_ADD),
 	DESC_ENTRY(ZEBRA_RULE_DELETE),
 	DESC_ENTRY(ZEBRA_RULE_NOTIFY_OWNER),
+	DESC_ENTRY(ZEBRA_TABLE_MANAGER_CONNECT),
+	DESC_ENTRY(ZEBRA_GET_TABLE_CHUNK),
+	DESC_ENTRY(ZEBRA_RELEASE_TABLE_CHUNK),
+	DESC_ENTRY(ZEBRA_IPSET_CREATE),
+	DESC_ENTRY(ZEBRA_IPSET_DESTROY),
+	DESC_ENTRY(ZEBRA_IPSET_ENTRY_ADD),
+	DESC_ENTRY(ZEBRA_IPSET_ENTRY_DELETE),
 	DESC_ENTRY(ZEBRA_VXLAN_FLOOD_CONTROL),
 };
 #undef DESC_ENTRY
 
 static const struct zebra_desc_table unknown = {0, "unknown", '?'};
 
-static const struct zebra_desc_table *zroute_lookup(u_int zroute)
+static const struct zebra_desc_table *zroute_lookup(unsigned int zroute)
 {
-	u_int i;
+	unsigned int i;
 
 	if (zroute >= array_size(route_types)) {
-		flog_err(LIB_ERR_DEVELOPMENT, "unknown zebra route type: %u",
-			  zroute);
+		flog_err(EC_LIB_DEVELOPMENT, "unknown zebra route type: %u",
+			 zroute);
 		return &unknown;
 	}
 	if (zroute == route_types[zroute].type)
@@ -1000,18 +1023,17 @@ static const struct zebra_desc_table *zroute_lookup(u_int zroute)
 			return &route_types[i];
 		}
 	}
-	flog_err(LIB_ERR_DEVELOPMENT,
-		  "internal error: cannot find route type %u in table!",
-		  zroute);
+	flog_err(EC_LIB_DEVELOPMENT,
+		 "internal error: cannot find route type %u in table!", zroute);
 	return &unknown;
 }
 
-const char *zebra_route_string(u_int zroute)
+const char *zebra_route_string(unsigned int zroute)
 {
 	return zroute_lookup(zroute)->string;
 }
 
-char zebra_route_char(u_int zroute)
+char zebra_route_char(unsigned int zroute)
 {
 	return zroute_lookup(zroute)->chr;
 }
@@ -1019,8 +1041,8 @@ char zebra_route_char(u_int zroute)
 const char *zserv_command_string(unsigned int command)
 {
 	if (command >= array_size(command_types)) {
-		flog_err(LIB_ERR_DEVELOPMENT, "unknown zserv command type: %u",
-			  command);
+		flog_err(EC_LIB_DEVELOPMENT, "unknown zserv command type: %u",
+			 command);
 		return unknown.string;
 	}
 	return command_types[command].string;
@@ -1107,17 +1129,21 @@ void zlog_hexdump(const void *mem, unsigned int len)
 	unsigned long i = 0;
 	unsigned int j = 0;
 	unsigned int columns = 8;
-	/* 19 bytes for 0xADDRESS: */
-	/* 24 bytes for data; 2 chars plus a space per data byte */
-	/*  1 byte for space */
-	/*  8 bytes for ASCII representation */
-	/*  1 byte for a newline */
-	/* ===================== */
-	/* 53 bytes per 8 bytes of data */
-	/*  1 byte for null term */
+	/*
+	 * 19 bytes for 0xADDRESS:
+	 * 24 bytes for data; 2 chars plus a space per data byte
+	 *  1 byte for space
+	 *  8 bytes for ASCII representation
+	 *  1 byte for a newline
+	 * =====================
+	 * 53 bytes per 8 bytes of data
+	 *  1 byte for null term
+	 */
 	size_t bs = ((len / 8) + 1) * 53 + 1;
 	char buf[bs];
 	char *s = buf;
+
+	memset(buf, 0, sizeof(buf));
 
 	for (i = 0; i < len + ((len % columns) ? (columns - len % columns) : 0);
 	     i++) {

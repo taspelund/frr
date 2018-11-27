@@ -194,7 +194,7 @@ static int ripng_offset_list_unset(struct vty *vty, const char *alist,
 
 /* If metric is modifed return 1. */
 int ripng_offset_list_apply_in(struct prefix_ipv6 *p, struct interface *ifp,
-			       u_char *metric)
+			       uint8_t *metric)
 {
 	struct ripng_offset_list *offset;
 	struct access_list *alist;
@@ -232,7 +232,7 @@ int ripng_offset_list_apply_in(struct prefix_ipv6 *p, struct interface *ifp,
 
 /* If metric is modifed return 1. */
 int ripng_offset_list_apply_out(struct prefix_ipv6 *p, struct interface *ifp,
-				u_char *metric)
+				uint8_t *metric)
 {
 	struct ripng_offset_list *offset;
 	struct access_list *alist;
@@ -375,7 +375,7 @@ void ripng_offset_init(void)
 
 void ripng_offset_clean(void)
 {
-	list_delete_and_null(&ripng_offset_list_master);
+	list_delete(&ripng_offset_list_master);
 
 	ripng_offset_list_master = list_new();
 	ripng_offset_list_master->cmp =

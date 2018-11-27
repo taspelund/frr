@@ -23,7 +23,7 @@
 
 #include "command.h"
 #include "prefix.h"
-#include "table.h"
+#include "agg_table.h"
 #include "stream.h"
 #include "memory.h"
 #include "routemap.h"
@@ -37,7 +37,7 @@
 struct zclient *zclient = NULL;
 
 /* Send ECMP routes to zebra. */
-static void ripng_zebra_ipv6_send(struct route_node *rp, u_char cmd)
+static void ripng_zebra_ipv6_send(struct agg_node *rp, uint8_t cmd)
 {
 	struct list *list = (struct list *)rp->info;
 	struct zapi_route api;
@@ -100,13 +100,13 @@ static void ripng_zebra_ipv6_send(struct route_node *rp, u_char cmd)
 }
 
 /* Add/update ECMP routes to zebra. */
-void ripng_zebra_ipv6_add(struct route_node *rp)
+void ripng_zebra_ipv6_add(struct agg_node *rp)
 {
 	ripng_zebra_ipv6_send(rp, ZEBRA_ROUTE_ADD);
 }
 
 /* Delete ECMP routes from zebra. */
-void ripng_zebra_ipv6_delete(struct route_node *rp)
+void ripng_zebra_ipv6_delete(struct agg_node *rp)
 {
 	ripng_zebra_ipv6_send(rp, ZEBRA_ROUTE_DELETE);
 }
@@ -414,7 +414,7 @@ static void ripng_zebra_connected(struct zclient *zclient)
 void zebra_init(struct thread_master *master)
 {
 	/* Allocate zebra structure. */
-	zclient = zclient_new_notify(master, &zclient_options_default);
+	zclient = zclient_new(master, &zclient_options_default);
 	zclient_init(zclient, ZEBRA_ROUTE_RIPNG, 0, &ripngd_privs);
 
 	zclient->zebra_connected = ripng_zebra_connected;

@@ -36,14 +36,13 @@ struct bgp;
 #define BGP_AFI_SAFI_CMD_STR    BGP_AFI_CMD_STR" "BGP_SAFI_CMD_STR
 #define BGP_AFI_SAFI_HELP_STR   BGP_AFI_HELP_STR BGP_SAFI_HELP_STR
 
-#define BGP_SAFI_WITH_LABEL_CMD_STR  "<unicast|multicast|vpn|labeled-unicast>"
+#define BGP_SAFI_WITH_LABEL_CMD_STR  "<unicast|multicast|vpn|labeled-unicast|flowspec>"
 #define BGP_SAFI_WITH_LABEL_HELP_STR                                           \
 	"Address Family modifier\n"                                            \
 	"Address Family modifier\n"                                            \
 	"Address Family modifier\n"                                            \
+	"Address Family modifier\n"                                            \
 	"Address Family modifier\n"
-
-#define BGP_CMD_VNI_RANGE "(1-16777215)"
 
 extern void bgp_vty_init(void);
 extern const char *afi_safi_print(afi_t afi, safi_t safi);

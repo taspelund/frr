@@ -20,6 +20,10 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include "memory.h"
 #include "hook.h"
 
@@ -38,9 +42,8 @@ void _hook_register(struct hook *hook, void *funcptr, void *arg, bool has_arg,
 	he->priority = priority;
 
 	for (pos = &hook->entries; *pos; pos = &(*pos)->next)
-		if (hook->reverse
-		    ? (*pos)->priority < priority
-		    : (*pos)->priority >= priority)
+		if (hook->reverse ? (*pos)->priority < priority
+				  : (*pos)->priority >= priority)
 			break;
 
 	he->next = *pos;

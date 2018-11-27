@@ -123,10 +123,11 @@ static void peer_process(struct hash_backet *hb, void *arg)
 		*next_update = diff;
 }
 
-static int peer_hash_cmp(const void *f, const void *s)
+static bool peer_hash_cmp(const void *f, const void *s)
 {
 	const struct pkat *p1 = f;
 	const struct pkat *p2 = s;
+
 	return p1->peer == p2->peer;
 }
 
@@ -179,6 +180,8 @@ void *bgp_keepalives_start(void *arg)
 	pthread_condattr_setclock(&attrs, CLOCK_MONOTONIC);
 	pthread_cond_init(peerhash_cond, &attrs);
 	pthread_condattr_destroy(&attrs);
+
+	frr_pthread_set_name(fpt, NULL, "bgpd_ka");
 
 	/* initialize peer hashtable */
 	peerhash = hash_create_size(2048, peer_hash_key, peer_hash_cmp, NULL);
@@ -233,10 +236,10 @@ void bgp_keepalives_on(struct peer *peer)
 	/* placeholder bucket data to use for fast key lookups */
 	static struct pkat holder = {0};
 
-	if (!peerhash_mtx) {
-		zlog_warn("%s: call bgp_keepalives_init() first", __func__);
-		return;
-	}
+	/*
+	 * We need to ensure that bgp_keepalives_init was called first
+	 */
+	assert(peerhash_mtx);
 
 	pthread_mutex_lock(peerhash_mtx);
 	{
@@ -263,10 +266,10 @@ void bgp_keepalives_off(struct peer *peer)
 	/* placeholder bucket data to use for fast key lookups */
 	static struct pkat holder = {0};
 
-	if (!peerhash_mtx) {
-		zlog_warn("%s: call bgp_keepalives_init() first", __func__);
-		return;
-	}
+	/*
+	 * We need to ensure that bgp_keepalives_init was called first
+	 */
+	assert(peerhash_mtx);
 
 	pthread_mutex_lock(peerhash_mtx);
 	{

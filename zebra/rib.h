@@ -56,7 +56,7 @@ struct route_entry {
 	int type;
 
 	/* Source protocol instance */
-	u_short instance;
+	unsigned short instance;
 
 	/* VRF identifier. */
 	vrf_id_t vrf_id;
@@ -65,11 +65,11 @@ struct route_entry {
 	uint32_t table;
 
 	/* Metric */
-	u_int32_t metric;
+	uint32_t metric;
 
 	/* MTU */
-	u_int32_t mtu;
-	u_int32_t nexthop_mtu;
+	uint32_t mtu;
+	uint32_t nexthop_mtu;
 
 	/* Distance. */
 	uint8_t distance;
@@ -78,10 +78,10 @@ struct route_entry {
 	 * This flag's definition is in lib/zebra.h ZEBRA_FLAG_* and is exposed
 	 * to clients via Zserv
 	 */
-	u_int32_t flags;
+	uint32_t flags;
 
 	/* RIB internal status */
-	u_char status;
+	uint8_t status;
 #define ROUTE_ENTRY_REMOVED          0x1
 /* to simplify NHT logic when NHs change, instead of doing a NH by NH cmp */
 #define ROUTE_ENTRY_NEXTHOPS_CHANGED 0x2
@@ -89,8 +89,8 @@ struct route_entry {
 #define ROUTE_ENTRY_LABELS_CHANGED   0x8
 
 	/* Nexthop information. */
-	u_char nexthop_num;
-	u_char nexthop_active_num;
+	uint8_t nexthop_num;
+	uint8_t nexthop_active_num;
 };
 
 /* meta-queue structure:
@@ -103,7 +103,7 @@ struct route_entry {
 #define MQ_SIZE 5
 struct meta_queue {
 	struct list *subq[MQ_SIZE];
-	u_int32_t size; /* sum of lengths of all subqueues */
+	uint32_t size; /* sum of lengths of all subqueues */
 };
 
 /*
@@ -127,7 +127,7 @@ typedef struct rib_dest_t_ {
 	/*
 	 * Flags, see below.
 	 */
-	u_int32_t flags;
+	uint32_t flags;
 
 	/*
 	 * Linkage to put dest on the FPM processing queue.
@@ -171,10 +171,10 @@ typedef struct rib_dest_t_ {
 	     (re) && ((next) = (re)->next, 1); (re) = (next))
 
 #define RNODE_FOREACH_RE(rn, re)                                               \
-	RE_DEST_FOREACH_ROUTE(rib_dest_from_rnode(rn), re)
+	RE_DEST_FOREACH_ROUTE (rib_dest_from_rnode(rn), re)
 
 #define RNODE_FOREACH_RE_SAFE(rn, re, next)                                    \
-	RE_DEST_FOREACH_ROUTE_SAFE(rib_dest_from_rnode(rn), re, next)
+	RE_DEST_FOREACH_ROUTE_SAFE (rib_dest_from_rnode(rn), re, next)
 
 #if defined(HAVE_RTADV)
 /* Structure which hold status of router advertisement. */
@@ -287,12 +287,10 @@ extern int rib_lookup_ipv4_route(struct prefix_ipv4 *p, union sockunion *qgate,
 #define ZEBRA_RIB_FOUND_CONNECTED 2
 #define ZEBRA_RIB_NOTFOUND 3
 
-extern int is_zebra_valid_kernel_table(u_int32_t table_id);
-extern int is_zebra_main_routing_table(u_int32_t table_id);
-extern int zebra_check_addr(struct prefix *p);
+extern int is_zebra_valid_kernel_table(uint32_t table_id);
+extern int is_zebra_main_routing_table(uint32_t table_id);
+extern int zebra_check_addr(const struct prefix *p);
 
-extern void rib_addnode(struct route_node *rn, struct route_entry *re,
-			int process);
 extern void rib_delnode(struct route_node *rn, struct route_entry *re);
 extern void rib_install_kernel(struct route_node *rn, struct route_entry *re,
 			       struct route_entry *old);
@@ -302,19 +300,19 @@ extern void rib_uninstall_kernel(struct route_node *rn, struct route_entry *re);
  * All rib_add function will not just add prefix into RIB, but
  * also implicitly withdraw equal prefix of same type. */
 extern int rib_add(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
-		   u_short instance, int flags, struct prefix *p,
+		   unsigned short instance, int flags, struct prefix *p,
 		   struct prefix_ipv6 *src_p, const struct nexthop *nh,
-		   u_int32_t table_id, u_int32_t metric, u_int32_t mtu,
+		   uint32_t table_id, uint32_t metric, uint32_t mtu,
 		   uint8_t distance, route_tag_t tag);
 
 extern int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 			     struct prefix_ipv6 *src_p, struct route_entry *re);
 
 extern void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
-		       u_short instance, int flags, struct prefix *p,
+		       unsigned short instance, int flags, struct prefix *p,
 		       struct prefix_ipv6 *src_p, const struct nexthop *nh,
-		       u_int32_t table_id, u_int32_t metric, bool fromkernel,
-		       struct ethaddr *rmac);
+		       uint32_t table_id, uint32_t metric, uint8_t distance,
+		       bool fromkernel);
 
 extern struct route_entry *rib_match(afi_t afi, safi_t safi, vrf_id_t vrf_id,
 				     union g_addr *addr,
@@ -327,12 +325,15 @@ extern struct route_entry *rib_lookup_ipv4(struct prefix_ipv4 *p,
 					   vrf_id_t vrf_id);
 
 extern void rib_update(vrf_id_t vrf_id, rib_update_event_t event);
+extern void rib_update_table(struct route_table *table,
+			     rib_update_event_t event);
 extern void rib_sweep_route(void);
 extern void rib_sweep_table(struct route_table *table);
 extern void rib_close_table(struct route_table *table);
 extern void rib_init(void);
-extern unsigned long rib_score_proto(u_char proto, u_short instance);
-extern unsigned long rib_score_proto_table(u_char proto, u_short instance,
+extern unsigned long rib_score_proto(uint8_t proto, unsigned short instance);
+extern unsigned long rib_score_proto_table(uint8_t proto,
+					   unsigned short instance,
 					   struct route_table *table);
 extern void rib_queue_add(struct route_node *rn);
 extern void meta_queue_free(struct meta_queue *mq);
@@ -354,7 +355,7 @@ extern uint8_t route_distance(int type);
  */
 static inline rib_table_info_t *rib_table_info(struct route_table *table)
 {
-	return (rib_table_info_t *)table->info;
+	return (rib_table_info_t *)route_table_get_info(table);
 }
 
 /*
@@ -395,7 +396,7 @@ static inline struct prefix *rib_dest_prefix(rib_dest_t *dest)
  *
  * Returns the address family that the destination is for.
  */
-static inline u_char rib_dest_af(rib_dest_t *dest)
+static inline uint8_t rib_dest_af(rib_dest_t *dest)
 {
 	return dest->rnode->p.family;
 }
@@ -450,10 +451,8 @@ DECLARE_HOOK(rib_update, (struct route_node * rn, const char *reason),
 
 
 extern void zebra_vty_init(void);
-extern int static_config(struct vty *vty, struct zebra_vrf *zvrf,
-			 afi_t afi, safi_t safi, const char *cmd);
-extern void static_config_install_delayed_routes(struct zebra_vrf *zvrf);
 
 extern pid_t pid;
 
+extern bool v6_rr_semantics;
 #endif /*_ZEBRA_RIB_H */

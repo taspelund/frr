@@ -37,20 +37,20 @@
 
 char *pim_channel_oil_dump(struct channel_oil *c_oil, char *buf, size_t size)
 {
+	char *out;
 	struct prefix_sg sg;
 	int i;
 
-	memset(buf, 0, size);
 	sg.src = c_oil->oil.mfcc_origin;
 	sg.grp = c_oil->oil.mfcc_mcastgrp;
-	sprintf(buf, "%s IIF: %d, OIFS: ", pim_str_sg_dump(&sg),
-		c_oil->oil.mfcc_parent);
+	snprintf(buf, size, "%s IIF: %d, OIFS: ", pim_str_sg_dump(&sg),
+		 c_oil->oil.mfcc_parent);
 
+	out = buf + strlen(buf);
 	for (i = 0; i < MAXVIFS; i++) {
 		if (c_oil->oil.mfcc_ttls[i] != 0) {
-			char buf1[10];
-			sprintf(buf1, "%d ", i);
-			strcat(buf, buf1);
+			snprintf(out, buf + size - out, "%d ", i);
+			out += strlen(out);
 		}
 	}
 
@@ -79,16 +79,16 @@ static int pim_channel_oil_compare(struct channel_oil *c1,
 	return 0;
 }
 
-static int pim_oil_equal(const void *arg1, const void *arg2)
+static bool pim_oil_equal(const void *arg1, const void *arg2)
 {
 	const struct channel_oil *c1 = (const struct channel_oil *)arg1;
 	const struct channel_oil *c2 = (const struct channel_oil *)arg2;
 
 	if ((c1->oil.mfcc_mcastgrp.s_addr == c2->oil.mfcc_mcastgrp.s_addr)
 	    && (c1->oil.mfcc_origin.s_addr == c2->oil.mfcc_origin.s_addr))
-		return 1;
+		return true;
 
-	return 0;
+	return false;
 }
 
 static unsigned int pim_oil_hash_key(void *arg)
@@ -104,10 +104,8 @@ void pim_oil_init(struct pim_instance *pim)
 	char hash_name[64];
 
 	snprintf(hash_name, 64, "PIM %s Oil Hash", pim->vrf->name);
-	pim->channel_oil_hash = hash_create_size(8192,
-						pim_oil_hash_key,
-						pim_oil_equal,
-						hash_name);
+	pim->channel_oil_hash = hash_create_size(8192, pim_oil_hash_key,
+						 pim_oil_equal, hash_name);
 
 	pim->channel_oil_list = list_new();
 	pim->channel_oil_list->del = (void (*)(void *))pim_channel_oil_free;
@@ -118,7 +116,7 @@ void pim_oil_init(struct pim_instance *pim)
 void pim_oil_terminate(struct pim_instance *pim)
 {
 	if (pim->channel_oil_list)
-		list_delete_and_null(&pim->channel_oil_list);
+		list_delete(&pim->channel_oil_list);
 
 	if (pim->channel_oil_hash)
 		hash_free(pim->channel_oil_hash);

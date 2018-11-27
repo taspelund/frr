@@ -2,10 +2,11 @@
 # libfrr
 #
 lib_LTLIBRARIES += lib/libfrr.la
-lib_libfrr_la_LDFLAGS = -version-info 0:0:0 
+lib_libfrr_la_LDFLAGS = -version-info 0:0:0 -Xlinker -e_libfrr_version
 lib_libfrr_la_LIBADD = @LIBCAP@
 
 lib_libfrr_la_SOURCES = \
+	lib/agg_table.c \
 	lib/bfd.c \
 	lib/buffer.c \
 	lib/checksum.c \
@@ -21,6 +22,7 @@ lib_libfrr_la_SOURCES = \
 	lib/ferr.c \
 	lib/filter.c \
 	lib/frr_pthread.c \
+	lib/frrstr.c \
 	lib/getopt.c \
 	lib/getopt1.c \
 	lib/grammar_sandbox.c \
@@ -42,6 +44,7 @@ lib_libfrr_la_SOURCES = \
 	lib/memory.c \
 	lib/memory_vty.c \
 	lib/module.c \
+	lib/mpls.c \
 	lib/network.c \
 	lib/nexthop.c \
 	lib/netns_linux.c \
@@ -81,12 +84,29 @@ lib_libfrr_la_SOURCES = \
 	lib/logicalrouter.c \
 	# end
 
+vtysh_scan += \
+	$(top_srcdir)/lib/distribute.c \
+	$(top_srcdir)/lib/filter.c \
+	$(top_srcdir)/lib/if.c \
+	$(top_srcdir)/lib/if_rmap.c \
+	$(top_srcdir)/lib/keychain.c \
+	$(top_srcdir)/lib/logicalrouter.c \
+	$(top_srcdir)/lib/nexthop_group.c \
+	$(top_srcdir)/lib/plist.c \
+	$(top_srcdir)/lib/routemap.c \
+	$(top_srcdir)/lib/vrf.c \
+	$(top_srcdir)/lib/vty.c \
+	# end
+# can be loaded as DSO - always include for vtysh
+vtysh_scan += $(top_srcdir)/lib/agentx.c
+
 lib/plist_clippy.c: $(CLIPPY_DEPS)
 lib/plist.lo: lib/plist_clippy.c
 lib/nexthop_group_clippy.c: $(CLIPPY_DEPS)
 lib/nexthop_group.lo: lib/nexthop_group_clippy.c
 
 pkginclude_HEADERS += \
+	lib/agg_table.h \
 	lib/bfd.h \
 	lib/bitfield.h \
 	lib/buffer.h \
@@ -105,6 +125,7 @@ pkginclude_HEADERS += \
 	lib/freebsd-queue.h \
 	lib/frr_pthread.h \
 	lib/frratomic.h \
+	lib/frrstr.h \
 	lib/getopt.h \
 	lib/graph.h \
 	lib/hash.h \
@@ -169,7 +190,9 @@ pkginclude_HEADERS += \
 	lib/zclient.h \
 	lib/zebra.h \
 	lib/logicalrouter.h \
+	lib/pbr.h \
 	# end
+
 
 nodist_pkginclude_HEADERS += \
 	lib/route_types.h \
@@ -189,7 +212,7 @@ if SNMP
 lib_LTLIBRARIES += lib/libfrrsnmp.la
 endif
 
-lib_libfrrsnmp_la_CFLAGS = $(WERROR) $(SNMP_CFLAGS)
+lib_libfrrsnmp_la_CFLAGS = $(WERROR) $(SNMP_CFLAGS) -std=gnu99
 lib_libfrrsnmp_la_LDFLAGS = -version-info 0:0:0
 lib_libfrrsnmp_la_LIBADD = lib/libfrr.la $(SNMP_LIBS)
 lib_libfrrsnmp_la_SOURCES = \
@@ -231,9 +254,10 @@ lib_grammar_sandbox_SOURCES = \
 lib_grammar_sandbox_LDADD = \
 	lib/libfrr.la
 
-lib_clippy_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE
+lib_clippy_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE -DBUILDING_CLIPPY
 lib_clippy_CFLAGS = $(PYTHON_CFLAGS)
 lib_clippy_LDADD = $(PYTHON_LIBS)
+lib_clippy_LDFLAGS = -export-dynamic
 lib_clippy_SOURCES = \
 	lib/clippy.c \
 	lib/command_graph.c \
@@ -246,6 +270,26 @@ lib_clippy_SOURCES = \
 	lib/vector.c \
 	# end
 
+# (global) clippy rules for all directories
+
+AM_V_CLIPPY = $(am__v_CLIPPY_$(V))
+am__v_CLIPPY_ = $(am__v_CLIPPY_$(AM_DEFAULT_VERBOSITY))
+am__v_CLIPPY_0 = @echo "  CLIPPY  " $@;
+am__v_CLIPPY_1 =
+
+CLIPPY_DEPS = $(HOSTTOOLS)lib/clippy $(top_srcdir)/python/clidef.py
+
+SUFFIXES = _clippy.c .proto .pb-c.c .pb-c.h .pb.h
+.c_clippy.c:
+	@{ test -x $(top_builddir)/$(HOSTTOOLS)lib/clippy || \
+		$(MAKE) -C $(top_builddir)/$(HOSTTOOLS) lib/clippy; }
+	$(AM_V_CLIPPY) $(top_builddir)/$(HOSTTOOLS)lib/clippy $(top_srcdir)/python/clidef.py -o $@ $<
+
+## automake's "ylwrap" is a great piece of GNU software... not.
+.l.c:
+	$(AM_V_LEX)$(am__skiplex) $(LEXCOMPILE) $<
+.y.c:
+	$(AM_V_YACC)$(am__skipyacc) $(YACCCOMPILE) $<
 
 #
 # generated sources & extra foo
@@ -279,6 +323,7 @@ lib/lib_clippy-command_parse.$(OBJEXT): lib/command_lex.h
 
 lib/route_types.h: $(top_srcdir)/lib/route_types.txt $(top_srcdir)/lib/route_types.pl
 	@PERL@ $(top_srcdir)/lib/route_types.pl < $(top_srcdir)/lib/route_types.txt > $@
+DISTCLEANFILES += lib/route_types.h
 
 if GIT_VERSION
 # bit of a trick here to always have up-to-date git stamps without triggering
@@ -287,7 +332,7 @@ if GIT_VERSION
 # (even if gitversion.h's file timestamp doesn't change, make will think it
 # did, because of .PHONY...)
 
-.PHONY: lib/gitversion.h.tmp
+PHONY_GITVERSION=lib/gitversion.h.tmp
 .SILENT: lib/gitversion.h lib/gitversion.h.tmp
 GITH=lib/gitversion.h
 lib/gitversion.h.tmp: $(top_srcdir)/.git
@@ -296,7 +341,8 @@ lib/gitversion.h: lib/gitversion.h.tmp
 	{ test -f ${GITH} && diff -s -q ${GITH}.tmp ${GITH}; } || cp ${GITH}.tmp ${GITH}
 
 else
-.PHONY: lib/gitversion.h
+PHONY_GITVERSION=lib/gitversion.h
 lib/gitversion.h:
 	true
 endif
+.PHONY: $(PHONY_GITVERSION)

@@ -31,6 +31,7 @@
 #include "zebra/rt.h"
 #include "zebra/kernel_socket.h"
 #include "zebra/zebra_pbr.h"
+#include "zebra/zebra_errors.h"
 
 /* Kernel routing table read up by sysctl function. */
 void route_read(struct zebra_ns *zns)
@@ -47,7 +48,7 @@ void route_read(struct zebra_ns *zns)
 
 	/* Get buffer size. */
 	if (sysctl(mib, MIBSIZ, NULL, &bufsiz, NULL, 0) < 0) {
-		flog_warn(ZEBRA_ERR_ZEBRA_ERR_SYSCTL_FAILED, "sysctl fail: %s",
+		flog_warn(EC_ZEBRA_SYSCTL_FAILED, "sysctl fail: %s",
 			  safe_strerror(errno));
 		return;
 	}
@@ -57,7 +58,7 @@ void route_read(struct zebra_ns *zns)
 
 	/* Read routing table information by calling sysctl(). */
 	if (sysctl(mib, MIBSIZ, buf, &bufsiz, NULL, 0) < 0) {
-		flog_warn(ZEBRA_ERR_SYSCTL_FAILED, "sysctl() fail by %s",
+		flog_warn(EC_ZEBRA_SYSCTL_FAILED, "sysctl() fail by %s",
 			  safe_strerror(errno));
 		XFREE(MTYPE_TMP, ref);
 		return;

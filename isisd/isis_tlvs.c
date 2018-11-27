@@ -496,8 +496,9 @@ static void format_item_lsp_entry(uint16_t mtid, struct isis_item *i,
 {
 	struct isis_lsp_entry *e = (struct isis_lsp_entry *)i;
 
-	sbuf_push(buf, indent, "LSP Entry: %s, seq 0x%08" PRIx32
-		  ", cksum 0x%04" PRIx16 ", lifetime %" PRIu16 "s\n",
+	sbuf_push(buf, indent,
+		  "LSP Entry: %s, seq 0x%08" PRIx32 ", cksum 0x%04" PRIx16
+		  ", lifetime %" PRIu16 "s\n",
 		  isis_format_id(e->id, 8), e->seqno, e->checksum,
 		  e->rem_lifetime);
 }
@@ -579,7 +580,8 @@ static void format_item_extended_reach(uint16_t mtid, struct isis_item *i,
 	sbuf_push(buf, 0, "\n");
 
 	if (r->subtlv_len && r->subtlvs)
-		mpls_te_print_detail(buf, indent + 2, r->subtlvs, r->subtlv_len);
+		mpls_te_print_detail(buf, indent + 2, r->subtlvs,
+				     r->subtlv_len);
 }
 
 static void free_item_extended_reach(struct isis_item *i)
@@ -690,7 +692,8 @@ static void format_item_oldstyle_ip_reach(uint16_t mtid, struct isis_item *i,
 	char prefixbuf[PREFIX2STR_BUFFER];
 
 	sbuf_push(buf, indent, "IP Reachability: %s (Metric: %" PRIu8 ")\n",
-		  prefix2str(&r->prefix, prefixbuf, sizeof(prefixbuf)), r->metric);
+		  prefix2str(&r->prefix, prefixbuf, sizeof(prefixbuf)),
+		  r->metric);
 }
 
 static void free_item_oldstyle_ip_reach(struct isis_item *i)
@@ -1629,9 +1632,9 @@ static void format_item_auth(uint16_t mtid, struct isis_item *i,
 		sbuf_push(buf, indent, "  Password: %s\n", obuf);
 		break;
 	case ISIS_PASSWD_TYPE_HMAC_MD5:
-		for (unsigned int i = 0; i < 16; i++) {
-			snprintf(obuf + 2 * i, sizeof(obuf) - 2 * i,
-				 "%02" PRIx8, auth->value[i]);
+		for (unsigned int j = 0; j < 16; j++) {
+			snprintf(obuf + 2 * j, sizeof(obuf) - 2 * j,
+				 "%02" PRIx8, auth->value[j]);
 		}
 		sbuf_push(buf, indent, "  HMAC-MD5: %s\n", obuf);
 		break;
@@ -1909,6 +1912,11 @@ static void append_item(struct isis_item_list *dest, struct isis_item *item)
 	dest->count++;
 }
 
+static struct isis_item *last_item(struct isis_item_list *list)
+{
+	return container_of(list->tail, struct isis_item, next);
+}
+
 static int unpack_item(uint16_t mtid, enum isis_tlv_context context,
 		       uint8_t tlv_type, uint8_t len, struct stream *s,
 		       struct sbuf *log, void *dest, int indent)
@@ -2129,7 +2137,7 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
 		   &tlvs->mt_router_info, &rv->mt_router_info);
 
-	tlvs->mt_router_info_empty = rv->mt_router_info_empty;
+	rv->mt_router_info_empty = tlvs->mt_router_info_empty;
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 		   &tlvs->oldstyle_reach, &rv->oldstyle_reach);
@@ -2402,8 +2410,9 @@ static int pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream,
 	/* When fragmenting, don't add auth as it's already accounted for in the
 	 * size we are given. */
 	if (!fragment_tlvs) {
-		rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_AUTH, &tlvs->isis_auth,
-				stream, NULL, NULL, NULL, NULL);
+		rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_AUTH,
+				&tlvs->isis_auth, stream, NULL, NULL, NULL,
+				NULL);
 		if (rv)
 			return rv;
 	}
@@ -2523,7 +2532,7 @@ struct list *isis_fragment_tlvs(struct isis_tlvs *tlvs, size_t size)
 		struct listnode *node;
 		for (ALL_LIST_ELEMENTS_RO(rv, node, fragment_tlvs))
 			isis_free_tlvs(fragment_tlvs);
-		list_delete_and_null(&rv);
+		list_delete(&rv);
 	}
 
 	stream_free(dummy_stream);
@@ -2753,7 +2762,7 @@ void isis_tlvs_add_area_addresses(struct isis_tlvs *tlvs,
 void isis_tlvs_add_lan_neighbors(struct isis_tlvs *tlvs, struct list *neighbors)
 {
 	struct listnode *node;
-	u_char *snpa;
+	uint8_t *snpa;
 
 	for (ALL_LIST_ELEMENTS_RO(neighbors, node, snpa)) {
 		struct isis_lan_neighbor *n =
@@ -3162,6 +3171,21 @@ void isis_tlvs_add_ipv6_reach(struct isis_tlvs *tlvs, uint16_t mtid,
 		    ? &tlvs->ipv6_reach
 		    : isis_get_mt_items(&tlvs->mt_ipv6_reach, mtid);
 	append_item(l, (struct isis_item *)r);
+}
+
+void isis_tlvs_add_ipv6_dstsrc_reach(struct isis_tlvs *tlvs, uint16_t mtid,
+				     struct prefix_ipv6 *dest,
+				     struct prefix_ipv6 *src,
+				     uint32_t metric)
+{
+	isis_tlvs_add_ipv6_reach(tlvs, mtid, dest, metric);
+	struct isis_item_list *l = isis_get_mt_items(&tlvs->mt_ipv6_reach,
+						     mtid);
+
+	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)last_item(l);
+	r->subtlvs = isis_alloc_subtlvs();
+	r->subtlvs->source_prefix = XCALLOC(MTYPE_ISIS_SUBTLV, sizeof(*src));
+	memcpy(r->subtlvs->source_prefix, src, sizeof(*src));
 }
 
 void isis_tlvs_add_oldstyle_reach(struct isis_tlvs *tlvs, uint8_t *id,

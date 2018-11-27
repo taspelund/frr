@@ -117,7 +117,7 @@ static unsigned int if_rmap_hash_make(void *data)
 	return string_hash_make(if_rmap->ifname);
 }
 
-static int if_rmap_hash_cmp(const void *arg1, const void *arg2)
+static bool if_rmap_hash_cmp(const void *arg1, const void *arg2)
 {
 	const struct if_rmap *if_rmap1 = arg1;
 	const struct if_rmap *if_rmap2 = arg2;
@@ -294,9 +294,7 @@ void if_rmap_reset()
 
 void if_rmap_init(int node)
 {
-	ifrmaphash = hash_create_size(4,
-				      if_rmap_hash_make,
-				      if_rmap_hash_cmp,
+	ifrmaphash = hash_create_size(4, if_rmap_hash_make, if_rmap_hash_cmp,
 				      "Interface Route-Map Hash");
 	if (node == RIPNG_NODE) {
 	} else if (node == RIP_NODE) {

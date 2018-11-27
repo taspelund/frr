@@ -246,7 +246,7 @@ static void nhgc_delete(struct nexthop_group_cmd *nhgc)
 
 	RB_REMOVE(nhgc_entry_head, &nhgc_entries, nhgc);
 
-	list_delete_and_null(&nhgc->nhg_list);
+	list_delete(&nhgc->nhg_list);
 
 	XFREE(MTYPE_TMP, nhgc);
 }
@@ -386,6 +386,13 @@ DEFPY(ecmp_nexthops, ecmp_nexthops_cmd,
 	struct nexthop nhop;
 	struct nexthop *nh;
 	bool legal;
+
+	/*
+	 * This is impossible to happen as that the cli parser refuses
+	 * to let you get here without an addr, but the SA system
+	 * does not understand this intricacy
+	 */
+	assert(addr);
 
 	legal = nexthop_group_parse_nexthop(&nhop, addr, intf, name);
 

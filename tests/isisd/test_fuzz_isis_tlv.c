@@ -1,3 +1,7 @@
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include "test_fuzz_isis_tlv_tests.h"
 
 #include <zebra.h>
@@ -168,7 +172,7 @@ static int test(FILE *input, FILE *output)
 		sbuf_push(&fragment_format, 0, "%s", isis_format_tlvs(tlvs));
 		isis_free_tlvs(tlvs);
 	}
-	list_delete_and_null(&fragments);
+	list_delete(&fragments);
 	stream_free(s);
 
 	char *fragment_content = sortlines((char *)sbuf_buf(&fragment_format));

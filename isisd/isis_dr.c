@@ -126,7 +126,7 @@ int isis_dr_elect(struct isis_circuit *circuit, int level)
 	struct listnode *node;
 	struct isis_adjacency *adj, *adj_dr = NULL;
 	struct list *list = list_new();
-	u_char own_prio;
+	uint8_t own_prio;
 	int biggest_prio = -1;
 	int cmp_res, retval = ISIS_OK;
 
@@ -135,7 +135,7 @@ int isis_dr_elect(struct isis_circuit *circuit, int level)
 
 	if (!adjdb) {
 		zlog_warn("isis_dr_elect() adjdb == NULL");
-		list_delete_and_null(&list);
+		list_delete(&list);
 		return ISIS_WARNING;
 	}
 	isis_adj_build_up_list(adjdb, list);
@@ -177,7 +177,7 @@ int isis_dr_elect(struct isis_circuit *circuit, int level)
 		 */
 		if (circuit->u.bc.is_dr[level - 1])
 			retval = isis_dr_resign(circuit, level);
-		list_delete_and_null(&list);
+		list_delete(&list);
 		return retval;
 	}
 
@@ -217,13 +217,13 @@ int isis_dr_elect(struct isis_circuit *circuit, int level)
 		if (circuit->u.bc.is_dr[level - 1])
 			retval = isis_dr_resign(circuit, level);
 	}
-	list_delete_and_null(&list);
+	list_delete(&list);
 	return retval;
 }
 
 int isis_dr_resign(struct isis_circuit *circuit, int level)
 {
-	u_char id[ISIS_SYS_ID_LEN + 2];
+	uint8_t id[ISIS_SYS_ID_LEN + 2];
 
 	zlog_debug("isis_dr_resign l%d", level);
 
@@ -274,7 +274,7 @@ int isis_dr_resign(struct isis_circuit *circuit, int level)
 
 int isis_dr_commence(struct isis_circuit *circuit, int level)
 {
-	u_char old_dr[ISIS_SYS_ID_LEN + 2];
+	uint8_t old_dr[ISIS_SYS_ID_LEN + 2];
 
 	if (isis->debugs & DEBUG_EVENTS)
 		zlog_debug("isis_dr_commence l%d", level);

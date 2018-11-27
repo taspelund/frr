@@ -130,7 +130,7 @@ static void test_load(void)
 			line[strlen(line) - 1] = '\0';
 		if (line[0] == '#')
 			continue;
-		vector_set(test_cmds, XSTRDUP(MTYPE_STRVEC, line));
+		vector_set(test_cmds, XSTRDUP(MTYPE_TMP, line));
 	}
 }
 
@@ -181,7 +181,7 @@ static void test_terminate(void)
 
 	vty_terminate();
 	for (i = 0; i < vector_active(test_cmds); i++)
-		XFREE(MTYPE_STRVEC, vector_slot(test_cmds, i));
+		XFREE(MTYPE_TMP, vector_slot(test_cmds, i));
 	vector_free(test_cmds);
 	cmd_terminate();
 }
@@ -265,10 +265,10 @@ static void test_run(struct prng *prng, struct vty *vty, const char *cmd,
 			if (descriptions != NULL) {
 				for (j = 0; j < vector_active(descriptions);
 				     j++) {
-					struct cmd_token *cmd =
+					struct cmd_token *ct =
 						vector_slot(descriptions, j);
-					printf("  '%s' '%s'\n", cmd->text,
-					       cmd->desc);
+					printf("  '%s' '%s'\n", ct->text,
+					       ct->desc);
 				}
 				vector_free(descriptions);
 			}

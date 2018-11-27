@@ -40,6 +40,7 @@
 #include "zebra/rt.h"
 #include "zebra/kernel_socket.h"
 #include "zebra/zebra_mpls.h"
+#include "zebra/zebra_errors.h"
 
 extern struct zebra_privs_t zserv_privs;
 
@@ -72,7 +73,7 @@ static int kernel_rtm_add_labels(struct mpls_label_stack *nh_label,
 				 struct sockaddr_mpls *smpls)
 {
 	if (nh_label->num_labels > 1) {
-		flog_warn(ZEBRA_ERR_MAX_LABELS_PUSH,
+		flog_warn(EC_ZEBRA_MAX_LABELS_PUSH,
 			  "%s: can't push %u labels at "
 			  "once (maximum is 1)",
 			  __func__, nh_label->num_labels);
@@ -89,7 +90,8 @@ static int kernel_rtm_add_labels(struct mpls_label_stack *nh_label,
 #endif
 
 /* Interface between zebra message and rtm message. */
-static int kernel_rtm_ipv4(int cmd, struct prefix *p, struct route_entry *re)
+static int kernel_rtm_ipv4(int cmd, const struct prefix *p,
+			   struct route_entry *re)
 
 {
 	struct sockaddr_in *mask = NULL;
@@ -136,8 +138,7 @@ static int kernel_rtm_ipv4(int cmd, struct prefix *p, struct route_entry *re)
 		 * but this if statement seems overly cautious - what about
 		 * other than ADD and DELETE?
 		 */
-		if ((cmd == RTM_ADD
-		     && NEXTHOP_IS_ACTIVE(nexthop->flags))
+		if ((cmd == RTM_ADD && NEXTHOP_IS_ACTIVE(nexthop->flags))
 		    || (cmd == RTM_DELETE
 			&& CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB))) {
 			if (nexthop->type == NEXTHOP_TYPE_IPV4
@@ -213,7 +214,7 @@ static int kernel_rtm_ipv4(int cmd, struct prefix *p, struct route_entry *re)
 			case ZEBRA_ERR_RTEXIST:
 				if (cmd != RTM_ADD)
 					flog_err(
-						LIB_ERR_SYSTEM_CALL,
+						EC_LIB_SYSTEM_CALL,
 						"%s: rtm_write() returned %d for command %d",
 						__func__, error, cmd);
 				continue;
@@ -227,7 +228,7 @@ static int kernel_rtm_ipv4(int cmd, struct prefix *p, struct route_entry *re)
 			case ZEBRA_ERR_RTUNREACH:
 			default:
 				flog_err(
-					LIB_ERR_SYSTEM_CALL,
+					EC_LIB_SYSTEM_CALL,
 					"%s: %s: rtm_write() unexpectedly returned %d for command %s",
 					__func__,
 					prefix2str(p, prefix_buf,
@@ -244,9 +245,12 @@ static int kernel_rtm_ipv4(int cmd, struct prefix *p, struct route_entry *re)
 	} /* for (ALL_NEXTHOPS(...))*/
 
 	/* If there was no useful nexthop, then complain. */
-	if (nexthop_num == 0 && IS_ZEBRA_DEBUG_KERNEL)
-		zlog_debug("%s: No useful nexthops were found in RIB entry %p",
-			   __func__, re);
+	if (nexthop_num == 0) {
+		if (IS_ZEBRA_DEBUG_KERNEL)
+			zlog_debug("%s: No useful nexthops were found in RIB entry %p",
+				   __func__, re);
+		return 1;
+	}
 
 	return 0; /*XXX*/
 }
@@ -276,7 +280,8 @@ static int sin6_masklen(struct in6_addr mask)
 #endif /* SIN6_LEN */
 
 /* Interface between zebra message and rtm message. */
-static int kernel_rtm_ipv6(int cmd, struct prefix *p, struct route_entry *re)
+static int kernel_rtm_ipv6(int cmd, const struct prefix *p,
+			   struct route_entry *re)
 {
 	struct sockaddr_in6 *mask;
 	struct sockaddr_in6 sin_dest, sin_mask, sin_gate;
@@ -313,8 +318,7 @@ static int kernel_rtm_ipv6(int cmd, struct prefix *p, struct route_entry *re)
 
 		gate = 0;
 
-		if ((cmd == RTM_ADD
-		     && NEXTHOP_IS_ACTIVE(nexthop->flags))
+		if ((cmd == RTM_ADD && NEXTHOP_IS_ACTIVE(nexthop->flags))
 		    || (cmd == RTM_DELETE)) {
 			if (nexthop->type == NEXTHOP_TYPE_IPV6
 			    || nexthop->type == NEXTHOP_TYPE_IPV6_IFINDEX) {
@@ -373,13 +377,13 @@ static int kernel_rtm_ipv6(int cmd, struct prefix *p, struct route_entry *re)
 	if (nexthop_num == 0) {
 		if (IS_ZEBRA_DEBUG_KERNEL)
 			zlog_debug("kernel_rtm_ipv6(): No useful nexthop.");
-		return 0;
+		return 1;
 	}
 
 	return 0; /*XXX*/
 }
 
-static int kernel_rtm(int cmd, struct prefix *p, struct route_entry *re)
+static int kernel_rtm(int cmd, const struct prefix *p, struct route_entry *re)
 {
 	switch (PREFIX_FAMILY(p)) {
 	case AF_INET:
@@ -390,41 +394,43 @@ static int kernel_rtm(int cmd, struct prefix *p, struct route_entry *re)
 	return 0;
 }
 
-void kernel_route_rib(struct route_node *rn, struct prefix *p,
-		      struct prefix *src_p, struct route_entry *old,
-		      struct route_entry *new)
+enum dp_req_result kernel_route_rib(struct route_node *rn,
+				    const struct prefix *p,
+				    const struct prefix *src_p,
+				    struct route_entry *old,
+				    struct route_entry *new)
 {
 	int route = 0;
 
 	if (src_p && src_p->prefixlen) {
-		flog_warn(ZEBRA_ERR_UNSUPPORTED_V6_SRCDEST,
+		flog_warn(EC_ZEBRA_UNSUPPORTED_V6_SRCDEST,
 			  "%s: IPv6 sourcedest routes unsupported!", __func__);
-		return;
+		return DP_REQUEST_FAILURE;
 	}
 
-	if (zserv_privs.change(ZPRIVS_RAISE))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't raise privileges");
+	frr_elevate_privs(&zserv_privs) {
 
-	if (old)
-		route |= kernel_rtm(RTM_DELETE, p, old);
+		if (old)
+			route |= kernel_rtm(RTM_DELETE, p, old);
 
-	if (new)
-		route |= kernel_rtm(RTM_ADD, p, new);
+		if (new)
+			route |= kernel_rtm(RTM_ADD, p, new);
 
-	if (zserv_privs.change(ZPRIVS_LOWER))
-		flog_err(LIB_ERR_PRIVILEGES, "Can't lower privileges");
+	}
 
 	if (new) {
-		kernel_route_rib_pass_fail(rn, p, new,
-					   (!route) ?
-					   SOUTHBOUND_INSTALL_SUCCESS :
-					   SOUTHBOUND_INSTALL_FAILURE);
+		kernel_route_rib_pass_fail(
+			rn, p, new,
+			(!route) ? DP_INSTALL_SUCCESS
+				 : DP_INSTALL_FAILURE);
 	} else {
 		kernel_route_rib_pass_fail(rn, p, old,
-					   (!route) ?
-					   SOUTHBOUND_DELETE_SUCCESS :
-					   SOUTHBOUND_DELETE_FAILURE);
+					   (!route)
+						   ? DP_DELETE_SUCCESS
+						   : DP_DELETE_FAILURE);
 	}
+
+	return DP_REQUEST_SUCCESS;
 }
 
 int kernel_neigh_update(int add, int ifindex, uint32_t addr, char *lla,
@@ -456,7 +462,7 @@ int kernel_add_mac(struct interface *ifp, vlanid_t vid, struct ethaddr *mac,
 }
 
 int kernel_del_mac(struct interface *ifp, vlanid_t vid, struct ethaddr *mac,
-		   struct in_addr vtep_ip, int local)
+		   struct in_addr vtep_ip)
 {
 	return 0;
 }

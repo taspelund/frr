@@ -29,16 +29,21 @@
 #include "module.h"
 #include "hook.h"
 
-#define FRR_CONFDIR SYSCONFDIR
-#define FRR_INTCONF "frr.conf"
-#define QUAGGA_CONFDIR "/etc/quagga"
-#define QUAGGA_INTCONF "Quagga.conf"
-
+/* The following options disable specific command line options that
+ * are not applicable for a particular daemon.
+ */
 #define FRR_NO_PRIVSEP		(1 << 0)
 #define FRR_NO_TCPVTY		(1 << 1)
 #define FRR_LIMITED_CLI		(1 << 2)
-#define FRR_NO_CFG_PID_DRY		(1 << 3)
+#define FRR_NO_CFG_PID_DRY	(1 << 3)
 #define FRR_NO_ZCLIENT		(1 << 4)
+/* If FRR_DETACH_LATER is used, the daemon will keep its parent running
+ * until frr_detach() is called.  Normally "somedaemon -d" returns once the
+ * main event loop is reached in the daemon;  use this for extra startup bits.
+ *
+ * Does nothing if -d isn't used.
+ */
+#define FRR_DETACH_LATER	(1 << 5)
 
 struct frr_daemon_info {
 	unsigned flags;
@@ -55,11 +60,16 @@ struct frr_daemon_info {
 	bool dryrun;
 	bool daemon_mode;
 	bool terminal;
+
+	struct thread *read_in;
 	const char *config_file;
+	const char *backup_config_file;
 	const char *pid_file;
 	const char *vty_path;
 	const char *module_path;
 	const char *pathspace;
+	const char *early_logging;
+	const char *early_loglevel;
 
 	const char *proghelp;
 	void (*printhelp)(FILE *target);
@@ -102,10 +112,8 @@ extern struct thread_master *frr_init(void);
 DECLARE_HOOK(frr_late_init, (struct thread_master * tm), (tm))
 extern void frr_config_fork(void);
 
-extern void frr_vty_serv(void);
-
-/* note: contains call to frr_vty_serv() */
 extern void frr_run(struct thread_master *master);
+extern void frr_detach(void);
 
 extern bool frr_zclient_addr(struct sockaddr_storage *sa, socklen_t *sa_len,
 			     const char *path);
@@ -118,14 +126,11 @@ extern void frr_early_fini(void);
 DECLARE_KOOH(frr_fini, (), ())
 extern void frr_fini(void);
 
-extern char config_default[256];
+extern char config_default[512];
 extern char frr_zclientpath[256];
-extern char config_default_int[256];
 extern const char frr_sysconfdir[];
 extern const char frr_vtydir[];
 extern const char frr_moduledir[];
-
-extern bool quagga_compat_mode;
 
 extern char frr_protoname[];
 extern char frr_protonameinst[];

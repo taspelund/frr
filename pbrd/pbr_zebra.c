@@ -1,9 +1,7 @@
 /*
  * Zebra connect code.
- * Copyright (C) Cumulus Networks, Inc.
+ * Copyright (C) 2018 Cumulus Networks, Inc.
  *               Donald Sharp
- *
- * This file is part of FRR.
  *
  * FRR is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -45,10 +43,7 @@
 DEFINE_MTYPE_STATIC(PBRD, PBR_INTERFACE, "PBR Interface")
 
 /* Zebra structure to hold current status. */
-struct zclient *zclient = NULL;
-
-/* For registering threads. */
-extern struct thread_master *master;
+struct zclient *zclient;
 
 struct pbr_interface *pbr_if_new(struct interface *ifp)
 {
@@ -59,7 +54,8 @@ struct pbr_interface *pbr_if_new(struct interface *ifp)
 
 	pbr_ifp = XCALLOC(MTYPE_PBR_INTERFACE, sizeof(*pbr_ifp));
 
-	return (pbr_ifp);
+	ifp->info = pbr_ifp;
+	return pbr_ifp;
 }
 
 /* Inteface addition message from zebra. */
@@ -73,12 +69,8 @@ static int interface_add(int command, struct zclient *zclient,
 	if (!ifp)
 		return 0;
 
-	if (!ifp->info) {
-		struct pbr_interface *pbr_ifp;
-
-		pbr_ifp = pbr_if_new(ifp);
-		ifp->info = pbr_ifp;
-	}
+	if (!ifp->info)
+		pbr_if_new(ifp);
 
 	return 0;
 }
@@ -224,6 +216,7 @@ static int rule_notify_owner(int command, struct zclient *zclient,
 		DEBUGD(&pbr_dbg_zebra, "%s: Recived RULE_INSTALLED",
 		       __PRETTY_FUNCTION__);
 		break;
+	case ZAPI_RULE_FAIL_REMOVE:
 	case ZAPI_RULE_REMOVED:
 		pbrms->installed &= ~installed;
 		DEBUGD(&pbr_dbg_zebra, "%s: Received RULE REMOVED",
@@ -359,8 +352,6 @@ void route_delete(struct pbr_nexthop_group_cache *pnhgc, afi_t afi)
 		       __PRETTY_FUNCTION__);
 		break;
 	}
-
-	return;
 }
 
 static int pbr_zebra_nexthop_update(int command, struct zclient *zclient,
@@ -400,7 +391,7 @@ void pbr_zebra_init(void)
 {
 	struct zclient_options opt = { .receive_notify = true };
 
-	zclient = zclient_new_notify(master, &opt);
+	zclient = zclient_new(master, &opt);
 
 	zclient_init(zclient, ZEBRA_ROUTE_PBR, 0, &pbr_privs);
 	zclient->zebra_connected = zebra_connected;
@@ -451,7 +442,7 @@ void pbr_send_rnh(struct nexthop *nhop, bool reg)
 
 static void pbr_encode_pbr_map_sequence_prefix(struct stream *s,
 					       struct prefix *p,
-					       u_char family)
+					       unsigned char  family)
 {
 	struct prefix any;
 
@@ -470,14 +461,11 @@ static void pbr_encode_pbr_map_sequence(struct stream *s,
 					struct pbr_map_sequence *pbrms,
 					struct interface *ifp)
 {
-	u_char family;
+	unsigned char family;
 
 	family = AF_INET;
-	if (pbrms->src)
-		family = pbrms->src->family;
-
-	if (pbrms->dst)
-		family = pbrms->dst->family;
+	if (pbrms->family)
+		family = pbrms->family;
 
 	stream_putl(s, pbrms->seqno);
 	stream_putl(s, pbrms->ruleno);
@@ -486,6 +474,7 @@ static void pbr_encode_pbr_map_sequence(struct stream *s,
 	stream_putw(s, 0);  /* src port */
 	pbr_encode_pbr_map_sequence_prefix(s, pbrms->dst, family);
 	stream_putw(s, 0);  /* dst port */
+	stream_putl(s, 0);  /* fwmark */
 	if (pbrms->nhgrp_name)
 		stream_putl(s, pbr_nht_get_table(pbrms->nhgrp_name));
 	else if (pbrms->nhg)
@@ -498,7 +487,7 @@ void pbr_send_pbr_map(struct pbr_map_sequence *pbrms,
 {
 	struct pbr_map *pbrm = pbrms->parent;
 	struct stream *s;
-	uint64_t is_installed = 1 << pmi->install_bit;
+	uint64_t is_installed = (uint64_t)1 << pmi->install_bit;
 
 	is_installed &= pbrms->installed;
 

@@ -33,6 +33,14 @@ DEFINE_MTYPE_STATIC(ISISD, MT_AREA_SETTING, "ISIS MT Area Setting")
 DEFINE_MTYPE_STATIC(ISISD, MT_CIRCUIT_SETTING, "ISIS MT Circuit Setting")
 DEFINE_MTYPE_STATIC(ISISD, MT_ADJ_INFO, "ISIS MT Adjacency Info")
 
+bool isis_area_ipv6_dstsrc_enabled(struct isis_area *area)
+{
+	struct isis_area_mt_setting *area_mt_setting;
+	area_mt_setting = area_lookup_mt_setting(area, ISIS_MT_IPV6_DSTSRC);
+
+	return (area_mt_setting && area_mt_setting->enabled);
+}
+
 uint16_t isis_area_ipv6_topology(struct isis_area *area)
 {
 	struct isis_area_mt_setting *area_mt_setting;
@@ -61,6 +69,8 @@ const char *isis_mtid2str(uint16_t mtid)
 		return "ipv6-multicast";
 	case ISIS_MT_IPV6_MGMT:
 		return "ipv6-mgmt";
+	case ISIS_MT_IPV6_DSTSRC:
+		return "ipv6-dstsrc";
 	default:
 		snprintf(buf, sizeof(buf), "%" PRIu16, mtid);
 		return buf;
@@ -81,6 +91,8 @@ uint16_t isis_str2mtid(const char *name)
 		return ISIS_MT_IPV6_MULTICAST;
 	if (!strcmp(name, "ipv6-mgmt"))
 		return ISIS_MT_IPV6_MGMT;
+	if (!strcmp(name, "ipv6-dstsrc"))
+		return ISIS_MT_IPV6_DSTSRC;
 	return -1;
 }
 
@@ -151,7 +163,7 @@ void area_mt_init(struct isis_area *area)
 
 void area_mt_finish(struct isis_area *area)
 {
-	list_delete_and_null(&area->mt_settings);
+	list_delete(&area->mt_settings);
 }
 
 struct isis_area_mt_setting *area_get_mt_setting(struct isis_area *area,
@@ -274,7 +286,7 @@ void circuit_mt_init(struct isis_circuit *circuit)
 
 void circuit_mt_finish(struct isis_circuit *circuit)
 {
-	list_delete_and_null(&circuit->mt_settings);
+	list_delete(&circuit->mt_settings);
 }
 
 struct isis_circuit_mt_setting *

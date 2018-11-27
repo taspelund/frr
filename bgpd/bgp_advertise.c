@@ -71,7 +71,7 @@ unsigned int baa_hash_key(void *p)
 	return attrhash_key_make(baa->attr);
 }
 
-int baa_hash_cmp(const void *p1, const void *p2)
+bool baa_hash_cmp(const void *p1, const void *p2)
 {
 	const struct bgp_advertise_attr *baa1 = p1;
 	const struct bgp_advertise_attr *baa2 = p2;
@@ -90,9 +90,9 @@ struct bgp_advertise *bgp_advertise_new(void)
 
 void bgp_advertise_free(struct bgp_advertise *adv)
 {
-	if (adv->binfo)
-		bgp_info_unlock(
-			adv->binfo); /* bgp_advertise bgp_info reference */
+	if (adv->pathi)
+		/* bgp_advertise bgp_path_info reference */
+		bgp_path_info_unlock(adv->pathi);
 	XFREE(MTYPE_BGP_ADVERTISE, adv);
 }
 
@@ -146,7 +146,7 @@ void bgp_advertise_unintern(struct hash *hash, struct bgp_advertise_attr *baa)
 }
 
 int bgp_adj_out_lookup(struct peer *peer, struct bgp_node *rn,
-		       u_int32_t addpath_tx_id)
+		       uint32_t addpath_tx_id)
 {
 	struct bgp_adj_out *adj;
 	struct peer_af *paf;
@@ -179,7 +179,7 @@ int bgp_adj_out_lookup(struct peer *peer, struct bgp_node *rn,
 
 
 void bgp_adj_in_set(struct bgp_node *rn, struct peer *peer, struct attr *attr,
-		    u_int32_t addpath_id)
+		    uint32_t addpath_id)
 {
 	struct bgp_adj_in *adj;
 
@@ -209,7 +209,7 @@ void bgp_adj_in_remove(struct bgp_node *rn, struct bgp_adj_in *bai)
 }
 
 int bgp_adj_in_unset(struct bgp_node *rn, struct peer *peer,
-		     u_int32_t addpath_id)
+		     uint32_t addpath_id)
 {
 	struct bgp_adj_in *adj;
 	struct bgp_adj_in *adj_next;

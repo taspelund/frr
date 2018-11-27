@@ -1585,7 +1585,7 @@ void igmp_v3_send_query(struct igmp_group *group, int fd, const char *ifname,
 	msg_size = IGMP_V3_SOURCES_OFFSET + (num_sources << 2);
 	if (msg_size > query_buf_size) {
 		flog_err(
-			LIB_ERR_DEVELOPMENT,
+			EC_LIB_DEVELOPMENT,
 			"%s %s: unable to send: msg_size=%zd larger than query_buf_size=%d",
 			__FILE__, __PRETTY_FUNCTION__, msg_size,
 			query_buf_size);
@@ -1840,6 +1840,9 @@ int igmp_v3_recv_report(struct igmp_sock *igmp, struct in_addr from,
 	int local_ncb = 0;
 	struct pim_interface *pim_ifp;
 
+	if (igmp->mtrace_only)
+		return 0;
+
 	pim_ifp = igmp->interface->info;
 
 	if (igmp_msg_len < IGMP_V3_MSG_MIN_SIZE) {
@@ -1862,6 +1865,9 @@ int igmp_v3_recv_report(struct igmp_sock *igmp, struct in_addr from,
 			from_str, ifp->name, recv_checksum, checksum);
 		return -1;
 	}
+
+	/* Collecting IGMP Rx stats */
+	igmp->rx_stats.report_v3++;
 
 	num_groups = ntohs(
 		*(uint16_t *)(igmp_msg + IGMP_V3_REPORT_NUMGROUPS_OFFSET));

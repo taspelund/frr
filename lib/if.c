@@ -49,8 +49,8 @@ RB_GENERATE(if_index_head, interface, index_entry, if_cmp_index_func);
 
 DEFINE_QOBJ_TYPE(interface)
 
-DEFINE_HOOK(if_add, (struct interface *ifp), (ifp))
-DEFINE_KOOH(if_del, (struct interface *ifp), (ifp))
+DEFINE_HOOK(if_add, (struct interface * ifp), (ifp))
+DEFINE_KOOH(if_del, (struct interface * ifp), (ifp))
 
 /* List of interfaces in only the default VRF */
 int ptm_enable = 0;
@@ -63,7 +63,7 @@ int ptm_enable = 0;
  * before all numbers.  Examples: de0 < de1, de100 < fxp0 < xl0, devpty <
  * devpty0, de0 < del0
  */
-int if_cmp_name_func(char *p1, char *p2)
+int if_cmp_name_func(const char *p1, const char *p2)
 {
 	unsigned int l1, l2;
 	long int x1, x2;
@@ -99,8 +99,8 @@ int if_cmp_name_func(char *p1, char *p2)
 		if (!*p2)
 			return 1;
 
-		x1 = strtol(p1, &p1, 10);
-		x2 = strtol(p2, &p2, 10);
+		x1 = strtol(p1, (char **)&p1, 10);
+		x2 = strtol(p2, (char **)&p2, 10);
 
 		/* let's compare numbers now */
 		if (x1 < x2)
@@ -121,7 +121,7 @@ int if_cmp_name_func(char *p1, char *p2)
 static int if_cmp_func(const struct interface *ifp1,
 		       const struct interface *ifp2)
 {
-	return if_cmp_name_func((char *)ifp1->name, (char *)ifp2->name);
+	return if_cmp_name_func(ifp1->name, ifp2->name);
 }
 
 static int if_cmp_index_func(const struct interface *ifp1,
@@ -153,7 +153,7 @@ struct interface *if_create(const char *name, vrf_id_t vrf_id)
 	SET_FLAG(ifp->status, ZEBRA_INTERFACE_LINKDETECTION);
 
 	QOBJ_REG(ifp, interface);
-        hook_call(if_add, ifp);
+	hook_call(if_add, ifp);
 	return ifp;
 }
 
@@ -182,7 +182,7 @@ void if_update_to_new_vrf(struct interface *ifp, vrf_id_t vrf_id)
 /* Delete interface structure. */
 void if_delete_retain(struct interface *ifp)
 {
-        hook_call(if_del, ifp);
+	hook_call(if_del, ifp);
 	QOBJ_UNREG(ifp);
 
 	/* Free connected address list */
@@ -206,8 +206,8 @@ void if_delete(struct interface *ifp)
 
 	if_delete_retain(ifp);
 
-	list_delete_and_null(&ifp->connected);
-	list_delete_and_null(&ifp->nbr_connected);
+	list_delete(&ifp->connected);
+	list_delete(&ifp->nbr_connected);
 
 	if_link_params_free(ifp);
 
@@ -222,18 +222,6 @@ struct interface *if_lookup_by_index(ifindex_t ifindex, vrf_id_t vrf_id)
 {
 	struct vrf *vrf;
 	struct interface if_tmp;
-
-	if (vrf_id == VRF_UNKNOWN) {
-		struct interface *ifp;
-
-		RB_FOREACH(vrf, vrf_id_head, &vrfs_by_id) {
-			ifp = if_lookup_by_index(ifindex, vrf->vrf_id);
-			if (ifp)
-				return ifp;
-		}
-
-		return NULL;
-	}
 
 	vrf = vrf_lookup_by_id(vrf_id);
 	if (!vrf)
@@ -405,8 +393,8 @@ struct interface *if_get_by_name(const char *name, vrf_id_t vrf_id, int vty)
 	 * this should not be considered as an update
 	 * then create the new interface
 	 */
-	if (ifp->vrf_id != vrf_id &&
-	    vrf_is_mapped_on_netns(vrf_id))
+	if (ifp->vrf_id != vrf_id && vrf_is_mapped_on_netns(
+					vrf_lookup_by_id(vrf_id)))
 		return if_create(name, vrf_id);
 	/* If it came from the kernel
 	 * or by way of zclient, believe it and update
@@ -648,7 +636,7 @@ static struct interface *if_sunwzebra_get(char *name, vrf_id_t vrf_id)
 }
 #endif /* SUNOS_5 */
 
-DEFUN (interface,
+DEFUN_NOSH (interface,
        interface_cmd,
        "interface IFNAME [vrf NAME]",
        "Select an interface to configure\n"
@@ -658,7 +646,8 @@ DEFUN (interface,
 	int idx_ifname = 1;
 	int idx_vrf = 3;
 	const char *ifname = argv[idx_ifname]->arg;
-	const char *vrfname = (argc > 2) ? argv[idx_vrf]->arg : NULL;
+	const char *vrfname =
+		(argc > 2) ? argv[idx_vrf]->arg : VRF_DEFAULT_NAME;
 
 	struct interface *ifp;
 	vrf_id_t vrf_id = VRF_DEFAULT;
@@ -683,7 +672,8 @@ DEFUN (interface,
 #endif /* SUNOS_5 */
 
 	if (!ifp) {
-		vty_out(vty, "%% interface %s not in %s\n", ifname, vrfname);
+		vty_out(vty, "%% interface %s not in %s vrf\n", ifname,
+			vrfname);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 	VTY_PUSH_CONTEXT(INTERFACE_NODE, ifp);
@@ -691,13 +681,13 @@ DEFUN (interface,
 	return CMD_SUCCESS;
 }
 
-DEFUN_NOSH (no_interface,
-           no_interface_cmd,
-           "no interface IFNAME [vrf NAME]",
-           NO_STR
-           "Delete a pseudo interface's configuration\n"
-           "Interface's name\n"
-           VRF_CMD_HELP_STR)
+DEFUN (no_interface,
+       no_interface_cmd,
+       "no interface IFNAME [vrf NAME]",
+       NO_STR
+       "Delete a pseudo interface's configuration\n"
+       "Interface's name\n"
+       VRF_CMD_HELP_STR)
 {
 	int idx_vrf = 4;
 	const char *ifname = argv[2]->arg;
@@ -1161,7 +1151,7 @@ const char *if_link_type_str(enum zebra_link_type llt)
 		llts(ZEBRA_LLT_IEEE802154, "IEEE 802.15.4");
 		llts(ZEBRA_LLT_IEEE802154_PHY, "IEEE 802.15.4 Phy");
 	default:
-		flog_err(LIB_ERR_DEVELOPMENT, "Unknown value %d", llt);
+		flog_err(EC_LIB_DEVELOPMENT, "Unknown value %d", llt);
 		return "Unknown type!";
 #undef llts
 	}

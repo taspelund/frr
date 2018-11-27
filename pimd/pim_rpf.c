@@ -77,7 +77,7 @@ int pim_nexthop_lookup(struct pim_instance *pim, struct pim_nexthop *nexthop,
 			pim_addr_dump("<nexthop?>", &nexthop->mrib_nexthop_addr,
 				      nexthop_str, sizeof(nexthop_str));
 			zlog_debug(
-				"%s: Using last lookup for %s at %lld, %" PRId64 " addr%s",
+				"%s: Using last lookup for %s at %lld, %" PRId64 " addr %s",
 				__PRETTY_FUNCTION__, addr_str,
 				nexthop->last_lookup_time,
 				pim->last_route_change_time, nexthop_str);
@@ -170,7 +170,7 @@ int pim_nexthop_lookup(struct pim_instance *pim, struct pim_nexthop *nexthop,
 				nexthop_tab[i].route_metric,
 				nexthop_tab[i].protocol_distance);
 		}
-		/* update nextop data */
+		/* update nexthop data */
 		nexthop->interface = ifp;
 		nexthop->mrib_nexthop_addr = nexthop_tab[i].nexthop_addr;
 		nexthop->mrib_metric_preference =
@@ -239,8 +239,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 				return PIM_RPF_FAILURE;
 		}
 	} else {
-		if (!pim_ecmp_nexthop_lookup(pim, &rpf->source_nexthop,
-					     up->upstream_addr, &src,
+		if (!pim_ecmp_nexthop_lookup(pim, &rpf->source_nexthop, &src,
 					     &grp, neigh_needed))
 			return PIM_RPF_FAILURE;
 	}
@@ -408,7 +407,7 @@ unsigned int pim_rpf_hash_key(void *arg)
 	return jhash_1word(r->rpf.rpf_addr.u.prefix4.s_addr, 0);
 }
 
-int pim_rpf_equal(const void *arg1, const void *arg2)
+bool pim_rpf_equal(const void *arg1, const void *arg2)
 {
 	const struct pim_nexthop_cache *r1 =
 		(const struct pim_nexthop_cache *)arg1;

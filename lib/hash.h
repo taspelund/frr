@@ -73,7 +73,7 @@ struct hash {
 	unsigned int (*hash_key)(void *);
 
 	/* Data compare function. */
-	int (*hash_cmp)(const void *, const void *);
+	bool (*hash_cmp)(const void *, const void *);
 
 	/* Backet alloc. */
 	unsigned long count;
@@ -115,7 +115,7 @@ struct hash {
  *    a new hash table
  */
 extern struct hash *hash_create(unsigned int (*hash_key)(void *),
-				int (*hash_cmp)(const void *, const void *),
+				bool (*hash_cmp)(const void *, const void *),
 				const char *name);
 
 /*
@@ -150,7 +150,8 @@ extern struct hash *hash_create(unsigned int (*hash_key)(void *),
  */
 extern struct hash *
 hash_create_size(unsigned int size, unsigned int (*hash_key)(void *),
-		 int (*hash_cmp)(const void *, const void *), const char *name);
+		 bool (*hash_cmp)(const void *, const void *),
+		 const char *name);
 
 /*
  * Retrieve or insert data from / into a hash table.
@@ -167,7 +168,9 @@ hash_create_size(unsigned int size, unsigned int (*hash_key)(void *),
  *    hash table to operate on
  *
  * data
- *    data to insert or retrieve
+ *    data to insert or retrieve - A hash backet will not be created if
+ *    the alloc_func returns a NULL pointer and nothing will be added to
+ *    the hash.  As such backet->data will always be non-NULL.
  *
  * alloc_func
  *    function to call if the item is not found in the hash table. This
@@ -232,7 +235,11 @@ extern void *hash_release(struct hash *hash, void *data);
  * Iterate over the elements in a hash table.
  *
  * It is safe to delete items passed to the iteration function from the hash
- * table during iteration.
+ * table during iteration.  Please note that adding entries to the hash
+ * during the walk will cause undefined behavior in that some new entries
+ * will be walked and some will not.  So do not do this.
+ *
+ * The backet passed to func will have a non-NULL data pointer.
  *
  * hash
  *    hash table to operate on
@@ -250,7 +257,11 @@ extern void hash_iterate(struct hash *hash,
  * Iterate over the elements in a hash table, stopping on condition.
  *
  * It is safe to delete items passed to the iteration function from the hash
- * table during iteration.
+ * table during iteration.  Please note that adding entries to the hash
+ * during the walk will cause undefined behavior in that some new entries
+ * will be walked and some will not.  So do not do this.
+ *
+ * The backet passed to func will have a non-NULL data pointer.
  *
  * hash
  *    hash table to operate on

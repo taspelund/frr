@@ -37,7 +37,7 @@
 struct zclient *zclient = NULL;
 
 /* Send ECMP routes to zebra. */
-static void rip_zebra_ipv4_send(struct route_node *rp, u_char cmd)
+static void rip_zebra_ipv4_send(struct route_node *rp, uint8_t cmd)
 {
 	struct list *list = (struct list *)rp->info;
 	struct zapi_route api;
@@ -139,8 +139,7 @@ static int rip_zebra_read_route(int command, struct zclient *zclient,
 	if (command == ZEBRA_REDISTRIBUTE_ROUTE_ADD)
 		rip_redistribute_add(api.type, RIP_ROUTE_REDISTRIBUTE,
 				     (struct prefix_ipv4 *)&api.prefix, &nh,
-				     api.metric, api.distance,
-				     api.tag);
+				     api.metric, api.distance, api.tag);
 	else if (command == ZEBRA_REDISTRIBUTE_ROUTE_DEL)
 		rip_redistribute_delete(api.type, RIP_ROUTE_REDISTRIBUTE,
 					(struct prefix_ipv4 *)&api.prefix,
@@ -591,7 +590,7 @@ static void rip_zebra_connected(struct zclient *zclient)
 void rip_zclient_init(struct thread_master *master)
 {
 	/* Set default value to the zebra client structure. */
-	zclient = zclient_new_notify(master, &zclient_options_default);
+	zclient = zclient_new(master, &zclient_options_default);
 	zclient_init(zclient, ZEBRA_ROUTE_RIP, 0, &ripd_privs);
 	zclient->zebra_connected = rip_zebra_connected;
 	zclient->interface_add = rip_interface_add;

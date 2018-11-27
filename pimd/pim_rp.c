@@ -52,7 +52,7 @@ void pim_rp_list_hash_clean(void *data)
 {
 	struct pim_nexthop_cache *pnc = (struct pim_nexthop_cache *)data;
 
-	list_delete_and_null(&pnc->rp_list);
+	list_delete(&pnc->rp_list);
 
 	hash_clean(pnc->upstream_hash, NULL);
 	hash_free(pnc->upstream_hash);
@@ -113,9 +113,9 @@ void pim_rp_init(struct pim_instance *pim)
 	rp_info = XCALLOC(MTYPE_PIM_RP, sizeof(*rp_info));
 
 	if (!str2prefix("224.0.0.0/4", &rp_info->group)) {
-		flog_err(LIB_ERR_DEVELOPMENT,
-			  "Unable to convert 224.0.0.0/4 to prefix");
-		list_delete_and_null(&pim->rp_list);
+		flog_err(EC_LIB_DEVELOPMENT,
+			 "Unable to convert 224.0.0.0/4 to prefix");
+		list_delete(&pim->rp_list);
 		route_table_finish(pim->rp_table);
 		XFREE(MTYPE_PIM_RP, rp_info);
 		return;
@@ -130,14 +130,15 @@ void pim_rp_init(struct pim_instance *pim)
 	rn = route_node_get(pim->rp_table, &rp_info->group);
 	rn->info = rp_info;
 	if (PIM_DEBUG_TRACE)
-		zlog_debug("Allocated: %p for rp_info: %p(224.0.0.0/4) Lock: %d",
-			   rn, rp_info, rn->lock);
+		zlog_debug(
+			"Allocated: %p for rp_info: %p(224.0.0.0/4) Lock: %d",
+			rn, rp_info, rn->lock);
 }
 
 void pim_rp_free(struct pim_instance *pim)
 {
 	if (pim->rp_list)
-		list_delete_and_null(&pim->rp_list);
+		list_delete(&pim->rp_list);
 }
 
 /*
@@ -183,7 +184,7 @@ static int pim_rp_prefix_list_used(struct pim_instance *pim, const char *plist)
  */
 static struct rp_info *pim_rp_find_exact(struct pim_instance *pim,
 					 struct in_addr rp,
-					 struct prefix *group)
+					 const struct prefix *group)
 {
 	struct listnode *node;
 	struct rp_info *rp_info;
@@ -201,13 +202,13 @@ static struct rp_info *pim_rp_find_exact(struct pim_instance *pim,
  * Given a group, return the rp_info for that group
  */
 static struct rp_info *pim_rp_find_match_group(struct pim_instance *pim,
-					       struct prefix *group)
+					       const struct prefix *group)
 {
 	struct listnode *node;
 	struct rp_info *best = NULL;
 	struct rp_info *rp_info;
 	struct prefix_list *plist;
-	struct prefix *p, *bp;
+	const struct prefix *p, *bp;
 	struct route_node *rn;
 
 	bp = NULL;
@@ -215,7 +216,8 @@ static struct rp_info *pim_rp_find_match_group(struct pim_instance *pim,
 		if (rp_info->plist) {
 			plist = prefix_list_lookup(AFI_IP, rp_info->plist);
 
-			if (prefix_list_apply_which_prefix(plist, &p, group) == PREFIX_DENY)
+			if (prefix_list_apply_which_prefix(plist, &p, group)
+			    == PREFIX_DENY)
 				continue;
 
 			if (!best) {
@@ -234,7 +236,7 @@ static struct rp_info *pim_rp_find_match_group(struct pim_instance *pim,
 	rn = route_node_match(pim->rp_table, group);
 	if (!rn) {
 		flog_err(
-			LIB_ERR_DEVELOPMENT,
+			EC_LIB_DEVELOPMENT,
 			"%s: BUG We should have found default group information\n",
 			__PRETTY_FUNCTION__);
 		return best;
@@ -245,8 +247,8 @@ static struct rp_info *pim_rp_find_match_group(struct pim_instance *pim,
 		char buf[PREFIX_STRLEN];
 
 		route_unlock_node(rn);
-		zlog_debug("Lookedup: %p for rp_info: %p(%s) Lock: %d",
-			   rn, rp_info,
+		zlog_debug("Lookedup: %p for rp_info: %p(%s) Lock: %d", rn,
+			   rp_info,
 			   prefix2str(&rp_info->group, buf, sizeof(buf)),
 			   rn->lock);
 	}
@@ -466,10 +468,9 @@ int pim_rp_new(struct pim_instance *pim, const char *rp,
 					    &rp_all->group, 1))
 					return PIM_RP_NO_PATH;
 			} else {
-				if (pim_nexthop_lookup(
+				if (!pim_ecmp_nexthop_lookup(
 					    pim, &rp_all->rp.source_nexthop,
-					    rp_all->rp.rpf_addr.u.prefix4, 1)
-				    != 0)
+					    &nht_p, &rp_all->group, 1))
 					return PIM_RP_NO_PATH;
 			}
 			pim_rp_check_interfaces(pim, rp_all);
@@ -519,8 +520,8 @@ int pim_rp_new(struct pim_instance *pim, const char *rp,
 	if (PIM_DEBUG_TRACE) {
 		char buf[PREFIX_STRLEN];
 
-		zlog_debug("Allocated: %p for rp_info: %p(%s) Lock: %d",
-			   rn, rp_info,
+		zlog_debug("Allocated: %p for rp_info: %p(%s) Lock: %d", rn,
+			   rp_info,
 			   prefix2str(&rp_info->group, buf, sizeof(buf)),
 			   rn->lock);
 	}
@@ -545,9 +546,8 @@ int pim_rp_new(struct pim_instance *pim, const char *rp,
 					     &nht_p, &rp_info->group, 1))
 			return PIM_RP_NO_PATH;
 	} else {
-		if (pim_nexthop_lookup(pim, &rp_info->rp.source_nexthop,
-				       rp_info->rp.rpf_addr.u.prefix4, 1)
-		    != 0)
+		if (!pim_ecmp_nexthop_lookup(pim, &rp_info->rp.source_nexthop,
+					     &nht_p, &rp_info->group, 1))
 			return PIM_RP_NO_PATH;
 	}
 
@@ -625,17 +625,18 @@ int pim_rp_del(struct pim_instance *pim, const char *rp,
 		if (rn) {
 			if (rn->info != rp_info)
 				flog_err(
-					LIB_ERR_DEVELOPMENT,
+					EC_LIB_DEVELOPMENT,
 					"Expected rn->info to be equal to rp_info");
 
 			if (PIM_DEBUG_TRACE) {
 				char buf[PREFIX_STRLEN];
 
-				zlog_debug("%s:Found for Freeing: %p for rp_info: %p(%s) Lock: %d",
-					   __PRETTY_FUNCTION__,
-					   rn, rp_info,
-					   prefix2str(&rp_info->group, buf, sizeof(buf)),
-					   rn->lock);
+				zlog_debug(
+					"%s:Found for Freeing: %p for rp_info: %p(%s) Lock: %d",
+					__PRETTY_FUNCTION__, rn, rp_info,
+					prefix2str(&rp_info->group, buf,
+						   sizeof(buf)),
+					rn->lock);
 			}
 			rn->info = NULL;
 			route_unlock_node(rn);
@@ -676,9 +677,9 @@ void pim_rp_setup(struct pim_instance *pim)
 					"%s: NHT Local Nexthop not found for RP %s ",
 					__PRETTY_FUNCTION__, buf);
 			}
-			if (!pim_nexthop_lookup(
-				    pim, &rp_info->rp.source_nexthop,
-				    rp_info->rp.rpf_addr.u.prefix4, 1))
+			if (!pim_ecmp_nexthop_lookup(pim,
+						     &rp_info->rp.source_nexthop,
+						      &nht_p, &rp_info->group, 1))
 				if (PIM_DEBUG_PIM_NHT_RP)
 					zlog_debug(
 						"Unable to lookup nexthop for rp specified");
@@ -843,8 +844,9 @@ struct pim_rpf *pim_rp_g(struct pim_instance *pim, struct in_addr group)
 					__PRETTY_FUNCTION__, buf, buf1);
 			}
 			pim_rpf_set_refresh_time(pim);
-			pim_nexthop_lookup(pim, &rp_info->rp.source_nexthop,
-					   rp_info->rp.rpf_addr.u.prefix4, 1);
+			(void)pim_ecmp_nexthop_lookup(
+				pim, &rp_info->rp.source_nexthop, &nht_p,
+				&rp_info->group, 1);
 		}
 		return (&rp_info->rp);
 	}

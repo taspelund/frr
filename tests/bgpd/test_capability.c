@@ -54,7 +54,7 @@ static int tty = 0;
 static struct test_segment {
 	const char *name;
 	const char *desc;
-	const u_char data[1024];
+	const uint8_t data[1024];
 	int len;
 #define SHOULD_PARSE	0
 #define SHOULD_ERR	-1
@@ -821,6 +821,7 @@ static void parse_test(struct peer *peer, struct test_segment *t, int type)
 	switch (type) {
 	case CAPABILITY:
 		len += 2; /* to cover the OPT-Param header */
+		_FALLTHROUGH
 	case OPT_PARAM:
 		printf("len: %u\n", len);
 		/* peek_for_as4 wants getp at capibility*/

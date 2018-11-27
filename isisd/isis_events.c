@@ -134,7 +134,7 @@ static void circuit_resign_level(struct isis_circuit *circuit, int level)
 		circuit->lsp_regenerate_pending[idx] = 0;
 		circuit->u.bc.run_dr_elect[idx] = 0;
 		if (circuit->u.bc.lan_neighs[idx] != NULL)
-			list_delete_and_null(&circuit->u.bc.lan_neighs[idx]);
+			list_delete(&circuit->u.bc.lan_neighs[idx]);
 	}
 
 	return;
@@ -158,7 +158,7 @@ void isis_circuit_is_type_set(struct isis_circuit *circuit, int newtype)
 
 	if (!(newtype & circuit->area->is_type)) {
 		flog_err(
-			ISIS_ERR_CONFIG,
+			EC_ISIS_CONFIG,
 			"ISIS-Evt (%s) circuit type change - invalid level %s because area is %s",
 			circuit->area->area_tag, circuit_t2string(newtype),
 			circuit_t2string(circuit->area->is_type));
@@ -257,7 +257,7 @@ int isis_event_dis_status_change(struct thread *thread)
 }
 
 void isis_event_auth_failure(char *area_tag, const char *error_string,
-			     u_char *sysid)
+			     uint8_t *sysid)
 {
 	if (isis->debugs & DEBUG_EVENTS)
 		zlog_debug("ISIS-Evt (%s) Authentication failure %s from %s",

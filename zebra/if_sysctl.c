@@ -37,6 +37,7 @@
 #include "zebra/rt.h"
 #include "zebra/kernel_socket.h"
 #include "zebra/rib.h"
+#include "zebra/zebra_errors.h"
 
 void ifstat_update_sysctl(void)
 {
@@ -52,7 +53,7 @@ void ifstat_update_sysctl(void)
 
 	/* Query buffer size. */
 	if (sysctl(mib, MIBSIZ, NULL, &bufsiz, NULL, 0) < 0) {
-		flog_warn(ZEBRA_ERR_SYSCTL_FAILED, "sysctl() error by %s",
+		flog_warn(EC_ZEBRA_SYSCTL_FAILED, "sysctl() error by %s",
 			  safe_strerror(errno));
 		return;
 	}
@@ -62,7 +63,7 @@ void ifstat_update_sysctl(void)
 
 	/* Fetch interface informations into allocated buffer. */
 	if (sysctl(mib, MIBSIZ, buf, &bufsiz, NULL, 0) < 0) {
-		flog_warn(ZEBRA_ERR_SYSCTL_FAILED, "sysctl error by %s",
+		flog_warn(EC_ZEBRA_SYSCTL_FAILED, "sysctl error by %s",
 			  safe_strerror(errno));
 		XFREE(MTYPE_TMP, ref);
 		return;
@@ -103,7 +104,7 @@ void interface_list(struct zebra_ns *zns)
 
 	/* Query buffer size. */
 	if (sysctl(mib, MIBSIZ, NULL, &bufsiz, NULL, 0) < 0) {
-		flog_err_sys(ZEBRA_ERR_IFLIST_FAILED,
+		flog_err_sys(EC_ZEBRA_IFLIST_FAILED,
 			     "Could not enumerate interfaces: %s",
 			     safe_strerror(errno));
 		return;
@@ -114,7 +115,7 @@ void interface_list(struct zebra_ns *zns)
 
 	/* Fetch interface informations into allocated buffer. */
 	if (sysctl(mib, MIBSIZ, buf, &bufsiz, NULL, 0) < 0) {
-		flog_err_sys(ZEBRA_ERR_IFLIST_FAILED,
+		flog_err_sys(EC_ZEBRA_IFLIST_FAILED,
 			     "Could not enumerate interfaces: %s",
 			     safe_strerror(errno));
 		return;

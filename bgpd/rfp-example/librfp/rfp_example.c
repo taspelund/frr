@@ -18,6 +18,10 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 /* stub rfp */
 #include "rfp_internal.h"
 #include "bgpd/rfapi/rfapi.h"
@@ -230,7 +234,7 @@ void *rfp_start(struct thread_master *master, struct rfapi_rfp_cfg **cfgp,
 
 	/* initilize struct rfapi_rfp_cfg, see rfapi.h */
 	global_rfi.rfapi_config.download_type =
-		RFAPI_RFP_DOWNLOAD_FULL; /* default=partial */
+		RFAPI_RFP_DOWNLOAD_PARTIAL; /* default=partial */
 	global_rfi.rfapi_config.ftd_advertisement_interval =
 		RFAPI_RFP_CFG_DEFAULT_FTD_ADVERTISEMENT_INTERVAL;
 	global_rfi.rfapi_config.holddown_factor =

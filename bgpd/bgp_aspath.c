@@ -38,7 +38,7 @@
 #include "bgpd/bgp_errors.h"
 
 /* Attr. Flags and Attr. Type Code. */
-#define AS_HEADER_SIZE        2
+#define AS_HEADER_SIZE 2
 
 /* Now FOUR octets are used for AS value. */
 #define AS_VALUE_SIZE         sizeof (as_t)
@@ -81,8 +81,8 @@
  * NOT the internal representation!
  */
 struct assegment_header {
-	u_char type;
-	u_char length;
+	uint8_t type;
+	uint8_t length;
 };
 
 /* Hash for aspath.  This is the top level structure of AS path. */
@@ -110,7 +110,7 @@ const char *aspath_segment_type_str[] = {"as-invalid", "as-set", "as-sequence",
  * the caller should immediately assign data to the segment, as the segment
  * otherwise is not generally valid
  */
-static struct assegment *assegment_new(u_char type, u_short length)
+static struct assegment *assegment_new(uint8_t type, unsigned short length)
 {
 	struct assegment *new;
 
@@ -341,7 +341,7 @@ void aspath_unintern(struct aspath **aspath)
 /* Return the start or end delimiters for a particular Segment type */
 #define AS_SEG_START 0
 #define AS_SEG_END 1
-static char aspath_delimiter_char(u_char type, u_char which)
+static char aspath_delimiter_char(uint8_t type, uint8_t which)
 {
 	int i;
 	struct {
@@ -494,7 +494,8 @@ static void aspath_make_str_count(struct aspath *as, bool make_json)
 	if (!as->segments) {
 		if (make_json) {
 			json_object_string_add(as->json, "string", "Local");
-			json_object_object_add(as->json, "segments", jaspath_segments);
+			json_object_object_add(as->json, "segments",
+					       jaspath_segments);
 			json_object_int_add(as->json, "length", 0);
 		}
 		as->str = XMALLOC(MTYPE_AS_STR, 1);
@@ -571,8 +572,9 @@ static void aspath_make_str_count(struct aspath *as, bool make_json)
 		/* write out the ASNs, with their seperators, bar the last one*/
 		for (i = 0; i < seg->length; i++) {
 			if (make_json)
-				json_object_array_add(jseg_list,
-						      json_object_new_int(seg->as[i]));
+				json_object_array_add(
+					jseg_list,
+					json_object_new_int(seg->as[i]));
 
 			len += snprintf(str_buf + len, str_size - len, "%u",
 					seg->as[i]);
@@ -584,8 +586,9 @@ static void aspath_make_str_count(struct aspath *as, bool make_json)
 
 		if (make_json) {
 			jseg = json_object_new_object();
-			json_object_string_add(jseg, "type",
-					       aspath_segment_type_str[seg->type]);
+			json_object_string_add(
+				jseg, "type",
+				aspath_segment_type_str[seg->type]);
 			json_object_object_add(jseg, "list", jseg_list);
 			json_object_array_add(jaspath_segments, jseg);
 		}
@@ -857,7 +860,7 @@ static void assegment_data_put(struct stream *s, as_t *as, int num,
 		}
 }
 
-static size_t assegment_header_put(struct stream *s, u_char type, int length)
+static size_t assegment_header_put(struct stream *s, uint8_t type, int length)
 {
 	size_t lenp;
 	assert(length <= AS_SEGMENT_MAX);
@@ -897,10 +900,11 @@ size_t aspath_put(struct stream *s, struct aspath *as, int use32bit)
 			while ((seg->length - written) > AS_SEGMENT_MAX) {
 				assegment_header_put(s, seg->type,
 						     AS_SEGMENT_MAX);
-				assegment_data_put(s, seg->as, AS_SEGMENT_MAX,
+				assegment_data_put(s, (seg->as + written), AS_SEGMENT_MAX,
 						   use32bit);
 				written += AS_SEGMENT_MAX;
-				bytes += ASSEGMENT_SIZE(AS_SEGMENT_MAX, use32bit);
+				bytes += ASSEGMENT_SIZE(AS_SEGMENT_MAX,
+							use32bit);
 			}
 
 			/* write the final segment, probably is also the first
@@ -954,7 +958,7 @@ size_t aspath_put(struct stream *s, struct aspath *as, int use32bit)
  * We have no way to manage the storage, so we use a static stream
  * wrapper around aspath_put.
  */
-u_char *aspath_snmp_pathseg(struct aspath *as, size_t *varlen)
+uint8_t *aspath_snmp_pathseg(struct aspath *as, size_t *varlen)
 {
 #define SNMP_PATHSEG_MAX 1024
 
@@ -1533,7 +1537,7 @@ struct aspath *aspath_filter_exclude(struct aspath *source,
 
 /* Add specified AS to the leftmost of aspath. */
 static struct aspath *aspath_add_asns(struct aspath *aspath, as_t asno,
-				      u_char type, unsigned num)
+				      uint8_t type, unsigned num)
 {
 	struct assegment *assegment = aspath->segments;
 	unsigned i;
@@ -1624,7 +1628,7 @@ struct aspath *aspath_reconcile_as4(struct aspath *aspath,
 	struct aspath *newpath = NULL, *mergedpath;
 	int hops, cpasns = 0;
 
-	if (!aspath)
+	if (!aspath || !as4path)
 		return NULL;
 
 	seg = aspath->segments;
@@ -1635,8 +1639,9 @@ struct aspath *aspath_reconcile_as4(struct aspath *aspath,
 
 	if (hops < 0) {
 		if (BGP_DEBUG(as4, AS4))
-			flog_warn(BGP_WARN_ASPATH_FEWER_HOPS,
-				  "[AS4] Fewer hops in AS_PATH than NEW_AS_PATH");
+			flog_warn(
+				EC_BGP_ASPATH_FEWER_HOPS,
+				"[AS4] Fewer hops in AS_PATH than NEW_AS_PATH");
 		/* Something's gone wrong. The RFC says we should now ignore
 		 * AS4_PATH,
 		 * which is daft behaviour - it contains vital loop-detection
@@ -1721,23 +1726,23 @@ struct aspath *aspath_reconcile_as4(struct aspath *aspath,
 /* Compare leftmost AS value for MED check.  If as1's leftmost AS and
    as2's leftmost AS is same return 1. (confederation as-path
    only).  */
-int aspath_cmp_left_confed(const struct aspath *aspath1,
-			   const struct aspath *aspath2)
+bool aspath_cmp_left_confed(const struct aspath *aspath1,
+			    const struct aspath *aspath2)
 {
 	if (!(aspath1 && aspath2))
-		return 0;
+		return false;
 
 	if (!(aspath1->segments && aspath2->segments))
-		return 0;
+		return false;
 
 	if ((aspath1->segments->type != AS_CONFED_SEQUENCE)
 	    || (aspath2->segments->type != AS_CONFED_SEQUENCE))
-		return 0;
+		return false;
 
 	if (aspath1->segments->as[0] == aspath2->segments->as[0])
-		return 1;
+		return true;
 
-	return 0;
+	return false;
 }
 
 /* Delete all AS_CONFED_SEQUENCE/SET segments from aspath.
@@ -1864,7 +1869,7 @@ enum as_token {
 
 /* Return next token and point for string parse. */
 static const char *aspath_gettoken(const char *buf, enum as_token *token,
-				   u_long *asno)
+				   unsigned long *asno)
 {
 	const char *p = buf;
 
@@ -1929,8 +1934,8 @@ static const char *aspath_gettoken(const char *buf, enum as_token *token,
 struct aspath *aspath_str2aspath(const char *str)
 {
 	enum as_token token = as_token_unknown;
-	u_short as_type;
-	u_long asno = 0;
+	unsigned short as_type;
+	unsigned long asno = 0;
 	struct aspath *aspath;
 	int needtype;
 
@@ -2003,7 +2008,7 @@ unsigned int aspath_key_make(void *p)
 }
 
 /* If two aspath have same value then return 1 else return 0 */
-int aspath_cmp(const void *arg1, const void *arg2)
+bool aspath_cmp(const void *arg1, const void *arg2)
 {
 	const struct assegment *seg1 = ((const struct aspath *)arg1)->segments;
 	const struct assegment *seg2 = ((const struct aspath *)arg2)->segments;
@@ -2011,26 +2016,24 @@ int aspath_cmp(const void *arg1, const void *arg2)
 	while (seg1 || seg2) {
 		int i;
 		if ((!seg1 && seg2) || (seg1 && !seg2))
-			return 0;
+			return false;
 		if (seg1->type != seg2->type)
-			return 0;
+			return false;
 		if (seg1->length != seg2->length)
-			return 0;
+			return false;
 		for (i = 0; i < seg1->length; i++)
 			if (seg1->as[i] != seg2->as[i])
-				return 0;
+				return false;
 		seg1 = seg1->next;
 		seg2 = seg2->next;
 	}
-	return 1;
+	return true;
 }
 
 /* AS path hash initialize. */
 void aspath_init(void)
 {
-	ashash = hash_create_size(32768,
-				  aspath_key_make,
-				  aspath_cmp,
+	ashash = hash_create_size(32768, aspath_key_make, aspath_cmp,
 				  "BGP AS Path");
 }
 
