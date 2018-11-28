@@ -10829,7 +10829,6 @@ static int bgp_show_neighbor(struct vty *vty, struct bgp *bgp,
 	if (use_json) {
 		vty_out(vty, "%s\n", json_object_to_json_string_ext(
 					     json, JSON_C_TO_STRING_PRETTY));
-		json_object_free(json);
 	} else {
 		vty_out(vty, "\n");
 	}
@@ -10902,6 +10901,7 @@ static void bgp_show_all_instances_neighbors_vty(struct vty *vty,
 			bgp_show_neighbor(vty, bgp, show_all, NULL, NULL,
 					  use_json, json);
 		}
+		json_object_free(json);
 	}
 
 	if (use_json)
