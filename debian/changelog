@@ -1,3 +1,9 @@
+frr (6.0+cl4u1) RELEASED; urgency=medium
+
+  * Upgrade to 6.0
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Wed, 28 Nov 2018 18:10:00 -0400
+
 frr (4.1+cl3u1) RELEASED; urgency=medium
 
   * Staticd: New daemon responsible for management of static routes
