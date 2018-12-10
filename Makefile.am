@@ -126,7 +126,7 @@ include fpm/subdir.am
 include mlag/subdir.am
 include grpc/subdir.am
 include tools/subdir.am
-include debianpkg/subdir.am
+include debian/subdir.am
 include solaris/subdir.am
 
 include bgpd/subdir.am

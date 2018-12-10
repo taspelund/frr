@@ -1,14 +1,17 @@
 etc/frr/
 usr/bin/vtysh
 usr/bin/mtracebis
-usr/include/frr/
-usr/lib/
-tools/frr usr/lib/frr
-usr/share/doc/frr/
+usr/lib/*/frr/libfrr.*
+usr/lib/*/frr/libfrrospfapiclient.*
+usr/lib/frr/frr
+usr/lib/frr/*d
+usr/lib/frr/watchfrr
+usr/lib/frr/zebra
+usr/lib/*/frr/modules/zebra_irdp.so
+usr/lib/*/frr/modules/zebra_fpm.so
+usr/share/doc/frr/examples
+usr/share/man/
 usr/share/yang/
 tools/etc/* etc/
-tools/*.service lib/systemd/system
 tools/frr-reload usr/lib/frr/
-tools/frr-reload.py usr/lib/frr
-tools/usr/share/cumulus/* usr/share/cumulus/
 debian/frr.conf usr/lib/tmpfiles.d
