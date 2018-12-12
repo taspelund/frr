@@ -910,10 +910,6 @@ void rtm_read(struct rt_msghdr *rtm)
 	if (flags & RTF_PROTO1)
 		SET_FLAG(zebra_flags, ZEBRA_FLAG_SELFROUTE);
 
-	/* This is persistent route. */
-	if (flags & RTF_STATIC)
-		SET_FLAG(zebra_flags, ZEBRA_FLAG_STATIC);
-
 	memset(&nh, 0, sizeof(nh));
 
 	nh.vrf_id = VRF_DEFAULT;
