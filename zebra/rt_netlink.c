@@ -1553,7 +1553,7 @@ static int netlink_route_multipath(int cmd, const struct prefix *p,
 	}
 
 	/* Singlepath case. */
-	if (nexthop_num == 1 || multipath_num == 1) {
+	if (nexthop_num == 1) {
 		nexthop_num = 0;
 		for (ALL_NEXTHOPS(re->ng, nexthop)) {
 			/*
@@ -1654,9 +1654,6 @@ static int netlink_route_multipath(int cmd, const struct prefix *p,
 
 		nexthop_num = 0;
 		for (ALL_NEXTHOPS(re->ng, nexthop)) {
-			if (nexthop_num >= multipath_num)
-				break;
-
 			if (CHECK_FLAG(nexthop->flags,
 				       NEXTHOP_FLAG_RECURSIVE)) {
 				/* This only works for IPv4 now */
@@ -2657,7 +2654,7 @@ int netlink_mpls_multipath(int cmd, zebra_lsp_t *lsp)
 	/* Fill nexthops (paths) based on single-path or multipath. The paths
 	 * chosen depend on the operation.
 	 */
-	if (nexthop_num == 1 || multipath_num == 1) {
+	if (nexthop_num == 1) {
 		routedesc = "single-path";
 		_netlink_mpls_debug(cmd, lsp->ile.in_label, routedesc);
 
@@ -2703,9 +2700,6 @@ int netlink_mpls_multipath(int cmd, zebra_lsp_t *lsp)
 			nexthop = nhlfe->nexthop;
 			if (!nexthop)
 				continue;
-
-			if (nexthop_num >= multipath_num)
-				break;
 
 			if ((cmd == RTM_NEWROUTE
 			     && (CHECK_FLAG(nhlfe->flags, NHLFE_FLAG_SELECTED)
