@@ -2877,6 +2877,12 @@ DEFUN (bgp_evpn_advertise_default_gw,
 	if (!bgp)
 		return CMD_WARNING;
 
+	if (bgp->vrf_id != VRF_DEFAULT) {
+		vty_out(vty,
+			"This command is only supported under Default VRF\n");
+		return CMD_WARNING;
+	}
+
 	evpn_set_advertise_default_gw(bgp, NULL);
 
 	return CMD_SUCCESS;
@@ -2892,6 +2898,12 @@ DEFUN (no_bgp_evpn_advertise_default_gw,
 
 	if (!bgp)
 		return CMD_WARNING;
+
+	if (bgp->vrf_id != VRF_DEFAULT) {
+		vty_out(vty,
+			"This command is only supported under Default VRF\n");
+		return CMD_WARNING;
+	}
 
 	evpn_unset_advertise_default_gw(bgp, NULL);
 
@@ -3005,6 +3017,12 @@ DEFPY (dup_addr_detection,
 	if (!bgp_vrf)
 		return CMD_WARNING;
 
+	if (bgp_vrf->vrf_id != VRF_DEFAULT) {
+		vty_out(vty,
+			"This command is only supported under Default VRF\n");
+		return CMD_WARNING;
+	}
+
 	bgp_vrf->evpn_info->dup_addr_detect = true;
 
 	if (time_val)
@@ -3030,6 +3048,12 @@ DEFPY (dup_addr_detection_auto_recovery,
 
 	if (!bgp_vrf)
 		return CMD_WARNING;
+
+	if (bgp_vrf->vrf_id != VRF_DEFAULT) {
+		vty_out(vty,
+			"This command is only supported under Default VRF\n");
+		return CMD_WARNING;
+	}
 
 	bgp_vrf->evpn_info->dup_addr_detect = true;
 	bgp_vrf->evpn_info->dad_freeze = true;
@@ -3059,6 +3083,12 @@ DEFPY (no_dup_addr_detection,
 
 	if (!bgp_vrf)
 		return CMD_WARNING;
+
+	if (bgp_vrf->vrf_id != VRF_DEFAULT) {
+		vty_out(vty,
+			"This command is only supported under Default VRF\n");
+		return CMD_WARNING;
+	}
 
 	if (argc == 2) {
 		if (!bgp_vrf->evpn_info->dup_addr_detect)
