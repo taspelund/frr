@@ -207,7 +207,6 @@ struct interface *if_link_per_ns(struct zebra_ns *ns, struct interface *ifp)
 	if (rn->info) {
 		ifp = (struct interface *)rn->info;
 		route_unlock_node(rn); /* get */
-		ifp->node = rn;
 		return ifp;
 	}
 
@@ -255,30 +254,6 @@ struct interface *if_lookup_by_name_per_ns(struct zebra_ns *ns,
 			return (ifp);
 	}
 
-	return NULL;
-}
-
-/* this function must be used only if the vrf backend
- * is a netns backend
- */
-struct interface *if_lookup_by_name_not_ns(ns_id_t ns_id,
-					   const char *ifname)
-{
-	struct interface *ifp;
-	struct ns *ns;
-
-	RB_FOREACH (ns, ns_head, &ns_tree) {
-		if (ns->ns_id == ns_id)
-			continue;
-		/* if_delete_update has removed interface
-		 * from zns->if_table
-		 * so to look for interface, use the vrf list
-		 */
-		ifp = if_lookup_by_name(ifname, (vrf_id_t)ns->ns_id);
-		if (!ifp)
-			continue;
-		return ifp;
-	}
 	return NULL;
 }
 
@@ -761,8 +736,12 @@ void if_delete_update(struct interface *ifp)
 	ifp->node = NULL;
 
 	/* if the ifp is in a vrf, move it to default so vrf can be deleted if
-	 * desired */
-	if (ifp->vrf_id)
+	 * desired. This operation is not done for netns implementation to avoid
+	 * collision with interface with the same name in the default vrf (can
+	 * occur with this implementation whereas it is not possible with
+	 * vrf-lite).
+	 */
+	if (ifp->vrf_id && !vrf_is_backend_netns())
 		if_handle_vrf_change(ifp, VRF_DEFAULT);
 
 	/* Reset some zebra interface params to default values. */
@@ -827,19 +806,6 @@ static void ipv6_ll_address_to_mac(struct in6_addr *address, uint8_t *mac)
 	mac[5] = address->s6_addr[15];
 }
 
-static bool mac_is_same(char *mac1, char *mac2)
-{
-	if (mac1[0] == mac2[0] &&
-	    mac1[1] == mac2[1] &&
-	    mac1[2] == mac2[2] &&
-	    mac1[3] == mac2[3] &&
-	    mac1[4] == mac2[4] &&
-	    mac1[5] == mac2[5])
-		return true;
-	else
-		return false;
-}
-
 void if_nbr_mac_to_ipv4ll_neigh_update(struct interface *ifp,
 				       char mac[6],
 				       struct in6_addr *address,
@@ -856,19 +822,23 @@ void if_nbr_mac_to_ipv4ll_neigh_update(struct interface *ifp,
 	ns_id = zvrf->zns->ns_id;
 
 	/*
-	 * Remove existed arp record for the interface as netlink
-	 * protocol does not have update message types
-	 *
-	 * supported message types are RTM_NEWNEIGH and RTM_DELNEIGH
+	 * Remove and re-add any existing neighbor entry for this address,
+	 * since Netlink doesn't currently offer update message types.
 	 */
-	if (!mac_is_same(zif->neigh_mac, mac)) {
-		kernel_neigh_update(0, ifp->ifindex, ipv4_ll.s_addr,
-				    mac, 6, ns_id);
+	kernel_neigh_update(0, ifp->ifindex, ipv4_ll.s_addr, mac, 6, ns_id);
 
-		/* Add arp record */
-		kernel_neigh_update(add, ifp->ifindex, ipv4_ll.s_addr,
-				    mac, 6, ns_id);
-	}
+	/* Add new neighbor entry.
+	 *
+	 * We force installation even if current neighbor entry is the same.
+	 * Since this function is used to refresh our MAC entries after an
+	 * interface flap, if we don't force in our custom entries with their
+	 * state set to PERMANENT or REACHABLE then the kernel will attempt to
+	 * resolve our leftover entries, fail, mark them unreachable and then
+	 * they'll be useless to us.
+	 */
+	if (add)
+		kernel_neigh_update(add, ifp->ifindex, ipv4_ll.s_addr, mac, 6,
+				    ns_id);
 
 	memcpy(&zif->neigh_mac[0], &mac[0], 6);
 
@@ -1040,13 +1010,16 @@ void if_refresh(struct interface *ifp)
 	if_get_flags(ifp);
 }
 
-void zebra_if_update_link(struct interface *ifp, ifindex_t link_ifindex)
+void zebra_if_update_link(struct interface *ifp, ifindex_t link_ifindex,
+			  ns_id_t ns_id)
 {
 	struct zebra_if *zif;
 
+	if (IS_ZEBRA_IF_VETH(ifp))
+		return;
 	zif = (struct zebra_if *)ifp->info;
 	zif->link_ifindex = link_ifindex;
-	zif->link = if_lookup_by_index_per_ns(zebra_ns_lookup(NS_DEFAULT),
+	zif->link = if_lookup_by_index_per_ns(zebra_ns_lookup(ns_id),
 					      link_ifindex);
 }
 
@@ -1163,6 +1136,19 @@ static const char *zebra_ziftype_2str(zebra_iftype_t zif_type)
 	case ZEBRA_IF_VRF:
 		return "VRF";
 		break;
+
+	case ZEBRA_IF_VETH:
+		return "VETH";
+		break;
+
+	case ZEBRA_IF_BOND:
+		return "bond";
+
+	case ZEBRA_IF_BOND_SLAVE:
+		return "bond_slave";
+
+	case ZEBRA_IF_MACVLAN:
+		return "macvlan";
 
 	default:
 		return "Unknown";
@@ -1291,6 +1277,15 @@ static void if_dump_vty(struct vty *vty, struct interface *ifp)
 		if (br_slave->bridge_ifindex != IFINDEX_INTERNAL)
 			vty_out(vty, "  Master (bridge) ifindex %u\n",
 				br_slave->bridge_ifindex);
+	}
+
+	if (IS_ZEBRA_IF_BOND_SLAVE(ifp)) {
+		struct zebra_l2info_bondslave *bond_slave;
+
+		bond_slave = &zebra_if->bondslave_info;
+		if (bond_slave->bond_ifindex != IFINDEX_INTERNAL)
+			vty_out(vty, "  Master (bond) ifindex %u\n",
+				bond_slave->bond_ifindex);
 	}
 
 	if (zebra_if->link_ifindex != IFINDEX_INTERNAL) {

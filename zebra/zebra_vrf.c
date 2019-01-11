@@ -40,6 +40,7 @@
 #include "zebra/zebra_mpls.h"
 #include "zebra/zebra_vxlan.h"
 #include "zebra/zebra_netns_notify.h"
+#include "zebra/zebra_routemap.h"
 
 extern struct zebra_t zebrad;
 
@@ -283,6 +284,19 @@ static int zebra_vrf_delete(struct vrf *vrf)
 	return 0;
 }
 
+static int zebra_vrf_update(struct vrf *vrf)
+{
+	struct zebra_vrf *zvrf = vrf->info;
+
+	assert(zvrf);
+	if (IS_ZEBRA_DEBUG_EVENT)
+		zlog_debug("VRF %s id %u, name updated", vrf->name,
+			   zvrf_id(zvrf));
+	zebra_vrf_add_update(zvrf);
+	return 0;
+}
+
+
 /* Return if this VRF has any FRR configuration or not.
  * IMPORTANT: This function needs to be updated when additional configuration
  * is added for a VRF.
@@ -466,7 +480,6 @@ static int vrf_config_write(struct vty *vty)
 		if (zvrf_id(zvrf) == VRF_DEFAULT) {
 			if (zvrf->l3vni)
 				vty_out(vty, "vni %u\n", zvrf->l3vni);
-			vty_out(vty, "!\n");
 		} else {
 			vty_frame(vty, "vrf %s\n", zvrf_name(zvrf));
 			if (zvrf->l3vni)
@@ -476,11 +489,14 @@ static int vrf_config_write(struct vty *vty)
 						? " prefix-routes-only"
 						: "");
 			zebra_ns_config_write(vty, (struct ns *)vrf->ns_ctxt);
-
 		}
+
+		zebra_routemap_config_write_protocol(vty, zvrf);
 
 		if (zvrf_id(zvrf) != VRF_DEFAULT)
 			vty_endframe(vty, " exit-vrf\n!\n");
+		else
+			vty_out(vty, "!\n");
 	}
 	return 0;
 }
@@ -489,7 +505,7 @@ static int vrf_config_write(struct vty *vty)
 void zebra_vrf_init(void)
 {
 	vrf_init(zebra_vrf_new, zebra_vrf_enable, zebra_vrf_disable,
-		 zebra_vrf_delete);
+		 zebra_vrf_delete, zebra_vrf_update);
 
 	vrf_cmd_init(vrf_config_write, &zserv_privs);
 }

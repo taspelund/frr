@@ -171,7 +171,7 @@ void ospf_router_id_update(struct ospf *ospf)
 
 		/* Flush (inline) all external LSAs which now match the new
 		   router-id,
-		   need to adjust the OSPF_LSA_SELF flag, so the flush doesnt
+		   need to adjust the OSPF_LSA_SELF flag, so the flush doesn't
 		   hit
 		   asserts in ospf_refresher_unregister_lsa(). This step is
 		   needed
@@ -234,12 +234,10 @@ static struct ospf *ospf_new(unsigned short instance, const char *name)
 	new->instance = instance;
 	new->router_id.s_addr = htonl(0);
 	new->router_id_static.s_addr = htonl(0);
-
-	if (name) {
+	if (name && !strmatch(name, VRF_DEFAULT_NAME)) {
 		new->vrf_id = VRF_UNKNOWN;
 		/* Freed in ospf_finish_final */
 		new->name = XSTRDUP(MTYPE_OSPF_TOP, name);
-		vrf = vrf_lookup_by_name(new->name);
 		if (IS_DEBUG_OSPF_EVENT)
 			zlog_debug(
 				"%s: Create new ospf instance with vrf_name %s vrf_id %u",
@@ -377,6 +375,9 @@ struct ospf *ospf_lookup_by_inst_name(unsigned short instance, const char *name)
 {
 	struct ospf *ospf = NULL;
 	struct listnode *node, *nnode;
+
+	if (name == NULL || strmatch(name, VRF_DEFAULT_NAME))
+		return ospf_lookup_by_vrf_id(VRF_DEFAULT);
 
 	for (ALL_LIST_ELEMENTS(om->ospf, node, nnode, ospf)) {
 		if ((ospf->instance == instance)
@@ -889,6 +890,7 @@ void ospf_area_check_free(struct ospf *ospf, struct in_addr area_id)
 
 	area = ospf_area_lookup_by_area_id(ospf, area_id);
 	if (area && listcount(area->oiflist) == 0 && area->ranges->top == NULL
+	    && !ospf_vl_count(ospf, area)
 	    && area->shortcut_configured == OSPF_SHORTCUT_DEFAULT
 	    && area->external_routing == OSPF_AREA_DEFAULT
 	    && area->no_summary == 0 && area->default_cost == 1
@@ -1145,6 +1147,32 @@ void ospf_interface_area_unset(struct ospf *ospf, struct interface *ifp)
 
 	/* Update connected redistribute. */
 	update_redistributed(ospf, 0); /* interfaces possibly removed */
+}
+
+bool ospf_interface_area_is_already_set(struct ospf *ospf,
+					struct interface *ifp)
+{
+	struct route_node *rn_oi;
+
+	if (!ospf)
+		return false; /* Ospf not ready yet */
+
+	/* Find interfaces that may need to be removed. */
+	for (rn_oi = route_top(IF_OIFS(ifp)); rn_oi;
+	     rn_oi = route_next(rn_oi)) {
+		struct ospf_interface *oi = rn_oi->info;
+
+		if (oi == NULL)
+			continue;
+
+		if (oi->type == OSPF_IFTYPE_VIRTUALLINK)
+			continue;
+		/* at least one route covered by interface
+		 * that implies already done
+		 */
+		return true;
+	}
+	return false;
 }
 
 /* Check whether interface matches given network
@@ -2072,6 +2100,10 @@ static int ospf_vrf_enable(struct vrf *vrf)
 
 	ospf = ospf_lookup_by_name(vrf->name);
 	if (ospf) {
+		if (ospf->name && strmatch(vrf->name, VRF_DEFAULT_NAME)) {
+			XFREE(MTYPE_OSPF_TOP, ospf->name);
+			ospf->name = NULL;
+		}
 		old_vrf_id = ospf->vrf_id;
 		/* We have instance configured, link to VRF and make it "up". */
 		ospf_vrf_link(ospf, vrf);
@@ -2143,7 +2175,7 @@ static int ospf_vrf_disable(struct vrf *vrf)
 void ospf_vrf_init(void)
 {
 	vrf_init(ospf_vrf_new, ospf_vrf_enable, ospf_vrf_disable,
-		 ospf_vrf_delete);
+		 ospf_vrf_delete, NULL);
 }
 
 void ospf_vrf_terminate(void)

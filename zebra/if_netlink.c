@@ -243,7 +243,8 @@ static enum zebra_link_type netlink_to_zebra_link_type(unsigned int hwt)
 	}
 }
 
-static void netlink_determine_zebra_iftype(char *kind, zebra_iftype_t *zif_type)
+static void netlink_determine_zebra_iftype(const char *kind,
+					   zebra_iftype_t *zif_type)
 {
 	*zif_type = ZEBRA_IF_OTHER;
 
@@ -260,6 +261,12 @@ static void netlink_determine_zebra_iftype(char *kind, zebra_iftype_t *zif_type)
 		*zif_type = ZEBRA_IF_VXLAN;
 	else if (strcmp(kind, "macvlan") == 0)
 		*zif_type = ZEBRA_IF_MACVLAN;
+	else if (strcmp(kind, "veth") == 0)
+		*zif_type = ZEBRA_IF_VETH;
+	else if (strcmp(kind, "bond") == 0)
+		*zif_type = ZEBRA_IF_BOND;
+	else if (strcmp(kind, "bond_slave") == 0)
+		*zif_type = ZEBRA_IF_BOND_SLAVE;
 }
 
 #define parse_rtattr_nested(tb, max, rta)                                      \
@@ -392,7 +399,7 @@ static int get_iflink_speed(struct interface *interface)
 			       (char *)&ifdata);
 	}
 	if (rc < 0) {
-		if (IS_ZEBRA_DEBUG_KERNEL)
+		if (errno != EOPNOTSUPP && IS_ZEBRA_DEBUG_KERNEL)
 			zlog_debug(
 				"IOCTL failure to read interface %s speed: %d %s",
 				ifname, errno, safe_strerror(errno));
@@ -583,6 +590,7 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	zebra_slave_iftype_t zif_slave_type = ZEBRA_IF_SLAVE_NONE;
 	ifindex_t bridge_ifindex = IFINDEX_INTERNAL;
 	ifindex_t link_ifindex = IFINDEX_INTERNAL;
+	ifindex_t bond_ifindex = IFINDEX_INTERNAL;
 	struct zebra_if *zif;
 
 	zns = zebra_ns_lookup(ns_id);
@@ -633,7 +641,10 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 		if (linkinfo[IFLA_INFO_SLAVE_KIND])
 			slave_kind = RTA_DATA(linkinfo[IFLA_INFO_SLAVE_KIND]);
 
-		netlink_determine_zebra_iftype(kind, &zif_type);
+		if ((slave_kind != NULL) && strcmp(slave_kind, "bond") == 0)
+			netlink_determine_zebra_iftype("bond_slave", &zif_type);
+		else
+			netlink_determine_zebra_iftype(kind, &zif_type);
 	}
 
 	/* If VRF, create the VRF structure itself. */
@@ -651,6 +662,9 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 			zif_slave_type = ZEBRA_IF_SLAVE_BRIDGE;
 			bridge_ifindex =
 				*(ifindex_t *)RTA_DATA(tb[IFLA_MASTER]);
+		} else if (slave_kind && (strcmp(slave_kind, "bond") == 0)) {
+			zif_slave_type = ZEBRA_IF_SLAVE_BOND;
+			bond_ifindex = *(ifindex_t *)RTA_DATA(tb[IFLA_MASTER]);
 		} else
 			zif_slave_type = ZEBRA_IF_SLAVE_OTHER;
 	}
@@ -662,7 +676,7 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 		link_ifindex = *(ifindex_t *)RTA_DATA(tb[IFLA_LINK]);
 
 	/* Add interface. */
-	ifp = if_get_by_name(name, vrf_id, 0);
+	ifp = if_get_by_name(name, vrf_id);
 	set_ifindex(ifp, ifi->ifi_index, zns);
 	ifp->flags = ifi->ifi_flags & 0x0000fffff;
 	ifp->mtu6 = ifp->mtu = *(uint32_t *)RTA_DATA(tb[IFLA_MTU]);
@@ -698,13 +712,15 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	netlink_interface_update_l2info(ifp, linkinfo[IFLA_INFO_DATA], 1);
 	if (IS_ZEBRA_IF_BRIDGE_SLAVE(ifp))
 		zebra_l2if_update_bridge_slave(ifp, bridge_ifindex);
+	else if (IS_ZEBRA_IF_BOND_SLAVE(ifp))
+		zebra_l2if_update_bond_slave(ifp, bond_ifindex);
 
 	return 0;
 }
 
 /* Request for specific interface or address information from the kernel */
-static int netlink_request_intf_addr(struct zebra_ns *zns, int family, int type,
-				     uint32_t filter_mask)
+static int netlink_request_intf_addr(struct nlsock *netlink_cmd, int family,
+				     int type, uint32_t filter_mask)
 {
 	struct {
 		struct nlmsghdr n;
@@ -722,39 +738,44 @@ static int netlink_request_intf_addr(struct zebra_ns *zns, int family, int type,
 	if (filter_mask)
 		addattr32(&req.n, sizeof(req), IFLA_EXT_MASK, filter_mask);
 
-	return netlink_request(&zns->netlink_cmd, &req.n);
+	return netlink_request(netlink_cmd, &req.n);
 }
 
 /* Interface lookup by netlink socket. */
 int interface_lookup_netlink(struct zebra_ns *zns)
 {
 	int ret;
+	struct zebra_dplane_info dp_info;
+	struct nlsock *netlink_cmd = &zns->netlink_cmd;
+
+	/* Capture key info from ns struct */
+	zebra_dplane_info_from_zns(&dp_info, zns, true /*is_cmd*/);
 
 	/* Get interface information. */
-	ret = netlink_request_intf_addr(zns, AF_PACKET, RTM_GETLINK, 0);
+	ret = netlink_request_intf_addr(netlink_cmd, AF_PACKET, RTM_GETLINK, 0);
 	if (ret < 0)
 		return ret;
-	ret = netlink_parse_info(netlink_interface, &zns->netlink_cmd, zns, 0,
+	ret = netlink_parse_info(netlink_interface, netlink_cmd, &dp_info, 0,
 				 1);
 	if (ret < 0)
 		return ret;
 
 	/* Get interface information - for bridge interfaces. */
-	ret = netlink_request_intf_addr(zns, AF_BRIDGE, RTM_GETLINK,
+	ret = netlink_request_intf_addr(netlink_cmd, AF_BRIDGE, RTM_GETLINK,
 					RTEXT_FILTER_BRVLAN);
 	if (ret < 0)
 		return ret;
-	ret = netlink_parse_info(netlink_interface, &zns->netlink_cmd, zns, 0,
+	ret = netlink_parse_info(netlink_interface, netlink_cmd, &dp_info, 0,
 				 0);
 	if (ret < 0)
 		return ret;
 
 	/* Get interface information - for bridge interfaces. */
-	ret = netlink_request_intf_addr(zns, AF_BRIDGE, RTM_GETLINK,
+	ret = netlink_request_intf_addr(netlink_cmd, AF_BRIDGE, RTM_GETLINK,
 					RTEXT_FILTER_BRVLAN);
 	if (ret < 0)
 		return ret;
-	ret = netlink_parse_info(netlink_interface, &zns->netlink_cmd, zns, 0,
+	ret = netlink_parse_info(netlink_interface, netlink_cmd, &dp_info, 0,
 				 0);
 	if (ret < 0)
 		return ret;
@@ -763,19 +784,19 @@ int interface_lookup_netlink(struct zebra_ns *zns)
 	zebra_if_update_all_links();
 
 	/* Get IPv4 address of the interfaces. */
-	ret = netlink_request_intf_addr(zns, AF_INET, RTM_GETADDR, 0);
+	ret = netlink_request_intf_addr(netlink_cmd, AF_INET, RTM_GETADDR, 0);
 	if (ret < 0)
 		return ret;
-	ret = netlink_parse_info(netlink_interface_addr, &zns->netlink_cmd, zns,
+	ret = netlink_parse_info(netlink_interface_addr, netlink_cmd, &dp_info,
 				 0, 1);
 	if (ret < 0)
 		return ret;
 
 	/* Get IPv6 address of the interfaces. */
-	ret = netlink_request_intf_addr(zns, AF_INET6, RTM_GETADDR, 0);
+	ret = netlink_request_intf_addr(netlink_cmd, AF_INET6, RTM_GETADDR, 0);
 	if (ret < 0)
 		return ret;
-	ret = netlink_parse_info(netlink_interface_addr, &zns->netlink_cmd, zns,
+	ret = netlink_parse_info(netlink_interface_addr, netlink_cmd, &dp_info,
 				 0, 1);
 	if (ret < 0)
 		return ret;
@@ -1058,67 +1079,6 @@ int netlink_interface_addr(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	return 0;
 }
 
-/* helper function called by if_netlink_change
- * to delete interfaces in case the interface moved
- * to an other netns
- */
-static void if_netlink_check_ifp_instance_consistency(uint16_t cmd,
-						     struct interface *ifp,
-						     ns_id_t ns_id)
-{
-	struct interface *other_ifp;
-
-	/*
-	 * look if interface name is also found on other netns
-	 * - only if vrf backend is netns
-	 * - do not concern lo interface
-	 * - then remove previous one
-	 * - for new link case, check found interface is not active
-	 */
-	if (!vrf_is_backend_netns() ||
-	    !strcmp(ifp->name, "lo"))
-		return;
-	other_ifp = if_lookup_by_name_not_ns(ns_id, ifp->name);
-	if (!other_ifp)
-		return;
-	/* because previous interface may be inactive,
-	 * interface is moved back to default vrf
-	 * then one may find the same pointer; ignore
-	 */
-	if (other_ifp == ifp)
-		return;
-	if ((cmd == RTM_NEWLINK)
-	    && (CHECK_FLAG(other_ifp->status, ZEBRA_INTERFACE_ACTIVE)))
-		return;
-	if (IS_ZEBRA_DEBUG_KERNEL && cmd == RTM_NEWLINK) {
-		zlog_debug("RTM_NEWLINK %s(%u, VRF %u) replaces %s(%u, VRF %u)\n",
-			   ifp->name,
-			   ifp->ifindex,
-			   ifp->vrf_id,
-			   other_ifp->name,
-			   other_ifp->ifindex,
-			   other_ifp->vrf_id);
-	} else	if (IS_ZEBRA_DEBUG_KERNEL && cmd == RTM_DELLINK) {
-		zlog_debug("RTM_DELLINK %s(%u, VRF %u) is replaced by %s(%u, VRF %u)\n",
-			   ifp->name,
-			   ifp->ifindex,
-			   ifp->vrf_id,
-			   other_ifp->name,
-			   other_ifp->ifindex,
-			   other_ifp->vrf_id);
-	}
-	/* the found interface replaces the current one
-	 * remove it
-	 */
-	if (cmd == RTM_DELLINK)
-		if_delete(ifp);
-	else
-		if_delete(other_ifp);
-	/* the found interface is replaced by the current one
-	 * suppress it
-	 */
-}
-
 int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 {
 	int len;
@@ -1135,6 +1095,7 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	zebra_iftype_t zif_type = ZEBRA_IF_OTHER;
 	zebra_slave_iftype_t zif_slave_type = ZEBRA_IF_SLAVE_NONE;
 	ifindex_t bridge_ifindex = IFINDEX_INTERNAL;
+	ifindex_t bond_ifindex = IFINDEX_INTERNAL;
 	ifindex_t link_ifindex = IFINDEX_INTERNAL;
 
 
@@ -1234,6 +1195,11 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 				zif_slave_type = ZEBRA_IF_SLAVE_BRIDGE;
 				bridge_ifindex =
 					*(ifindex_t *)RTA_DATA(tb[IFLA_MASTER]);
+			} else if (slave_kind
+				   && (strcmp(slave_kind, "bond") == 0)) {
+				zif_slave_type = ZEBRA_IF_SLAVE_BOND;
+				bond_ifindex =
+					*(ifindex_t *)RTA_DATA(tb[IFLA_MASTER]);
 			} else
 				zif_slave_type = ZEBRA_IF_SLAVE_OTHER;
 		}
@@ -1252,7 +1218,7 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 			if (ifp == NULL) {
 				/* unknown interface */
-				ifp = if_get_by_name(name, vrf_id, 0);
+				ifp = if_get_by_name(name, vrf_id);
 			} else {
 				/* pre-configured interface, learnt now */
 				if (ifp->vrf_id != vrf_id)
@@ -1279,7 +1245,7 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 					 ZEBRA_INTERFACE_VRF_LOOPBACK);
 
 			/* Update link. */
-			zebra_if_update_link(ifp, link_ifindex);
+			zebra_if_update_link(ifp, link_ifindex, ns_id);
 
 			netlink_interface_update_hw_addr(tb, ifp);
 
@@ -1293,8 +1259,8 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 			if (IS_ZEBRA_IF_BRIDGE_SLAVE(ifp))
 				zebra_l2if_update_bridge_slave(ifp,
 							       bridge_ifindex);
-			if_netlink_check_ifp_instance_consistency(RTM_NEWLINK,
-								  ifp, ns_id);
+			else if (IS_ZEBRA_IF_BOND_SLAVE(ifp))
+				zebra_l2if_update_bond_slave(ifp, bond_ifindex);
 		} else if (ifp->vrf_id != vrf_id) {
 			/* VRF change for an interface. */
 			if (IS_ZEBRA_DEBUG_KERNEL)
@@ -1306,7 +1272,7 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 			if_handle_vrf_change(ifp, vrf_id);
 		} else {
-			int was_bridge_slave;
+			bool was_bridge_slave, was_bond_slave;
 
 			/* Interface update. */
 			if (IS_ZEBRA_DEBUG_KERNEL)
@@ -1329,6 +1295,7 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 			/* Update interface type - NOTE: Only slave_type can
 			 * change. */
 			was_bridge_slave = IS_ZEBRA_IF_BRIDGE_SLAVE(ifp);
+			was_bond_slave = IS_ZEBRA_IF_BOND_SLAVE(ifp);
 			zebra_if_set_ziftype(ifp, zif_type, zif_slave_type);
 
 			netlink_interface_update_hw_addr(tb, ifp);
@@ -1368,8 +1335,8 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 			if (IS_ZEBRA_IF_BRIDGE_SLAVE(ifp) || was_bridge_slave)
 				zebra_l2if_update_bridge_slave(ifp,
 							       bridge_ifindex);
-			if_netlink_check_ifp_instance_consistency(RTM_NEWLINK,
-								  ifp, ns_id);
+			else if (IS_ZEBRA_IF_BOND_SLAVE(ifp) || was_bond_slave)
+				zebra_l2if_update_bond_slave(ifp, bond_ifindex);
 		}
 	} else {
 		/* Delete interface notification from kernel */
@@ -1395,8 +1362,6 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 		if (!IS_ZEBRA_IF_VRF(ifp))
 			if_delete_update(ifp);
-		if_netlink_check_ifp_instance_consistency(RTM_DELLINK,
-							  ifp, ns_id);
 	}
 
 	return 0;

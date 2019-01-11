@@ -655,18 +655,24 @@ void thread_master_free(struct thread_master *m)
 	XFREE(MTYPE_THREAD_MASTER, m);
 }
 
-/* Return remain time in second. */
-unsigned long thread_timer_remain_second(struct thread *thread)
+/* Return remain time in miliseconds. */
+unsigned long thread_timer_remain_msec(struct thread *thread)
 {
 	int64_t remain;
 
 	pthread_mutex_lock(&thread->mtx);
 	{
-		remain = monotime_until(&thread->u.sands, NULL) / 1000000LL;
+		remain = monotime_until(&thread->u.sands, NULL) / 1000LL;
 	}
 	pthread_mutex_unlock(&thread->mtx);
 
 	return remain < 0 ? 0 : remain;
+}
+
+/* Return remain time in seconds. */
+unsigned long thread_timer_remain_second(struct thread *thread)
+{
+	return thread_timer_remain_msec(thread) / 1000LL;
 }
 
 #define debugargdef  const char *funcname, const char *schedfrom, int fromln
@@ -1566,8 +1572,13 @@ void thread_set_yield_time(struct thread *thread, unsigned long yield_time)
 
 void thread_getrusage(RUSAGE_T *r)
 {
+#if defined RUSAGE_THREAD
+#define FRR_RUSAGE RUSAGE_THREAD
+#else
+#define FRR_RUSAGE RUSAGE_SELF
+#endif
 	monotime(&r->real);
-	getrusage(RUSAGE_SELF, &(r->cpu));
+	getrusage(FRR_RUSAGE, &(r->cpu));
 }
 
 /*

@@ -145,6 +145,8 @@ static struct ospf *ospf_cmd_lookup_ospf(struct vty *vty,
 
 	if (argv_find(argv, argc, "vrf", &idx_vrf)) {
 		vrf_name = argv[idx_vrf + 1]->arg;
+		if (vrf_name == NULL || strmatch(vrf_name, VRF_DEFAULT_NAME))
+			vrf_name = NULL;
 		if (enable) {
 			/* Allocate VRF aware instance */
 			ospf = ospf_get(*instance, vrf_name);
@@ -243,8 +245,11 @@ DEFUN_NOSH (router_ospf,
 						return ret;
 					}
 				}
-				ospf_interface_area_set(ospf, ifp);
-				ospf->if_ospf_cli_count++;
+				if (!ospf_interface_area_is_already_set(ospf,
+									ifp)) {
+					ospf_interface_area_set(ospf, ifp);
+					ospf->if_ospf_cli_count++;
+				}
 			}
 		}
 
@@ -458,7 +463,7 @@ DEFUN (ospf_passive_interface,
 		return CMD_SUCCESS;
 	}
 	if (ospf->vrf_id != VRF_UNKNOWN)
-		ifp = if_get_by_name(argv[1]->arg, ospf->vrf_id, 0);
+		ifp = if_get_by_name(argv[1]->arg, ospf->vrf_id);
 
 	if (ifp == NULL) {
 		vty_out(vty, "interface %s not found.\n", (char *)argv[1]->arg);
@@ -531,7 +536,7 @@ DEFUN (no_ospf_passive_interface,
 	}
 
 	if (ospf->vrf_id != VRF_UNKNOWN)
-		ifp = if_get_by_name(argv[2]->arg, ospf->vrf_id, 0);
+		ifp = if_get_by_name(argv[2]->arg, ospf->vrf_id);
 
 	if (ifp == NULL) {
 		vty_out(vty, "interface %s not found.\n", (char *)argv[2]->arg);
@@ -748,6 +753,7 @@ DEFUN (ospf_area_range_not_advertise,
 	ospf_area_range_set(ospf, area_id, &p, 0);
 	ospf_area_display_format_set(ospf, ospf_area_get(ospf, area_id),
 				     format);
+	ospf_area_range_substitute_unset(ospf, area_id, &p);
 
 	return CMD_SUCCESS;
 }
@@ -4681,7 +4687,7 @@ static int show_ip_ospf_neighbor_int_common(struct vty *vty, struct ospf *ospf,
 
 	ospf_show_vrf_name(ospf, vty, json, use_vrf);
 
-	ifp = if_lookup_by_name_all_vrf(argv[arg_base]->arg);
+	ifp = if_lookup_by_name(argv[arg_base]->arg, ospf->vrf_id);
 	if (!ifp) {
 		if (use_json)
 			json_object_boolean_true_add(json, "noSuchIface");
@@ -4711,34 +4717,50 @@ static int show_ip_ospf_neighbor_int_common(struct vty *vty, struct ospf *ospf,
 
 DEFUN (show_ip_ospf_neighbor_int,
        show_ip_ospf_neighbor_int_cmd,
-       "show ip ospf neighbor IFNAME [json]",
+       "show ip ospf [vrf <NAME>] neighbor IFNAME [json]",
        SHOW_STR
        IP_STR
        "OSPF information\n"
+       VRF_CMD_HELP_STR
        "Neighbor list\n"
        "Interface name\n"
        JSON_STR)
 {
 	struct ospf *ospf;
-	int idx_ifname = 4;
+	int idx_ifname = 0;
+	int idx_vrf = 0;
 	bool uj = use_json(argc, argv);
-	struct listnode *node = NULL;
 	int ret = CMD_SUCCESS;
 	struct interface *ifp = NULL;
+	char *vrf_name = NULL;
+	vrf_id_t vrf_id = VRF_DEFAULT;
+	struct vrf *vrf = NULL;
+
+	if (argv_find(argv, argc, "vrf", &idx_vrf))
+		vrf_name = argv[idx_vrf + 1]->arg;
+	if (vrf_name && strmatch(vrf_name, VRF_DEFAULT_NAME))
+		vrf_name = NULL;
+	if (vrf_name) {
+		vrf = vrf_lookup_by_name(vrf_name);
+		if (vrf)
+			vrf_id = vrf->vrf_id;
+	}
+	ospf = ospf_lookup_by_vrf_id(vrf_id);
+
+	if (!ospf || !ospf->oi_running)
+		return ret;
 
 	if (!uj)
 		show_ip_ospf_neighbour_header(vty);
 
-	ifp = if_lookup_by_name_all_vrf(argv[idx_ifname]->arg);
-	for (ALL_LIST_ELEMENTS_RO(om->ospf, node, ospf)) {
-		if (!ospf->oi_running)
-			continue;
-		if (!ifp || ifp->vrf_id != ospf->vrf_id)
-			continue;
-		ret = show_ip_ospf_neighbor_int_common(vty, ospf, idx_ifname,
-						       argv, uj, 0);
-	}
+	argv_find(argv, argc, "IFNAME", &idx_ifname);
 
+	ifp = if_lookup_by_name(argv[idx_ifname]->arg, vrf_id);
+	if (!ifp)
+		return ret;
+
+	ret = show_ip_ospf_neighbor_int_common(vty, ospf, idx_ifname,
+					       argv, uj, 0);
 	return ret;
 }
 
@@ -5074,15 +5096,12 @@ static void show_ip_ospf_neighbor_detail_sub(struct vty *vty,
 }
 
 static int show_ip_ospf_neighbor_id_common(struct vty *vty, struct ospf *ospf,
-					   int arg_base,
-					   struct cmd_token **argv,
+					   struct in_addr *router_id,
 					   bool use_json, uint8_t use_vrf)
 {
 	struct listnode *node;
 	struct ospf_neighbor *nbr;
 	struct ospf_interface *oi;
-	struct in_addr router_id;
-	int ret;
 	json_object *json = NULL;
 
 	if (use_json)
@@ -5098,19 +5117,8 @@ static int show_ip_ospf_neighbor_id_common(struct vty *vty, struct ospf *ospf,
 
 	ospf_show_vrf_name(ospf, vty, json, use_vrf);
 
-	ret = inet_aton(argv[arg_base]->arg, &router_id);
-	if (!ret) {
-		if (!use_json)
-			vty_out(vty, "Please specify Neighbor ID by A.B.C.D\n");
-		else {
-			vty_out(vty, "{}\n");
-			json_object_free(json);
-		}
-		return CMD_WARNING;
-	}
-
 	for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi)) {
-		if ((nbr = ospf_nbr_lookup_by_routerid(oi->nbrs, &router_id))) {
+		if ((nbr = ospf_nbr_lookup_by_routerid(oi->nbrs, router_id))) {
 			show_ip_ospf_neighbor_detail_sub(vty, oi, nbr, json,
 							 use_json);
 		}
@@ -5126,9 +5134,9 @@ static int show_ip_ospf_neighbor_id_common(struct vty *vty, struct ospf *ospf,
 	return CMD_SUCCESS;
 }
 
-DEFUN (show_ip_ospf_neighbor_id,
+DEFPY (show_ip_ospf_neighbor_id,
        show_ip_ospf_neighbor_id_cmd,
-       "show ip ospf neighbor A.B.C.D [json]",
+       "show ip ospf neighbor A.B.C.D$router_id [json$json]",
        SHOW_STR
        IP_STR
        "OSPF information\n"
@@ -5137,23 +5145,22 @@ DEFUN (show_ip_ospf_neighbor_id,
        JSON_STR)
 {
 	struct ospf *ospf;
-	bool uj = use_json(argc, argv);
-	struct listnode *node = NULL;
+	struct listnode *node;
 	int ret = CMD_SUCCESS;
 
 	for (ALL_LIST_ELEMENTS_RO(om->ospf, node, ospf)) {
 		if (!ospf->oi_running)
 			continue;
-		ret = show_ip_ospf_neighbor_id_common(vty, ospf, 0, argv, uj,
-						      0);
+		ret = show_ip_ospf_neighbor_id_common(vty, ospf, &router_id,
+						      !!json, 0);
 	}
 
 	return ret;
 }
 
-DEFUN (show_ip_ospf_instance_neighbor_id,
+DEFPY (show_ip_ospf_instance_neighbor_id,
        show_ip_ospf_instance_neighbor_id_cmd,
-       "show ip ospf (1-65535) neighbor A.B.C.D [json]",
+       "show ip ospf (1-65535)$instance neighbor A.B.C.D$router_id [json$json]",
        SHOW_STR
        IP_STR
        "OSPF information\n"
@@ -5162,13 +5169,8 @@ DEFUN (show_ip_ospf_instance_neighbor_id,
        "Neighbor ID\n"
        JSON_STR)
 {
-	int idx_number = 3;
-	int idx_router_id = 5;
 	struct ospf *ospf;
-	unsigned short instance = 0;
-	bool uj = use_json(argc, argv);
 
-	instance = strtoul(argv[idx_number]->arg, NULL, 10);
 	ospf = ospf_lookup_instance(instance);
 	if (ospf == NULL)
 		return CMD_NOT_MY_INSTANCE;
@@ -5176,8 +5178,8 @@ DEFUN (show_ip_ospf_instance_neighbor_id,
 	if (!ospf->oi_running)
 		return CMD_SUCCESS;
 
-	return show_ip_ospf_neighbor_id_common(vty, ospf, idx_router_id, argv,
-					       uj, 0);
+	return show_ip_ospf_neighbor_id_common(vty, ospf, &router_id, !!json,
+					       0);
 }
 
 static int show_ip_ospf_neighbor_detail_common(struct vty *vty,
@@ -5570,7 +5572,7 @@ static int show_ip_ospf_neighbor_int_detail_common(struct vty *vty,
 			vty_out(vty, "\nOSPF Instance: %d\n\n", ospf->instance);
 	}
 
-	ifp = if_lookup_by_name_all_vrf(argv[arg_base]->arg);
+	ifp = if_lookup_by_name(argv[arg_base]->arg, ospf->vrf_id);
 	if (!ifp) {
 		if (!use_json)
 			vty_out(vty, "No such interface.\n");
@@ -8199,6 +8201,8 @@ DEFUN (no_ospf_redistribute_source,
 		return CMD_SUCCESS;
 
 	ospf_routemap_unset(red);
+	ospf_redist_del(ospf, source, 0);
+
 	return ospf_redistribute_unset(ospf, source, 0);
 }
 
@@ -8313,6 +8317,8 @@ DEFUN (no_ospf_redistribute_instance_source,
 		return CMD_SUCCESS;
 
 	ospf_routemap_unset(red);
+	ospf_redist_del(ospf, source, instance);
+
 	return ospf_redistribute_unset(ospf, source, instance);
 }
 
@@ -8380,6 +8386,9 @@ DEFUN (ospf_default_information_originate,
 	int metric = -1;
 	struct ospf_redist *red;
 	int idx = 0;
+	int cur_originate = ospf->default_originate;
+	int sameRtmap = 0;
+	char *rtmap = NULL;
 
 	red = ospf_redist_add(ospf, DEFAULT_ROUTE, 0);
 
@@ -8401,7 +8410,28 @@ DEFUN (ospf_default_information_originate,
 	idx = 1;
 	/* Get route-map */
 	if (argv_find(argv, argc, "WORD", &idx))
-		ospf_routemap_set(red, argv[idx]->arg);
+		rtmap = argv[idx]->arg;
+
+	/* To check ,if user is providing same route map */
+	if ((rtmap == ROUTEMAP_NAME(red)) ||
+	    (rtmap && ROUTEMAP_NAME(red)
+	    && (strcmp(rtmap, ROUTEMAP_NAME(red)) == 0)))
+		sameRtmap = 1;
+
+	/* Don't allow if the same lsa is aleardy originated. */
+	if ((sameRtmap)
+	    && (red->dmetric.type == type)
+	    && (red->dmetric.value == metric)
+	    && (cur_originate == default_originate))
+		return CMD_SUCCESS;
+
+	/* Updating Metric details */
+	red->dmetric.type = type;
+	red->dmetric.value = metric;
+
+	/* updating route map details */
+	if (rtmap)
+		ospf_routemap_set(red, rtmap);
 	else
 		ospf_routemap_unset(red);
 
@@ -8445,6 +8475,8 @@ DEFUN (no_ospf_default_information_originate,
 		return CMD_SUCCESS;
 
 	ospf_routemap_unset(red);
+	ospf_redist_del(ospf, DEFAULT_ROUTE, 0);
+
 	return ospf_redistribute_default_unset(ospf);
 }
 
@@ -10612,28 +10644,45 @@ static void ospf_interface_clear(struct interface *ifp)
 
 DEFUN (clear_ip_ospf_interface,
        clear_ip_ospf_interface_cmd,
-       "clear ip ospf interface [IFNAME]",
+       "clear ip ospf [vrf <NAME>] interface [IFNAME]",
        CLEAR_STR
        IP_STR
        "OSPF information\n"
+       VRF_CMD_HELP_STR
        "Interface information\n"
        "Interface name\n")
 {
-	int idx_ifname = 4;
+	int idx_ifname = 0;
+	int idx_vrf = 0;
 	struct interface *ifp;
 	struct listnode *node;
 	struct ospf *ospf = NULL;
+	char *vrf_name = NULL;
+	vrf_id_t vrf_id = VRF_DEFAULT;
+	struct vrf *vrf = NULL;
 
-	if (argc == 4) /* Clear all the ospfv2 interfaces. */
-	{
+	if (argv_find(argv, argc, "vrf", &idx_vrf))
+		vrf_name = argv[idx_vrf + 1]->arg;
+	if (vrf_name && strmatch(vrf_name, VRF_DEFAULT_NAME))
+		vrf_name = NULL;
+	if (vrf_name) {
+		vrf = vrf_lookup_by_name(vrf_name);
+		if (vrf)
+			vrf_id = vrf->vrf_id;
+	}
+	if (!argv_find(argv, argc, "IFNAME", &idx_ifname)) {
+		/* Clear all the ospfv2 interfaces. */
 		for (ALL_LIST_ELEMENTS_RO(om->ospf, node, ospf)) {
-			struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
+			if (vrf_id != ospf->vrf_id)
+				continue;
+			if (!vrf)
+				vrf = vrf_lookup_by_id(ospf->vrf_id);
 			FOR_ALL_INTERFACES (vrf, ifp)
 				ospf_interface_clear(ifp);
 		}
 	} else {
 		/* Interface name is specified. */
-		ifp = if_lookup_by_name_all_vrf(argv[idx_ifname]->arg);
+		ifp = if_lookup_by_name(argv[idx_ifname]->arg, vrf_id);
 		if (ifp == NULL)
 			vty_out(vty, "No such interface name\n");
 		else

@@ -59,6 +59,7 @@
 #include "bgpd/bgp_labelpool.h"
 #include "bgpd/bgp_pbr.h"
 #include "bgpd/bgp_evpn_private.h"
+#include "bgpd/bgp_mac.h"
 
 /* All information about zebra. */
 struct zclient *zclient = NULL;
@@ -221,6 +222,8 @@ static int bgp_interface_add(int command, struct zclient *zclient,
 	if (!bgp)
 		return 0;
 
+	bgp_mac_add_mac_entry(ifp);
+
 	bgp_update_interface_nbrs(bgp, ifp, ifp);
 	return 0;
 }
@@ -245,6 +248,8 @@ static int bgp_interface_delete(int command, struct zclient *zclient,
 	if (bgp)
 		bgp_update_interface_nbrs(bgp, ifp, NULL);
 
+	bgp_mac_del_mac_entry(ifp);
+
 	if_set_index(ifp, IFINDEX_INTERNAL);
 	return 0;
 }
@@ -266,6 +271,8 @@ static int bgp_interface_up(int command, struct zclient *zclient,
 
 	if (!ifp)
 		return 0;
+
+	bgp_mac_add_mac_entry(ifp);
 
 	if (BGP_DEBUG(zebra, ZEBRA))
 		zlog_debug("Rx Intf up VRF %u IF %s", vrf_id, ifp->name);
@@ -299,6 +306,8 @@ static int bgp_interface_down(int command, struct zclient *zclient,
 	ifp = zebra_interface_state_read(s, vrf_id);
 	if (!ifp)
 		return 0;
+
+	bgp_mac_del_mac_entry(ifp);
 
 	if (BGP_DEBUG(zebra, ZEBRA))
 		zlog_debug("Rx Intf down VRF %u IF %s", vrf_id, ifp->name);
@@ -1218,9 +1227,10 @@ void bgp_zebra_announce(struct bgp_node *rn, struct prefix *p,
 	if (bgp_debug_zebra(p))
 		prefix2str(p, buf_prefix, sizeof(buf_prefix));
 
-	if (safi == SAFI_FLOWSPEC)
-		return bgp_pbr_update_entry(bgp, &rn->p,
-					    info, afi, safi, true);
+	if (safi == SAFI_FLOWSPEC) {
+		bgp_pbr_update_entry(bgp, &rn->p, info, afi, safi, true);
+		return;
+	}
 
 	/*
 	 * vrf leaking support (will have only one nexthop)
@@ -1481,7 +1491,7 @@ void bgp_zebra_announce_table(struct bgp *bgp, afi_t afi, safi_t safi)
 		return;
 
 	for (rn = bgp_table_top(table); rn; rn = bgp_route_next(rn))
-		for (pi = rn->info; pi; pi = pi->next)
+		for (pi = bgp_node_get_bgp_path_info(rn); pi; pi = pi->next)
 			if (CHECK_FLAG(pi->flags, BGP_PATH_SELECTED) &&
 
 			    (pi->type == ZEBRA_ROUTE_BGP
@@ -1506,8 +1516,8 @@ void bgp_zebra_withdraw(struct prefix *p, struct bgp_path_info *info,
 
 	if (safi == SAFI_FLOWSPEC) {
 		peer = info->peer;
-		return bgp_pbr_update_entry(peer->bgp, p,
-					    info, AFI_IP, safi, false);
+		bgp_pbr_update_entry(peer->bgp, p, info, AFI_IP, safi, false);
+		return;
 	}
 
 	memset(&api, 0, sizeof(api));
@@ -1664,7 +1674,8 @@ int bgp_redistribute_resend(struct bgp *bgp, afi_t afi, int type,
 }
 
 /* Redistribute with route-map specification.  */
-int bgp_redistribute_rmap_set(struct bgp_redist *red, const char *name)
+int bgp_redistribute_rmap_set(struct bgp_redist *red, const char *name,
+			      struct route_map *route_map)
 {
 	if (red->rmap.name && (strcmp(red->rmap.name, name) == 0))
 		return 0;
@@ -1672,7 +1683,7 @@ int bgp_redistribute_rmap_set(struct bgp_redist *red, const char *name)
 	if (red->rmap.name)
 		XFREE(MTYPE_ROUTE_MAP_NAME, red->rmap.name);
 	red->rmap.name = XSTRDUP(MTYPE_ROUTE_MAP_NAME, name);
-	red->rmap.map = route_map_lookup_by_name(name);
+	red->rmap.map = route_map;
 
 	return 1;
 }
@@ -1692,7 +1703,7 @@ int bgp_redistribute_metric_set(struct bgp *bgp, struct bgp_redist *red,
 
 	for (rn = bgp_table_top(bgp->rib[afi][SAFI_UNICAST]); rn;
 	     rn = bgp_route_next(rn)) {
-		for (pi = rn->info; pi; pi = pi->next) {
+		for (pi = bgp_node_get_bgp_path_info(rn); pi; pi = pi->next) {
 			if (pi->sub_type == BGP_ROUTE_REDISTRIBUTE
 			    && pi->type == type
 			    && pi->instance == red->instance) {
@@ -2537,19 +2548,19 @@ static void bgp_zebra_process_local_ip_prefix(int cmd, struct zclient *zclient,
 	if (cmd == ZEBRA_IP_PREFIX_ROUTE_ADD) {
 
 		if (p.family == AF_INET)
-			return bgp_evpn_advertise_type5_route(
-				bgp_vrf, &p, NULL, AFI_IP, SAFI_UNICAST);
+			bgp_evpn_advertise_type5_route(bgp_vrf, &p, NULL,
+						       AFI_IP, SAFI_UNICAST);
 		else
-			return bgp_evpn_advertise_type5_route(
-				bgp_vrf, &p, NULL, AFI_IP6, SAFI_UNICAST);
+			bgp_evpn_advertise_type5_route(bgp_vrf, &p, NULL,
+						       AFI_IP6, SAFI_UNICAST);
 
 	} else {
 		if (p.family == AF_INET)
-			return bgp_evpn_withdraw_type5_route(
-				bgp_vrf, &p, AFI_IP, SAFI_UNICAST);
+			bgp_evpn_withdraw_type5_route(bgp_vrf, &p, AFI_IP,
+						      SAFI_UNICAST);
 		else
-			return bgp_evpn_withdraw_type5_route(
-				bgp_vrf, &p, AFI_IP6, SAFI_UNICAST);
+			bgp_evpn_withdraw_type5_route(bgp_vrf, &p, AFI_IP6,
+						      SAFI_UNICAST);
 	}
 }
 

@@ -77,6 +77,7 @@ enum node_type {
 	CONFIG_NODE,		 /* Config node. Default mode of config file. */
 	DEBUG_NODE,		 /* Debug node. */
 	VRF_DEBUG_NODE,		 /* Vrf Debug node. */
+	NORTHBOUND_DEBUG_NODE,	 /* Northbound Debug node. */
 	DEBUG_VNC_NODE,		 /* Debug VNC node. */
 	AAA_NODE,		 /* AAA node. */
 	KEYCHAIN_NODE,		 /* Key-chain node. */
@@ -141,6 +142,7 @@ enum node_type {
 	BGP_FLOWSPECV6_NODE,	/* BGP IPv6 FLOWSPEC Address-Family */
 	BFD_NODE,		 /* BFD protocol mode. */
 	BFD_PEER_NODE,		 /* BFD peer configuration mode. */
+	OPENFABRIC_NODE,	/* OpenFabric router configuration node */
 	NODE_TYPE_MAX, /* maximum */
 };
 
@@ -354,7 +356,7 @@ struct cmd_node {
 #define IN_STR  "Filter incoming routing updates\n"
 #define V4NOTATION_STR "specify by IPv4 address notation(e.g. 0.0.0.0)\n"
 #define OSPF6_NUMBER_STR "Specify by number\n"
-#define INTERFACE_STR "Interface infomation\n"
+#define INTERFACE_STR "Interface information\n"
 #define IFNAME_STR "Interface name(e.g. ep0)\n"
 #define IP6_STR "IPv6 Information\n"
 #define OSPF6_STR "Open Shortest Path First (OSPF) for IPv6\n"
@@ -364,7 +366,6 @@ struct cmd_node {
 #define PREFIX_LIST_STR "Build a prefix list\n"
 #define OSPF6_DUMP_TYPE_LIST                                                   \
 	"<neighbor|interface|area|lsa|zebra|config|dbex|spf|route|lsdb|redistribute|hook|asbr|prefix|abr>"
-#define ISIS_STR "IS-IS information\n"
 #define AREA_TAG_STR "[area tag]\n"
 #define COMMUNITY_AANN_STR "Community number where AA and NN are (0-65535)\n"
 #define COMMUNITY_VAL_STR  "Community number in AA:NN format (where AA and NN are (0-65535)) or local-AS|no-advertise|no-export|internet or additive\n"

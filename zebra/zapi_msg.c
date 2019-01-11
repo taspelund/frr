@@ -63,6 +63,7 @@
 #include "zebra/table_manager.h"
 #include "zebra/zapi_msg.h"
 #include "zebra/zebra_errors.h"
+#include "zebra/zebra_mlag.h"
 
 /* Encoding helpers -------------------------------------------------------- */
 
@@ -432,8 +433,8 @@ int zsend_interface_vrf_update(struct zserv *client, struct interface *ifp,
 
 	zclient_create_header(s, ZEBRA_INTERFACE_VRF_UPDATE, ifp->vrf_id);
 
-	/* Fill in the ifIndex of the interface and its new VRF (id) */
-	stream_putl(s, ifp->ifindex);
+	/* Fill in the name of the interface and its new VRF (id) */
+	stream_put(s, ifp->name, INTERFACE_NAMSIZ);
 	stream_putl(s, vrf_id);
 
 	/* Write packet size. */
@@ -739,6 +740,20 @@ int zsend_route_notify_owner(struct route_entry *re, const struct prefix *p,
 {
 	return (route_notify_internal(p, re->type, re->instance, re->vrf_id,
 				      re->table, note));
+}
+
+/*
+ * Route-owner notification using info from dataplane update context.
+ */
+int zsend_route_notify_owner_ctx(const struct zebra_dplane_ctx *ctx,
+				 enum zapi_route_notify_owner note)
+{
+	return (route_notify_internal(dplane_ctx_get_dest(ctx),
+				      dplane_ctx_get_type(ctx),
+				      dplane_ctx_get_instance(ctx),
+				      dplane_ctx_get_vrf(ctx),
+				      dplane_ctx_get_table(ctx),
+				      note));
 }
 
 void zsend_rule_notify_owner(struct zebra_pbr_rule *rule,
@@ -1093,8 +1108,7 @@ static void zread_rnh_register(ZAPI_HANDLER_ARGS)
 		zebra_add_rnh_client(rnh, client, type, zvrf_id(zvrf));
 		/* Anything not AF_INET/INET6 has been filtered out above */
 		if (!exist)
-			zebra_evaluate_rnh(zvrf_id(zvrf), p.family, 1, type,
-					   &p);
+			zebra_evaluate_rnh(zvrf, p.family, 1, type, &p);
 	}
 
 stream_failure:
@@ -1174,6 +1188,7 @@ static void zread_fec_register(ZAPI_HANDLER_ARGS)
 	unsigned short l = 0;
 	struct prefix p;
 	uint16_t flags;
+	uint32_t label = MPLS_INVALID_LABEL;
 	uint32_t label_index = MPLS_INVALID_LABEL_INDEX;
 
 	s = msg;
@@ -1216,12 +1231,15 @@ static void zread_fec_register(ZAPI_HANDLER_ARGS)
 		l += 5;
 		STREAM_GET(&p.u.prefix, s, PSIZE(p.prefixlen));
 		l += PSIZE(p.prefixlen);
-		if (flags & ZEBRA_FEC_REGISTER_LABEL_INDEX) {
+		if (flags & ZEBRA_FEC_REGISTER_LABEL) {
+			STREAM_GETL(s, label);
+			l += 4;
+		} else if (flags & ZEBRA_FEC_REGISTER_LABEL_INDEX) {
 			STREAM_GETL(s, label_index);
 			l += 4;
-		} else
-			label_index = MPLS_INVALID_LABEL_INDEX;
-		zebra_mpls_fec_register(zvrf, &p, label_index, client);
+		}
+
+		zebra_mpls_fec_register(zvrf, &p, label, label_index, client);
 	}
 
 stream_failure:
@@ -1640,6 +1658,7 @@ static void zsend_capabilities(struct zserv *client, struct zebra_vrf *zvrf)
 	zclient_create_header(s, ZEBRA_CAPABILITIES, zvrf->vrf->vrf_id);
 	stream_putc(s, mpls_enabled);
 	stream_putl(s, multipath_num);
+	stream_putc(s, zebra_mlag_get_role());
 
 	stream_putw_at(s, 0, stream_get_endp(s));
 	zserv_send_message(client, s);

@@ -24,6 +24,7 @@
 #include "queue.h"
 #include "nexthop.h"
 #include "bgp_table.h"
+#include "bgp_addpath_types.h"
 
 struct bgp_nexthop_cache;
 struct bgp_route_evpn;
@@ -220,7 +221,7 @@ struct bgp_path_info {
 
 	/* Addpath identifiers */
 	uint32_t addpath_rx_id;
-	uint32_t addpath_tx_id;
+	struct bgp_addpath_info_data tx_addpath;
 };
 
 /* Structure used in BGP path selection */
@@ -361,6 +362,7 @@ extern struct bgp_node *bgp_afi_node_get(struct bgp_table *table, afi_t afi,
 extern struct bgp_path_info *bgp_path_info_lock(struct bgp_path_info *path);
 extern struct bgp_path_info *bgp_path_info_unlock(struct bgp_path_info *path);
 extern void bgp_path_info_add(struct bgp_node *rn, struct bgp_path_info *pi);
+extern void bgp_path_info_extra_free(struct bgp_path_info_extra **extra);
 extern void bgp_path_info_reap(struct bgp_node *rn, struct bgp_path_info *pi);
 extern void bgp_path_info_delete(struct bgp_node *rn, struct bgp_path_info *pi);
 extern struct bgp_path_info_extra *

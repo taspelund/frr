@@ -2728,7 +2728,7 @@ static int zvni_gw_macip_del(struct interface *ifp, zebra_vni_t *zvni,
 	/* mac entry should be present */
 	mac = zvni_mac_lookup(zvni, &n->emac);
 	if (!mac) {
-		zlog_debug("MAC %s doesnt exists for neigh %s on VNI %u",
+		zlog_debug("MAC %s doesn't exist for neigh %s on VNI %u",
 			   prefix_mac2str(&n->emac, buf1, sizeof(buf1)),
 			   ipaddr2str(ip, buf2, sizeof(buf2)), zvni->vni);
 		return -1;
@@ -5540,7 +5540,7 @@ void zebra_vxlan_print_specific_rmac_l3vni(struct vty *vty, vni_t l3vni,
 		if (use_json)
 			vty_out(vty, "{}\n");
 		else
-			vty_out(vty, "%% L3-VNI %u doesnt exist\n", l3vni);
+			vty_out(vty, "%% L3-VNI %u doesn't exist\n", l3vni);
 		return;
 	}
 
@@ -5550,7 +5550,7 @@ void zebra_vxlan_print_specific_rmac_l3vni(struct vty *vty, vni_t l3vni,
 			vty_out(vty, "{}\n");
 		else
 			vty_out(vty,
-				"%% Requested RMAC doesnt exist in L3-VNI %u",
+				"%% Requested RMAC doesn't exist in L3-VNI %u",
 				l3vni);
 		return;
 	}
@@ -8400,7 +8400,7 @@ int zebra_vxlan_if_add(struct interface *ifp)
 				"Add L2-VNI %u VRF %s intf %s(%u) VLAN %u local IP %s master %u",
 				vni,
 				vlan_if ? vrf_id_to_name(vlan_if->vrf_id)
-					: "Default",
+					: VRF_DEFAULT_NAME,
 				ifp->name, ifp->ifindex, vxl->access_vlan,
 				inet_ntoa(vxl->vtep_ip),
 				zif->brslave_info.bridge_ifindex);
@@ -8869,14 +8869,14 @@ void zebra_vxlan_close_tables(struct zebra_vrf *zvrf)
 }
 
 /* init the l3vni table */
-void zebra_vxlan_ns_init(struct zebra_ns *zns)
+void zebra_vxlan_init(void)
 {
 	zrouter.l3vni_table = hash_create(l3vni_hash_keymake, l3vni_hash_cmp,
 					  "Zebra VRF L3 VNI table");
 }
 
 /* free l3vni table */
-void zebra_vxlan_ns_disable(struct zebra_ns *zns)
+void zebra_vxlan_disable(void)
 {
 	hash_free(zrouter.l3vni_table);
 }

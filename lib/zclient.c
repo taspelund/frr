@@ -1368,6 +1368,9 @@ static void zclient_vrf_add(struct zclient *zclient, vrf_id_t vrf_id)
 	vrf = vrf_get(vrf_id, vrfname_tmp);
 	vrf->data.l.table_id = data.l.table_id;
 	memcpy(vrf->data.l.netns_name, data.l.netns_name, NS_NAMSIZ);
+	/* overwrite default vrf */
+	if (vrf_id == VRF_DEFAULT)
+		vrf_set_default_name(vrfname_tmp, false);
 	vrf_enable(vrf);
 }
 
@@ -1398,7 +1401,7 @@ struct interface *zebra_interface_add_read(struct stream *s, vrf_id_t vrf_id)
 	stream_get(ifname_tmp, s, INTERFACE_NAMSIZ);
 
 	/* Lookup/create interface by name. */
-	ifp = if_get_by_name(ifname_tmp, vrf_id, 0);
+	ifp = if_get_by_name(ifname_tmp, vrf_id);
 
 	zebra_interface_if_set_value(s, ifp);
 
@@ -1767,19 +1770,19 @@ struct interface *zebra_interface_vrf_update_read(struct stream *s,
 						  vrf_id_t vrf_id,
 						  vrf_id_t *new_vrf_id)
 {
-	unsigned int ifindex;
+	char ifname[INTERFACE_NAMSIZ];
 	struct interface *ifp;
 	vrf_id_t new_id;
 
-	/* Get interface index. */
-	ifindex = stream_getl(s);
+	/* Read interface name. */
+	stream_get(ifname, s, INTERFACE_NAMSIZ);
 
 	/* Lookup interface. */
-	ifp = if_lookup_by_index(ifindex, vrf_id);
+	ifp = if_lookup_by_name(ifname, vrf_id);
 	if (ifp == NULL) {
 		flog_err(EC_LIB_ZAPI_ENCODE,
-			 "INTERFACE_VRF_UPDATE: Cannot find IF %u in VRF %d",
-			 ifindex, vrf_id);
+			 "INTERFACE_VRF_UPDATE: Cannot find IF %s in VRF %d",
+			 ifname, vrf_id);
 		return NULL;
 	}
 
@@ -2352,6 +2355,7 @@ static void zclient_capability_decode(int command, struct zclient *zclient,
 	STREAM_GETC(s, mpls_enabled);
 	cap.mpls_enabled = !!mpls_enabled;
 	STREAM_GETL(s, cap.ecmp);
+	STREAM_GETC(s, cap.role);
 
 	if (zclient->zebra_capabilities)
 		(*zclient->zebra_capabilities)(&cap);

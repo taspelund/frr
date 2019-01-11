@@ -37,6 +37,7 @@
 #include "frrstr.h"
 
 #include "bgpd/bgpd.h"
+#include "bgpd/bgp_attr_evpn.h"
 #include "bgpd/bgp_advertise.h"
 #include "bgpd/bgp_attr.h"
 #include "bgpd/bgp_aspath.h"
@@ -61,6 +62,8 @@
 #include "bgpd/bgp_bfd.h"
 #include "bgpd/bgp_io.h"
 #include "bgpd/bgp_evpn.h"
+#include "bgpd/bgp_addpath.h"
+#include "bgpd/bgp_mac.h"
 
 static struct peer_group *listen_range_exists(struct bgp *bgp,
 					      struct prefix *range, int exact);
@@ -312,10 +315,14 @@ int bgp_vty_find_and_parse_afi_safi_bgp(struct vty *vty,
 	if (argv_find(argv, argc, "ip", idx))
 		*afi = AFI_IP;
 
-	if (argv_find(argv, argc, "view", idx)
-	    || argv_find(argv, argc, "vrf", idx)) {
+	if (argv_find(argv, argc, "view", idx))
 		vrf_name = argv[*idx + 1]->arg;
-
+	else if (argv_find(argv, argc, "vrf", idx)) {
+		vrf_name = argv[*idx + 1]->arg;
+		if (strmatch(vrf_name, VRF_DEFAULT_NAME))
+			vrf_name = NULL;
+	}
+	if (vrf_name) {
 		if (strmatch(vrf_name, "all"))
 			*bgp = NULL;
 		else {
@@ -597,7 +604,7 @@ static int bgp_clear(struct vty *vty, struct bgp *bgp, afi_t afi, safi_t safi,
 			bgp->update_delay_over = 0;
 
 		if (!found)
-			vty_out(vty, "%%BGP: No %s peer configured",
+			vty_out(vty, "%%BGP: No %s peer configured\n",
 				afi_safi_print(afi, safi));
 
 		return CMD_SUCCESS;
@@ -967,6 +974,7 @@ DEFUN_NOSH (router_bgp,
 	int idx_asn = 2;
 	int idx_view_vrf = 3;
 	int idx_vrf = 4;
+	int is_new_bgp = 0;
 	int ret;
 	as_t as;
 	struct bgp *bgp;
@@ -997,11 +1005,17 @@ DEFUN_NOSH (router_bgp,
 		if (argc > 3) {
 			name = argv[idx_vrf]->arg;
 
-			if (!strcmp(argv[idx_view_vrf]->text, "vrf"))
-				inst_type = BGP_INSTANCE_TYPE_VRF;
-			else if (!strcmp(argv[idx_view_vrf]->text, "view"))
+			if (!strcmp(argv[idx_view_vrf]->text, "vrf")) {
+				if (strmatch(name, VRF_DEFAULT_NAME))
+					name = NULL;
+				else
+					inst_type = BGP_INSTANCE_TYPE_VRF;
+			} else if (!strcmp(argv[idx_view_vrf]->text, "view"))
 				inst_type = BGP_INSTANCE_TYPE_VIEW;
 		}
+
+		if (inst_type == BGP_INSTANCE_TYPE_DEFAULT)
+			is_new_bgp = (bgp_lookup(as, name) == NULL);
 
 		ret = bgp_get(&bgp, &as, name, inst_type);
 		switch (ret) {
@@ -1026,7 +1040,7 @@ DEFUN_NOSH (router_bgp,
 		 * any pending VRF-VPN leaking that was configured via
 		 * earlier "router bgp X vrf FOO" blocks.
 		 */
-		if (inst_type == BGP_INSTANCE_TYPE_DEFAULT)
+		if (is_new_bgp && inst_type == BGP_INSTANCE_TYPE_DEFAULT)
 			vpn_leak_postchange_all();
 
 		/* Pending: handle when user tries to change a view to vrf n vv.
@@ -1881,9 +1895,8 @@ DEFUN (no_bgp_deterministic_med,
 
 		for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer)) {
 			FOREACH_AFI_SAFI (afi, safi)
-				if (CHECK_FLAG(
-					    peer->af_flags[afi][safi],
-					    PEER_FLAG_ADDPATH_TX_BESTPATH_PER_AS)) {
+				if (bgp_addpath_dmed_required(
+					peer->addpath_type[afi][safi])) {
 					bestpath_per_as_used = 1;
 					break;
 				}
@@ -2375,7 +2388,7 @@ DEFUN (bgp_default_show_hostname,
        "bgp default show-hostname",
        "BGP specific commands\n"
        "Configure BGP defaults\n"
-       "Show hostname in certain command ouputs\n")
+       "Show hostname in certain command outputs\n")
 {
 	VTY_DECLVAR_CONTEXT(bgp, bgp);
 	bgp_flag_set(bgp, BGP_FLAG_SHOW_HOSTNAME);
@@ -2388,7 +2401,7 @@ DEFUN (no_bgp_default_show_hostname,
        NO_STR
        "BGP specific commands\n"
        "Configure BGP defaults\n"
-       "Show hostname in certain command ouputs\n")
+       "Show hostname in certain command outputs\n")
 {
 	VTY_DECLVAR_CONTEXT(bgp, bgp);
 	bgp_flag_unset(bgp, BGP_FLAG_SHOW_HOSTNAME);
@@ -2960,7 +2973,7 @@ static int peer_conf_interface_get(struct vty *vty, const char *conf_if,
 	if (!CHECK_FLAG(peer->flags_invert, PEER_FLAG_CAPABILITY_ENHE)) {
 		SET_FLAG(peer->flags, PEER_FLAG_CAPABILITY_ENHE);
 		SET_FLAG(peer->flags_invert, PEER_FLAG_CAPABILITY_ENHE);
-		SET_FLAG(peer->flags_override, PEER_FLAG_CAPABILITY_ENHE);
+		UNSET_FLAG(peer->flags_override, PEER_FLAG_CAPABILITY_ENHE);
 	}
 
 	if (peer_group_name) {
@@ -4842,14 +4855,17 @@ static int peer_default_originate_set_vty(struct vty *vty, const char *peer_str,
 {
 	int ret;
 	struct peer *peer;
+	struct route_map *route_map;
 
 	peer = peer_and_group_lookup_vty(vty, peer_str);
 	if (!peer)
 		return CMD_WARNING_CONFIG_FAILED;
 
-	if (set)
-		ret = peer_default_originate_set(peer, afi, safi, rmap);
-	else
+	if (set) {
+		route_map = route_map_lookup_warn_noexist(vty, rmap);
+		ret = peer_default_originate_set(peer, afi, safi,
+						 rmap, route_map);
+	} else
 		ret = peer_default_originate_unset(peer, afi, safi);
 
 	return bgp_vty_return(vty, ret);
@@ -5668,6 +5684,7 @@ static int peer_route_map_set_vty(struct vty *vty, const char *ip_str,
 	int ret;
 	struct peer *peer;
 	int direct = RMAP_IN;
+	struct route_map *route_map;
 
 	peer = peer_and_group_lookup_vty(vty, ip_str);
 	if (!peer)
@@ -5679,7 +5696,8 @@ static int peer_route_map_set_vty(struct vty *vty, const char *ip_str,
 	else if (strncmp(direct_str, "o", 1) == 0)
 		direct = RMAP_OUT;
 
-	ret = peer_route_map_set(peer, afi, safi, direct, name_str);
+	route_map = route_map_lookup_warn_noexist(vty, name_str);
+	ret = peer_route_map_set(peer, afi, safi, direct, name_str, route_map);
 
 	return bgp_vty_return(vty, ret);
 }
@@ -5766,12 +5784,14 @@ static int peer_unsuppress_map_set_vty(struct vty *vty, const char *ip_str,
 {
 	int ret;
 	struct peer *peer;
+	struct route_map *route_map;
 
 	peer = peer_and_group_lookup_vty(vty, ip_str);
 	if (!peer)
 		return CMD_WARNING_CONFIG_FAILED;
 
-	ret = peer_unsuppress_map_set(peer, afi, safi, name_str);
+	route_map = route_map_lookup_warn_noexist(vty, name_str);
+	ret = peer_unsuppress_map_set(peer, afi, safi, name_str, route_map);
 
 	return bgp_vty_return(vty, ret);
 }
@@ -6083,7 +6103,7 @@ DEFUN (neighbor_allowas_in,
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
        "Accept as-path with my AS present in it\n"
-       "Number of occurances of AS number\n"
+       "Number of occurences of AS number\n"
        "Only accept my AS in the as-path if the route was originated in my AS\n")
 {
 	int idx_peer = 1;
@@ -6117,7 +6137,7 @@ ALIAS_HIDDEN(
 	"neighbor <A.B.C.D|X:X::X:X|WORD> allowas-in [<(1-10)|origin>]",
 	NEIGHBOR_STR NEIGHBOR_ADDR_STR2
 	"Accept as-path with my AS present in it\n"
-	"Number of occurances of AS number\n"
+	"Number of occurences of AS number\n"
 	"Only accept my AS in the as-path if the route was originated in my AS\n")
 
 DEFUN (no_neighbor_allowas_in,
@@ -6127,7 +6147,7 @@ DEFUN (no_neighbor_allowas_in,
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
        "allow local ASN appears in aspath attribute\n"
-       "Number of occurances of AS number\n"
+       "Number of occurences of AS number\n"
        "Only accept my AS in the as-path if the route was originated in my AS\n")
 {
 	int idx_peer = 2;
@@ -6149,7 +6169,7 @@ ALIAS_HIDDEN(
 	"no neighbor <A.B.C.D|X:X::X:X|WORD> allowas-in [<(1-10)|origin>]",
 	NO_STR NEIGHBOR_STR NEIGHBOR_ADDR_STR2
 	"allow local ASN appears in aspath attribute\n"
-	"Number of occurances of AS number\n"
+	"Number of occurences of AS number\n"
 	"Only accept my AS in the as-path if the route was originated in my AS\n")
 
 DEFUN (neighbor_ttl_security,
@@ -6220,9 +6240,9 @@ DEFUN (neighbor_addpath_tx_all_paths,
 	if (!peer)
 		return CMD_WARNING_CONFIG_FAILED;
 
-	return peer_af_flag_set_vty(vty, argv[idx_peer]->arg, bgp_node_afi(vty),
-				    bgp_node_safi(vty),
-				    PEER_FLAG_ADDPATH_TX_ALL_PATHS);
+	bgp_addpath_set_peer_type(peer, bgp_node_afi(vty), bgp_node_safi(vty),
+				 BGP_ADDPATH_ALL);
+	return CMD_SUCCESS;
 }
 
 ALIAS_HIDDEN(neighbor_addpath_tx_all_paths,
@@ -6240,9 +6260,23 @@ DEFUN (no_neighbor_addpath_tx_all_paths,
        "Use addpath to advertise all paths to a neighbor\n")
 {
 	int idx_peer = 2;
-	return peer_af_flag_unset_vty(vty, argv[idx_peer]->arg,
-				      bgp_node_afi(vty), bgp_node_safi(vty),
-				      PEER_FLAG_ADDPATH_TX_ALL_PATHS);
+	struct peer *peer;
+
+	peer = peer_and_group_lookup_vty(vty, argv[idx_peer]->arg);
+	if (!peer)
+		return CMD_WARNING_CONFIG_FAILED;
+
+	if (peer->addpath_type[bgp_node_afi(vty)][bgp_node_safi(vty)]
+	    != BGP_ADDPATH_ALL) {
+		vty_out(vty,
+			"%% Peer not currently configured to transmit all paths.");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	bgp_addpath_set_peer_type(peer, bgp_node_afi(vty), bgp_node_safi(vty),
+				 BGP_ADDPATH_NONE);
+
+	return CMD_SUCCESS;
 }
 
 ALIAS_HIDDEN(no_neighbor_addpath_tx_all_paths,
@@ -6265,9 +6299,10 @@ DEFUN (neighbor_addpath_tx_bestpath_per_as,
 	if (!peer)
 		return CMD_WARNING_CONFIG_FAILED;
 
-	return peer_af_flag_set_vty(vty, argv[idx_peer]->arg, bgp_node_afi(vty),
-				    bgp_node_safi(vty),
-				    PEER_FLAG_ADDPATH_TX_BESTPATH_PER_AS);
+	bgp_addpath_set_peer_type(peer, bgp_node_afi(vty), bgp_node_safi(vty),
+				 BGP_ADDPATH_BEST_PER_AS);
+
+	return CMD_SUCCESS;
 }
 
 ALIAS_HIDDEN(neighbor_addpath_tx_bestpath_per_as,
@@ -6285,9 +6320,23 @@ DEFUN (no_neighbor_addpath_tx_bestpath_per_as,
        "Use addpath to advertise the bestpath per each neighboring AS\n")
 {
 	int idx_peer = 2;
-	return peer_af_flag_unset_vty(vty, argv[idx_peer]->arg,
-				      bgp_node_afi(vty), bgp_node_safi(vty),
-				      PEER_FLAG_ADDPATH_TX_BESTPATH_PER_AS);
+	struct peer *peer;
+
+	peer = peer_and_group_lookup_vty(vty, argv[idx_peer]->arg);
+	if (!peer)
+		return CMD_WARNING_CONFIG_FAILED;
+
+	if (peer->addpath_type[bgp_node_afi(vty)][bgp_node_safi(vty)]
+	    != BGP_ADDPATH_BEST_PER_AS) {
+		vty_out(vty,
+			"%% Peer not currently configured to transmit all best path per as.");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	bgp_addpath_set_peer_type(peer, bgp_node_afi(vty), bgp_node_safi(vty),
+				 BGP_ADDPATH_NONE);
+
+	return CMD_SUCCESS;
 }
 
 ALIAS_HIDDEN(no_neighbor_addpath_tx_bestpath_per_as,
@@ -6721,7 +6770,7 @@ DEFPY (af_route_map_vpn_imexport,
 			bgp->vpn_policy[afi].rmap_name[dir] = XSTRDUP(
 								      MTYPE_ROUTE_MAP_NAME, rmap_str);
 			bgp->vpn_policy[afi].rmap[dir] =
-				route_map_lookup_by_name(rmap_str);
+				route_map_lookup_warn_noexist(vty, rmap_str);
 			if (!bgp->vpn_policy[afi].rmap[dir])
 				return CMD_SUCCESS;
 		} else {
@@ -6794,7 +6843,7 @@ DEFPY(af_import_vrf_route_map, af_import_vrf_route_map_cmd,
 		bgp->vpn_policy[afi].rmap_name[dir] =
 			XSTRDUP(MTYPE_ROUTE_MAP_NAME, rmap_str);
 		bgp->vpn_policy[afi].rmap[dir] =
-			route_map_lookup_by_name(rmap_str);
+			route_map_lookup_warn_noexist(vty, rmap_str);
 		if (!bgp->vpn_policy[afi].rmap[dir])
 			return CMD_SUCCESS;
 	} else {
@@ -6817,13 +6866,12 @@ ALIAS(af_import_vrf_route_map, af_no_import_vrf_route_map_cmd,
       "Vrf routes being filtered\n"
       "Specify route map\n")
 
-DEFPY (bgp_imexport_vrf,
-       bgp_imexport_vrf_cmd,
-       "[no] import vrf NAME$import_name",
-       NO_STR
-       "Import routes from another VRF\n"
-       "VRF to import from\n"
-       "The name of the VRF\n")
+DEFPY(bgp_imexport_vrf, bgp_imexport_vrf_cmd,
+      "[no] import vrf VIEWVRFNAME$import_name",
+      NO_STR
+      "Import routes from another VRF\n"
+      "VRF to import from\n"
+      "The name of the VRF\n")
 {
 	VTY_DECLVAR_CONTEXT(bgp, bgp);
 	struct listnode *node;
@@ -7167,7 +7215,9 @@ static int bgp_clear_prefix(struct vty *vty, const char *view_name,
 			if (prd && memcmp(rn->p.u.val, prd->val, 8) != 0)
 				continue;
 
-			if ((table = rn->info) != NULL) {
+			table = bgp_node_get_bgp_table_info(rn);
+			if (table != NULL) {
+
 				if ((rm = bgp_node_match(table, &match))
 				    != NULL) {
 					if (rm->p.prefixlen
@@ -7196,13 +7246,15 @@ static int bgp_clear_prefix(struct vty *vty, const char *view_name,
 /* one clear bgp command to rule them all */
 DEFUN (clear_ip_bgp_all,
        clear_ip_bgp_all_cmd,
-       "clear [ip] bgp [<view|vrf> VIEWVRFNAME] ["BGP_AFI_CMD_STR" ["BGP_SAFI_WITH_LABEL_CMD_STR"]] <*|A.B.C.D|X:X::X:X|WORD|(1-4294967295)|external|peer-group WORD> [<soft [<in|out>]|in [prefix-filter]|out>]",
+       "clear [ip] bgp [<view|vrf> VIEWVRFNAME] [<ipv4|ipv6|l2vpn> [<unicast|multicast|vpn|labeled-unicast|flowspec|evpn>]] <*|A.B.C.D|X:X::X:X|WORD|(1-4294967295)|external|peer-group WORD> [<soft [<in|out>]|in [prefix-filter]|out>]",
        CLEAR_STR
        IP_STR
        BGP_STR
        BGP_INSTANCE_HELP_STR
        BGP_AFI_HELP_STR
+       "Address Family\n"
        BGP_SAFI_WITH_LABEL_HELP_STR
+       "Address Family modifier\n"
        "Clear all peers\n"
        "BGP neighbor address to clear\n"
        "BGP IPv6 neighbor to clear\n"
@@ -7232,13 +7284,17 @@ DEFUN (clear_ip_bgp_all,
 	if (argv_find(argv, argc, "ip", &idx))
 		afi = AFI_IP;
 
-	/* [<view|vrf> VIEWVRFNAME] */
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx)) {
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		idx += 2;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx)) {
+		/* [<view> VIEWVRFNAME] */
 		vrf = argv[idx + 1]->arg;
 		idx += 2;
 	}
-
 	/* ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] */
 	if (argv_find_and_parse_afi(argv, argc, &idx, &afi))
 		argv_find_and_parse_safi(argv, argc, &idx, &safi);
@@ -7303,8 +7359,16 @@ DEFUN (clear_ip_bgp_prefix,
 	int idx = 0;
 
 	/* [<view|vrf> VIEWVRFNAME] */
-	if (argv_find(argv, argc, "VIEWVRFNAME", &idx))
-		vrf = argv[idx]->arg;
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		idx += 2;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx)) {
+		/* [<view> VIEWVRFNAME] */
+		vrf = argv[idx + 1]->arg;
+		idx += 2;
+	}
 
 	prefix = argv[argc - 1]->arg;
 
@@ -7346,16 +7410,23 @@ DEFUN (clear_bgp_instance_ipv6_safi_prefix,
        "Clear bestpath and re-advertise\n"
        "IPv6 prefix\n")
 {
-	int idx_word = 3;
 	int idx_safi = 0;
+	int idx_vrfview = 0;
 	int idx_ipv6_prefix = 0;
 	safi_t safi = SAFI_UNICAST;
 	char *prefix = argv_find(argv, argc, "X:X::X:X/M", &idx_ipv6_prefix) ?
 		argv[idx_ipv6_prefix]->arg : NULL;
-	/* [<view|vrf> VIEWVRFNAME] */
-	char *vrfview = argv_find(argv, argc, "VIEWVRFNAME", &idx_word) ?
-		argv[idx_word]->arg : NULL;
+	char *vrfview = NULL;
 
+	/* [<view|vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx_vrfview)) {
+		vrfview = argv[idx_vrfview + 1]->arg;
+		if (vrfview && strmatch(vrfview, VRF_DEFAULT_NAME))
+			vrfview = NULL;
+	} else if (argv_find(argv, argc, "view", &idx_vrfview)) {
+		/* [<view> VIEWVRFNAME] */
+		vrfview = argv[idx_vrfview + 1]->arg;
+	}
 	argv_find_and_parse_safi(argv, argc, &idx_safi, &safi);
 
 	return bgp_clear_prefix(
@@ -7507,6 +7578,18 @@ DEFUN (show_bgp_vrfs,
 	return CMD_SUCCESS;
 }
 
+DEFUN (show_bgp_mac_hash,
+       show_bgp_mac_hash_cmd,
+       "show bgp mac hash",
+       SHOW_STR
+       BGP_STR
+       "Mac Address\n"
+       "Mac Address database\n")
+{
+	bgp_mac_dump_table(vty);
+
+	return CMD_SUCCESS;
+}
 
 static void show_tip_entry(struct hash_backet *backet, void *args)
 {
@@ -7536,10 +7619,18 @@ DEFUN(show_bgp_martian_nexthop_db, show_bgp_martian_nexthop_db_cmd,
 {
 	struct bgp *bgp = NULL;
 	int idx = 0;
+	char *name = NULL;
 
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx))
-		bgp = bgp_lookup_by_name(argv[idx + 1]->arg);
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		name = argv[idx + 1]->arg;
+		if (name && strmatch(name, VRF_DEFAULT_NAME))
+			name = NULL;
+	} else if (argv_find(argv, argc, "view", &idx))
+		/* [<view> VIEWVRFNAME] */
+		name = argv[idx + 1]->arg;
+	if (name)
+		bgp = bgp_lookup_by_name(name);
 	else
 		bgp = bgp_get_default();
 
@@ -7730,6 +7821,7 @@ static int bgp_show_summary(struct vty *vty, struct bgp *bgp, int afi, int safi,
 	int pfx_rcd_safi;
 	json_object *json_peer = NULL;
 	json_object *json_peers = NULL;
+	struct peer_af *paf;
 
 	/* labeled-unicast routes are installed in the unicast table so in order
 	 * to
@@ -8022,8 +8114,22 @@ static int bgp_show_summary(struct vty *vty, struct bgp *bgp, int afi, int safi,
 			json_object_int_add(json_peer, "inq", 0);
 			peer_uptime(peer->uptime, timebuf, BGP_UPTIME_LEN,
 				    use_json, json_peer);
+
+			/*
+			 * Adding "pfxRcd" field to match with the corresponding
+			 * CLI. "prefixReceivedCount" will be deprecated in
+			 * future.
+			 */
 			json_object_int_add(json_peer, "prefixReceivedCount",
 					    peer->pcount[afi][pfx_rcd_safi]);
+			json_object_int_add(json_peer, "pfxRcd",
+					peer->pcount[afi][pfx_rcd_safi]);
+
+			paf = peer_af_find(peer, afi, pfx_rcd_safi);
+			if (paf && PAF_SUBGRP(paf))
+				json_object_int_add(json_peer,
+						"pfxSnt",
+						(PAF_SUBGRP(paf))->scount);
 
 			if (CHECK_FLAG(peer->flags, PEER_FLAG_SHUTDOWN))
 				json_object_string_add(json_peer, "state",
@@ -8305,10 +8411,14 @@ DEFUN (show_ip_bgp_summary,
 	/* show [ip] bgp */
 	if (argv_find(argv, argc, "ip", &idx))
 		afi = AFI_IP;
-	/* [<view|vrf> VIEWVRFNAME] */
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx))
-		vrf = argv[++idx]->arg;
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx))
+		/* [<view> VIEWVRFNAME] */
+		vrf = argv[idx + 1]->arg;
 	/* ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] */
 	if (argv_find_and_parse_afi(argv, argc, &idx, &afi)) {
 		argv_find_and_parse_safi(argv, argc, &idx, &safi);
@@ -8597,15 +8707,11 @@ static void bgp_show_peer_afi(struct vty *vty, struct peer *p, afi_t afi,
 				json_addr,
 				"privateAsNumsRemovedInUpdatesToNbr");
 
-		if (CHECK_FLAG(p->af_flags[afi][safi],
-			       PEER_FLAG_ADDPATH_TX_ALL_PATHS))
-			json_object_boolean_true_add(json_addr,
-						     "addpathTxAllPaths");
-
-		if (CHECK_FLAG(p->af_flags[afi][safi],
-			       PEER_FLAG_ADDPATH_TX_BESTPATH_PER_AS))
-			json_object_boolean_true_add(json_addr,
-						     "addpathTxBestpathPerAS");
+		if (p->addpath_type[afi][safi] != BGP_ADDPATH_NONE)
+			json_object_boolean_true_add(
+				json_addr,
+				bgp_addpath_names(p->addpath_type[afi][safi])
+					->type_json_name);
 
 		if (CHECK_FLAG(p->af_flags[afi][safi], PEER_FLAG_AS_OVERRIDE))
 			json_object_string_add(json_addr,
@@ -8733,6 +8839,9 @@ static void bgp_show_peer_afi(struct vty *vty, struct peer *p, afi_t afi,
 		/* Receive prefix count */
 		json_object_int_add(json_addr, "acceptedPrefixCounter",
 				    p->pcount[afi][safi]);
+		if (paf && PAF_SUBGRP(paf))
+			json_object_int_add(json_addr, "sentPrefixCounter",
+						(PAF_SUBGRP(paf))->scount);
 
 		/* Maximum prefix */
 		if (CHECK_FLAG(p->af_flags[afi][safi], PEER_FLAG_MAX_PREFIX)) {
@@ -8868,14 +8977,10 @@ static void bgp_show_peer_afi(struct vty *vty, struct peer *p, afi_t afi,
 			vty_out(vty,
 				"  Private AS numbers removed in updates to this neighbor\n");
 
-		if (CHECK_FLAG(p->af_flags[afi][safi],
-			       PEER_FLAG_ADDPATH_TX_ALL_PATHS))
-			vty_out(vty, "  Advertise all paths via addpath\n");
-
-		if (CHECK_FLAG(p->af_flags[afi][safi],
-			       PEER_FLAG_ADDPATH_TX_BESTPATH_PER_AS))
-			vty_out(vty,
-				"  Advertise bestpath per AS via addpath\n");
+		if (p->addpath_type[afi][safi] != BGP_ADDPATH_NONE)
+			vty_out(vty, "  %s\n",
+				bgp_addpath_names(p->addpath_type[afi][safi])
+					->human_description);
 
 		if (CHECK_FLAG(p->af_flags[afi][safi], PEER_FLAG_AS_OVERRIDE))
 			vty_out(vty,
@@ -9635,7 +9740,7 @@ static void bgp_show_peer(struct vty *vty, struct peer *p, bool use_json,
 								json_object_string_add(
 									json_nxt,
 									print_store,
-									"recieved");
+									"recieved"); /* misspelled for compatibility */
 							}
 						}
 						json_object_object_add(
@@ -10243,7 +10348,7 @@ static void bgp_show_peer(struct vty *vty, struct peer *p, bool use_json,
 			json_object_object_add(
 				json_neigh, "gracefulRestartInfo", json_grace);
 		} else {
-			vty_out(vty, "  Graceful restart informations:\n");
+			vty_out(vty, "  Graceful restart information:\n");
 			if (p->status == Established) {
 				vty_out(vty, "    End-of-RIB send: ");
 				FOREACH_AFI_SAFI (afi, safi) {
@@ -10901,11 +11006,12 @@ static void bgp_show_all_instances_neighbors_vty(struct vty *vty,
 			bgp_show_neighbor(vty, bgp, show_all, NULL, NULL,
 					  use_json, json);
 		}
-		json_object_free(json);
 	}
 
-	if (use_json)
+	if (use_json) {
 		vty_out(vty, "}\n");
+		json_object_free(json);
+	}
 	else if (!nbr_output)
 		vty_out(vty, "%% BGP instance not found\n");
 }
@@ -10994,8 +11100,13 @@ DEFUN (show_ip_bgp_neighbors,
 
 	int idx = 0;
 
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx))
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx))
+		/* [<view> VIEWVRFNAME] */
 		vrf = argv[idx + 1]->arg;
 
 	idx++;
@@ -11287,8 +11398,11 @@ DEFUN (show_ip_bgp_route_leak,
 		return CMD_WARNING;
 	}
 
-	if (argv_find(argv, argc, "vrf", &idx))
-		vrf = argv[++idx]->arg;
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	}
 	/* ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] */
 	if (argv_find_and_parse_afi(argv, argc, &idx, &afi)) {
 		argv_find_and_parse_safi(argv, argc, &idx, &safi);
@@ -11361,10 +11475,14 @@ DEFUN (show_ip_bgp_updgrps,
 	/* show [ip] bgp */
 	if (argv_find(argv, argc, "ip", &idx))
 		afi = AFI_IP;
-	/* [<view|vrf> VIEWVRFNAME] */
-	if (argv_find(argv, argc, "view", &idx)
-	    || argv_find(argv, argc, "vrf", &idx))
-		vrf = argv[++idx]->arg;
+	/* [<vrf> VIEWVRFNAME] */
+	if (argv_find(argv, argc, "vrf", &idx)) {
+		vrf = argv[idx + 1]->arg;
+		if (vrf && strmatch(vrf, VRF_DEFAULT_NAME))
+			vrf = NULL;
+	} else if (argv_find(argv, argc, "view", &idx))
+		/* [<view> VIEWVRFNAME] */
+		vrf = argv[idx + 1]->arg;
 	/* ["BGP_AFI_CMD_STR" ["BGP_SAFI_CMD_STR"]] */
 	if (argv_find_and_parse_afi(argv, argc, &idx, &afi)) {
 		argv_find_and_parse_safi(argv, argc, &idx, &safi);
@@ -11691,6 +11809,8 @@ DEFUN (bgp_redistribute_ipv4_rmap,
 	int type;
 	struct bgp_redist *red;
 	bool changed;
+	struct route_map *route_map = route_map_lookup_warn_noexist(
+		vty, argv[idx_word]->arg);
 
 	type = proto_redistnum(AFI_IP, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -11699,7 +11819,8 @@ DEFUN (bgp_redistribute_ipv4_rmap,
 	}
 
 	red = bgp_redist_add(bgp, AFI_IP, type, 0);
-	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed =
+		bgp_redistribute_rmap_set(red, argv[idx_word]->arg, route_map);
 	return bgp_redistribute_set(bgp, AFI_IP, type, 0, changed);
 }
 
@@ -11763,6 +11884,8 @@ DEFUN (bgp_redistribute_ipv4_rmap_metric,
 	uint32_t metric;
 	struct bgp_redist *red;
 	bool changed;
+	struct route_map *route_map =
+		route_map_lookup_warn_noexist(vty, argv[idx_word]->arg);
 
 	type = proto_redistnum(AFI_IP, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -11772,7 +11895,8 @@ DEFUN (bgp_redistribute_ipv4_rmap_metric,
 	metric = strtoul(argv[idx_number]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP, type, 0);
-	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed =
+		bgp_redistribute_rmap_set(red, argv[idx_word]->arg, route_map);
 	changed |= bgp_redistribute_metric_set(bgp, red, AFI_IP, type, metric);
 	return bgp_redistribute_set(bgp, AFI_IP, type, 0, changed);
 }
@@ -11806,6 +11930,8 @@ DEFUN (bgp_redistribute_ipv4_metric_rmap,
 	uint32_t metric;
 	struct bgp_redist *red;
 	bool changed;
+	struct route_map *route_map =
+		route_map_lookup_warn_noexist(vty, argv[idx_word]->arg);
 
 	type = proto_redistnum(AFI_IP, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -11816,7 +11942,8 @@ DEFUN (bgp_redistribute_ipv4_metric_rmap,
 
 	red = bgp_redist_add(bgp, AFI_IP, type, 0);
 	changed = bgp_redistribute_metric_set(bgp, red, AFI_IP, type, metric);
-	changed |= bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed |=
+		bgp_redistribute_rmap_set(red, argv[idx_word]->arg, route_map);
 	return bgp_redistribute_set(bgp, AFI_IP, type, 0, changed);
 }
 
@@ -11881,6 +12008,8 @@ DEFUN (bgp_redistribute_ipv4_ospf_rmap,
 	unsigned short instance;
 	int protocol;
 	bool changed;
+	struct route_map *route_map =
+		route_map_lookup_warn_noexist(vty, argv[idx_word]->arg);
 
 	if (strncmp(argv[idx_ospf_table]->arg, "o", 1) == 0)
 		protocol = ZEBRA_ROUTE_OSPF;
@@ -11889,7 +12018,8 @@ DEFUN (bgp_redistribute_ipv4_ospf_rmap,
 
 	instance = strtoul(argv[idx_number]->arg, NULL, 10);
 	red = bgp_redist_add(bgp, AFI_IP, protocol, instance);
-	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed =
+		bgp_redistribute_rmap_set(red, argv[idx_word]->arg, route_map);
 	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance, changed);
 }
 
@@ -11969,6 +12099,8 @@ DEFUN (bgp_redistribute_ipv4_ospf_rmap_metric,
 	unsigned short instance;
 	int protocol;
 	bool changed;
+	struct route_map *route_map =
+		route_map_lookup_warn_noexist(vty, argv[idx_word]->arg);
 
 	if (strncmp(argv[idx_ospf_table]->arg, "o", 1) == 0)
 		protocol = ZEBRA_ROUTE_OSPF;
@@ -11979,7 +12111,8 @@ DEFUN (bgp_redistribute_ipv4_ospf_rmap_metric,
 	metric = strtoul(argv[idx_number_2]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP, protocol, instance);
-	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed =
+		bgp_redistribute_rmap_set(red, argv[idx_word]->arg, route_map);
 	changed |= bgp_redistribute_metric_set(bgp, red, AFI_IP, protocol,
 						metric);
 	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance, changed);
@@ -12020,6 +12153,8 @@ DEFUN (bgp_redistribute_ipv4_ospf_metric_rmap,
 	unsigned short instance;
 	int protocol;
 	bool changed;
+	struct route_map *route_map =
+		route_map_lookup_warn_noexist(vty, argv[idx_word]->arg);
 
 	if (strncmp(argv[idx_ospf_table]->arg, "o", 1) == 0)
 		protocol = ZEBRA_ROUTE_OSPF;
@@ -12032,7 +12167,8 @@ DEFUN (bgp_redistribute_ipv4_ospf_metric_rmap,
 	red = bgp_redist_add(bgp, AFI_IP, protocol, instance);
 	changed = bgp_redistribute_metric_set(bgp, red, AFI_IP, protocol,
 						metric);
-	changed |= bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed |=
+		bgp_redistribute_rmap_set(red, argv[idx_word]->arg, route_map);
 	return bgp_redistribute_set(bgp, AFI_IP, protocol, instance, changed);
 }
 
@@ -12158,6 +12294,8 @@ DEFUN (bgp_redistribute_ipv6_rmap,
 	int type;
 	struct bgp_redist *red;
 	bool changed;
+	struct route_map *route_map =
+		route_map_lookup_warn_noexist(vty, argv[idx_word]->arg);
 
 	type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -12166,7 +12304,8 @@ DEFUN (bgp_redistribute_ipv6_rmap,
 	}
 
 	red = bgp_redist_add(bgp, AFI_IP6, type, 0);
-	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed =
+		bgp_redistribute_rmap_set(red, argv[idx_word]->arg, route_map);
 	return bgp_redistribute_set(bgp, AFI_IP6, type, 0, changed);
 }
 
@@ -12216,6 +12355,8 @@ DEFUN (bgp_redistribute_ipv6_rmap_metric,
 	uint32_t metric;
 	struct bgp_redist *red;
 	bool changed;
+	struct route_map *route_map =
+		route_map_lookup_warn_noexist(vty, argv[idx_word]->arg);
 
 	type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -12225,7 +12366,8 @@ DEFUN (bgp_redistribute_ipv6_rmap_metric,
 	metric = strtoul(argv[idx_number]->arg, NULL, 10);
 
 	red = bgp_redist_add(bgp, AFI_IP6, type, 0);
-	changed = bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed =
+		bgp_redistribute_rmap_set(red, argv[idx_word]->arg, route_map);
 	changed |= bgp_redistribute_metric_set(bgp, red, AFI_IP6, type,
 						metric);
 	return bgp_redistribute_set(bgp, AFI_IP6, type, 0, changed);
@@ -12249,6 +12391,8 @@ DEFUN (bgp_redistribute_ipv6_metric_rmap,
 	uint32_t metric;
 	struct bgp_redist *red;
 	bool changed;
+	struct route_map *route_map =
+		route_map_lookup_warn_noexist(vty, argv[idx_word]->arg);
 
 	type = proto_redistnum(AFI_IP6, argv[idx_protocol]->text);
 	if (type < 0) {
@@ -12260,7 +12404,8 @@ DEFUN (bgp_redistribute_ipv6_metric_rmap,
 	red = bgp_redist_add(bgp, AFI_IP6, type, 0);
 	changed = bgp_redistribute_metric_set(bgp, red, AFI_IP6, SAFI_UNICAST,
 						metric);
-	changed |= bgp_redistribute_rmap_set(red, argv[idx_word]->arg);
+	changed |=
+		bgp_redistribute_rmap_set(red, argv[idx_word]->arg, route_map);
 	return bgp_redistribute_set(bgp, AFI_IP6, type, 0, changed);
 }
 
@@ -12332,11 +12477,16 @@ void bgp_vpn_policy_config_write_afi(struct vty *vty, struct bgp *bgp,
 {
 	int indent = 2;
 
-	if (bgp->vpn_policy[afi].rmap_name[BGP_VPN_POLICY_DIR_FROMVPN])
-		vty_out(vty, "%*simport vrf route-map %s\n", indent, "",
-			bgp->vpn_policy[afi]
+	if (bgp->vpn_policy[afi].rmap_name[BGP_VPN_POLICY_DIR_FROMVPN]) {
+		if (listcount(bgp->vpn_policy[afi].import_vrf))
+			vty_out(vty, "%*simport vrf route-map %s\n", indent, "",
+				bgp->vpn_policy[afi]
 				.rmap_name[BGP_VPN_POLICY_DIR_FROMVPN]);
-
+		else
+			vty_out(vty, "%*sroute-map vpn import %s\n", indent, "",
+				bgp->vpn_policy[afi]
+				.rmap_name[BGP_VPN_POLICY_DIR_FROMVPN]);
+	}
 	if (CHECK_FLAG(bgp->af_flags[afi][SAFI_UNICAST],
 		       BGP_CONFIG_VRF_TO_VRF_IMPORT)
 	    || CHECK_FLAG(bgp->af_flags[afi][SAFI_UNICAST],
@@ -12865,6 +13015,8 @@ void bgp_vty_init(void)
 			&neighbor_soft_reconfiguration_cmd);
 	install_element(BGP_FLOWSPECV6_NODE,
 			&no_neighbor_soft_reconfiguration_cmd);
+	install_element(BGP_EVPN_NODE, &neighbor_soft_reconfiguration_cmd);
+	install_element(BGP_EVPN_NODE, &no_neighbor_soft_reconfiguration_cmd);
 
 	/* "neighbor attribute-unchanged" commands.  */
 	install_element(BGP_NODE, &neighbor_attr_unchanged_hidden_cmd);
@@ -13698,6 +13850,8 @@ void bgp_vty_init(void)
 	/* "show bgp martian next-hop" */
 	install_element(VIEW_NODE, &show_bgp_martian_nexthop_db_cmd);
 
+	install_element(VIEW_NODE, &show_bgp_mac_hash_cmd);
+
 	/* "show [ip] bgp views" commands. */
 	install_element(VIEW_NODE, &show_bgp_views_cmd);
 
@@ -13782,11 +13936,11 @@ static void community_list_perror(struct vty *vty, int ret)
 /* "community-list" keyword help string.  */
 #define COMMUNITY_LIST_STR "Add a community list entry\n"
 
-/* ip community-list standard */
-DEFUN (ip_community_list_standard,
-       ip_community_list_standard_cmd,
-       "ip community-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
-       IP_STR
+/*community-list standard */
+DEFUN (community_list_standard,
+       bgp_community_list_standard_cmd,
+       "bgp community-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
+       BGP_STR
        COMMUNITY_LIST_STR
        "Community list number (standard)\n"
        "Add an standard community-list entry\n"
@@ -13800,6 +13954,14 @@ DEFUN (ip_community_list_standard,
 	int style = COMMUNITY_LIST_STANDARD;
 
 	int idx = 0;
+
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'bgp community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> AA:NN'\n");
+		zlog_warn("Deprecated option: 'ip community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> AA:NN' being used");
+	}
+
 	argv_find(argv, argc, "(1-99)", &idx);
 	argv_find(argv, argc, "WORD", &idx);
 	cl_name_or_number = argv[idx]->arg;
@@ -13822,7 +13984,79 @@ DEFUN (ip_community_list_standard,
 	return CMD_SUCCESS;
 }
 
-DEFUN (no_ip_community_list_standard_all,
+#if CONFDATE > 20191005
+CPP_NOTICE("bgpd: remove deprecated 'ip community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> AA:NN' command")
+#endif
+ALIAS (community_list_standard,
+       ip_community_list_standard_cmd,
+       "ip community-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
+       IP_STR
+       COMMUNITY_LIST_STR
+       "Community list number (standard)\n"
+       "Add an standard community-list entry\n"
+       "Community list name\n"
+       "Specify community to reject\n"
+       "Specify community to accept\n"
+       COMMUNITY_VAL_STR)
+
+DEFUN (no_community_list_standard_all,
+       no_bgp_community_list_standard_all_cmd,
+       "no bgp community-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
+       NO_STR
+       BGP_STR
+       COMMUNITY_LIST_STR
+       "Community list number (standard)\n"
+       "Add an standard community-list entry\n"
+       "Community list name\n"
+       "Specify community to reject\n"
+       "Specify community to accept\n"
+       COMMUNITY_VAL_STR)
+{
+	char *cl_name_or_number = NULL;
+	char *str = NULL;
+	int direct = 0;
+	int style = COMMUNITY_LIST_STANDARD;
+
+	int idx = 0;
+
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'no bgp community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> AA:NN'\n");
+		zlog_warn("Deprecated option: 'no ip community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> |AA:NN' being used");
+	}
+
+	argv_find(argv, argc, "permit", &idx);
+	argv_find(argv, argc, "deny", &idx);
+
+	if (idx) {
+		direct = argv_find(argv, argc, "permit", &idx)
+				 ? COMMUNITY_PERMIT
+				 : COMMUNITY_DENY;
+
+		idx = 0;
+		argv_find(argv, argc, "AA:NN", &idx);
+		str = argv_concat(argv, argc, idx);
+	}
+
+	idx = 0;
+	argv_find(argv, argc, "(1-99)", &idx);
+	argv_find(argv, argc, "WORD", &idx);
+	cl_name_or_number = argv[idx]->arg;
+
+	int ret = community_list_unset(bgp_clist, cl_name_or_number, str,
+				       direct, style);
+
+	XFREE(MTYPE_TMP, str);
+
+	if (ret < 0) {
+		community_list_perror(vty, ret);
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	return CMD_SUCCESS;
+}
+ALIAS (no_community_list_standard_all,
        no_ip_community_list_standard_all_cmd,
        "no ip community-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
        NO_STR
@@ -13834,38 +14068,26 @@ DEFUN (no_ip_community_list_standard_all,
        "Specify community to reject\n"
        "Specify community to accept\n"
        COMMUNITY_VAL_STR)
-{
-	char *cl_name_or_number = NULL;
-	int direct = 0;
-	int style = COMMUNITY_LIST_STANDARD;
 
-	int idx = 0;
-	argv_find(argv, argc, "(1-99)", &idx);
-	argv_find(argv, argc, "WORD", &idx);
-	cl_name_or_number = argv[idx]->arg;
-	direct = argv_find(argv, argc, "permit", &idx) ? COMMUNITY_PERMIT
-						       : COMMUNITY_DENY;
-	argv_find(argv, argc, "AA:NN", &idx);
-	char *str = argv_concat(argv, argc, idx);
+ALIAS(no_community_list_standard_all, no_bgp_community_list_standard_all_list_cmd,
+      "no bgp community-list <(1-99)|standard WORD>",
+      NO_STR BGP_STR COMMUNITY_LIST_STR
+      "Community list number (standard)\n"
+      "Add an standard community-list entry\n"
+      "Community list name\n")
 
-	int ret = community_list_unset(bgp_clist, cl_name_or_number, str,
-				       direct, style);
+ALIAS(no_community_list_standard_all, no_ip_community_list_standard_all_list_cmd,
+      "no ip community-list <(1-99)|standard WORD>",
+      NO_STR BGP_STR COMMUNITY_LIST_STR
+      "Community list number (standard)\n"
+      "Add an standard community-list entry\n"
+      "Community list name\n")
 
-	XFREE(MTYPE_TMP, str);
-
-	if (ret < 0) {
-		community_list_perror(vty, ret);
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
-	return CMD_SUCCESS;
-}
-
-/* ip community-list expanded */
-DEFUN (ip_community_list_expanded_all,
-       ip_community_list_expanded_all_cmd,
-       "ip community-list <(100-500)|expanded WORD> <deny|permit> AA:NN...",
-       IP_STR
+/*community-list expanded */
+DEFUN (community_list_expanded_all,
+       bgp_community_list_expanded_all_cmd,
+       "bgp community-list <(100-500)|expanded WORD> <deny|permit> AA:NN...",
+       BGP_STR
        COMMUNITY_LIST_STR
        "Community list number (expanded)\n"
        "Add an expanded community-list entry\n"
@@ -13879,6 +14101,12 @@ DEFUN (ip_community_list_expanded_all,
 	int style = COMMUNITY_LIST_EXPANDED;
 
 	int idx = 0;
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'bgp community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> AA:NN'\n");
+		zlog_warn("Deprecated option: 'ip community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> AA:NN' being used");
+	}
 	argv_find(argv, argc, "(100-500)", &idx);
 	argv_find(argv, argc, "WORD", &idx);
 	cl_name_or_number = argv[idx]->arg;
@@ -13901,11 +14129,23 @@ DEFUN (ip_community_list_expanded_all,
 	return CMD_SUCCESS;
 }
 
-DEFUN (no_ip_community_list_expanded_all,
-       no_ip_community_list_expanded_all_cmd,
-       "no ip community-list <(100-500)|expanded WORD> <deny|permit> AA:NN...",
-       NO_STR
+ALIAS (community_list_expanded_all,
+       ip_community_list_expanded_all_cmd,
+       "ip community-list <(100-500)|expanded WORD> <deny|permit> AA:NN...",
        IP_STR
+       COMMUNITY_LIST_STR
+       "Community list number (expanded)\n"
+       "Add an expanded community-list entry\n"
+       "Community list name\n"
+       "Specify community to reject\n"
+       "Specify community to accept\n"
+       COMMUNITY_VAL_STR)
+
+DEFUN (no_community_list_expanded_all,
+       no_bgp_community_list_expanded_all_cmd,
+       "no bgp community-list <(100-500)|expanded WORD> <deny|permit> AA:NN...",
+       NO_STR
+       BGP_STR
        COMMUNITY_LIST_STR
        "Community list number (expanded)\n"
        "Add an expanded community-list entry\n"
@@ -13915,17 +14155,36 @@ DEFUN (no_ip_community_list_expanded_all,
        COMMUNITY_VAL_STR)
 {
 	char *cl_name_or_number = NULL;
+	char *str = NULL;
 	int direct = 0;
 	int style = COMMUNITY_LIST_EXPANDED;
 
 	int idx = 0;
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'no bgp community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> AA:NN'\n");
+		zlog_warn("Deprecated option: 'no ip community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> AA:NN' being used");
+	}
+
+	idx = 0;
+	argv_find(argv, argc, "permit", &idx);
+	argv_find(argv, argc, "deny", &idx);
+
+	if (idx) {
+		direct = argv_find(argv, argc, "permit", &idx)
+				 ? COMMUNITY_PERMIT
+				 : COMMUNITY_DENY;
+
+		idx = 0;
+		argv_find(argv, argc, "AA:NN", &idx);
+		str = argv_concat(argv, argc, idx);
+	}
+
+	idx = 0;
 	argv_find(argv, argc, "(100-500)", &idx);
 	argv_find(argv, argc, "WORD", &idx);
 	cl_name_or_number = argv[idx]->arg;
-	direct = argv_find(argv, argc, "permit", &idx) ? COMMUNITY_PERMIT
-						       : COMMUNITY_DENY;
-	argv_find(argv, argc, "AA:NN", &idx);
-	char *str = argv_concat(argv, argc, idx);
 
 	int ret = community_list_unset(bgp_clist, cl_name_or_number, str,
 				       direct, style);
@@ -13939,6 +14198,33 @@ DEFUN (no_ip_community_list_expanded_all,
 
 	return CMD_SUCCESS;
 }
+
+ALIAS (no_community_list_expanded_all,
+       no_ip_community_list_expanded_all_cmd,
+       "no ip community-list <(100-500)|expanded WORD> <deny|permit> AA:NN...",
+       NO_STR
+       IP_STR
+       COMMUNITY_LIST_STR
+       "Community list number (expanded)\n"
+       "Add an expanded community-list entry\n"
+       "Community list name\n"
+       "Specify community to reject\n"
+       "Specify community to accept\n"
+       COMMUNITY_VAL_STR)
+
+ALIAS(no_community_list_expanded_all, no_bgp_community_list_expanded_all_list_cmd,
+      "no bgp community-list <(100-500)|expanded WORD>",
+      NO_STR IP_STR COMMUNITY_LIST_STR
+      "Community list number (expanded)\n"
+      "Add an expanded community-list entry\n"
+      "Community list name\n")
+
+ALIAS(no_community_list_expanded_all, no_ip_community_list_expanded_all_list_cmd,
+      "no ip community-list <(100-500)|expanded WORD>",
+      NO_STR IP_STR COMMUNITY_LIST_STR
+      "Community list number (expanded)\n"
+      "Add an expanded community-list entry\n"
+      "Community list name\n")
 
 /* Return configuration string of community-list entry.  */
 static const char *community_list_config_str(struct community_entry *entry)
@@ -13987,16 +14273,23 @@ static void community_list_show(struct vty *vty, struct community_list *list)
 	}
 }
 
-DEFUN (show_ip_community_list,
-       show_ip_community_list_cmd,
-       "show ip community-list",
+DEFUN (show_community_list,
+       show_bgp_community_list_cmd,
+       "show bgp community-list",
        SHOW_STR
-       IP_STR
+       BGP_STR
        "List community-list\n")
 {
 	struct community_list *list;
 	struct community_list_master *cm;
 
+	int idx = 0;
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'show bgp community-list <(1-500)|WORD>'\n");
+		zlog_warn("Deprecated option: 'ip show community-list <(1-500)|WORD>' being used");
+	}
 	cm = community_list_master_lookup(bgp_clist, COMMUNITY_LIST_MASTER);
 	if (!cm)
 		return CMD_SUCCESS;
@@ -14010,11 +14303,18 @@ DEFUN (show_ip_community_list,
 	return CMD_SUCCESS;
 }
 
-DEFUN (show_ip_community_list_arg,
-       show_ip_community_list_arg_cmd,
-       "show ip community-list <(1-500)|WORD>",
+ALIAS (show_community_list,
+       show_ip_community_list_cmd,
+       "show ip community-list",
        SHOW_STR
        IP_STR
+       "List community-list\n")
+
+DEFUN (show_community_list_arg,
+       show_bgp_community_list_arg_cmd,
+       "show bgp community-list <(1-500)|WORD>",
+       SHOW_STR
+       BGP_STR
        "List community-list\n"
        "Community-list number\n"
        "Community-list name\n")
@@ -14022,6 +14322,13 @@ DEFUN (show_ip_community_list_arg,
 	int idx_comm_list = 3;
 	struct community_list *list;
 
+	int idx = 0;
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'show bgp community-list <(1-500)|WORD>'\n");
+		zlog_warn("Deprecated option: 'ip show community-list <(1-500)|WORD>' being used");
+	}
 	list = community_list_lookup(bgp_clist, argv[idx_comm_list]->arg,
 				     COMMUNITY_LIST_MASTER);
 	if (!list) {
@@ -14033,6 +14340,15 @@ DEFUN (show_ip_community_list_arg,
 
 	return CMD_SUCCESS;
 }
+
+ALIAS (show_community_list_arg,
+       show_ip_community_list_arg_cmd,
+       "show ip community-list <(1-500)|WORD>",
+       SHOW_STR
+       IP_STR
+       "List community-list\n"
+       "Community-list number\n"
+       "Community-list name\n")
 
 /*
  * Large Community code.
@@ -14047,6 +14363,12 @@ static int lcommunity_list_set_vty(struct vty *vty, int argc,
 	int idx = 0;
 	char *cl_name;
 
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'bgp large-community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:BB:CC>'\n");
+		zlog_warn("Deprecated option: 'large-community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:BB:CC>' being used");
+	}
 	direct = argv_find(argv, argc, "permit", &idx) ? COMMUNITY_PERMIT
 						       : COMMUNITY_DENY;
 
@@ -14092,6 +14414,12 @@ static int lcommunity_list_unset_vty(struct vty *vty, int argc,
 	char *str = NULL;
 	int idx = 0;
 
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'no bgp large-community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:BB:CC>'\n");
+		zlog_warn("Deprecated option: 'no ip large-community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:BB:CC>' being used");	
+	}
 	argv_find(argv, argc, "permit", &idx);
 	argv_find(argv, argc, "deny", &idx);
 
@@ -14135,10 +14463,13 @@ static int lcommunity_list_unset_vty(struct vty *vty, int argc,
 #define LCOMMUNITY_LIST_STR "Add a large community list entry\n"
 #define LCOMMUNITY_VAL_STR  "large community in 'aa:bb:cc' format\n"
 
-DEFUN (ip_lcommunity_list_standard,
-       ip_lcommunity_list_standard_cmd,
-       "ip large-community-list (1-99) <deny|permit>",
-       IP_STR
+#if CONFDATE > 20191005
+CPP_NOTICE("bgpd: remove deprecated 'ip large-community-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:BB:CC>' command")
+#endif
+DEFUN (lcommunity_list_standard,
+       bgp_lcommunity_list_standard_cmd,
+       "bgp large-community-list (1-99) <deny|permit>",
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Large Community list number (standard)\n"
        "Specify large community to reject\n"
@@ -14148,10 +14479,19 @@ DEFUN (ip_lcommunity_list_standard,
 				       LARGE_COMMUNITY_LIST_STANDARD, 0);
 }
 
-DEFUN (ip_lcommunity_list_standard1,
-       ip_lcommunity_list_standard1_cmd,
-       "ip large-community-list (1-99) <deny|permit> AA:BB:CC...",
+ALIAS (lcommunity_list_standard,
+       ip_lcommunity_list_standard_cmd,
+       "ip large-community-list (1-99) <deny|permit>",
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Large Community list number (standard)\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n")
+
+DEFUN (lcommunity_list_standard1,
+       bgp_lcommunity_list_standard1_cmd,
+       "bgp large-community-list (1-99) <deny|permit> AA:BB:CC...",
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Large Community list number (standard)\n"
        "Specify large community to reject\n"
@@ -14162,10 +14502,20 @@ DEFUN (ip_lcommunity_list_standard1,
 				       LARGE_COMMUNITY_LIST_STANDARD, 0);
 }
 
-DEFUN (ip_lcommunity_list_expanded,
-       ip_lcommunity_list_expanded_cmd,
-       "ip large-community-list (100-500) <deny|permit> LINE...",
+ALIAS (lcommunity_list_standard1,
+       ip_lcommunity_list_standard1_cmd,
+       "ip large-community-list (1-99) <deny|permit> AA:BB:CC...",
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Large Community list number (standard)\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n"
+       LCOMMUNITY_VAL_STR)
+
+DEFUN (lcommunity_list_expanded,
+       bgp_lcommunity_list_expanded_cmd,
+       "bgp large-community-list (100-500) <deny|permit> LINE...",
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Large Community list number (expanded)\n"
        "Specify large community to reject\n"
@@ -14176,10 +14526,20 @@ DEFUN (ip_lcommunity_list_expanded,
 				       LARGE_COMMUNITY_LIST_EXPANDED, 0);
 }
 
-DEFUN (ip_lcommunity_list_name_standard,
-       ip_lcommunity_list_name_standard_cmd,
-       "ip large-community-list standard WORD <deny|permit>",
+ALIAS (lcommunity_list_expanded,
+       ip_lcommunity_list_expanded_cmd,
+       "ip large-community-list (100-500) <deny|permit> LINE...",
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Large Community list number (expanded)\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n"
+       "An ordered list as a regular-expression\n")
+
+DEFUN (lcommunity_list_name_standard,
+       bgp_lcommunity_list_name_standard_cmd,
+       "bgp large-community-list standard WORD <deny|permit>",
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Specify standard large-community-list\n"
        "Large Community list name\n"
@@ -14190,10 +14550,20 @@ DEFUN (ip_lcommunity_list_name_standard,
 				       LARGE_COMMUNITY_LIST_STANDARD, 1);
 }
 
-DEFUN (ip_lcommunity_list_name_standard1,
-       ip_lcommunity_list_name_standard1_cmd,
-       "ip large-community-list standard WORD <deny|permit> AA:BB:CC...",
+ALIAS (lcommunity_list_name_standard,
+       ip_lcommunity_list_name_standard_cmd,
+       "ip large-community-list standard WORD <deny|permit>",
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Specify standard large-community-list\n"
+       "Large Community list name\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n")
+
+DEFUN (lcommunity_list_name_standard1,
+       bgp_lcommunity_list_name_standard1_cmd,
+       "bgp large-community-list standard WORD <deny|permit> AA:BB:CC...",
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Specify standard large-community-list\n"
        "Large Community list name\n"
@@ -14205,10 +14575,21 @@ DEFUN (ip_lcommunity_list_name_standard1,
 				       LARGE_COMMUNITY_LIST_STANDARD, 1);
 }
 
-DEFUN (ip_lcommunity_list_name_expanded,
-       ip_lcommunity_list_name_expanded_cmd,
-       "ip large-community-list expanded WORD <deny|permit> LINE...",
+ALIAS (lcommunity_list_name_standard1,
+       ip_lcommunity_list_name_standard1_cmd,
+       "ip large-community-list standard WORD <deny|permit> AA:BB:CC...",
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Specify standard large-community-list\n"
+       "Large Community list name\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n"
+       LCOMMUNITY_VAL_STR)
+
+DEFUN (lcommunity_list_name_expanded,
+       bgp_lcommunity_list_name_expanded_cmd,
+       "bgp large-community-list expanded WORD <deny|permit> LINE...",
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Specify expanded large-community-list\n"
        "Large Community list name\n"
@@ -14220,11 +14601,22 @@ DEFUN (ip_lcommunity_list_name_expanded,
 				       LARGE_COMMUNITY_LIST_EXPANDED, 1);
 }
 
-DEFUN (no_ip_lcommunity_list_standard_all,
-       no_ip_lcommunity_list_standard_all_cmd,
-       "no ip large-community-list <(1-99)|(100-500)|WORD>",
-       NO_STR
+ALIAS (lcommunity_list_name_expanded,
+       ip_lcommunity_list_name_expanded_cmd,
+       "ip large-community-list expanded WORD <deny|permit> LINE...",
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Specify expanded large-community-list\n"
+       "Large Community list name\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n"
+       "An ordered list as a regular-expression\n")
+
+DEFUN (no_lcommunity_list_standard_all,
+       no_bgp_lcommunity_list_standard_all_cmd,
+       "no bgp large-community-list <(1-99)|(100-500)|WORD>",
+       NO_STR
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Large Community list number (standard)\n"
        "Large Community list number (expanded)\n"
@@ -14234,11 +14626,21 @@ DEFUN (no_ip_lcommunity_list_standard_all,
 					 LARGE_COMMUNITY_LIST_STANDARD);
 }
 
-DEFUN (no_ip_lcommunity_list_name_expanded_all,
-       no_ip_lcommunity_list_name_expanded_all_cmd,
-       "no ip large-community-list expanded WORD",
+ALIAS (no_lcommunity_list_standard_all,
+       no_ip_lcommunity_list_standard_all_cmd,
+       "no ip large-community-list <(1-99)|(100-500)|WORD>",
        NO_STR
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Large Community list number (standard)\n"
+       "Large Community list number (expanded)\n"
+       "Large Community list name\n")
+
+DEFUN (no_lcommunity_list_name_expanded_all,
+       no_bgp_lcommunity_list_name_expanded_all_cmd,
+       "no bgp large-community-list expanded WORD",
+       NO_STR
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Specify expanded large-community-list\n"
        "Large Community list name\n")
@@ -14247,11 +14649,20 @@ DEFUN (no_ip_lcommunity_list_name_expanded_all,
 					 LARGE_COMMUNITY_LIST_EXPANDED);
 }
 
-DEFUN (no_ip_lcommunity_list_standard,
-       no_ip_lcommunity_list_standard_cmd,
-       "no ip large-community-list (1-99) <deny|permit> AA:AA:NN...",
+ALIAS (no_lcommunity_list_name_expanded_all,
+       no_ip_lcommunity_list_name_expanded_all_cmd,
+       "no ip large-community-list expanded WORD",
        NO_STR
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Specify expanded large-community-list\n"
+       "Large Community list name\n")
+
+DEFUN (no_lcommunity_list_standard,
+       no_bgp_lcommunity_list_standard_cmd,
+       "no bgp large-community-list (1-99) <deny|permit> AA:AA:NN...",
+       NO_STR
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Large Community list number (standard)\n"
        "Specify large community to reject\n"
@@ -14262,11 +14673,22 @@ DEFUN (no_ip_lcommunity_list_standard,
 					 LARGE_COMMUNITY_LIST_STANDARD);
 }
 
-DEFUN (no_ip_lcommunity_list_expanded,
-       no_ip_lcommunity_list_expanded_cmd,
-       "no ip large-community-list (100-500) <deny|permit> LINE...",
+ALIAS (no_lcommunity_list_standard,
+       no_ip_lcommunity_list_standard_cmd,
+       "no ip large-community-list (1-99) <deny|permit> AA:AA:NN...",
        NO_STR
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Large Community list number (standard)\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n"
+       LCOMMUNITY_VAL_STR)
+
+DEFUN (no_lcommunity_list_expanded,
+       no_bgp_lcommunity_list_expanded_cmd,
+       "no bgp large-community-list (100-500) <deny|permit> LINE...",
+       NO_STR
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Large Community list number (expanded)\n"
        "Specify large community to reject\n"
@@ -14277,11 +14699,22 @@ DEFUN (no_ip_lcommunity_list_expanded,
 					 LARGE_COMMUNITY_LIST_EXPANDED);
 }
 
-DEFUN (no_ip_lcommunity_list_name_standard,
-       no_ip_lcommunity_list_name_standard_cmd,
-       "no ip large-community-list standard WORD <deny|permit> AA:AA:NN...",
+ALIAS (no_lcommunity_list_expanded,
+       no_ip_lcommunity_list_expanded_cmd,
+       "no ip large-community-list (100-500) <deny|permit> LINE...",
        NO_STR
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Large Community list number (expanded)\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n"
+       "An ordered list as a regular-expression\n")
+
+DEFUN (no_lcommunity_list_name_standard,
+       no_bgp_lcommunity_list_name_standard_cmd,
+       "no bgp large-community-list standard WORD <deny|permit> AA:AA:NN...",
+       NO_STR
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Specify standard large-community-list\n"
        "Large Community list name\n"
@@ -14293,11 +14726,23 @@ DEFUN (no_ip_lcommunity_list_name_standard,
 					 LARGE_COMMUNITY_LIST_STANDARD);
 }
 
-DEFUN (no_ip_lcommunity_list_name_expanded,
-       no_ip_lcommunity_list_name_expanded_cmd,
-       "no ip large-community-list expanded WORD <deny|permit> LINE...",
+ALIAS (no_lcommunity_list_name_standard,
+       no_ip_lcommunity_list_name_standard_cmd,
+       "no ip large-community-list standard WORD <deny|permit> AA:AA:NN...",
        NO_STR
        IP_STR
+       LCOMMUNITY_LIST_STR
+       "Specify standard large-community-list\n"
+       "Large Community list name\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n"
+       LCOMMUNITY_VAL_STR)
+
+DEFUN (no_lcommunity_list_name_expanded,
+       no_bgp_lcommunity_list_name_expanded_cmd,
+       "no bgp large-community-list expanded WORD <deny|permit> LINE...",
+       NO_STR
+       BGP_STR
        LCOMMUNITY_LIST_STR
        "Specify expanded large-community-list\n"
        "Large community list name\n"
@@ -14308,6 +14753,18 @@ DEFUN (no_ip_lcommunity_list_name_expanded,
 	return lcommunity_list_unset_vty(vty, argc, argv,
 					 LARGE_COMMUNITY_LIST_EXPANDED);
 }
+
+ALIAS (no_lcommunity_list_name_expanded,
+       no_ip_lcommunity_list_name_expanded_cmd,
+       "no ip large-community-list expanded WORD <deny|permit> LINE...",
+       NO_STR
+       IP_STR
+       LCOMMUNITY_LIST_STR
+       "Specify expanded large-community-list\n"
+       "Large community list name\n"
+       "Specify large community to reject\n"
+       "Specify large community to accept\n"
+       "An ordered list as a regular-expression\n")
 
 static void lcommunity_list_show(struct vty *vty, struct community_list *list)
 {
@@ -14339,15 +14796,23 @@ static void lcommunity_list_show(struct vty *vty, struct community_list *list)
 	}
 }
 
-DEFUN (show_ip_lcommunity_list,
-       show_ip_lcommunity_list_cmd,
-       "show ip large-community-list",
+DEFUN (show_lcommunity_list,
+       show_bgp_lcommunity_list_cmd,
+       "show bgp large-community-list",
        SHOW_STR
-       IP_STR
+       BGP_STR
        "List large-community list\n")
 {
 	struct community_list *list;
 	struct community_list_master *cm;
+	int idx = 0;
+
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'show bgp large-community-list <(1-500)|WORD>'\n");
+		zlog_warn("Deprecated option: 'ip show large-community-list <(1-500)|WORD>' being used");
+	}
 
 	cm = community_list_master_lookup(bgp_clist,
 					  LARGE_COMMUNITY_LIST_MASTER);
@@ -14363,16 +14828,31 @@ DEFUN (show_ip_lcommunity_list,
 	return CMD_SUCCESS;
 }
 
-DEFUN (show_ip_lcommunity_list_arg,
-       show_ip_lcommunity_list_arg_cmd,
-       "show ip large-community-list <(1-500)|WORD>",
+ALIAS (show_lcommunity_list,
+       show_ip_lcommunity_list_cmd,
+       "show ip large-community-list",
        SHOW_STR
        IP_STR
+       "List large-community list\n")
+
+DEFUN (show_lcommunity_list_arg,
+       show_bgp_lcommunity_list_arg_cmd,
+       "show bgp large-community-list <(1-500)|WORD>",
+       SHOW_STR
+       BGP_STR
        "List large-community list\n"
        "large-community-list number\n"
        "large-community-list name\n")
 {
 	struct community_list *list;
+	int idx = 0;
+
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'show bgp large-community-list <(1-500)|WORD>'\n");
+		zlog_warn("Deprecated option: 'ip show large-community-list <(1-500)|WORD>' being used");
+	}
 
 	list = community_list_lookup(bgp_clist, argv[3]->arg,
 				     LARGE_COMMUNITY_LIST_MASTER);
@@ -14386,14 +14866,23 @@ DEFUN (show_ip_lcommunity_list_arg,
 	return CMD_SUCCESS;
 }
 
+ALIAS (show_lcommunity_list_arg,
+       show_ip_lcommunity_list_arg_cmd,
+       "show ip large-community-list <(1-500)|WORD>",
+       SHOW_STR
+       IP_STR
+       "List large-community list\n"
+       "large-community-list number\n"
+       "large-community-list name\n")
+
 /* "extcommunity-list" keyword help string.  */
 #define EXTCOMMUNITY_LIST_STR "Add a extended community list entry\n"
 #define EXTCOMMUNITY_VAL_STR  "Extended community attribute in 'rt aa:nn_or_IPaddr:nn' OR 'soo aa:nn_or_IPaddr:nn' format\n"
 
-DEFUN (ip_extcommunity_list_standard,
-       ip_extcommunity_list_standard_cmd,
-       "ip extcommunity-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
-       IP_STR
+DEFUN (extcommunity_list_standard,
+       bgp_extcommunity_list_standard_cmd,
+       "bgp extcommunity-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
+       BGP_STR
        EXTCOMMUNITY_LIST_STR
        "Extended Community list number (standard)\n"
        "Specify standard extcommunity-list\n"
@@ -14407,6 +14896,12 @@ DEFUN (ip_extcommunity_list_standard,
 	char *cl_number_or_name = NULL;
 
 	int idx = 0;
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'bgp extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>'\n");
+		zlog_warn("Deprecated option: 'ip extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>' being used");
+	}
 	argv_find(argv, argc, "(1-99)", &idx);
 	argv_find(argv, argc, "WORD", &idx);
 	cl_number_or_name = argv[idx]->arg;
@@ -14428,10 +14923,25 @@ DEFUN (ip_extcommunity_list_standard,
 	return CMD_SUCCESS;
 }
 
-DEFUN (ip_extcommunity_list_name_expanded,
-       ip_extcommunity_list_name_expanded_cmd,
-       "ip extcommunity-list <(100-500)|expanded WORD> <deny|permit> LINE...",
+#if CONFDATE > 20191005
+CPP_NOTICE("bgpd: remove deprecated 'ip extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>' command")
+#endif
+ALIAS (extcommunity_list_standard,
+       ip_extcommunity_list_standard_cmd,
+       "ip extcommunity-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
        IP_STR
+       EXTCOMMUNITY_LIST_STR
+       "Extended Community list number (standard)\n"
+       "Specify standard extcommunity-list\n"
+       "Community list name\n"
+       "Specify community to reject\n"
+       "Specify community to accept\n"
+       EXTCOMMUNITY_VAL_STR)
+
+DEFUN (extcommunity_list_name_expanded,
+       bgp_extcommunity_list_name_expanded_cmd,
+       "bgp extcommunity-list <(100-500)|expanded WORD> <deny|permit> LINE...",
+       BGP_STR
        EXTCOMMUNITY_LIST_STR
        "Extended Community list number (expanded)\n"
        "Specify expanded extcommunity-list\n"
@@ -14445,6 +14955,13 @@ DEFUN (ip_extcommunity_list_name_expanded,
 	char *cl_number_or_name = NULL;
 
 	int idx = 0;
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>'\n");
+		zlog_warn("Deprecated option: ‘ip extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>' being used");
+	}
+
 	argv_find(argv, argc, "(100-500)", &idx);
 	argv_find(argv, argc, "WORD", &idx);
 	cl_number_or_name = argv[idx]->arg;
@@ -14466,7 +14983,77 @@ DEFUN (ip_extcommunity_list_name_expanded,
 	return CMD_SUCCESS;
 }
 
-DEFUN (no_ip_extcommunity_list_standard_all,
+ALIAS (extcommunity_list_name_expanded,
+       ip_extcommunity_list_name_expanded_cmd,
+       "ip extcommunity-list <(100-500)|expanded WORD> <deny|permit> LINE...",
+       IP_STR
+       EXTCOMMUNITY_LIST_STR
+       "Extended Community list number (expanded)\n"
+       "Specify expanded extcommunity-list\n"
+       "Extended Community list name\n"
+       "Specify community to reject\n"
+       "Specify community to accept\n"
+       "An ordered list as a regular-expression\n")
+
+DEFUN (no_extcommunity_list_standard_all,
+       no_bgp_extcommunity_list_standard_all_cmd,
+       "no bgp extcommunity-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
+       NO_STR
+       BGP_STR
+       EXTCOMMUNITY_LIST_STR
+       "Extended Community list number (standard)\n"
+       "Specify standard extcommunity-list\n"
+       "Community list name\n"
+       "Specify community to reject\n"
+       "Specify community to accept\n"
+       EXTCOMMUNITY_VAL_STR)
+{
+	int style = EXTCOMMUNITY_LIST_STANDARD;
+	int direct = 0;
+	char *cl_number_or_name = NULL;
+	char *str = NULL;
+
+	int idx = 0;
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'no bgp extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>'\n");
+		zlog_warn("Deprecated option: ‘no ip extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>' being used");
+	}
+
+	idx = 0;
+	argv_find(argv, argc, "permit", &idx);
+	argv_find(argv, argc, "deny", &idx);
+
+	if (idx) {
+		direct = argv_find(argv, argc, "permit", &idx)
+				 ? COMMUNITY_PERMIT
+				 : COMMUNITY_DENY;
+
+		idx = 0;
+		argv_find(argv, argc, "AA:NN", &idx);
+		str = argv_concat(argv, argc, idx);
+	}
+
+	idx = 0;
+	argv_find(argv, argc, "(1-99)", &idx);
+	argv_find(argv, argc, "WORD", &idx);
+	cl_number_or_name = argv[idx]->arg;
+
+	int ret = extcommunity_list_unset(bgp_clist, cl_number_or_name, str,
+					  direct, style);
+
+	XFREE(MTYPE_TMP, str);
+
+	if (ret < 0) {
+		community_list_perror(vty, ret);
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	return CMD_SUCCESS;
+}
+
+ALIAS (no_extcommunity_list_standard_all,
        no_ip_extcommunity_list_standard_all_cmd,
        "no ip extcommunity-list <(1-99)|standard WORD> <deny|permit> AA:NN...",
        NO_STR
@@ -14478,38 +15065,28 @@ DEFUN (no_ip_extcommunity_list_standard_all,
        "Specify community to reject\n"
        "Specify community to accept\n"
        EXTCOMMUNITY_VAL_STR)
-{
-	int style = EXTCOMMUNITY_LIST_STANDARD;
-	int direct = 0;
-	char *cl_number_or_name = NULL;
 
-	int idx = 0;
-	argv_find(argv, argc, "(1-99)", &idx);
-	argv_find(argv, argc, "WORD", &idx);
-	cl_number_or_name = argv[idx]->arg;
-	direct = argv_find(argv, argc, "permit", &idx) ? COMMUNITY_PERMIT
-						       : COMMUNITY_DENY;
-	argv_find(argv, argc, "AA:NN", &idx);
-	char *str = argv_concat(argv, argc, idx);
+ALIAS(no_extcommunity_list_standard_all,
+      no_bgp_extcommunity_list_standard_all_list_cmd,
+      "no bgp extcommunity-list <(1-99)|standard WORD>",
+      NO_STR IP_STR EXTCOMMUNITY_LIST_STR
+      "Extended Community list number (standard)\n"
+      "Specify standard extcommunity-list\n"
+      "Community list name\n")
 
-	int ret = extcommunity_list_unset(bgp_clist, cl_number_or_name, str,
-					  direct, style);
+ALIAS(no_extcommunity_list_standard_all,
+      no_ip_extcommunity_list_standard_all_list_cmd,
+      "no ip extcommunity-list <(1-99)|standard WORD>",
+      NO_STR IP_STR EXTCOMMUNITY_LIST_STR
+      "Extended Community list number (standard)\n"
+      "Specify standard extcommunity-list\n"
+      "Community list name\n")
 
-	XFREE(MTYPE_TMP, str);
-
-	if (ret < 0) {
-		community_list_perror(vty, ret);
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
-	return CMD_SUCCESS;
-}
-
-DEFUN (no_ip_extcommunity_list_expanded_all,
-       no_ip_extcommunity_list_expanded_all_cmd,
-       "no ip extcommunity-list <(100-500)|expanded WORD> <deny|permit> LINE...",
+DEFUN (no_extcommunity_list_expanded_all,
+       no_bgp_extcommunity_list_expanded_all_cmd,
+       "no bgp extcommunity-list <(100-500)|expanded WORD> <deny|permit> LINE...",
        NO_STR
-       IP_STR
+       BGP_STR
        EXTCOMMUNITY_LIST_STR
        "Extended Community list number (expanded)\n"
        "Specify expanded extcommunity-list\n"
@@ -14521,15 +15098,34 @@ DEFUN (no_ip_extcommunity_list_expanded_all,
 	int style = EXTCOMMUNITY_LIST_EXPANDED;
 	int direct = 0;
 	char *cl_number_or_name = NULL;
+	char *str = NULL;
 
 	int idx = 0;
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'no bgp extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>'\n");
+		zlog_warn("Deprecated option: ‘no ip extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>' being used");
+	}
+
+	idx = 0;
+	argv_find(argv, argc, "permit", &idx);
+	argv_find(argv, argc, "deny", &idx);
+
+	if (idx) {
+		direct = argv_find(argv, argc, "permit", &idx)
+				 ? COMMUNITY_PERMIT
+				 : COMMUNITY_DENY;
+
+		idx = 0;
+		argv_find(argv, argc, "LINE", &idx);
+		str = argv_concat(argv, argc, idx);
+	}
+
+	idx = 0;
 	argv_find(argv, argc, "(100-500)", &idx);
 	argv_find(argv, argc, "WORD", &idx);
 	cl_number_or_name = argv[idx]->arg;
-	direct = argv_find(argv, argc, "permit", &idx) ? COMMUNITY_PERMIT
-						       : COMMUNITY_DENY;
-	argv_find(argv, argc, "LINE", &idx);
-	char *str = argv_concat(argv, argc, idx);
 
 	int ret = extcommunity_list_unset(bgp_clist, cl_number_or_name, str,
 					  direct, style);
@@ -14543,6 +15139,35 @@ DEFUN (no_ip_extcommunity_list_expanded_all,
 
 	return CMD_SUCCESS;
 }
+
+ALIAS (no_extcommunity_list_expanded_all,
+       no_ip_extcommunity_list_expanded_all_cmd,
+       "no ip extcommunity-list <(100-500)|expanded WORD> <deny|permit> LINE...",
+       NO_STR
+       IP_STR
+       EXTCOMMUNITY_LIST_STR
+       "Extended Community list number (expanded)\n"
+       "Specify expanded extcommunity-list\n"
+       "Extended Community list name\n"
+       "Specify community to reject\n"
+       "Specify community to accept\n"
+       "An ordered list as a regular-expression\n")
+
+ALIAS(no_extcommunity_list_expanded_all,
+      no_ip_extcommunity_list_expanded_all_list_cmd,
+      "no ip extcommunity-list <(100-500)|expanded WORD>",
+      NO_STR IP_STR EXTCOMMUNITY_LIST_STR
+      "Extended Community list number (expanded)\n"
+      "Specify expanded extcommunity-list\n"
+      "Extended Community list name\n")
+
+ALIAS(no_extcommunity_list_expanded_all,
+      no_bgp_extcommunity_list_expanded_all_list_cmd,
+      "no bgp extcommunity-list <(100-500)|expanded WORD>",
+      NO_STR IP_STR EXTCOMMUNITY_LIST_STR
+      "Extended Community list number (expanded)\n"
+      "Specify expanded extcommunity-list\n"
+      "Extended Community list name\n")
 
 static void extcommunity_list_show(struct vty *vty, struct community_list *list)
 {
@@ -14574,16 +15199,23 @@ static void extcommunity_list_show(struct vty *vty, struct community_list *list)
 	}
 }
 
-DEFUN (show_ip_extcommunity_list,
-       show_ip_extcommunity_list_cmd,
-       "show ip extcommunity-list",
+DEFUN (show_extcommunity_list,
+       show_bgp_extcommunity_list_cmd,
+       "show bgp extcommunity-list",
        SHOW_STR
-       IP_STR
+       BGP_STR
        "List extended-community list\n")
 {
 	struct community_list *list;
 	struct community_list_master *cm;
+	int idx = 0;
 
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'show bgp extcommunity-list <(1-500)|WORD>'\n");
+		zlog_warn("Deprecated option: 'ip show extcommunity-list <(1-500)|WORD>' being used");
+	}
 	cm = community_list_master_lookup(bgp_clist, EXTCOMMUNITY_LIST_MASTER);
 	if (!cm)
 		return CMD_SUCCESS;
@@ -14597,18 +15229,32 @@ DEFUN (show_ip_extcommunity_list,
 	return CMD_SUCCESS;
 }
 
-DEFUN (show_ip_extcommunity_list_arg,
-       show_ip_extcommunity_list_arg_cmd,
-       "show ip extcommunity-list <(1-500)|WORD>",
+ALIAS (show_extcommunity_list,
+       show_ip_extcommunity_list_cmd,
+       "show ip extcommunity-list",
        SHOW_STR
        IP_STR
+       "List extended-community list\n")
+
+DEFUN (show_extcommunity_list_arg,
+       show_bgp_extcommunity_list_arg_cmd,
+       "show bgp extcommunity-list <(1-500)|WORD>",
+       SHOW_STR
+       BGP_STR
        "List extended-community list\n"
        "Extcommunity-list number\n"
        "Extcommunity-list name\n")
 {
 	int idx_comm_list = 3;
 	struct community_list *list;
+	int idx = 0;
 
+	if (argv_find(argv, argc, "ip", &idx)) {
+		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
+		vty_out(vty, "if you are using this please migrate to the below command.\n");
+		vty_out(vty, "'show bgp extcommunity-list <(1-500)|WORD>'\n");
+		zlog_warn("Deprecated option: 'ip show extcommunity-list <(1-500)|WORD>' being used");
+	}
 	list = community_list_lookup(bgp_clist, argv[idx_comm_list]->arg,
 				     EXTCOMMUNITY_LIST_MASTER);
 	if (!list) {
@@ -14620,6 +15266,15 @@ DEFUN (show_ip_extcommunity_list_arg,
 
 	return CMD_SUCCESS;
 }
+
+ALIAS (show_extcommunity_list_arg,
+       show_ip_extcommunity_list_arg_cmd,
+       "show ip extcommunity-list <(1-500)|WORD>",
+       SHOW_STR
+       IP_STR
+       "List extended-community list\n"
+       "Extcommunity-list number\n"
+       "Extcommunity-list name\n")
 
 /* Display community-list and extcommunity-list configuration.  */
 static int community_list_config_write(struct vty *vty)
@@ -14634,14 +15289,14 @@ static int community_list_config_write(struct vty *vty)
 
 	for (list = cm->num.head; list; list = list->next)
 		for (entry = list->head; entry; entry = entry->next) {
-			vty_out(vty, "ip community-list %s %s %s\n", list->name,
+			vty_out(vty, "bgp community-list %s %s %s\n", list->name,
 				community_direct_str(entry->direct),
 				community_list_config_str(entry));
 			write++;
 		}
 	for (list = cm->str.head; list; list = list->next)
 		for (entry = list->head; entry; entry = entry->next) {
-			vty_out(vty, "ip community-list %s %s %s %s\n",
+			vty_out(vty, "bgp community-list %s %s %s %s\n",
 				entry->style == COMMUNITY_LIST_STANDARD
 					? "standard"
 					: "expanded",
@@ -14655,14 +15310,14 @@ static int community_list_config_write(struct vty *vty)
 
 	for (list = cm->num.head; list; list = list->next)
 		for (entry = list->head; entry; entry = entry->next) {
-			vty_out(vty, "ip extcommunity-list %s %s %s\n",
+			vty_out(vty, "bgp extcommunity-list %s %s %s\n",
 				list->name, community_direct_str(entry->direct),
 				community_list_config_str(entry));
 			write++;
 		}
 	for (list = cm->str.head; list; list = list->next)
 		for (entry = list->head; entry; entry = entry->next) {
-			vty_out(vty, "ip extcommunity-list %s %s %s %s\n",
+			vty_out(vty, "bgp extcommunity-list %s %s %s %s\n",
 				entry->style == EXTCOMMUNITY_LIST_STANDARD
 					? "standard"
 					: "expanded",
@@ -14678,14 +15333,14 @@ static int community_list_config_write(struct vty *vty)
 
 	for (list = cm->num.head; list; list = list->next)
 		for (entry = list->head; entry; entry = entry->next) {
-			vty_out(vty, "ip large-community-list %s %s %s\n",
+			vty_out(vty, "bgp large-community-list %s %s %s\n",
 				list->name, community_direct_str(entry->direct),
 				community_list_config_str(entry));
 			write++;
 		}
 	for (list = cm->str.head; list; list = list->next)
 		for (entry = list->head; entry; entry = entry->next) {
-			vty_out(vty, "ip large-community-list %s %s %s %s\n",
+			vty_out(vty, "bgp large-community-list %s %s %s %s\n",
 				entry->style == LARGE_COMMUNITY_LIST_STANDARD
 					? "standard"
 					: "expanded",
@@ -14706,22 +15361,59 @@ static void community_list_vty(void)
 	install_node(&community_list_node, community_list_config_write);
 
 	/* Community-list.  */
+	install_element(CONFIG_NODE, &bgp_community_list_standard_cmd);
+	install_element(CONFIG_NODE, &bgp_community_list_expanded_all_cmd);
+	install_element(CONFIG_NODE, &no_bgp_community_list_standard_all_cmd);
+	install_element(CONFIG_NODE, &no_bgp_community_list_standard_all_list_cmd);
+	install_element(CONFIG_NODE, &no_bgp_community_list_expanded_all_cmd);
+	install_element(CONFIG_NODE, &no_bgp_community_list_expanded_all_list_cmd);
+	install_element(VIEW_NODE, &show_bgp_community_list_cmd);
+	install_element(VIEW_NODE, &show_bgp_community_list_arg_cmd);
 	install_element(CONFIG_NODE, &ip_community_list_standard_cmd);
 	install_element(CONFIG_NODE, &ip_community_list_expanded_all_cmd);
 	install_element(CONFIG_NODE, &no_ip_community_list_standard_all_cmd);
+	install_element(CONFIG_NODE, &no_ip_community_list_standard_all_list_cmd);
 	install_element(CONFIG_NODE, &no_ip_community_list_expanded_all_cmd);
+	install_element(CONFIG_NODE, &no_ip_community_list_expanded_all_list_cmd);
 	install_element(VIEW_NODE, &show_ip_community_list_cmd);
 	install_element(VIEW_NODE, &show_ip_community_list_arg_cmd);
 
 	/* Extcommunity-list.  */
+	install_element(CONFIG_NODE, &bgp_extcommunity_list_standard_cmd);
+	install_element(CONFIG_NODE, &bgp_extcommunity_list_name_expanded_cmd);
+	install_element(CONFIG_NODE, &no_bgp_extcommunity_list_standard_all_cmd);
+	install_element(CONFIG_NODE,
+			&no_bgp_extcommunity_list_standard_all_list_cmd);
+	install_element(CONFIG_NODE, &no_bgp_extcommunity_list_expanded_all_cmd);
+	install_element(CONFIG_NODE,
+			&no_bgp_extcommunity_list_expanded_all_list_cmd);
+	install_element(VIEW_NODE, &show_bgp_extcommunity_list_cmd);
+	install_element(VIEW_NODE, &show_bgp_extcommunity_list_arg_cmd);
 	install_element(CONFIG_NODE, &ip_extcommunity_list_standard_cmd);
 	install_element(CONFIG_NODE, &ip_extcommunity_list_name_expanded_cmd);
 	install_element(CONFIG_NODE, &no_ip_extcommunity_list_standard_all_cmd);
+	install_element(CONFIG_NODE, &no_ip_extcommunity_list_standard_all_list_cmd);
 	install_element(CONFIG_NODE, &no_ip_extcommunity_list_expanded_all_cmd);
+	install_element(CONFIG_NODE, &no_ip_extcommunity_list_expanded_all_list_cmd);
 	install_element(VIEW_NODE, &show_ip_extcommunity_list_cmd);
 	install_element(VIEW_NODE, &show_ip_extcommunity_list_arg_cmd);
 
 	/* Large Community List */
+	install_element(CONFIG_NODE, &bgp_lcommunity_list_standard_cmd);
+	install_element(CONFIG_NODE, &bgp_lcommunity_list_standard1_cmd);
+	install_element(CONFIG_NODE, &bgp_lcommunity_list_expanded_cmd);
+	install_element(CONFIG_NODE, &bgp_lcommunity_list_name_standard_cmd);
+	install_element(CONFIG_NODE, &bgp_lcommunity_list_name_standard1_cmd);
+	install_element(CONFIG_NODE, &bgp_lcommunity_list_name_expanded_cmd);
+	install_element(CONFIG_NODE, &no_bgp_lcommunity_list_standard_all_cmd);
+	install_element(CONFIG_NODE,
+			&no_bgp_lcommunity_list_name_expanded_all_cmd);
+	install_element(CONFIG_NODE, &no_bgp_lcommunity_list_standard_cmd);
+	install_element(CONFIG_NODE, &no_bgp_lcommunity_list_expanded_cmd);
+	install_element(CONFIG_NODE, &no_bgp_lcommunity_list_name_standard_cmd);
+	install_element(CONFIG_NODE, &no_bgp_lcommunity_list_name_expanded_cmd);
+	install_element(VIEW_NODE, &show_bgp_lcommunity_list_cmd);
+	install_element(VIEW_NODE, &show_bgp_lcommunity_list_arg_cmd);
 	install_element(CONFIG_NODE, &ip_lcommunity_list_standard_cmd);
 	install_element(CONFIG_NODE, &ip_lcommunity_list_standard1_cmd);
 	install_element(CONFIG_NODE, &ip_lcommunity_list_expanded_cmd);

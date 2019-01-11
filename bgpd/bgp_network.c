@@ -621,10 +621,9 @@ int bgp_getsockname(struct peer *peer)
 
 	if (!bgp_zebra_nexthop_set(peer->su_local, peer->su_remote,
 				   &peer->nexthop, peer)) {
-		flog_err(
-			EC_BGP_NH_UPD,
-			"%s: nexthop_set failed, resetting connection - intf %p",
-			peer->host, peer->nexthop.ifp);
+		flog_err(EC_BGP_NH_UPD,
+			 "%s: nexthop_set failed, resetting connection - intf %p",
+			 peer->host, peer->nexthop.ifp);
 		return -1;
 	}
 	return 0;
@@ -709,7 +708,11 @@ int bgp_socket(struct bgp *bgp, unsigned short port, const char *address)
 			     gai_strerror(ret));
 		return -1;
 	}
-
+	if (bgp_option_check(BGP_OPT_NO_ZEBRA) &&
+	    bgp->vrf_id != VRF_DEFAULT) {
+		freeaddrinfo(ainfo_save);
+		return -1;
+	}
 	count = 0;
 	for (ainfo = ainfo_save; ainfo; ainfo = ainfo->ai_next) {
 		int sock;

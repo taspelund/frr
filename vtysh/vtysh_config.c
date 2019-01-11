@@ -309,6 +309,9 @@ void vtysh_config_parse_line(void *arg, const char *line)
 		else if (strncmp(line, "router isis", strlen("router isis"))
 			 == 0)
 			config = config_get(ISIS_NODE, line);
+		else if (strncmp(line, "router openfabric", strlen("router openfabric"))
+			 == 0)
+			config = config_get(OPENFABRIC_NODE, line);
 		else if (strncmp(line, "route-map", strlen("route-map")) == 0)
 			config = config_get(RMAP_NODE, line);
 		else if (strncmp(line, "pbr-map", strlen("pbr-map")) == 0)
@@ -332,18 +335,18 @@ void vtysh_config_parse_line(void *arg, const char *line)
 				 strlen("ipv6 prefix-list"))
 			 == 0)
 			config = config_get(PREFIX_IPV6_NODE, line);
-		else if (strncmp(line, "ip as-path access-list",
-				 strlen("ip as-path access-list"))
+		else if (strncmp(line, "bgp as-path access-list",
+				 strlen("bgp as-path access-list"))
 			 == 0)
 			config = config_get(AS_LIST_NODE, line);
-		else if (strncmp(line, "ip community-list",
-				 strlen("ip community-list"))
+		else if (strncmp(line, "bgp community-list",
+				 strlen("bgp community-list"))
 				 == 0
-			 || strncmp(line, "ip extcommunity-list",
-				    strlen("ip extcommunity-list"))
+			 || strncmp(line, "bgp extcommunity-list",
+				    strlen("bgp extcommunity-list"))
 				    == 0
-			 || strncmp(line, "ip large-community-list",
-				    strlen("ip large-community-list"))
+			 || strncmp(line, "bgp large-community-list",
+				    strlen("bgp large-community-list"))
 				    == 0)
 			config = config_get(COMMUNITY_LIST_NODE, line);
 		else if (strncmp(line, "ip route", strlen("ip route")) == 0)
@@ -363,6 +366,10 @@ void vtysh_config_parse_line(void *arg, const char *line)
 			config = config_get(FORWARDING_NODE, line);
 		else if (strncmp(line, "debug vrf", strlen("debug vrf")) == 0)
 			config = config_get(VRF_DEBUG_NODE, line);
+		else if (strncmp(line, "debug northbound",
+				 strlen("debug northbound"))
+			 == 0)
+			config = config_get(NORTHBOUND_DEBUG_NODE, line);
 		else if (strncmp(line, "debug", strlen("debug")) == 0)
 			config = config_get(DEBUG_NODE, line);
 		else if (strncmp(line, "password", strlen("password")) == 0
@@ -408,7 +415,7 @@ void vtysh_config_parse_line(void *arg, const char *line)
 	 || (I) == ACCESS_IPV6_NODE || (I) == ACCESS_MAC_NODE                  \
 	 || (I) == PREFIX_IPV6_NODE || (I) == FORWARDING_NODE                  \
 	 || (I) == DEBUG_NODE || (I) == AAA_NODE || (I) == VRF_DEBUG_NODE      \
-	 || (I) == MPLS_NODE)
+	 || (I) == NORTHBOUND_DEBUG_NODE || (I) == MPLS_NODE)
 
 /* Display configuration to file pointer. */
 void vtysh_config_dump(void)

@@ -86,7 +86,7 @@
 %{!?frr_gid:            %global  frr_gid            92 }
 %{!?vty_gid:            %global  vty_gid            85 }
 
-%define daemon_list zebra ripd ospfd bgpd isisd ripngd ospf6d pbrd staticd bfdd
+%define daemon_list zebra ripd ospfd bgpd isisd ripngd ospf6d pbrd staticd bfdd fabricd
 
 %if %{with_ldpd}
     %define daemon_ldpd ldpd
@@ -162,6 +162,7 @@ BuildRequires:  make
 BuildRequires:  ncurses-devel
 BuildRequires:  readline-devel
 BuildRequires:  texinfo
+BuildRequires:  libyang >= 0.16.7
 %if 0%{?rhel} && 0%{?rhel} < 7
 #python27-devel is available from ius community repo for RedHat/CentOS 6
 BuildRequires:  python27-devel
@@ -370,6 +371,7 @@ rm -f %{buildroot}%{_sbindir}/frr
 # kill bogus libtool files
 rm -vf %{buildroot}%{_libdir}/frr/modules/*.la
 rm -vf %{buildroot}%{_libdir}/*.la
+rm -vf %{buildroot}%{_libdir}/frr/libyang_plugins/*.la
 
 # install /etc sources
 %if "%{initsystem}" == "systemd"
@@ -460,6 +462,7 @@ zebra_spec_add_service isisd    2608/tcp "ISISd vty"
 %if %{with_bfdd}
     zebra_spec_add_service bfdd     2617/tcp "BFDd vty"
 %endif
+zebra_spec_add_service fabricd	2618/tcp "Fabricd vty"
 
 %if "%{initsystem}" == "systemd"
     for daemon in %all_daemons ; do
@@ -563,6 +566,7 @@ fi
 %doc */*.sample* COPYING
 %doc doc/mpls
 %doc README.md
+/usr/share/yang/*.yang
 %if 0%{?frr_user:1}
     %dir %attr(751,%{frr_user},%{frr_user}) %{configdir}
     %dir %attr(750,%{frr_user},%{frr_user}) %{_localstatedir}/log/frr
@@ -595,6 +599,7 @@ fi
     %{_sbindir}/pbrd
 %endif
 %{_sbindir}/isisd
+%{_sbindir}/fabricd
 %if %{with_ldpd}
     %{_sbindir}/ldpd
 %endif
@@ -619,6 +624,7 @@ fi
     %{_libdir}/frr/modules/bgpd_rpki.so
 %endif
 %{_libdir}/frr/modules/zebra_irdp.so
+%{_libdir}/frr/libyang_plugins/frr_user_types.so
 %{_bindir}/*
 %config(noreplace) %{configdir}/[!v]*.conf*
 %config(noreplace) %attr(750,%{frr_user},%{frr_user}) %{configdir}/daemons
@@ -631,6 +637,9 @@ fi
 %config(noreplace) %{_sysconfdir}/pam.d/frr
 %config(noreplace) %{_sysconfdir}/logrotate.d/frr
 %{_sbindir}/frr-reload
+%{_sbindir}/frrcommon.sh
+%{_sbindir}/frrinit.sh
+%{_sbindir}/watchfrr.sh
 
 
 %files contrib

@@ -48,6 +48,7 @@
 #include "zebra/kernel_socket.h"
 #include "zebra/rib.h"
 #include "zebra/zebra_errors.h"
+#include "zebra/zebra_ptm.h"
 
 extern struct zebra_privs_t zserv_privs;
 
@@ -63,17 +64,18 @@ extern struct zebra_privs_t zserv_privs;
  * 0).  We follow this practice without questioning it, but it is a
  * bug if quagga calls ROUNDUP with 0.
  */
+#ifdef __APPLE__
+#define ROUNDUP_TYPE	int
+#else
+#define ROUNDUP_TYPE	long
+#endif
 
 /*
  * Because of these varying conventions, the only sane approach is for
  * the <net/route.h> header to define some flavor of ROUNDUP macro.
  */
 
-#if defined(SA_SIZE)
-/* SAROUNDUP is the only thing we need, and SA_SIZE provides that */
-#define SAROUNDUP(a)	SA_SIZE(a)
-#else /* !SA_SIZE */
-
+/* OS X (Xcode as of 2014-12) is known not to define RT_ROUNDUP */
 #if defined(RT_ROUNDUP)
 #define ROUNDUP(a)	RT_ROUNDUP(a)
 #endif /* defined(RT_ROUNDUP) */
@@ -95,20 +97,17 @@ extern struct zebra_privs_t zserv_privs;
  * have it in its headers, this will break rather obviously and you'll
  * have to fix it here.
  */
-
-/* OS X (Xcode as of 2014-12) is known not to define RT_ROUNDUP */
-#ifdef __APPLE__
-#define ROUNDUP_TYPE	int
-#else
-#define ROUNDUP_TYPE	long
-#endif
-
 #define ROUNDUP(a)                                                             \
 	((a) > 0 ? (1 + (((a)-1) | (sizeof(ROUNDUP_TYPE) - 1)))                \
 		 : sizeof(ROUNDUP_TYPE))
 
 #endif /* defined(ROUNDUP) */
 
+
+#if defined(SA_SIZE)
+/* SAROUNDUP is the only thing we need, and SA_SIZE provides that */
+#define SAROUNDUP(a)	SA_SIZE(a)
+#else /* !SA_SIZE */
 /*
  * Given a pointer (sockaddr or void *), return the number of bytes
  * taken up by the sockaddr and any padding needed for alignment.
@@ -132,60 +131,6 @@ extern struct zebra_privs_t zserv_privs;
 
 #endif /* !SA_SIZE */
 
-/*
- * We use a call to an inline function to copy (PNT) to (DEST)
- * 1. Calculating the length of the copy requires an #ifdef to determine
- *    if sa_len is a field and can't be used directly inside a #define
- * 2. So the compiler doesn't complain when DEST is NULL, which is only true
- *    when we are skipping the copy and incrementing to the next SA
- */
-static inline void rta_copy(union sockunion *dest, caddr_t src)
-{
-	int len;
-	if (!dest)
-		return;
-#ifdef HAVE_STRUCT_SOCKADDR_SA_LEN
-	len = (((struct sockaddr *)src)->sa_len > sizeof(*dest))
-		      ? sizeof(*dest)
-		      : ((struct sockaddr *)src)->sa_len;
-#else
-	len = (SAROUNDUP(src) > sizeof(*dest)) ? sizeof(*dest) : SAROUNDUP(src);
-#endif
-	memcpy(dest, src, len);
-}
-
-#define RTA_ADDR_GET(DEST, RTA, RTMADDRS, PNT)                                 \
-	if ((RTMADDRS) & (RTA)) {                                              \
-		int len = SAROUNDUP((PNT));                                    \
-		if (af_check(((struct sockaddr *)(PNT))->sa_family))           \
-			rta_copy((DEST), (PNT));                               \
-		(PNT) += len;                                                  \
-	}
-#define RTA_ATTR_GET(DEST, RTA, RTMADDRS, PNT)                                 \
-	if ((RTMADDRS) & (RTA)) {                                              \
-		int len = SAROUNDUP((PNT));                                    \
-		rta_copy((DEST), (PNT));                                       \
-		(PNT) += len;                                                  \
-	}
-
-#define RTA_NAME_GET(DEST, RTA, RTMADDRS, PNT, LEN)                            \
-	if ((RTMADDRS) & (RTA)) {                                              \
-		uint8_t *pdest = (uint8_t *)(DEST);                            \
-		int len = SAROUNDUP((PNT));                                    \
-		struct sockaddr_dl *sdl = (struct sockaddr_dl *)(PNT);         \
-		if (IS_ZEBRA_DEBUG_KERNEL)                                     \
-			zlog_debug("%s: RTA_SDL_GET nlen %d, alen %d",         \
-				   __func__, sdl->sdl_nlen, sdl->sdl_alen);    \
-		if (((DEST) != NULL) && (sdl->sdl_family == AF_LINK)           \
-		    && (sdl->sdl_nlen < IFNAMSIZ) && (sdl->sdl_nlen <= len)) { \
-			memcpy(pdest, sdl->sdl_data, sdl->sdl_nlen);           \
-			pdest[sdl->sdl_nlen] = '\0';                           \
-			(LEN) = sdl->sdl_nlen;                                 \
-		}                                                              \
-		(PNT) += len;                                                  \
-	} else {                                                               \
-		(LEN) = 0;                                                     \
-	}
 /* Routing socket message types. */
 const struct message rtm_type_str[] = {{RTM_ADD, "RTM_ADD"},
 				       {RTM_DELETE, "RTM_DELETE"},
@@ -194,7 +139,9 @@ const struct message rtm_type_str[] = {{RTM_ADD, "RTM_ADD"},
 				       {RTM_LOSING, "RTM_LOSING"},
 				       {RTM_REDIRECT, "RTM_REDIRECT"},
 				       {RTM_MISS, "RTM_MISS"},
+#ifdef RTM_LOCK
 				       {RTM_LOCK, "RTM_LOCK"},
+#endif /* RTM_LOCK */
 #ifdef OLDADD
 				       {RTM_OLDADD, "RTM_OLDADD"},
 #endif /* RTM_OLDADD */
@@ -277,8 +224,18 @@ static const struct message rtm_flag_str[] = {{RTF_UP, "UP"},
 /* Kernel routing update socket. */
 int routing_sock = -1;
 
+/* Kernel dataplane routing update socket, used in the dataplane pthread
+ * context.
+ */
+int dplane_routing_sock = -1;
+
 /* Yes I'm checking ugly routing socket behavior. */
 /* #define DEBUG */
+
+size_t _rta_get(caddr_t sap, void *destp, size_t destlen, bool checkaf);
+size_t rta_get(caddr_t sap, void *dest, size_t destlen);
+size_t rta_getattr(caddr_t sap, void *destp, size_t destlen);
+size_t rta_getsdlname(caddr_t sap, void *dest, short *destlen);
 
 /* Supported address family check. */
 static inline int af_check(int family)
@@ -288,6 +245,88 @@ static inline int af_check(int family)
 	if (family == AF_INET6)
 		return 1;
 	return 0;
+}
+
+size_t _rta_get(caddr_t sap, void *destp, size_t destlen, bool checkaf)
+{
+	struct sockaddr *sa = (struct sockaddr *)sap;
+	struct sockaddr_dl *sdl;
+	uint8_t *dest = destp;
+	size_t tlen, copylen;
+
+#ifdef HAVE_STRUCT_SOCKADDR_SA_LEN
+	copylen = sa->sa_len;
+	tlen = (copylen == 0) ? sizeof(ROUNDUP_TYPE) : ROUNDUP(copylen);
+#else  /* !HAVE_STRUCT_SOCKADDR_SA_LEN */
+	copylen = tlen = SAROUNDUP(sap);
+#endif /* !HAVE_STRUCT_SOCKADDR_SA_LEN */
+
+	if (copylen > 0 && dest != NULL) {
+		if (checkaf && af_check(sa->sa_family) == 0)
+			return tlen;
+		/*
+		 * Handle sockaddr_dl corner case:
+		 * RTA_NETMASK might be AF_LINK, but it doesn't anything
+		 * relevant (e.g. zeroed out fields). Check for this
+		 * case and avoid warning log message.
+		 */
+		if (sa->sa_family == AF_LINK) {
+			sdl = (struct sockaddr_dl *)sa;
+			if (sdl->sdl_index == 0 || sdl->sdl_nlen == 0)
+				copylen = sizeof(*sdl) - sizeof(sdl->sdl_data);
+		}
+
+		if (copylen > destlen) {
+			zlog_warn("%s: destination buffer too small (%lu vs %lu)",
+				  __func__, copylen, destlen);
+			memcpy(dest, sap, destlen);
+		} else
+			memcpy(dest, sap, copylen);
+	}
+
+	return tlen;
+}
+
+size_t rta_get(caddr_t sap, void *destp, size_t destlen)
+{
+	return _rta_get(sap, destp, destlen, true);
+}
+
+size_t rta_getattr(caddr_t sap, void *destp, size_t destlen)
+{
+	return _rta_get(sap, destp, destlen, false);
+}
+
+size_t rta_getsdlname(caddr_t sap, void *destp, short *destlen)
+{
+	struct sockaddr_dl *sdl = (struct sockaddr_dl *)sap;
+	struct sockaddr *sa = (struct sockaddr *)sap;
+	uint8_t *dest = destp;
+	size_t tlen, copylen;
+
+	copylen = sdl->sdl_nlen;
+#ifdef HAVE_STRUCT_SOCKADDR_SA_LEN
+	tlen = (sa->sa_len == 0) ? sizeof(ROUNDUP_TYPE) : ROUNDUP(sa->sa_len);
+#else  /* !HAVE_STRUCT_SOCKADDR_SA_LEN */
+	tlen = SAROUNDUP(sap);
+#endif /* !HAVE_STRUCT_SOCKADDR_SA_LEN */
+
+	if (copylen > 0 && dest != NULL && sdl->sdl_family == AF_LINK) {
+		if (copylen > IFNAMSIZ) {
+			zlog_warn("%s: destination buffer too small (%lu vs %d)",
+				  __func__, copylen, IFNAMSIZ);
+			memcpy(dest, sdl->sdl_data, IFNAMSIZ);
+			dest[IFNAMSIZ] = 0;
+			*destlen = IFNAMSIZ;
+		} else {
+			memcpy(dest, sdl->sdl_data, copylen);
+			dest[copylen] = 0;
+			*destlen = copylen;
+		}
+	} else
+		*destlen = 0;
+
+	return tlen;
 }
 
 /* Dump routing table flag for debug purpose. */
@@ -326,7 +365,7 @@ static int ifan_read(struct if_announcemsghdr *ifan)
 				__func__, ifan->ifan_index, ifan->ifan_name);
 
 		/* Create Interface */
-		ifp = if_get_by_name(ifan->ifan_name, VRF_DEFAULT, 0);
+		ifp = if_get_by_name(ifan->ifan_name, VRF_DEFAULT);
 		if_set_index(ifp, ifan->ifan_index);
 
 		if_get_metric(ifp);
@@ -402,6 +441,7 @@ int ifm_read(struct if_msghdr *ifm)
 	struct sockaddr_dl *sdl;
 	char ifname[IFNAMSIZ];
 	short ifnlen = 0;
+	int maskbit;
 	caddr_t cp;
 
 	/* terminate ifname at head (for strnlen) and tail (for safety) */
@@ -433,21 +473,19 @@ int ifm_read(struct if_msghdr *ifm)
 		cp = cp + 12;
 #endif
 
-	RTA_ADDR_GET(NULL, RTA_DST, ifm->ifm_addrs, cp);
-	RTA_ADDR_GET(NULL, RTA_GATEWAY, ifm->ifm_addrs, cp);
-	RTA_ATTR_GET(NULL, RTA_NETMASK, ifm->ifm_addrs, cp);
-	RTA_ADDR_GET(NULL, RTA_GENMASK, ifm->ifm_addrs, cp);
-	sdl = (struct sockaddr_dl *)cp;
-	RTA_NAME_GET(ifname, RTA_IFP, ifm->ifm_addrs, cp, ifnlen);
-	RTA_ADDR_GET(NULL, RTA_IFA, ifm->ifm_addrs, cp);
-	RTA_ADDR_GET(NULL, RTA_AUTHOR, ifm->ifm_addrs, cp);
-	RTA_ADDR_GET(NULL, RTA_BRD, ifm->ifm_addrs, cp);
-#ifdef RTA_LABEL
-	RTA_ATTR_GET(NULL, RTA_LABEL, ifm->ifm_addrs, cp);
-#endif
-#ifdef RTA_SRC
-	RTA_ADDR_GET(NULL, RTA_SRC, ifm->ifm_addrs, cp);
-#endif
+	/* Look up for RTA_IFP and skip others. */
+	for (maskbit = 1; maskbit; maskbit <<= 1) {
+		if ((maskbit & ifm->ifm_addrs) == 0)
+			continue;
+		if (maskbit != RTA_IFP) {
+			cp += rta_get(cp, NULL, 0);
+			continue;
+		}
+
+		/* Save the pointer to the structure. */
+		sdl = (struct sockaddr_dl *)cp;
+		cp += rta_getsdlname(cp, ifname, &ifnlen);
+	}
 
 	if (IS_ZEBRA_DEBUG_KERNEL)
 		zlog_debug("%s: sdl ifname %s", __func__,
@@ -469,7 +507,7 @@ int ifm_read(struct if_msghdr *ifm)
 		if (ifnlen && (strncmp(ifp->name, ifname, IFNAMSIZ) != 0)) {
 			if (IS_ZEBRA_DEBUG_KERNEL)
 				zlog_debug(
-					"%s: ifp name %s doesnt match sdl name %s",
+					"%s: ifp name %s doesn't match sdl name %s",
 					__func__, ifp->name, ifname);
 			ifp = NULL;
 		}
@@ -554,7 +592,7 @@ int ifm_read(struct if_msghdr *ifm)
 		 *  - Solaris has no sdl_len, but sdl_data[244]
 		 *    presumably, it's not going to run past that, so sizeof()
 		 *    is fine here.
-		 * a nonzero ifnlen from RTA_NAME_GET() means sdl is valid
+		 * a nonzero ifnlen from rta_getsdlname() means sdl is valid
 		 */
 		ifp->ll_type = ZEBRA_LLT_UNKNOWN;
 		ifp->hw_addr_len = 0;
@@ -648,6 +686,7 @@ static void ifam_read_mesg(struct ifa_msghdr *ifm, union sockunion *addr,
 	caddr_t pnt, end;
 	union sockunion dst;
 	union sockunion gateway;
+	int maskbit;
 
 	pnt = (caddr_t)(ifm + 1);
 	end = ((caddr_t)ifm) + ifm->ifam_msglen;
@@ -660,20 +699,41 @@ static void ifam_read_mesg(struct ifa_msghdr *ifm, union sockunion *addr,
 	memset(&gateway, 0, sizeof(union sockunion));
 
 	/* We fetch each socket variable into sockunion. */
-	RTA_ADDR_GET(&dst, RTA_DST, ifm->ifam_addrs, pnt);
-	RTA_ADDR_GET(&gateway, RTA_GATEWAY, ifm->ifam_addrs, pnt);
-	RTA_ATTR_GET(mask, RTA_NETMASK, ifm->ifam_addrs, pnt);
-	RTA_ADDR_GET(NULL, RTA_GENMASK, ifm->ifam_addrs, pnt);
-	RTA_NAME_GET(ifname, RTA_IFP, ifm->ifam_addrs, pnt, *ifnlen);
-	RTA_ADDR_GET(addr, RTA_IFA, ifm->ifam_addrs, pnt);
-	RTA_ADDR_GET(NULL, RTA_AUTHOR, ifm->ifam_addrs, pnt);
-	RTA_ADDR_GET(brd, RTA_BRD, ifm->ifam_addrs, pnt);
-#ifdef RTA_LABEL
-	RTA_ATTR_GET(NULL, RTA_LABEL, ifm->ifam_addrs, pnt);
-#endif
-#ifdef RTA_SRC
-	RTA_ADDR_GET(NULL, RTA_SRC, ifm->ifam_addrs, pnt);
-#endif
+	for (maskbit = 1; maskbit; maskbit <<= 1) {
+		if ((maskbit & ifm->ifam_addrs) == 0)
+			continue;
+
+		switch (maskbit) {
+		case RTA_DST:
+			pnt += rta_get(pnt, &dst, sizeof(dst));
+			break;
+		case RTA_GATEWAY:
+			pnt += rta_get(pnt, &gateway, sizeof(gateway));
+			break;
+		case RTA_NETMASK:
+			pnt += rta_getattr(pnt, mask, sizeof(*mask));
+			break;
+		case RTA_IFP:
+			pnt += rta_getsdlname(pnt, ifname, ifnlen);
+			break;
+		case RTA_IFA:
+			pnt += rta_get(pnt, addr, sizeof(*addr));
+			break;
+		case RTA_BRD:
+			pnt += rta_get(pnt, brd, sizeof(*brd));
+			break;
+
+		default:
+			pnt += rta_get(pnt, NULL, 0);
+			break;
+		}
+
+		if (pnt > end) {
+			zlog_warn("%s: overflow detected (pnt:%p end:%p)",
+				  __func__, pnt, end);
+			break;
+		}
+	}
 
 	if (IS_ZEBRA_DEBUG_KERNEL) {
 		int family = sockunion_family(addr);
@@ -708,7 +768,8 @@ static void ifam_read_mesg(struct ifa_msghdr *ifm, union sockunion *addr,
 	}
 
 	/* Assert read up end point matches to end point */
-	if (pnt != end)
+	pnt = (caddr_t)ROUNDUP((size_t)pnt);
+	if (pnt != (caddr_t)ROUNDUP((size_t)end))
 		zlog_debug("ifam_read() doesn't read all socket data");
 }
 
@@ -816,6 +877,7 @@ static int rtm_read_mesg(struct rt_msghdr *rtm, union sockunion *dest,
 			 char *ifname, short *ifnlen)
 {
 	caddr_t pnt, end;
+	int maskbit;
 
 	/* Pnt points out socket data start point. */
 	pnt = (caddr_t)(rtm + 1);
@@ -834,25 +896,36 @@ static int rtm_read_mesg(struct rt_msghdr *rtm, union sockunion *dest,
 	memset(mask, 0, sizeof(union sockunion));
 
 	/* We fetch each socket variable into sockunion. */
-	RTA_ADDR_GET(dest, RTA_DST, rtm->rtm_addrs, pnt);
-	RTA_ADDR_GET(gate, RTA_GATEWAY, rtm->rtm_addrs, pnt);
-	RTA_ATTR_GET(mask, RTA_NETMASK, rtm->rtm_addrs, pnt);
-	RTA_ADDR_GET(NULL, RTA_GENMASK, rtm->rtm_addrs, pnt);
-	RTA_NAME_GET(ifname, RTA_IFP, rtm->rtm_addrs, pnt, *ifnlen);
-	RTA_ADDR_GET(NULL, RTA_IFA, rtm->rtm_addrs, pnt);
-	RTA_ADDR_GET(NULL, RTA_AUTHOR, rtm->rtm_addrs, pnt);
-	RTA_ADDR_GET(NULL, RTA_BRD, rtm->rtm_addrs, pnt);
-#ifdef RTA_LABEL
-#if 0
-	union sockunion label;
-	memset(&label, 0, sizeof(label));
-	RTA_ATTR_GET(&label, RTA_LABEL, rtm->rtm_addrs, pnt);
-#endif
-	RTA_ATTR_GET(NULL, RTA_LABEL, rtm->rtm_addrs, pnt);
-#endif
-#ifdef RTA_SRC
-	RTA_ADDR_GET(NULL, RTA_SRC, rtm->rtm_addrs, pnt);
-#endif
+	/* We fetch each socket variable into sockunion. */
+	for (maskbit = 1; maskbit; maskbit <<= 1) {
+		if ((maskbit & rtm->rtm_addrs) == 0)
+			continue;
+
+		switch (maskbit) {
+		case RTA_DST:
+			pnt += rta_get(pnt, dest, sizeof(*dest));
+			break;
+		case RTA_GATEWAY:
+			pnt += rta_get(pnt, gate, sizeof(*gate));
+			break;
+		case RTA_NETMASK:
+			pnt += rta_get(pnt, mask, sizeof(*mask));
+			break;
+		case RTA_IFP:
+			pnt += rta_getsdlname(pnt, ifname, ifnlen);
+			break;
+
+		default:
+			pnt += rta_get(pnt, NULL, 0);
+			break;
+		}
+
+		if (pnt > end) {
+			zlog_warn("%s: overflow detected (pnt:%p end:%p)",
+				  __func__, pnt, end);
+			break;
+		}
+	}
 
 	/* If there is netmask information set it's family same as
 	   destination family*/
@@ -1003,7 +1076,7 @@ int rtm_write(int message, union sockunion *dest, union sockunion *mask,
 		char buf[512];
 	} msg;
 
-	if (routing_sock < 0)
+	if (dplane_routing_sock < 0)
 		return ZEBRA_ERR_EPERM;
 
 	/* Clear and set rt_msghdr values */
@@ -1110,7 +1183,7 @@ int rtm_write(int message, union sockunion *dest, union sockunion *mask,
 
 	msg.rtm.rtm_msglen = pnt - (caddr_t)&msg;
 
-	ret = write(routing_sock, &msg, msg.rtm.rtm_msglen);
+	ret = write(dplane_routing_sock, &msg, msg.rtm.rtm_msglen);
 
 	if (ret != msg.rtm.rtm_msglen) {
 		if (errno == EEXIST)
@@ -1257,10 +1330,19 @@ static void routing_socket(struct zebra_ns *zns)
 {
 	frr_elevate_privs(&zserv_privs) {
 		routing_sock = ns_socket(AF_ROUTE, SOCK_RAW, 0, zns->ns_id);
+
+		dplane_routing_sock =
+			ns_socket(AF_ROUTE, SOCK_RAW, 0, zns->ns_id);
 	}
 
 	if (routing_sock < 0) {
 		flog_err_sys(EC_LIB_SOCKET, "Can't init kernel routing socket");
+		return;
+	}
+
+	if (dplane_routing_sock < 0) {
+		flog_err_sys(EC_LIB_SOCKET,
+			     "Can't init kernel dataplane routing socket");
 		return;
 	}
 
@@ -1282,7 +1364,7 @@ void kernel_init(struct zebra_ns *zns)
 	routing_socket(zns);
 }
 
-void kernel_terminate(struct zebra_ns *zns)
+void kernel_terminate(struct zebra_ns *zns, bool complete)
 {
 	return;
 }

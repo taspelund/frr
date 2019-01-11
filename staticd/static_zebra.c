@@ -122,11 +122,17 @@ static int interface_state_up(int command, struct zclient *zclient,
 
 	ifp = zebra_interface_if_lookup(zclient->ibuf);
 
-	if (ifp && if_is_vrf(ifp)) {
-		struct static_vrf *svrf = static_vrf_lookup_by_id(vrf_id);
+	if (ifp) {
+		if (if_is_vrf(ifp)) {
+			struct static_vrf *svrf =
+					static_vrf_lookup_by_id(vrf_id);
 
-		static_fixup_vrf_ids(svrf);
-		static_config_install_delayed_routes(svrf);
+			static_fixup_vrf_ids(svrf);
+			static_config_install_delayed_routes(svrf);
+		}
+
+		/* Install any static reliant on this interface coming up */
+		static_install_intf_nh(ifp);
 	}
 
 	return 0;
@@ -148,10 +154,10 @@ static int route_notify_owner(int command, struct zclient *zclient,
 	uint32_t table_id;
 	char buf[PREFIX_STRLEN];
 
-	prefix2str(&p, buf, sizeof(buf));
-
 	if (!zapi_route_notify_decode(zclient->ibuf, &p, &table_id, &note))
 		return -1;
+
+	prefix2str(&p, buf, sizeof(buf));
 
 	switch (note) {
 	case ZAPI_ROUTE_FAIL_INSTALL:

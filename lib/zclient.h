@@ -36,6 +36,8 @@
 /* For union pw_protocol_fields */
 #include "pw.h"
 
+#include "mlag.h"
+
 /* For input/output buffer to zebra. */
 #define ZEBRA_MAX_PACKET_SIZ          16384
 
@@ -57,6 +59,10 @@
  */
 #define ZEBRA_IPTABLES_FORWARD 0
 #define ZEBRA_IPTABLES_DROP    1
+
+/* Zebra FEC register command flags. */
+#define ZEBRA_FEC_REGISTER_LABEL          0x1
+#define ZEBRA_FEC_REGISTER_LABEL_INDEX    0x2
 
 extern struct sockaddr_storage zclient_addr;
 extern socklen_t zclient_addr_len;
@@ -167,6 +173,7 @@ struct redist_proto {
 struct zclient_capabilities {
 	uint32_t ecmp;
 	bool mpls_enabled;
+	enum mlag_role role;
 };
 
 /* Structure for the zebra client. */

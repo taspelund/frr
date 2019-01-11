@@ -418,7 +418,8 @@ static void revalidate_bgp_node(struct bgp_node *bgp_node, afi_t afi,
 
 	for (ain = bgp_node->adj_in; ain; ain = ain->next) {
 		int ret;
-		struct bgp_path_info *path = bgp_node->info;
+		struct bgp_path_info *path =
+			bgp_node_get_bgp_path_info(bgp_node);
 		mpls_label_t *label = NULL;
 		uint32_t num_labels = 0;
 
@@ -1282,7 +1283,7 @@ DEFUN_NOSH (rpki_end,
 {
 	int ret = reset(false);
 
-	vty_config_unlock(vty);
+	vty_config_exit(vty);
 	vty->node = ENABLE_NODE;
 	return ret == SUCCESS ? CMD_SUCCESS : CMD_WARNING;
 }

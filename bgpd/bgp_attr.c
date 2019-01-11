@@ -78,7 +78,7 @@ static const struct message attr_str[] = {
 	{BGP_ATTR_AS_PATHLIMIT, "AS_PATHLIMIT"},
 	{BGP_ATTR_PMSI_TUNNEL, "PMSI_TUNNEL_ATTRIBUTE"},
 	{BGP_ATTR_ENCAP, "ENCAP"},
-#if ENABLE_BGP_VNC
+#if ENABLE_BGP_VNC_ATTR
 	{BGP_ATTR_VNC, "VNC"},
 #endif
 	{BGP_ATTR_LARGE_COMMUNITIES, "LARGE_COMMUNITY"},
@@ -392,7 +392,7 @@ static bool overlay_index_same(const struct attr *a1, const struct attr *a2)
 	if (!a1 && !a2)
 		return true;
 	return !memcmp(&(a1->evpn_overlay), &(a2->evpn_overlay),
-		       sizeof(struct overlay_index));
+		       sizeof(struct bgp_route_evpn));
 }
 
 /* Unknown transit attribute. */
@@ -849,7 +849,7 @@ void bgp_attr_undup(struct attr *new, struct attr *old)
 		aspath_free(new->aspath);
 
 	if (new->community != old->community)
-		community_free(new->community);
+		community_free(&new->community);
 
 	if (new->ecommunity != old->ecommunity)
 		ecommunity_free(&new->ecommunity);
@@ -887,11 +887,8 @@ void bgp_attr_flush(struct attr *attr)
 		aspath_free(attr->aspath);
 		attr->aspath = NULL;
 	}
-	if (attr->community && !attr->community->refcnt) {
-		community_free(attr->community);
-		attr->community = NULL;
-	}
-
+	if (attr->community && !attr->community->refcnt)
+		community_free(&attr->community);
 	if (attr->ecommunity && !attr->ecommunity->refcnt)
 		ecommunity_free(&attr->ecommunity);
 	if (attr->lcommunity && !attr->lcommunity->refcnt)
@@ -1700,7 +1697,7 @@ int bgp_mp_reach_parse(struct bgp_attr_parser_args *args,
 				 * - for consistency in rx processing
 				 *
 				 * The following comment is to signal GCC this intention
-				 * and supress the warning
+				 * and suppress the warning
 				 */
 	/* FALLTHRU */
 	case BGP_ATTR_NHLEN_IPV4:
@@ -2596,7 +2593,7 @@ bgp_attr_parse_ret_t bgp_attr_parse(struct peer *peer, struct attr *attr,
 		case BGP_ATTR_EXT_COMMUNITIES:
 			ret = bgp_attr_ext_communities(&attr_args);
 			break;
-#if ENABLE_BGP_VNC
+#if ENABLE_BGP_VNC_ATTR
 		case BGP_ATTR_VNC:
 #endif
 		case BGP_ATTR_ENCAP:
@@ -2627,7 +2624,7 @@ bgp_attr_parse_ret_t bgp_attr_parse(struct peer *peer, struct attr *attr,
 			return ret;
 		}
 
-		/* If hard error occured immediately return to the caller. */
+		/* If hard error occurred immediately return to the caller. */
 		if (ret == BGP_ATTR_PARSE_ERROR) {
 			flog_warn(EC_BGP_ATTRIBUTE_PARSE_ERROR,
 				  "%s: Attribute %s, parse error", peer->host,
@@ -2949,7 +2946,7 @@ static void bgp_packet_mpattr_tea(struct bgp *bgp, struct peer *peer,
 		attrhdrlen = 1 + 1;   /* subTLV T + L */
 		break;
 
-#if ENABLE_BGP_VNC
+#if ENABLE_BGP_VNC_ATTR
 	case BGP_ATTR_VNC:
 		attrname = "VNC";
 		subtlvs = attr->vnc_subtlvs;
@@ -3436,7 +3433,7 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 		/* Tunnel Encap attribute */
 		bgp_packet_mpattr_tea(bgp, peer, s, attr, BGP_ATTR_ENCAP);
 
-#if ENABLE_BGP_VNC
+#if ENABLE_BGP_VNC_ATTR
 		/* VNC attribute */
 		bgp_packet_mpattr_tea(bgp, peer, s, attr, BGP_ATTR_VNC);
 #endif
@@ -3498,8 +3495,8 @@ void bgp_packet_mpunreach_prefix(struct stream *s, struct prefix *p, afi_t afi,
 		num_labels = 1;
 	}
 
-	return bgp_packet_mpattr_prefix(s, afi, safi, p, prd, label, num_labels,
-					addpath_encode, addpath_tx_id, attr);
+	bgp_packet_mpattr_prefix(s, afi, safi, p, prd, label, num_labels,
+				 addpath_encode, addpath_tx_id, attr);
 }
 
 void bgp_packet_mpunreach_end(struct stream *s, size_t attrlen_pnt)
