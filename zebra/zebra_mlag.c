@@ -52,15 +52,15 @@ DEFUN_HIDDEN (show_mlag,
 	return CMD_SUCCESS;
 }
 
-DEFPY_HIDDEN (test_mlag,
-	      test_mlag_cmd,
-	      "test zebra mlag <none$none|primary$primary|secondary$secondary>",
-	      "Test code\n"
-	      ZEBRA_STR
-	      "Modify the Mlag state\n"
-	      "Mlag is not setup on the machine\n"
-	      "Mlag is setup to be primary\n"
-	      "Mlag is setup to be the secondary\n")
+DEFPY (test_mlag,
+       test_mlag_cmd,
+       "test zebra mlag <none$none|primary$primary|secondary$secondary>",
+       "Test code\n"
+       ZEBRA_STR
+       "Modify the Mlag state\n"
+       "Mlag is not setup on the machine\n"
+       "Mlag is setup to be primary\n"
+       "Mlag is setup to be the secondary\n")
 {
 	if (none)
 		role = MLAG_ROLE_NONE;
