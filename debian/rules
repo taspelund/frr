@@ -11,11 +11,11 @@
 WANT_WERROR ?= 0
 
 WANT_OSPFAPI ?= 1
-WANT_BGP_VNC ?= 1
-WANT_CUMULUS_MODE ?= 0
+WANT_BGP_VNC ?= 0
+WANT_CUMULUS_MODE ?= 1
 WANT_MULTIPATH ?= 1
-WANT_SNMP ?= 0
-WANT_RPKI ?= 0
+WANT_SNMP ?= 1
+WANT_RPKI ?= 1
 
 # NOTES:
 #
@@ -30,7 +30,7 @@ WANT_RPKI ?= 0
 # If multipath is enabled (WANT_MULTIPATH=1), then set number of multipaths here
 #    Please be aware that 0 is NOT disabled, but treated as unlimited
 
-MULTIPATH ?= 256
+MULTIPATH ?= 128
 
 # Set the following to the value required (or leave alone for the default below)
 # WANT_FRR_USER is used for the username and groupname of the FRR user account
@@ -133,6 +133,7 @@ override_dh_auto_configure:
 		$(USE_WERROR) \
 		--with-libpam \
 		--enable-systemd=yes \
+		--enable-sharpd=yes \
 		$(USE_CUMULUS) \
 		--disable-dependency-tracking \
 		$(USE_BGP_VNC) \
