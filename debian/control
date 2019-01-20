@@ -29,6 +29,7 @@ Build-Depends: autoconf,
 	       libpython-dev,
 	       libpython3-dev, 
 	       libreadline6-dev, 
+	       librtr-dev
 	       libsnmp-dev, 
 	       libsystemd-dev, 
 	       libtool, 
