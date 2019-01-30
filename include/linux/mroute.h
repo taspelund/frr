@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
-#ifndef __LINUX_MROUTE_H
-#define __LINUX_MROUTE_H
+#ifndef _UAPI__LINUX_MROUTE_H
+#define _UAPI__LINUX_MROUTE_H
 
 #include <linux/sockios.h>
 #include <linux/types.h>
@@ -34,7 +34,7 @@
 #define SIOCGETSGCNT	(SIOCPROTOPRIVATE+1)
 #define SIOCGETRPF	(SIOCPROTOPRIVATE+2)
 
-#define MAXVIFS		32
+#define MAXVIFS		256
 typedef unsigned long vifbitmap_t;	/* User mode code depends on this lot */
 typedef unsigned short vifi_t;
 #define ALL_VIFS	((vifi_t)(-1))
@@ -176,4 +176,4 @@ enum {
 #define IGMPMSG_WHOLEPKT	3		/* For PIM Register processing */
 #define IGMPMSG_WRVIFWHOLE	4		/* For PIM Register and assert processing */
 
-#endif /* __LINUX_MROUTE_H */
+#endif /* _UAPI__LINUX_MROUTE_H */
