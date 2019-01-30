@@ -1942,6 +1942,14 @@ static void rib_process_result(struct zebra_dplane_ctx *ctx)
 			 * old_re in this case is used for nothing
 			 * more than knowing whom to contact if necessary.
 			 */
+			if (old_re) {
+				UNSET_FLAG(old_re->status, ROUTE_ENTRY_FAILED);
+				UNSET_FLAG(old_re->status,
+					   ROUTE_ENTRY_INSTALLED);
+			}
+			/* Update zebra nexthop FIB flag for each
+			 * nexthop that was installed.
+			 */
 			for (ALL_NEXTHOPS_PTR(dplane_ctx_get_ng(ctx),
 					      ctx_nexthop)) {
 
