@@ -10,4 +10,5 @@ tools/etc/* etc/
 tools/*.service lib/systemd/system
 tools/frr-reload usr/lib/frr/
 tools/frr-reload.py usr/lib/frr
+tools/usr/share/cumulus/* usr/share/cumulus/
 debian/frr.conf usr/lib/tmpfiles.d
