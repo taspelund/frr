@@ -87,9 +87,6 @@ static vector Vvty_serv_thread;
 /* Current directory. */
 char vty_cwd[MAXPATHLEN];
 
-/* Exclusive configuration lock. */
-struct vty *vty_exclusive_lock;
-
 /* Login password check. */
 static int no_password_check = 0;
 
@@ -2346,7 +2343,7 @@ static void vty_read_file(struct nb_config *config, FILE *confp)
 	if (config == NULL && vty->candidate_config
 	    && frr_get_cli_mode() == FRR_CLI_TRANSACTIONAL) {
 		ret = nb_candidate_commit(vty->candidate_config, NB_CLIENT_CLI,
-					  true, "Read configuration file",
+					  vty, true, "Read configuration file",
 					  NULL);
 		if (ret != NB_OK && ret != NB_ERR_NO_CHANGES)
 			zlog_err("%s: failed to read configuration file.",
@@ -2574,8 +2571,8 @@ void vty_log_fixed(char *buf, size_t len)
 
 int vty_config_enter(struct vty *vty, bool private_config, bool exclusive)
 {
-	if (exclusive && !vty_config_exclusive_lock(vty)) {
-		vty_out(vty, "VTY configuration is locked by other VTY\n");
+	if (exclusive && nb_running_lock(NB_CLIENT_CLI, vty)) {
+		vty_out(vty, "%% Configuration is locked by other client\n");
 		return CMD_WARNING;
 	}
 
@@ -2609,7 +2606,7 @@ void vty_config_exit(struct vty *vty)
 		nb_cli_confirmed_commit_clean(vty);
 	}
 
-	vty_config_exclusive_unlock(vty);
+	(void)nb_running_unlock(NB_CLIENT_CLI, vty);
 
 	if (vty->candidate_config) {
 		if (vty->private_config)
@@ -2622,21 +2619,6 @@ void vty_config_exit(struct vty *vty)
 	}
 
 	vty->config = false;
-}
-
-int vty_config_exclusive_lock(struct vty *vty)
-{
-	if (vty_exclusive_lock == NULL) {
-		vty_exclusive_lock = vty;
-		return 1;
-	}
-	return 0;
-}
-
-void vty_config_exclusive_unlock(struct vty *vty)
-{
-	if (vty_exclusive_lock == vty)
-		vty_exclusive_lock = NULL;
 }
 
 /* Master of the threads. */
