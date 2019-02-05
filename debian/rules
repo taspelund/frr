@@ -135,6 +135,7 @@ override_dh_auto_configure:
 		--enable-systemd=yes \
 		--enable-sharpd=yes \
 		$(USE_CUMULUS) \
+		--enable-datacenter=yes \
 		--disable-dependency-tracking \
 		$(USE_BGP_VNC) \
 		$(USE_RPKI) \
