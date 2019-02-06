@@ -1,4 +1,4 @@
-frr (6.1+cl4u1-1~debian10+1) UNRELEASED; urgency=medium
+frr (7.0+cl4u1) UNRELEASED; urgency=medium
 
   * backport to debian10 systems
 
