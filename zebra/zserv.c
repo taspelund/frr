@@ -782,6 +782,7 @@ void zserv_close(void)
 	 * state where a client tries to reconnect
 	 */
 	close(zsock);
+	zsock = -1;
 }
 
 void zserv_start(char *path)
