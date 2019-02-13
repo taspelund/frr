@@ -25,12 +25,17 @@
 %{!?with_pbrd:          %global  with_pbrd          1 }
 %{!?with_pimd:          %global  with_pimd          1 }
 %{!?with_rpki:          %global  with_rpki          0 }
+<<<<<<< HEAD
 %{!?with_rtadv:         %global  with_rtadv         1 }
 %{!?with_watchfrr:      %global  with_watchfrr      1 }
 
 # user and group
 %{!?frr_user:           %global  frr_user           frr }
 %{!?vty_group:          %global  vty_group          frrvty }
+=======
+%{!?with_pbrd:          %global  with_pbrd          1 }
+%{!?with_vrrpd:         %global  with_vrrpd         1 }
+>>>>>>> 748f2d0ba... vrrpd: update auto*, init scripts, etc
 
 # path defines
 %define     configdir   %{_sysconfdir}/%{name}
@@ -86,7 +91,11 @@
 %{!?frr_gid:            %global  frr_gid            92 }
 %{!?vty_gid:            %global  vty_gid            85 }
 
+<<<<<<< HEAD
 %define daemon_list zebra ripd ospfd bgpd isisd ripngd ospf6d pbrd staticd bfdd fabricd
+=======
+%define     daemon_list zebra ripd ospfd bgpd isisd ripngd ospf6d pbrd vrrpd
+>>>>>>> 748f2d0ba... vrrpd: update auto*, init scripts, etc
 
 %if %{with_ldpd}
     %define daemon_ldpd ldpd
@@ -124,17 +133,27 @@
     %define daemon_babeld ""
 %endif
 
+%if %{with_vrrpd}
+%define		daemon_vrrpd vrrpd
+%else
+%define		daemon_vrrpd ""
+%endif
+
 %if %{with_watchfrr}
     %define daemon_watchfrr watchfrr
 %else
     %define daemon_watchfrr ""
 %endif
 
+<<<<<<< HEAD
 %if %{with_bfdd}
     %define daemon_bfdd bfdd
 %else
     %define daemon_bfdd ""
 %endif
+=======
+%define     all_daemons %{daemon_list} %{daemon_ldpd} %{daemon_pimd} %{daemon_nhrpd} %{daemon_eigrpd} %{daemon_babeld} %{daemon_watchfrr} %{daemon_pbrd} %{daemon_vrrpd}
+>>>>>>> 748f2d0ba... vrrpd: update auto*, init scripts, etc
 
 %define all_daemons %{daemon_list} %{daemon_ldpd} %{daemon_pimd} %{daemon_nhrpd} %{daemon_eigrpd} %{daemon_babeld} %{daemon_watchfrr} %{daemon_pbrd} %{daemon_bfdd}
 
@@ -306,6 +325,11 @@ developing OSPF-API and frr applications.
 %else
     --disable-babeld \
 %endif
+%if %{with_vrrpd}
+	--enable-vrrpd \
+%else
+	--disable-vrrpd \
+%endif
 %if %{with_pam}
     --with-libpam \
 %endif
@@ -459,10 +483,16 @@ zebra_spec_add_service isisd    2608/tcp "ISISd vty"
 %if %{with_eigrpd}
     zebra_spec_add_service eigrpd   2613/tcp "EIGRPd vty"
 %endif
+<<<<<<< HEAD
 %if %{with_bfdd}
     zebra_spec_add_service bfdd     2617/tcp "BFDd vty"
 %endif
 zebra_spec_add_service fabricd	2618/tcp "Fabricd vty"
+=======
+%if %{with_vrrpd}
+zebra_spec_add_service vrrpd    2617/tcp "VRRPd vty"
+%endif
+>>>>>>> 748f2d0ba... vrrpd: update auto*, init scripts, etc
 
 %if "%{initsystem}" == "systemd"
     for daemon in %all_daemons ; do
@@ -597,6 +627,9 @@ fi
 %endif
 %if %{with_pbrd}
     %{_sbindir}/pbrd
+%endif
+%if %{with_vrrpd}
+    %{_sbindir}/vrrpd
 %endif
 %{_sbindir}/isisd
 %{_sbindir}/fabricd
