@@ -112,4 +112,10 @@ extern struct nexthop *nexthop_exists(struct nexthop_group *nhg,
 extern struct nexthop_group_cmd *nhgc_find(const char *name);
 
 extern void nexthop_group_write_nexthop(struct vty *vty, struct nexthop *nh);
+
+/* Return the number of nexthops in this nhg */
+extern uint8_t nexthop_group_nexthop_num(const struct nexthop_group *nhg);
+extern uint8_t
+nexthop_group_active_nexthop_num(const struct nexthop_group *nhg);
+
 #endif
