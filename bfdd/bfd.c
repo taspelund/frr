@@ -871,7 +871,7 @@ static void _shop_key2(struct bfd_session *bs, const struct bfd_shop_key *shop);
 static void _mhop_key(struct bfd_session *bs, const struct bfd_mhop_key *mhop);
 static int _iface_key(struct bfd_iface *iface, const char *ifname);
 
-static void _bfd_free(struct hash_backet *hb,
+static void _bfd_free(struct hash_bucket *hb,
 		      void *arg __attribute__((__unused__)));
 static void _vrf_free(void *arg);
 static void _iface_free(void *arg);
@@ -1198,7 +1198,7 @@ void bfd_initialize(void)
 				     "BFD interface hash");
 }
 
-static void _bfd_free(struct hash_backet *hb,
+static void _bfd_free(struct hash_bucket *hb,
 		      void *arg __attribute__((__unused__)))
 {
 	struct bfd_session *bs = hb->data;
