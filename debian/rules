@@ -136,6 +136,7 @@ override_dh_auto_configure:
 		--enable-sharpd=yes \
 		$(USE_CUMULUS) \
 		--enable-datacenter=yes \
+		--enable-bfdd=no \
 		--disable-dependency-tracking \
 		$(USE_BGP_VNC) \
 		$(USE_RPKI) \
