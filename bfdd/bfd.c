@@ -374,8 +374,6 @@ static struct bfd_session *bfd_session_new(int sd)
 	struct bfd_session *bs;
 
 	bs = XCALLOC(MTYPE_BFDD_CONFIG, sizeof(*bs));
-	if (bs == NULL)
-		return NULL;
 
 	QOBJ_REG(bs, bfd_session);
 
