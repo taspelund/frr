@@ -843,8 +843,7 @@ void closezlog(void)
 	if (zl->fp != NULL)
 		fclose(zl->fp);
 
-	if (zl->filename != NULL)
-		XFREE(MTYPE_ZLOG, zl->filename);
+	XFREE(MTYPE_ZLOG, zl->filename);
 
 	XFREE(MTYPE_ZLOG, zl);
 	zlog_default = NULL;
@@ -903,8 +902,7 @@ int zlog_reset_file(void)
 	logfile_fd = -1;
 	zl->maxlvl[ZLOG_DEST_FILE] = ZLOG_DISABLED;
 
-	if (zl->filename)
-		XFREE(MTYPE_ZLOG, zl->filename);
+	XFREE(MTYPE_ZLOG, zl->filename);
 	zl->filename = NULL;
 
 	pthread_mutex_unlock(&loglock);

@@ -14403,8 +14403,7 @@ static int lcommunity_list_set_vty(struct vty *vty, int argc,
 
 	/* Free temporary community list string allocated by
 	   argv_concat().  */
-	if (str)
-		XFREE(MTYPE_TMP, str);
+	XFREE(MTYPE_TMP, str);
 
 	if (ret < 0) {
 		community_list_perror(vty, ret);
@@ -14455,8 +14454,7 @@ static int lcommunity_list_unset_vty(struct vty *vty, int argc,
 
 	/* Free temporary community list string allocated by
 	   argv_concat().  */
-	if (str)
-		XFREE(MTYPE_TMP, str);
+	XFREE(MTYPE_TMP, str);
 
 	if (ret < 0) {
 		community_list_perror(vty, ret);
