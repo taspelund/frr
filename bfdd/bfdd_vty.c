@@ -574,7 +574,7 @@ static void _display_all_peers(struct vty *vty, bool use_json)
 {
 	struct json_object *jo;
 
-	if (use_json == false) {
+	if (!use_json) {
 		vty_out(vty, "BFD Peers:\n");
 		bfd_id_iterate(_display_peer_iter, vty);
 		return;
@@ -657,7 +657,7 @@ static void _display_peers_counter(struct vty *vty, bool use_json)
 {
 	struct json_object *jo;
 
-	if (use_json == false) {
+	if (!use_json) {
 		vty_out(vty, "BFD Peers:\n");
 		bfd_id_iterate(_display_peer_counter_iter, vty);
 		return;
