@@ -1449,8 +1449,6 @@ static int eigrp_config_write(struct vty *vty)
 {
 	struct eigrp *eigrp;
 
-	int write = 0;
-
 	eigrp = eigrp_lookup();
 	if (eigrp != NULL) {
 		/* Writes 'router eigrp' section to config */
@@ -1475,7 +1473,7 @@ static int eigrp_config_write(struct vty *vty)
 		//      config_write_eigrp_distance (vty, eigrp)
 	}
 
-	return write;
+	return 0;
 }
 
 void eigrp_vty_show_init(void)

@@ -3303,7 +3303,6 @@ void rib_close_table(struct route_table *table)
  */
 static int handle_pw_result(struct zebra_dplane_ctx *ctx)
 {
-	int ret = 0;
 	struct zebra_pw *pw;
 	struct zebra_vrf *vrf;
 
@@ -3322,7 +3321,7 @@ static int handle_pw_result(struct zebra_dplane_ctx *ctx)
 
 done:
 
-	return ret;
+	return 0;
 }
 
 
