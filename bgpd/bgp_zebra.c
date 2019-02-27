@@ -1128,6 +1128,7 @@ static int update_ipv4nh_for_route_install(int nh_othervrf,
 	 */
 	if (is_evpn) {
 		api_nh->type = NEXTHOP_TYPE_IPV4_IFINDEX;
+		api_nh->onlink = true;
 		api_nh->ifindex = nh_bgp->l3vni_svi_ifindex;
 	} else if (nh_othervrf &&
 		 api_nh->gate.ipv4.s_addr == INADDR_ANY) {
@@ -1153,6 +1154,7 @@ update_ipv6nh_for_route_install(int nh_othervrf, struct bgp *nh_bgp,
 
 	if (is_evpn) {
 		api_nh->type = NEXTHOP_TYPE_IPV6_IFINDEX;
+		api_nh->onlink = true;
 		api_nh->ifindex = nh_bgp->l3vni_svi_ifindex;
 	} else if (nh_othervrf) {
 		if (IN6_IS_ADDR_UNSPECIFIED(nexthop)) {
