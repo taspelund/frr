@@ -926,7 +926,7 @@ static void _netlink_route_nl_add_gateway_info(uint8_t route_family,
 					       uint8_t gw_family,
 					       struct nlmsghdr *nlmsg,
 					       size_t req_size, int bytelen,
-					       struct nexthop *nexthop)
+					       const struct nexthop *nexthop)
 {
 	if (route_family == AF_MPLS) {
 		struct gw_family_t gw_fam;
@@ -953,7 +953,7 @@ static void _netlink_route_rta_add_gateway_info(uint8_t route_family,
 						struct rtattr *rta,
 						struct rtnexthop *rtnh,
 						size_t req_size, int bytelen,
-						struct nexthop *nexthop)
+						const struct nexthop *nexthop)
 {
 	if (route_family == AF_MPLS) {
 		struct gw_family_t gw_fam;
@@ -989,7 +989,7 @@ static void _netlink_route_rta_add_gateway_info(uint8_t route_family,
  * @param req_size: The size allocated for the message.
  */
 static void _netlink_route_build_singlepath(const char *routedesc, int bytelen,
-					    struct nexthop *nexthop,
+					    const struct nexthop *nexthop,
 					    struct nlmsghdr *nlmsg,
 					    struct rtmsg *rtmsg,
 					    size_t req_size, int cmd)
@@ -1008,7 +1008,7 @@ static void _netlink_route_build_singlepath(const char *routedesc, int bytelen,
 	label_buf[0] = '\0';
 
 	assert(nexthop);
-	for (struct nexthop *nh = nexthop; nh; nh = nh->rparent) {
+	for (const struct nexthop *nh = nexthop; nh; nh = nh->rparent) {
 		char label_buf1[20];
 
 		nh_label = nh->nh_label;
@@ -1174,11 +1174,11 @@ static void _netlink_route_build_singlepath(const char *routedesc, int bytelen,
  *             the prefsrc should be stored.
  */
 static void _netlink_route_build_multipath(const char *routedesc, int bytelen,
-					   struct nexthop *nexthop,
+					   const struct nexthop *nexthop,
 					   struct rtattr *rta,
 					   struct rtnexthop *rtnh,
 					   struct rtmsg *rtmsg,
-					   union g_addr **src)
+					   const union g_addr **src)
 {
 	struct mpls_label_stack *nh_label;
 	mpls_lse_t out_lse[MPLS_MAX_LABELS];
@@ -1199,7 +1199,7 @@ static void _netlink_route_build_multipath(const char *routedesc, int bytelen,
 	label_buf[0] = '\0';
 
 	assert(nexthop);
-	for (struct nexthop *nh = nexthop; nh; nh = nh->rparent) {
+	for (const struct nexthop *nh = nexthop; nh; nh = nh->rparent) {
 		char label_buf1[20];
 
 		nh_label = nh->nh_label;
@@ -1341,7 +1341,7 @@ static void _netlink_route_build_multipath(const char *routedesc, int bytelen,
 }
 
 static inline void _netlink_mpls_build_singlepath(const char *routedesc,
-						  zebra_nhlfe_t *nhlfe,
+						  const zebra_nhlfe_t *nhlfe,
 						  struct nlmsghdr *nlmsg,
 						  struct rtmsg *rtmsg,
 						  size_t req_size, int cmd)
@@ -1357,9 +1357,9 @@ static inline void _netlink_mpls_build_singlepath(const char *routedesc,
 
 
 static inline void
-_netlink_mpls_build_multipath(const char *routedesc, zebra_nhlfe_t *nhlfe,
+_netlink_mpls_build_multipath(const char *routedesc, const zebra_nhlfe_t *nhlfe,
 			      struct rtattr *rta, struct rtnexthop *rtnh,
-			      struct rtmsg *rtmsg, union g_addr **src)
+			      struct rtmsg *rtmsg, const union g_addr **src)
 {
 	int bytelen;
 	uint8_t family;
@@ -1654,7 +1654,7 @@ static int netlink_route_multipath(int cmd, struct zebra_dplane_ctx *ctx)
 		char buf[NL_PKT_BUF_SIZE];
 		struct rtattr *rta = (void *)buf;
 		struct rtnexthop *rtnh;
-		union g_addr *src1 = NULL;
+		const union g_addr *src1 = NULL;
 
 		rta->rta_type = RTA_MULTIPATH;
 		rta->rta_len = RTA_LENGTH(0);
@@ -2647,7 +2647,7 @@ int kernel_upd_neigh(struct interface *ifp, struct ipaddr *ip,
 int netlink_mpls_multipath(int cmd, struct zebra_dplane_ctx *ctx)
 {
 	mpls_lse_t lse;
-	zebra_nhlfe_t *nhlfe;
+	const zebra_nhlfe_t *nhlfe;
 	struct nexthop *nexthop = NULL;
 	unsigned int nexthop_num;
 	const char *routedesc;
@@ -2750,7 +2750,7 @@ int netlink_mpls_multipath(int cmd, struct zebra_dplane_ctx *ctx)
 		char buf[NL_PKT_BUF_SIZE];
 		struct rtattr *rta = (void *)buf;
 		struct rtnexthop *rtnh;
-		union g_addr *src1 = NULL;
+		const union g_addr *src1 = NULL;
 
 		rta->rta_type = RTA_MULTIPATH;
 		rta->rta_len = RTA_LENGTH(0);
