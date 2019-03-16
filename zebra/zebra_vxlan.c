@@ -2189,6 +2189,8 @@ static zebra_neigh_t *zvni_neigh_add(zebra_vni_t *zvni, struct ipaddr *ip,
 
 	memcpy(&n->emac, mac, ETH_ALEN);
 	n->state = ZEBRA_NEIGH_INACTIVE;
+	n->zvni = zvni;
+	n->dad_ip_auto_recovery_timer = NULL;
 
 	/* Associate the neigh to mac */
 	zmac = zvni_mac_lookup(zvni, mac);
@@ -2209,6 +2211,9 @@ static int zvni_neigh_del(zebra_vni_t *zvni, zebra_neigh_t *n)
 	zmac = zvni_mac_lookup(zvni, &n->emac);
 	if (zmac)
 		listnode_delete(zmac->neigh_list, n);
+
+	/* Cancel auto recovery */
+	THREAD_OFF(n->dad_ip_auto_recovery_timer);
 
 	/* Free the VNI hash entry and allocated memory. */
 	tmp_n = hash_release(zvni->neigh_table, n);
@@ -3268,6 +3273,9 @@ static zebra_mac_t *zvni_mac_add(zebra_vni_t *zvni, struct ethaddr *macaddr)
 	mac = hash_get(zvni->mac_table, &tmp_mac, zvni_mac_alloc);
 	assert(mac);
 
+	mac->zvni = zvni;
+	mac->dad_mac_auto_recovery_timer = NULL;
+
 	mac->neigh_list = list_new();
 	mac->neigh_list->cmp = neigh_list_cmp;
 
@@ -3280,6 +3288,9 @@ static zebra_mac_t *zvni_mac_add(zebra_vni_t *zvni, struct ethaddr *macaddr)
 static int zvni_mac_del(zebra_vni_t *zvni, zebra_mac_t *mac)
 {
 	zebra_mac_t *tmp_mac;
+
+	/* Cancel auto recovery */
+	THREAD_OFF(mac->dad_mac_auto_recovery_timer);
 
 	list_delete(&mac->neigh_list);
 
