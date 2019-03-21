@@ -2777,6 +2777,12 @@ int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 			break;
 	}
 
+	/* If this route is kernel/connected route, notify the dataplane. */
+	if (RIB_SYSTEM_ROUTE(re)) {
+		/* Notify dataplane */
+		dplane_sys_route_add(rn, re);
+	}
+
 	/* Link new re to node.*/
 	if (IS_ZEBRA_DEBUG_RIB) {
 		rnode_debug(rn, re->vrf_id,
@@ -2990,6 +2996,11 @@ void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 							       &vtep_ip, p);
 			}
 		}
+
+		/* Notify dplane if system route changes */
+		if (RIB_SYSTEM_ROUTE(re))
+			dplane_sys_route_del(rn, same);
+
 		rib_delnode(rn, same);
 	}
 
@@ -3333,6 +3344,12 @@ static int rib_process_dplane_results(struct thread *thread)
 			case DPLANE_OP_PW_INSTALL:
 			case DPLANE_OP_PW_UNINSTALL:
 				handle_pw_result(ctx);
+				break;
+
+			case DPLANE_OP_SYS_ROUTE_ADD:
+			case DPLANE_OP_SYS_ROUTE_DELETE:
+				/* No further processing in zebra for these. */
+				dplane_ctx_fini(&ctx);
 				break;
 
 			default:
