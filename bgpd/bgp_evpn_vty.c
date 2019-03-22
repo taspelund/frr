@@ -2917,7 +2917,7 @@ DEFUN (bgp_evpn_advertise_default_gw,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!bgp->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp)) {
 		vty_out(vty,
 			"This command is only supported under the EVPN VRF\n");
 		return CMD_WARNING;
@@ -2939,7 +2939,7 @@ DEFUN (no_bgp_evpn_advertise_default_gw,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!bgp->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp)) {
 		vty_out(vty,
 			"This command is only supported under the EVPN VRF\n");
 		return CMD_WARNING;
@@ -3066,7 +3066,7 @@ DEFPY (dup_addr_detection,
 	if (!bgp_vrf)
 		return CMD_WARNING;
 
-	if (!bgp_vrf->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp_vrf)) {
 		vty_out(vty,
 			"This command is only supported under the EVPN VRF\n");
 		return CMD_WARNING;
@@ -3098,7 +3098,7 @@ DEFPY (dup_addr_detection_auto_recovery,
 	if (!bgp_vrf)
 		return CMD_WARNING;
 
-	if (!bgp_vrf->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp_vrf)) {
 		vty_out(vty,
 			"This command is only supported under the EVPN VRF\n");
 		return CMD_WARNING;
@@ -3133,7 +3133,7 @@ DEFPY (no_dup_addr_detection,
 	if (!bgp_vrf)
 		return CMD_WARNING;
 
-	if (!bgp_vrf->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp_vrf)) {
 		vty_out(vty,
 			"This command is only supported under the EVPN VRF\n");
 		return CMD_WARNING;
@@ -3205,7 +3205,7 @@ DEFPY(bgp_evpn_advertise_svi_ip,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!bgp->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp)) {
 		vty_out(vty,
 			"This command is only supported under EVPN VRF\n");
 		return CMD_WARNING;
@@ -4519,7 +4519,7 @@ DEFUN (bgp_evpn_vni_rd,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!bgp->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp)) {
 		vty_out(vty,
 			"This command is only supported under EVPN VRF\n");
 		return CMD_WARNING;
@@ -4555,7 +4555,7 @@ DEFUN (no_bgp_evpn_vni_rd,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!bgp->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp)) {
 		vty_out(vty,
 			"This command is only supported under EVPN VRF\n");
 		return CMD_WARNING;
@@ -4595,7 +4595,7 @@ DEFUN (no_bgp_evpn_vni_rd_without_val,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!bgp->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp)) {
 		vty_out(vty,
 			"This command is only supported under EVPN VRF\n");
 		return CMD_WARNING;
@@ -4924,7 +4924,7 @@ DEFUN (bgp_evpn_vni_rt,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!bgp->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp)) {
 		vty_out(vty,
 			"This command is only supported under EVPN VRF\n");
 		return CMD_WARNING;
@@ -4992,7 +4992,7 @@ DEFUN (no_bgp_evpn_vni_rt,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!bgp->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp)) {
 		vty_out(vty,
 			"This command is only supported under EVPN VRF\n");
 		return CMD_WARNING;
@@ -5091,7 +5091,7 @@ DEFUN (no_bgp_evpn_vni_rt_without_val,
 	if (!bgp)
 		return CMD_WARNING;
 
-	if (!bgp->advertise_all_vni) {
+	if (!EVPN_ENABLED(bgp)) {
 		vty_out(vty,
 			"This command is only supported under EVPN VRF\n");
 		return CMD_WARNING;
