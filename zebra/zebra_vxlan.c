@@ -9049,9 +9049,6 @@ void zebra_vxlan_advertise_all_vni(ZAPI_HANDLER_ARGS)
 	struct stream *s = NULL;
 	int advertise = 0;
 	enum vxlan_flood_control flood_ctrl;
-	struct zebra_vrf *zvrf_default = NULL;
-
-	zvrf_default = zebra_vrf_lookup_by_id(VRF_DEFAULT);
 
 	/* Mismatch between EVPN VRF and current VRF (should be prevented by
 	 * bgpd's cli) */
@@ -9074,7 +9071,7 @@ void zebra_vxlan_advertise_all_vni(ZAPI_HANDLER_ARGS)
 
 	zvrf->advertise_all_vni = advertise;
 	if (EVPN_ENABLED(zvrf)) {
-		zvrf_default->evpn_vrf_id = zvrf_id(zvrf);
+		zrouter.evpn_vrf = zvrf;
 
 		/* Note BUM handling */
 		zvrf->vxlan_flood_ctrl = flood_ctrl;
@@ -9100,8 +9097,8 @@ void zebra_vxlan_advertise_all_vni(ZAPI_HANDLER_ARGS)
 		/* cleanup all l3vnis */
 		hash_iterate(zrouter.l3vni_table, zl3vni_cleanup_all, NULL);
 
-		/* Fallback to the default VRF. */
-		zvrf_default->evpn_vrf_id = VRF_DEFAULT;
+		/* Mark as "no EVPN VRF" */
+		zrouter.evpn_vrf = NULL;
 	}
 
 stream_failure:
@@ -9142,6 +9139,7 @@ void zebra_vxlan_init(void)
 {
 	zrouter.l3vni_table = hash_create(l3vni_hash_keymake, l3vni_hash_cmp,
 					  "Zebra VRF L3 VNI table");
+	zrouter.evpn_vrf = NULL;
 }
 
 /* free l3vni table */
