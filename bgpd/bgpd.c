@@ -2636,6 +2636,11 @@ int peer_group_listen_range_add(struct peer_group *group, struct prefix *range)
 	prefix = prefix_new();
 	prefix_copy(prefix, range);
 	listnode_add(group->listen_range[afi], prefix);
+
+	/* Update passwords for new ranges */
+	if (group->conf->password)
+		bgp_md5_set_prefix(prefix, group->conf->password);
+
 	return 0;
 }
 
@@ -2679,6 +2684,10 @@ int peer_group_listen_range_del(struct peer_group *group, struct prefix *range)
 
 	/* Get rid of the listen range */
 	listnode_delete(group->listen_range[afi], prefix);
+
+	/* Remove passwords for deleted ranges */
+	if (group->conf->password)
+		bgp_md5_unset_prefix(prefix);
 
 	return 0;
 }
@@ -5501,6 +5510,15 @@ int peer_password_set(struct peer *peer, const char *password)
 			ret = BGP_ERR_TCPSIG_FAILED;
 	}
 
+	/* Set flag and configuration on all peer-group listen ranges */
+	struct listnode *ln;
+	struct prefix *lr;
+
+	for (ALL_LIST_ELEMENTS_RO(peer->group->listen_range[AFI_IP], ln, lr))
+		bgp_md5_set_prefix(lr, password);
+	for (ALL_LIST_ELEMENTS_RO(peer->group->listen_range[AFI_IP6], ln, lr))
+		bgp_md5_set_prefix(lr, password);
+
 	return ret;
 }
 
@@ -5564,6 +5582,15 @@ int peer_password_unset(struct peer *peer)
 		if (!BGP_PEER_SU_UNSPEC(member))
 			bgp_md5_unset(member);
 	}
+
+	/* Set flag and configuration on all peer-group listen ranges */
+	struct listnode *ln;
+	struct prefix *lr;
+
+	for (ALL_LIST_ELEMENTS_RO(peer->group->listen_range[AFI_IP], ln, lr))
+		bgp_md5_unset_prefix(lr);
+	for (ALL_LIST_ELEMENTS_RO(peer->group->listen_range[AFI_IP6], ln, lr))
+		bgp_md5_unset_prefix(lr);
 
 	return 0;
 }
