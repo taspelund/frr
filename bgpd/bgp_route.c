@@ -9976,7 +9976,6 @@ static int bgp_table_stats_walker(struct thread *t)
 	for (rn = top; rn; rn = bgp_route_next(rn)) {
 		struct bgp_path_info *pi;
 		struct bgp_node *prn = bgp_node_parent_nolock(rn);
-		unsigned int pinum = 0;
 
 		if (rn == top)
 			continue;
@@ -10008,7 +10007,6 @@ static int bgp_table_stats_walker(struct thread *t)
 			ts->counts[BGP_STATS_MAX_AGGREGATEABLE]++;
 
 		for (pi = bgp_node_get_bgp_path_info(rn); pi; pi = pi->next) {
-			pinum++;
 			ts->counts[BGP_STATS_RIB]++;
 
 			if (pi->attr
