@@ -29,7 +29,7 @@
 DEFINE_MTYPE_STATIC(LIB, IF_RMAP, "Interface route map")
 DEFINE_MTYPE_STATIC(LIB, IF_RMAP_NAME, "I.f. route map name")
 
-struct hash *ifrmaphash;
+static struct hash *ifrmaphash;
 
 /* Hook functions. */
 static void (*if_rmap_add_hook)(struct if_rmap *) = NULL;
