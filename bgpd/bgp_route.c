@@ -1909,7 +1909,7 @@ void bgp_best_selection(struct bgp *bgp, struct bgp_node *rn,
 				continue;
 			if (BGP_PATH_HOLDDOWN(pi1))
 				continue;
-			if (pi1->peer && pi1->peer != bgp->peer_self)
+			if (pi1->peer != bgp->peer_self)
 				if (pi1->peer->status != Established)
 					continue;
 
@@ -1921,11 +1921,10 @@ void bgp_best_selection(struct bgp *bgp, struct bgp_node *rn,
 						continue;
 					if (BGP_PATH_HOLDDOWN(pi2))
 						continue;
-					if (pi2->peer
-					    && pi2->peer != bgp->peer_self
+					if (pi2->peer != bgp->peer_self
 					    && !CHECK_FLAG(
-						       pi2->peer->sflags,
-						       PEER_STATUS_NSF_WAIT))
+						    pi2->peer->sflags,
+						    PEER_STATUS_NSF_WAIT))
 						if (pi2->peer->status
 						    != Established)
 							continue;
