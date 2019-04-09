@@ -184,7 +184,7 @@ int netlink_rule_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	struct rtattr *tb[FRA_MAX + 1];
 	int len;
 	char *ifname;
-	struct zebra_pbr_rule rule;
+	struct zebra_pbr_rule rule = {};
 	char buf1[PREFIX_STRLEN];
 	char buf2[PREFIX_STRLEN];
 
@@ -229,7 +229,6 @@ int netlink_rule_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	if (!rule.ifp)
 		return 0;
 
-	memset(&rule, 0, sizeof(rule));
 	if (tb[FRA_PRIORITY])
 		rule.rule.priority = *(uint32_t *)RTA_DATA(tb[FRA_PRIORITY]);
 
