@@ -15,6 +15,9 @@ WatchdogSec=60s
 RestartSec=5
 Restart=on-abnormal
 LimitNOFILE=1024
+LimitAS=infinity
+LimitDATA=infinity
+Environment=ASAN_OPTIONS=detect_leaks=0
 ExecStart=/usr/lib/frr/frr start
 ExecStop=/usr/lib/frr/frr stop
 ExecReload=/usr/lib/frr/frr reload
