@@ -46,7 +46,7 @@ GENERATE_PDF ?= 0
 ####################################
 
 export DH_VERBOSE=1
-export DEB_BUILD_MAINT_OPTIONS = hardening=+all,-fortify
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export DH_OPTIONS=-v
 
 ifeq ($(WANT_SNMP), 1)
@@ -140,7 +140,6 @@ override_dh_auto_configure:
 		--disable-dependency-tracking \
 		$(USE_BGP_VNC) \
 		$(USE_RPKI) \
-		--enable-address-sanitizer \
 		$(shell dpkg-buildflags --export=configure); \
 	fi
 
