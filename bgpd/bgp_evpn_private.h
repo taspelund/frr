@@ -240,6 +240,7 @@ static inline void bgpevpn_unlink_from_l3vni(struct bgpevpn *vpn)
 	listnode_delete(vpn->bgp_vrf->l2vnis, vpn);
 
 	/* remove the backpointer to the vrf instance */
+	bgp_unlock(vpn->bgp_vrf);
 	vpn->bgp_vrf = NULL;
 }
 
@@ -256,7 +257,7 @@ static inline void bgpevpn_link_to_l3vni(struct bgpevpn *vpn)
 		return;
 
 	/* associate the vpn to the bgp_vrf instance */
-	vpn->bgp_vrf = bgp_vrf;
+	vpn->bgp_vrf = bgp_lock(bgp_vrf);
 	listnode_add_sort(bgp_vrf->l2vnis, vpn);
 
 	/* check if we are advertising two labels for this vpn */
