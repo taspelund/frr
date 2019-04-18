@@ -29,7 +29,6 @@
 #include "hash.h"
 #include "if.h"
 #include "command.h"
-#include "log_int.h"
 
 #include "isisd/isis_constants.h"
 #include "isisd/isis_common.h"
