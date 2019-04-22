@@ -33,6 +33,42 @@
 #include "zebra/zebra_mlag_clippy.c"
 #endif
 
+uint8_t mlag_wr_buffer[ZEBRA_MLAG_BUF_LIMIT];
+uint8_t mlag_rd_buffer[ZEBRA_MLAG_BUF_LIMIT];
+uint32_t mlag_wr_buf_ptr = 0;
+
+
+/*
+ * API to post the Registartion to MLAGD
+ * MLAG will not process any messages with out the registration
+ */
+void zebra_mlag_send_register(void)
+{
+	return;
+}
+
+/*
+ * API to post the De-Registartion to MLAGD
+ * MLAG will not process any messages after the de-registration
+ */
+void zebra_mlag_send_deregister(void)
+{
+	return;
+}
+
+void zebra_mlag_process_mlag_data(uint8_t *data, uint32_t len)
+{
+}
+
+/*
+ * API to handle teh process state.
+ * In case of Down, Zebra keep monitoring the MLAG state.
+ * all the state Notifications will be published to clients
+ */
+void zebra_mlag_handle_process_state(enum zebra_mlag_state state)
+{
+}
+
 enum mlag_role zebra_mlag_get_role(void)
 {
 	return zrouter.mlag_info.role;

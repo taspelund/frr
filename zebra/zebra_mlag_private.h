@@ -19,39 +19,22 @@
  * Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
  * 02111-1307, USA.
  */
-#ifndef __ZEBRA_MLAG_H__
-#define __ZEBRA_MLAG_H__
+#ifndef __ZEBRA_MLAG_PRIVATE_H__
+#define __ZEBRA_MLAG_PRIVATE_H__
 
-#include "mlag.h"
 
-#define ZEBRA_MLAG_BUF_LIMIT 2048
+/*
+ * all the platform specific API's
+ */
 
-extern uint8_t mlag_wr_buffer[ZEBRA_MLAG_BUF_LIMIT];
-extern uint8_t mlag_rd_buffer[ZEBRA_MLAG_BUF_LIMIT];
-extern uint32_t mlag_wr_buf_ptr;
+int zebra_mlag_private_open_channel(void);
 
-static inline void zebra_mlag_reset_write_buffer(void)
-{
-	memset(mlag_wr_buffer, 0, ZEBRA_MLAG_BUF_LIMIT);
-	mlag_wr_buf_ptr = 0;
-}
+int zebra_mlag_private_close_channel(void);
 
-enum zebra_mlag_state {
-	MLAG_UP = 1,
-	MLAG_DOWN = 2,
-};
+void zebra_mlag_private_monitor_state(void);
 
-void zebra_mlag_init(void);
-void zebra_mlag_terminate(void);
+int zebra_mlag_private_write_data(uint8_t *data, uint32_t len);
 
-enum mlag_role zebra_mlag_get_role(void);
-
-void zebra_mlag_send_register(void);
-
-void zebra_mlag_send_deregister(void);
-
-void zebra_mlag_handle_process_state(enum zebra_mlag_state state);
-
-void zebra_mlag_process_mlag_data(uint8_t *data, uint32_t len);
+void zebra_mlag_private_cleanup_data(void);
 
 #endif
