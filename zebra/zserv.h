@@ -96,6 +96,13 @@ struct zserv {
 	uint16_t instance;
 	uint8_t is_synchronous;
 
+	/*
+	 * Interested for MLAG Updates, and also stores the client
+	 * interested message mask
+	 */
+	bool mlag_updates_interested;
+	uint32_t mlag_reg_mask1;
+
 	/* Statistics */
 	uint32_t redist_v4_add_cnt;
 	uint32_t redist_v4_del_cnt;

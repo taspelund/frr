@@ -23,6 +23,8 @@
 #define __ZEBRA_MLAG_H__
 
 #include "mlag.h"
+#include "zclient.h"
+#include "zebra/zserv.h"
 
 #define ZEBRA_MLAG_BUF_LIMIT 2048
 
@@ -45,6 +47,12 @@ void zebra_mlag_init(void);
 void zebra_mlag_terminate(void);
 
 enum mlag_role zebra_mlag_get_role(void);
+
+void zebra_mlag_client_register(ZAPI_HANDLER_ARGS);
+
+void zebra_mlag_client_unregister(ZAPI_HANDLER_ARGS);
+
+void zebra_mlag_forward_client_msg(ZAPI_HANDLER_ARGS);
 
 void zebra_mlag_send_register(void);
 

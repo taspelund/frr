@@ -69,6 +69,36 @@ void zebra_mlag_handle_process_state(enum zebra_mlag_state state)
 {
 }
 
+
+/***********************Handling ZAPI Requests from clients*******************/
+
+/*
+ * API to register zebra client for MLAG Updates
+ */
+void zebra_mlag_client_register(ZAPI_HANDLER_ARGS)
+{
+}
+
+/*
+ * API to un-register for MLAG Updates
+ */
+void zebra_mlag_client_unregister(ZAPI_HANDLER_ARGS)
+{
+}
+
+/*
+ * Does following things.
+ * 1) allocated new local stream, and copies teh client data and enqueue
+ *    to MLAG Thread
+ *  2) MLAG Thread after dequeing, encode the client data using protobuf
+ *     and write on to MLAG
+ */
+void zebra_mlag_forward_client_msg(ZAPI_HANDLER_ARGS)
+{
+}
+
+/***********************End of Handling ZAPI Requests from clients*************/
+
 enum mlag_role zebra_mlag_get_role(void)
 {
 	return zrouter.mlag_info.role;
