@@ -43,6 +43,7 @@ uint8_t mlag_wr_buffer[ZEBRA_MLAG_BUF_LIMIT];
 uint8_t mlag_rd_buffer[ZEBRA_MLAG_BUF_LIMIT];
 uint32_t mlag_wr_buf_ptr = 0;
 
+static bool test_mlag_in_progress = false;
 
 static int zebra_mlag_signal_write_thread(void);
 static int zebra_mlag_terminate_pthread(struct thread *event);
@@ -608,15 +609,202 @@ DEFUN_HIDDEN (show_mlag,
 	return CMD_SUCCESS;
 }
 
-DEFPY (test_mlag,
-       test_mlag_cmd,
-       "test zebra mlag <none$none|primary$primary|secondary$secondary>",
-       "Test code\n"
-       ZEBRA_STR
-       "Modify the Mlag state\n"
-       "Mlag is not setup on the machine\n"
-       "Mlag is setup to be primary\n"
-       "Mlag is setup to be the secondary\n")
+static void test_mlag_post_mroute_add()
+{
+	struct stream *s = NULL;
+	char vrf_temp[20];
+	char intf_temp[20];
+
+	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
+	if (!s)
+		return;
+
+	memset(vrf_temp, 0, 20);
+	memset(intf_temp, 0, 20);
+
+	strncpy(vrf_temp, "test", 20);
+	strncpy(intf_temp, "br0.11", 20);
+
+	stream_putl(s, MLAG_MROUTE_ADD);
+	stream_putw(s, MLAG_MROUTE_ADD_MSGSIZE);
+	stream_putw(s, MLAG_MSG_NO_BATCH);
+
+	/* payload*/
+	stream_put(s, vrf_temp, VRF_NAMSIZ);
+	stream_putl(s, 0x01010101); /*source_ip*/
+	stream_putl(s, 0xE4000001); /*group_ip*/
+	stream_putl(s, 10);	 /*cost_to_rp*/
+	stream_putl(s, 5);	  /*vni_id */
+	stream_putc(s, 1);	  /*am_i_dr */
+	stream_putc(s, 1);	  /*dual_active */
+	stream_putl(s, 0x1004);     /*vrf_id*/
+	stream_put(s, intf_temp, INTERFACE_NAMSIZ);
+	stream_fifo_push_safe(zrouter.mlag_info.mlag_fifo, s);
+	zebra_mlag_signal_write_thread();
+
+	if (IS_ZEBRA_DEBUG_MLAG)
+		zlog_debug("%s: Enqueued MLAG Mroute-add to MLAG Thread ",
+			   __FUNCTION__);
+	return;
+}
+
+static void test_mlag_post_mroute_del()
+{
+	struct stream *s = NULL;
+	char vrf_temp[20];
+	char intf_temp[20];
+
+
+	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
+	if (!s)
+		return;
+
+	memset(vrf_temp, 0, 20);
+	memset(intf_temp, 0, 20);
+
+	strncpy(vrf_temp, "test", 20);
+	strncpy(intf_temp, "br0.11", 20);
+
+	stream_putl(s, MLAG_MROUTE_DEL);
+	stream_putw(s, MLAG_MROUTE_DEL_MSGSIZE);
+	stream_putw(s, MLAG_MSG_NO_BATCH);
+
+	/* payload*/
+	stream_put(s, vrf_temp, VRF_NAMSIZ);
+	stream_putl(s, 0x01010101); /*source_ip*/
+	stream_putl(s, 0xE4000001); /*group_ip*/
+	stream_putl(s, 5);	  /*vni_id */
+	stream_putl(s, 0x1004);     /*vrf_id*/
+	stream_put(s, intf_temp, INTERFACE_NAMSIZ);
+	stream_fifo_push_safe(zrouter.mlag_info.mlag_fifo, s);
+	zebra_mlag_signal_write_thread();
+
+	if (IS_ZEBRA_DEBUG_MLAG)
+		zlog_debug("%s: Enqueued MLAG Mroute-Del to MLAG Thread ",
+			   __FUNCTION__);
+	return;
+}
+
+static void test_mlag_post_mroute_bulk_add()
+{
+	struct stream *s = NULL;
+	char vrf_temp[20];
+	char intf_temp[20];
+
+	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
+	if (!s)
+		return;
+
+	memset(vrf_temp, 0, 20);
+	memset(intf_temp, 0, 20);
+
+	strncpy(vrf_temp, "test", 20);
+	strncpy(intf_temp, "br0.11", 20);
+
+	stream_putl(s, MLAG_MROUTE_ADD_BULK);
+	stream_putw(s, 3 * MLAG_MROUTE_ADD_MSGSIZE);
+	stream_putw(s, 3);
+
+	/* payload-1*/
+	stream_put(s, vrf_temp, VRF_NAMSIZ);
+	stream_putl(s, 0x01010101); /*source_ip*/
+	stream_putl(s, 0xE4000001); /*group_ip*/
+	stream_putl(s, 10);	 /*cost_to_rp*/
+	stream_putl(s, 5);	  /*vni_id */
+	stream_putc(s, 1);	  /*am_i_dr */
+	stream_putc(s, 1);	  /*dual_active */
+	stream_putl(s, 0x1004);     /*vrf_id*/
+	stream_put(s, intf_temp, INTERFACE_NAMSIZ);
+
+	/* payload-2*/
+	stream_put(s, vrf_temp, VRF_NAMSIZ);
+	stream_putl(s, 0x0);	/*source_ip*/
+	stream_putl(s, 0xE9000001); /*group_ip*/
+	stream_putl(s, 10);	 /*cost_to_rp*/
+	stream_putl(s, 5);	  /*vni_id */
+	stream_putc(s, 1);	  /*am_i_dr */
+	stream_putc(s, 1);	  /*dual_active */
+	stream_putl(s, 0x1004);     /*vrf_id*/
+	stream_put(s, intf_temp, INTERFACE_NAMSIZ);
+
+	/* payload-3*/
+	stream_put(s, vrf_temp, VRF_NAMSIZ);
+	stream_putl(s, 0x01010101); /*source_ip*/
+	stream_putl(s, 0xE5000001); /*group_ip*/
+	stream_putl(s, 10);	 /*cost_to_rp*/
+	stream_putl(s, 5);	  /*vni_id */
+	stream_putc(s, 1);	  /*am_i_dr */
+	stream_putc(s, 1);	  /*dual_active */
+	stream_putl(s, 0x1004);     /*vrf_id*/
+	stream_put(s, intf_temp, INTERFACE_NAMSIZ);
+	stream_fifo_push_safe(zrouter.mlag_info.mlag_fifo, s);
+	zebra_mlag_signal_write_thread();
+
+	if (IS_ZEBRA_DEBUG_MLAG)
+		zlog_debug("%s: Enqueued MLAG Mroute-Bulk to MLAG Thread ",
+			   __FUNCTION__);
+	return;
+}
+
+static void test_mlag_post_mroute_bulk_del()
+{
+	struct stream *s = NULL;
+	char vrf_temp[20];
+	char intf_temp[20];
+
+	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
+	if (!s)
+		return;
+
+	memset(vrf_temp, 0, 20);
+	memset(intf_temp, 0, 20);
+
+	strncpy(vrf_temp, "test", 20);
+	strncpy(intf_temp, "br0.11", 20);
+
+	stream_putl(s, MLAG_MROUTE_DEL_BULK);
+	stream_putw(s, 2 * MLAG_MROUTE_DEL_MSGSIZE);
+	stream_putw(s, 2);
+
+	/* payload-1*/
+	stream_put(s, vrf_temp, VRF_NAMSIZ);
+	stream_putl(s, 0x01010101); /*source_ip*/
+	stream_putl(s, 0xE4000001); /*group_ip*/
+	stream_putl(s, 5);	  /*vni_id */
+	stream_putl(s, 0x1004);     /*vrf_id*/
+	stream_put(s, intf_temp, INTERFACE_NAMSIZ);
+
+	/* payload-2*/
+	stream_put(s, vrf_temp, VRF_NAMSIZ);
+	stream_putl(s, 0x0);	/*source_ip*/
+	stream_putl(s, 0xE9000001); /*group_ip*/
+	stream_putl(s, 5);	  /*vni_id */
+	stream_putl(s, 0x1004);     /*vrf_id*/
+	stream_put(s, intf_temp, INTERFACE_NAMSIZ);
+
+	/* payload-3*/
+	stream_put(s, vrf_temp, VRF_NAMSIZ);
+	stream_putl(s, 0x01010101); /*source_ip*/
+	stream_putl(s, 0xE5000001); /*group_ip*/
+	stream_putl(s, 5);	  /*vni_id */
+	stream_putl(s, 0x1004);     /*vrf_id*/
+	stream_put(s, intf_temp, INTERFACE_NAMSIZ);
+	stream_fifo_push_safe(zrouter.mlag_info.mlag_fifo, s);
+	zebra_mlag_signal_write_thread();
+
+	if (IS_ZEBRA_DEBUG_MLAG)
+		zlog_debug("%s: Enqueued MLAG Mroute-Bulk to MLAG Thread ",
+			   __FUNCTION__);
+	return;
+}
+
+DEFPY(test_mlag, test_mlag_cmd,
+      "test zebra mlag <none$none|primary$primary|secondary$secondary>",
+      "Test code\n" ZEBRA_STR
+      "Modify the Mlag state\n"
+      "Mlag is not setup on the machine\n"
+      "Mlag is setup to be primary\n"
+      "Mlag is setup to be the secondary\n")
 {
 	enum mlag_role orig = zrouter.mlag_info.role;
 	char buf1[80], buf2[80];
@@ -633,8 +821,73 @@ DEFPY (test_mlag,
 			   mlag_role2str(orig, buf1, sizeof(buf1)),
 			   mlag_role2str(orig, buf2, sizeof(buf2)));
 
-	if (orig != zrouter.mlag_info.role)
+	if (orig != zrouter.mlag_info.role) {
 		zsend_capabilities_all_clients();
+		if (zrouter.mlag_info.role != MLAG_ROLE_NONE) {
+			if (zrouter.mlag_info.clients_interested_cnt == 0
+			    && test_mlag_in_progress == false) {
+				if (zrouter.mlag_info.zebra_pth_mlag == NULL) {
+					zebra_mlag_spawn_pthread();
+				}
+				zrouter.mlag_info.clients_interested_cnt++;
+				test_mlag_in_progress = true;
+				zebra_mlag_private_open_channel();
+			}
+		} else {
+			if (test_mlag_in_progress == true) {
+				test_mlag_in_progress = false;
+				zrouter.mlag_info.clients_interested_cnt--;
+				zebra_mlag_private_close_channel();
+			}
+		}
+	}
+
+	return CMD_SUCCESS;
+}
+
+DEFPY(test_mlag_route, test_mlag_route_cmd,
+      "test zebra mlag route <add$add|del$del>",
+      "Test code\n" ZEBRA_STR
+      "Modify the Mlag state\n"
+      "Post Route Action to Mlag\n"
+      "Posting Route-add\n"
+      "Posting Route-del\n")
+{
+
+	if (zrouter.mlag_info.connected == false) {
+		if (IS_ZEBRA_DEBUG_MLAG)
+			zlog_debug("Test: Not connected to MLAG");
+		return CMD_SUCCESS;
+	}
+
+	if (add)
+		test_mlag_post_mroute_add();
+	if (del)
+		test_mlag_post_mroute_del();
+
+	return CMD_SUCCESS;
+}
+
+DEFPY(test_mlag_route_bulk, test_mlag_route_bulk_cmd,
+      "test zebra mlag route bulk <add$add|del$del>",
+      "Test code\n" ZEBRA_STR
+      "Modify the Mlag state\n"
+      "Post Route Action to Mlag\n"
+      "Posting Route-bulk\n"
+      "Posting Route-add\n"
+      "Posting Route-del\n")
+{
+
+	if (zrouter.mlag_info.connected == false) {
+		if (IS_ZEBRA_DEBUG_MLAG)
+			zlog_debug("Test: Not connected to MLAG");
+		return CMD_SUCCESS;
+	}
+
+	if (add)
+		test_mlag_post_mroute_bulk_add();
+	if (del)
+		test_mlag_post_mroute_bulk_del();
 
 	return CMD_SUCCESS;
 }
@@ -643,6 +896,8 @@ void zebra_mlag_init(void)
 {
 	install_element(VIEW_NODE, &show_mlag_cmd);
 	install_element(ENABLE_NODE, &test_mlag_cmd);
+	install_element(ENABLE_NODE, &test_mlag_route_cmd);
+	install_element(ENABLE_NODE, &test_mlag_route_bulk_cmd);
 
 	/*
 	 * Intialiaze teh MLAG Global variableis
