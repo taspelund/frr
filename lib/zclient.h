@@ -635,5 +635,10 @@ static inline void zapi_route_set_blackhole(struct zapi_route *api,
 	SET_FLAG(api->message, ZAPI_MESSAGE_NEXTHOP);
 };
 
+extern void zclient_send_mlag_register(struct zclient *client,
+				       uint32_t bit_map);
+extern void zclient_send_mlag_deregister(struct zclient *client);
 
+extern void zclient_send_mlag_data(struct zclient *client,
+				   struct stream *client_s);
 #endif /* _ZEBRA_ZCLIENT_H */

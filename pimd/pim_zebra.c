@@ -46,11 +46,12 @@
 #include "pim_nht.h"
 #include "pim_ssm.h"
 #include "pim_vxlan.h"
+#include "pim_mlag.h"
 
 #undef PIM_DEBUG_IFADDR_DUMP
 #define PIM_DEBUG_IFADDR_DUMP
 
-static struct zclient *zclient = NULL;
+struct zclient *zclient = NULL;
 
 
 /* Router-id update message from zebra. */
@@ -787,7 +788,7 @@ static void pim_zebra_connected(struct zclient *zclient)
 
 static void pim_zebra_capabilities(struct zclient_capabilities *cap)
 {
-	router->role = cap->role;
+	router->mlag_role = cap->role;
 }
 
 void pim_zebra_init(void)
@@ -808,6 +809,9 @@ void pim_zebra_init(void)
 	zclient->nexthop_update = pim_parse_nexthop_update;
 	zclient->vxlan_sg_add = pim_zebra_vxlan_sg_proc;
 	zclient->vxlan_sg_del = pim_zebra_vxlan_sg_proc;
+	zclient->mlag_process_up = pim_zebra_mlag_process_up;
+	zclient->mlag_process_down = pim_zebra_mlag_process_down;
+	zclient->mlag_handle_msg = pim_zebra_mlag_handle_msg;
 
 	zclient_init(zclient, ZEBRA_ROUTE_PIM, 0, &pimd_privs);
 	if (PIM_DEBUG_PIM_TRACE) {
@@ -1092,12 +1096,13 @@ void igmp_source_forward_start(struct pim_instance *pim,
 		return;
 	}
 
-	if (!(PIM_I_am_DR(pim_oif))) {
+	if (!(PIM_I_am_DR(pim_oif)) && !PIM_I_am_DualActive(pim_oif)) {
 		if (PIM_DEBUG_IGMP_TRACE)
-			zlog_debug("%s: %s was received on %s interface but we are not DR for that interface",
-				   __PRETTY_FUNCTION__,
-				   pim_str_sg_dump(&sg),
-				   group->group_igmp_sock->interface->name);
+			zlog_debug(
+				"%s: %s was received on %s interface but we are not DR (or)"
+				"Dual-active for that interface",
+				__PRETTY_FUNCTION__, pim_str_sg_dump(&sg),
+				group->group_igmp_sock->interface->name);
 
 		pim_channel_del_oif(source->source_channel_oil,
 				    group->group_igmp_sock->interface,

@@ -62,7 +62,13 @@ struct pim_router {
 	 */
 	vrf_id_t vrf_id;
 
-	enum mlag_role role;
+	enum mlag_role mlag_role;
+	uint32_t pim_mlag_intf_cnt;
+	bool connected_to_mlag;
+	/* Holds the client data(unencoded) that need to be pushed to MCLAGD*/
+	struct stream_fifo *mlag_fifo;
+	struct stream *mlag_stream;
+	struct thread *zpthread_mlag_write;
 };
 
 /* Per VRF PIM DB */
@@ -121,6 +127,7 @@ struct pim_instance {
 
 	bool ecmp_enable;
 	bool ecmp_rebalance_enable;
+	uint32_t inst_mlag_intf_cnt;
 
 	/* If we need to rescan all our upstreams */
 	struct thread *rpf_cache_refresher;

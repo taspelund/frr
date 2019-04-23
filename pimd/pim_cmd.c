@@ -61,6 +61,7 @@
 #include "pim_nht.h"
 #include "pim_bfd.h"
 #include "pim_vxlan.h"
+#include "pim_mlag.h"
 #include "bfd.h"
 
 #ifndef VTYSH_EXTRACT_PL
@@ -4510,7 +4511,7 @@ static void pim_cmd_show_ip_multicast_helper(struct pim_instance *pim,
 	pim = vrf->info;
 
 	vty_out(vty, "Router MLAG Role: %s\n",
-		mlag_role2str(router->role, mlag_role, sizeof(mlag_role)));
+		mlag_role2str(router->mlag_role, mlag_role, sizeof(mlag_role)));
 	vty_out(vty, "Mroute socket descriptor:");
 
 	vty_out(vty, " %d(%s)\n", pim->mroute_socket, vrf->name);
@@ -6580,27 +6581,25 @@ DEFPY_HIDDEN (pim_test_sg_keepalive,
 	return CMD_SUCCESS;
 }
 
-DEFPY_HIDDEN (interface_ip_pim_activeactive,
-	      interface_ip_pim_activeactive_cmd,
-	      "[no$no] ip pim active-active",
-	      NO_STR
-	      IP_STR
-	      PIM_STR
-	      "Mark interface as Active-Active for MLAG operations, Hidden because not finished yet\n")
+DEFPY(interface_ip_pim_activeactive, interface_ip_pim_activeactive_cmd,
+      "[no$no] ip pim active-active",
+      NO_STR IP_STR PIM_STR
+      "Mark interface as Active-Active for MLAG operations\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	struct pim_interface *pim_ifp;
 
 	if (!no && !pim_cmd_interface_add(ifp)) {
-		vty_out(vty, "Could not enable PIM SM active-active on interface\n");
+		vty_out(vty,
+			"Could not enable PIM SM active-active on interface\n");
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
 	pim_ifp = ifp->info;
 	if (no)
-		pim_ifp->activeactive = false;
+		pim_if_unconfigure_mlag_dualactive(pim_ifp);
 	else
-		pim_ifp->activeactive = true;
+		pim_if_configure_mlag_dualactive(pim_ifp);
 
 	return CMD_SUCCESS;
 }
@@ -7513,6 +7512,29 @@ DEFUN (no_debug_pim_zebra,
        DEBUG_PIM_ZEBRA_STR)
 {
 	PIM_DONT_DEBUG_ZEBRA;
+	return CMD_SUCCESS;
+}
+
+DEFUN (debug_pim_mlag,
+       debug_pim_mlag_cmd,
+       "debug pim mlag",
+       DEBUG_STR
+       DEBUG_PIM_STR
+       DEBUG_PIM_MLAG_STR)
+{
+	PIM_DO_DEBUG_MLAG;
+	return CMD_SUCCESS;
+}
+
+DEFUN (no_debug_pim_mlag,
+       no_debug_pim_mlag_cmd,
+       "no debug pim mlag",
+       NO_STR
+       DEBUG_STR
+       DEBUG_PIM_STR
+       DEBUG_PIM_MLAG_STR)
+{
+	PIM_DONT_DEBUG_MLAG;
 	return CMD_SUCCESS;
 }
 
@@ -9404,6 +9426,8 @@ void pim_cmd_init(void)
 	install_element(ENABLE_NODE, &no_debug_ssmpingd_cmd);
 	install_element(ENABLE_NODE, &debug_pim_zebra_cmd);
 	install_element(ENABLE_NODE, &no_debug_pim_zebra_cmd);
+	install_element(ENABLE_NODE, &debug_pim_mlag_cmd);
+	install_element(ENABLE_NODE, &no_debug_pim_mlag_cmd);
 	install_element(ENABLE_NODE, &debug_pim_vxlan_cmd);
 	install_element(ENABLE_NODE, &no_debug_pim_vxlan_cmd);
 	install_element(ENABLE_NODE, &debug_msdp_cmd);
@@ -9447,6 +9471,8 @@ void pim_cmd_init(void)
 	install_element(CONFIG_NODE, &no_debug_ssmpingd_cmd);
 	install_element(CONFIG_NODE, &debug_pim_zebra_cmd);
 	install_element(CONFIG_NODE, &no_debug_pim_zebra_cmd);
+	install_element(CONFIG_NODE, &debug_pim_mlag_cmd);
+	install_element(CONFIG_NODE, &no_debug_pim_mlag_cmd);
 	install_element(CONFIG_NODE, &debug_pim_vxlan_cmd);
 	install_element(CONFIG_NODE, &no_debug_pim_vxlan_cmd);
 	install_element(CONFIG_NODE, &debug_msdp_cmd);

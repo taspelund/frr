@@ -120,6 +120,11 @@ int pim_debug_config_write(struct vty *vty)
 		++writes;
 	}
 
+	if (PIM_DEBUG_MLAG) {
+		vty_out(vty, "debug pim mlag\n");
+		++writes;
+	}
+
 	if (PIM_DEBUG_VXLAN) {
 		vty_out(vty, "debug pim vxlan\n");
 		++writes;

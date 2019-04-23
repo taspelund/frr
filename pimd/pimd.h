@@ -114,6 +114,7 @@
 #define PIM_MASK_PIM_NHT_RP          (1 << 24)
 #define PIM_MASK_MTRACE              (1 << 25)
 #define PIM_MASK_VXLAN               (1 << 26)
+#define PIM_MASK_MLAG                (1 << 27)
 /* Remember 32 bits!!! */
 
 /* PIM error codes */
@@ -167,6 +168,7 @@ extern uint8_t qpim_ecmp_rebalance_enable;
 #define PIM_DEBUG_IGMP_TRACE_DETAIL                                            \
 	(router->debugs & PIM_MASK_IGMP_TRACE_DETAIL)
 #define PIM_DEBUG_ZEBRA (router->debugs & PIM_MASK_ZEBRA)
+#define PIM_DEBUG_MLAG (router->debugs & PIM_MASK_MLAG)
 #define PIM_DEBUG_SSMPINGD (router->debugs & PIM_MASK_SSMPINGD)
 #define PIM_DEBUG_MROUTE (router->debugs & PIM_MASK_MROUTE)
 #define PIM_DEBUG_MROUTE_DETAIL (router->debugs & PIM_MASK_MROUTE_DETAIL)
@@ -209,6 +211,7 @@ extern uint8_t qpim_ecmp_rebalance_enable;
 #define PIM_DO_DEBUG_IGMP_TRACE_DETAIL                                         \
 	(router->debugs |= PIM_MASK_IGMP_TRACE_DETAIL)
 #define PIM_DO_DEBUG_ZEBRA (router->debugs |= PIM_MASK_ZEBRA)
+#define PIM_DO_DEBUG_MLAG (router->debugs |= PIM_MASK_MLAG)
 #define PIM_DO_DEBUG_SSMPINGD (router->debugs |= PIM_MASK_SSMPINGD)
 #define PIM_DO_DEBUG_MROUTE (router->debugs |= PIM_MASK_MROUTE)
 #define PIM_DO_DEBUG_MROUTE_DETAIL (router->debugs |= PIM_MASK_MROUTE_DETAIL)
@@ -239,6 +242,7 @@ extern uint8_t qpim_ecmp_rebalance_enable;
 #define PIM_DONT_DEBUG_IGMP_TRACE_DETAIL                                       \
 	(router->debugs &= ~PIM_MASK_IGMP_TRACE_DETAIL)
 #define PIM_DONT_DEBUG_ZEBRA (router->debugs &= ~PIM_MASK_ZEBRA)
+#define PIM_DONT_DEBUG_MLAG (router->debugs &= ~PIM_MASK_MLAG)
 #define PIM_DONT_DEBUG_SSMPINGD (router->debugs &= ~PIM_MASK_SSMPINGD)
 #define PIM_DONT_DEBUG_MROUTE (router->debugs &= ~PIM_MASK_MROUTE)
 #define PIM_DONT_DEBUG_MROUTE_DETAIL (router->debugs &= ~PIM_MASK_MROUTE_DETAIL)

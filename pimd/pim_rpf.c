@@ -36,6 +36,7 @@
 #include "pim_time.h"
 #include "pim_nht.h"
 #include "pim_oil.h"
+#include "pim_mlag.h"
 
 static struct in_addr pim_rpf_find_rpf_addr(struct pim_upstream *up);
 
@@ -203,6 +204,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 	struct prefix nht_p;
 	struct prefix src, grp;
 	bool neigh_needed = true;
+	uint32_t saved_mrib_route_metric;
 
 	if (PIM_UPSTREAM_FLAG_TEST_STATIC_IIF(up->flags))
 		return PIM_RPF_OK;
@@ -215,6 +217,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 
 	saved.source_nexthop = rpf->source_nexthop;
 	saved.rpf_addr = rpf->rpf_addr;
+	saved_mrib_route_metric = rpf->source_nexthop.mrib_route_metric;
 
 	if (is_new && PIM_DEBUG_ZEBRA) {
 		char source_str[INET_ADDRSTRLEN];
@@ -301,6 +304,26 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 			old->rpf_addr = saved.rpf_addr;
 		}
 		return PIM_RPF_CHANGED;
+	}
+
+	if (PIM_DEBUG_MLAG)
+		zlog_debug(
+			"%s: Cost_to_rp of upstream-%s changed to:%u,"
+			" dual_ifp_count:%u",
+			__FUNCTION__, up->sg_str,
+			rpf->source_nexthop.mrib_route_metric,
+			up->dualactive_ifchannel_count);
+	/* Cost changed, it might Impact MLAG DF election, update */
+	if (saved_mrib_route_metric != rpf->source_nexthop.mrib_route_metric) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug(
+				"%s: Cost_to_rp of upstream-%s changed to:%u,"
+				" dual_ifp_count:%u",
+				__FUNCTION__, up->sg_str,
+				rpf->source_nexthop.mrib_route_metric,
+				up->dualactive_ifchannel_count);
+		if (up->dualactive_ifchannel_count)
+			pim_mlag_update_cost_to_rp_to_peer(up);
 	}
 
 	return PIM_RPF_OK;
