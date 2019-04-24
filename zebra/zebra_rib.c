@@ -2666,7 +2666,6 @@ void rib_lookup_and_pushup(struct prefix_ipv4 *p, vrf_id_t vrf_id)
 {
 	struct route_table *table;
 	struct route_node *rn;
-	unsigned changed = 0;
 	rib_dest_t *dest;
 
 	if (NULL == (table = zebra_vrf_table(AFI_IP, SAFI_UNICAST, vrf_id))) {
@@ -2693,7 +2692,6 @@ void rib_lookup_and_pushup(struct prefix_ipv4 *p, vrf_id_t vrf_id)
 	 * of the rest of the RE.
 	 */
 	if (dest->selected_fib) {
-		changed = 1;
 		if (IS_ZEBRA_DEBUG_RIB) {
 			char buf[PREFIX_STRLEN];
 
@@ -2703,9 +2701,8 @@ void rib_lookup_and_pushup(struct prefix_ipv4 *p, vrf_id_t vrf_id)
 			route_entry_dump(&rn->p, NULL, dest->selected_fib);
 		}
 		rib_uninstall(rn, dest->selected_fib);
-	}
-	if (changed)
 		rib_queue_add(rn);
+	}
 }
 
 int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
@@ -3080,6 +3077,8 @@ void rib_update_table(struct route_table *table, rib_update_event_t event)
 					continue;
 
 				if (re->type != ZEBRA_ROUTE_STATIC) {
+					SET_FLAG(re->status,
+						 ROUTE_ENTRY_CHANGED);
 					rib_queue_add(rn);
 					continue;
 				}
@@ -3093,8 +3092,11 @@ void rib_update_table(struct route_table *table, rib_update_event_t event)
 				 * gateway, NHT will
 				 * take care.
 				 */
-				if (nh)
+				if (nh) {
+					SET_FLAG(re->status,
+						 ROUTE_ENTRY_CHANGED);
 					rib_queue_add(rn);
+				}
 			}
 			break;
 
@@ -3104,8 +3106,12 @@ void rib_update_table(struct route_table *table, rib_update_event_t event)
 			 * protocol in
 			 * some cases (TODO).
 			 */
-			if (rnode_to_ribs(rn))
+			if (rnode_to_ribs(rn)) {
+				RNODE_FOREACH_RE_SAFE (rn, re, next)
+					SET_FLAG(re->status,
+						 ROUTE_ENTRY_CHANGED);
 				rib_queue_add(rn);
+			}
 			break;
 
 		default:
