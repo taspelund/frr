@@ -80,6 +80,7 @@ struct mlag_status {
 };
 
 #define MLAG_STATUS_MSGSIZE (sizeof(struct mlag_status))
+#define MLAG_ROLE_STRSIZE 16
 
 struct mlag_pim_status {
 	enum mlag_switchd_state switchd_state;
