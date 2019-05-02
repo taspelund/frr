@@ -216,8 +216,7 @@ static void pim_rpf_cost_change(struct pim_instance *pim,
 }
 
 enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
-				   struct pim_upstream *up, struct pim_rpf *old,
-				   uint8_t is_new)
+				   struct pim_upstream *up, struct pim_rpf *old)
 {
 	struct pim_rpf *rpf = &up->rpf;
 	struct pim_rpf saved;
@@ -239,14 +238,6 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 	saved.rpf_addr = rpf->rpf_addr;
 	saved_mrib_route_metric = rpf->source_nexthop.mrib_route_metric;
 
-	if (is_new && PIM_DEBUG_ZEBRA) {
-		char source_str[INET_ADDRSTRLEN];
-		pim_inet4_dump("<source?>", up->upstream_addr, source_str,
-			       sizeof(source_str));
-		zlog_debug("%s: NHT Register upstream %s addr %s with Zebra.",
-			   __PRETTY_FUNCTION__, up->sg_str, source_str);
-	}
-	/* Register addr with Zebra NHT */
 	nht_p.family = AF_INET;
 	nht_p.prefixlen = IPV4_MAX_BITLEN;
 	nht_p.u.prefix4.s_addr = up->upstream_addr.s_addr;
