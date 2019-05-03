@@ -84,6 +84,8 @@ struct pim_router {
 
 	enum mlag_role mlag_role;
 	uint32_t pim_mlag_intf_cnt;
+	/* if true we have registered with MLAG */
+	bool mlag_process_register;
 	/* if true connection with the local MLAG process is up */
 	bool mlag_process_up;
 	/* if true local MLAG process reported that it is connected

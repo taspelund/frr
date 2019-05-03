@@ -24,6 +24,7 @@
 #include "pim_mlag.h"
 #include "pim_zebra.h"
 #include "pim_oil.h"
+#include "pim_vxlan.h"
 
 extern struct zclient *zclient;
 
@@ -560,7 +561,7 @@ int pim_zebra_mlag_process_down(void)
 	return (0);
 }
 
-static int pim_mlag_register(struct thread *thread)
+static int pim_mlag_register_handler(struct thread *thread)
 {
 	uint32_t bit_mask = 0;
 
@@ -586,7 +587,18 @@ static int pim_mlag_register(struct thread *thread)
 	return (0);
 }
 
-static int pim_mlag_deregister(struct thread *thread)
+void pim_mlag_register(void)
+{
+	if (router->mlag_process_register)
+		return;
+
+	router->mlag_process_register = true;
+
+	thread_add_event(router->master, pim_mlag_register_handler,
+			NULL, 0, NULL);
+}
+
+static int pim_mlag_deregister_handler(struct thread *thread)
 {
 	if (!zclient)
 		return (-1);
@@ -597,6 +609,22 @@ static int pim_mlag_deregister(struct thread *thread)
 	router->connected_to_mlag = false;
 	zclient_send_mlag_deregister(zclient);
 	return (0);
+}
+
+void pim_mlag_deregister(void)
+{
+	/* if somebody still interested in the MLAG channel skip de-reg */
+	if (router->pim_mlag_intf_cnt || pim_vxlan_do_mlag_reg())
+		return;
+
+	/* not registered; nothing do */
+	if (!router->mlag_process_register)
+		return;
+
+	router->mlag_process_register = false;
+
+	thread_add_event(router->master, pim_mlag_deregister_handler,
+			NULL, 0, NULL);
 }
 
 void pim_if_configure_mlag_dualactive(struct pim_interface *pim_ifp)
@@ -625,8 +653,7 @@ void pim_if_configure_mlag_dualactive(struct pim_interface *pim_ifp)
 		 * atleast one Interface is configured for MLAG, send register
 		 * to Zebra for receiving MLAG Updates
 		 */
-		thread_add_event(router->master, pim_mlag_register, NULL, 0,
-				 NULL);
+		pim_mlag_register();
 	}
 }
 
@@ -656,8 +683,7 @@ void pim_if_unconfigure_mlag_dualactive(struct pim_interface *pim_ifp)
 		 * all the Interfaces are MLAG un-configured, post MLAG
 		 * De-register to Zebra
 		 */
-		thread_add_event(router->master, pim_mlag_deregister, NULL, 0,
-				 NULL);
+		pim_mlag_deregister();
 	}
 }
 

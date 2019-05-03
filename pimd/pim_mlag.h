@@ -57,4 +57,8 @@ extern void pim_zpthread_init(void);
 
 extern void pim_zpthread_terminate(void);
 
+extern void pim_mlag_register(void);
+
+extern void pim_mlag_deregister(void);
+
 #endif
