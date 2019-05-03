@@ -316,10 +316,15 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 		zlog_debug("%s: msg dump: my_role:%d, peer_state:%d",
 			   __FUNCTION__, msg.my_role, msg.peer_state);
 
+	++router->mlag_stats.msg.mlag_status_updates;
+	router->mlag_role = msg.my_role;
+	strcpy(router->peerlink_rif, msg.peerlink_rif);
 	/*
 	 * This can be receieed when Peer clag down/peerlink failure.
 	 */
 	if (msg.peer_state == MLAG_STATE_DOWN) {
+		if (router->connected_to_mlag)
+			++router->mlag_stats.peer_session_downs;
 		router->connected_to_mlag = false;
 		thread_add_event(router->master, pim_mlag_down_handler, NULL, 0,
 				 NULL);
@@ -351,6 +356,7 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 			msg.cost_to_rp, msg.vni_id, msg.am_i_dr,
 			msg.am_i_dual_active, msg.vrf_id, msg.intf_name);
 
+	++router->mlag_stats.msg.mroute_add_rx;
 	vrf = vrf_lookup_by_name(msg.vrf_name);
 	if (vrf)
 		ifp = if_lookup_by_name(msg.intf_name, vrf->vrf_id);
@@ -392,6 +398,7 @@ static void pim_mlag_process_mroute_del(struct mlag_mroute_del msg)
 			"vni_id:%d, vrf_id:0x%x intf_name:%s",
 			__FUNCTION__, msg.vrf_name, msg.source_ip, msg.group_ip,
 			msg.vni_id, msg.vrf_id, msg.intf_name);
+	++router->mlag_stats.msg.mroute_del_rx;
 }
 
 static void pim_mlag_process_peer_status_update(struct mlag_pim_status msg)
@@ -399,6 +406,7 @@ static void pim_mlag_process_peer_status_update(struct mlag_pim_status msg)
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: msg dump: switchd_state:%d, svi_state:%d",
 			   __FUNCTION__, msg.switchd_state, msg.svi_state);
+	++router->mlag_stats.msg.pim_status_updates;
 }
 
 int pim_zebra_mlag_handle_msg(struct stream *s, int len)
@@ -487,10 +495,22 @@ int pim_zebra_mlag_process_up(void)
 	 * Incase of local MLAG restyrat, PIM needs to replay all the dat
 	 * since MLAG is empty.
 	 */
+	router->mlag_process_up = true;
 	router->connected_to_mlag = true;
 	thread_add_event(router->master, pim_mlag_local_up_handler, NULL, 0,
 			 NULL);
 	return (0);
+}
+
+static void pim_mlag_param_reset(void)
+{
+	/* reset the cached params and stats */
+	router->mlag_process_up = false;
+	router->local_vtep_ip.s_addr = INADDR_ANY;
+	router->anycast_vtep_ip.s_addr = INADDR_ANY;
+	router->mlag_role = MLAG_ROLE_NONE;
+	memset(&router->mlag_stats.msg, 0, sizeof(router->mlag_stats.msg));
+	router->peerlink_rif[0] = '\0';
 }
 
 int pim_zebra_mlag_process_down(void)
@@ -502,7 +522,10 @@ int pim_zebra_mlag_process_down(void)
 	 * Local CLAG is down, reset peer data
 	 * and forward teh traffic if we are DR
 	 */
+	if (router->connected_to_mlag)
+		++router->mlag_stats.peer_session_downs;
 	router->connected_to_mlag = false;
+	pim_mlag_param_reset();
 	thread_add_event(router->master, pim_mlag_down_handler, NULL, 0, NULL);
 	return (0);
 }
@@ -638,7 +661,7 @@ void pim_instance_mlag_terminate(struct pim_instance *pim)
 
 void pim_mlag_init(void)
 {
-	router->mlag_role = MLAG_ROLE_NONE;
+	pim_mlag_param_reset();
 	router->pim_mlag_intf_cnt = 0;
 	router->connected_to_mlag = false;
 	router->mlag_fifo = stream_fifo_new();

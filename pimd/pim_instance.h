@@ -45,6 +45,26 @@ enum pim_spt_switchover {
 	PIM_SPT_INFINITY,
 };
 
+/* stats for updates rxed from the MLAG component during the life of a
+ * session
+ */
+struct pim_mlag_msg_stats {
+	uint32_t mroute_add_rx;
+	uint32_t mroute_add_tx;
+	uint32_t mroute_del_rx;
+	uint32_t mroute_del_tx;
+	uint32_t mlag_status_updates;
+	uint32_t pim_status_updates;
+	uint32_t vxlan_updates;
+};
+
+struct pim_mlag_stats {
+	/* message stats are reset when the connection to mlagd flaps */
+	struct pim_mlag_msg_stats msg;
+	uint32_t mlagd_session_downs;
+	uint32_t peer_session_downs;
+};
+
 struct pim_router {
 	struct thread_master *master;
 
@@ -64,11 +84,20 @@ struct pim_router {
 
 	enum mlag_role mlag_role;
 	uint32_t pim_mlag_intf_cnt;
+	/* if true connection with the local MLAG process is up */
+	bool mlag_process_up;
+	/* if true local MLAG process reported that it is connected
+	 * with the peer MLAG process
+	 */
 	bool connected_to_mlag;
 	/* Holds the client data(unencoded) that need to be pushed to MCLAGD*/
 	struct stream_fifo *mlag_fifo;
 	struct stream *mlag_stream;
 	struct thread *zpthread_mlag_write;
+	struct in_addr anycast_vtep_ip;
+	struct in_addr local_vtep_ip;
+	struct pim_mlag_stats mlag_stats;
+	char peerlink_rif[INTERFACE_NAMSIZ];
 };
 
 /* Per VRF PIM DB */

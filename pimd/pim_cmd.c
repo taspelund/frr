@@ -3949,6 +3949,56 @@ DEFUN (show_ip_igmp_statistics,
 	return CMD_SUCCESS;
 }
 
+DEFUN (show_ip_pim_mlag_summary,
+       show_ip_pim_mlag_summary_cmd,
+       "show ip pim mlag summary [json]",
+       SHOW_STR
+       IP_STR
+       PIM_STR
+       "MLAG\n"
+       "status and stats\n"
+       JSON_STR)
+{
+	bool uj = use_json(argc, argv);
+	char role_buf[MLAG_ROLE_STRSIZE];
+	char addr_buf[INET_ADDRSTRLEN];
+
+	if (uj)
+		/* XXX: need to add json output */
+		return CMD_SUCCESS;
+
+	vty_out(vty, "MLAG daemon connection: %s\n",
+		router->mlag_process_up ? "up" : "down");
+	vty_out(vty, "MLAG peer state: %s\n",
+		router->connected_to_mlag ? "up" : "down");
+	vty_out(vty, "MLAG role: %s\n",
+		mlag_role2str(router->mlag_role, role_buf, sizeof(role_buf)));
+	inet_ntop(AF_INET, &router->local_vtep_ip,
+			addr_buf, INET_ADDRSTRLEN);
+	vty_out(vty, "Local VTEP IP: %s\n", addr_buf);
+	inet_ntop(AF_INET, &router->anycast_vtep_ip,
+			addr_buf, INET_ADDRSTRLEN);
+	vty_out(vty, "Anycast VTEP IP: %s\n", addr_buf);
+	vty_out(vty, "Session flaps: mlagd: %d mlag-peer: %d\n",
+			router->mlag_stats.mlagd_session_downs,
+			router->mlag_stats.peer_session_downs);
+	vty_out(vty, "Message Statistics:\n");
+	vty_out(vty, "  mroute adds: rx: %d, tx: %d\n",
+			router->mlag_stats.msg.mroute_add_rx,
+			router->mlag_stats.msg.mroute_add_tx);
+	vty_out(vty, "  mroute dels: rx: %d, tx: %d\n",
+			router->mlag_stats.msg.mroute_del_rx,
+			router->mlag_stats.msg.mroute_del_tx);
+	vty_out(vty, "  MLAG status updates: %d\n",
+			router->mlag_stats.msg.mlag_status_updates);
+	vty_out(vty, "  PIM status updates: %d\n",
+			router->mlag_stats.msg.pim_status_updates);
+	vty_out(vty, "  VxLAN updates: %d\n",
+			router->mlag_stats.msg.vxlan_updates);
+
+	return CMD_SUCCESS;
+}
+
 DEFUN (show_ip_pim_assert,
        show_ip_pim_assert_cmd,
        "show ip pim [vrf NAME] assert",
@@ -9693,6 +9743,7 @@ void pim_cmd_init(void)
 	install_element(VIEW_NODE, &show_ip_pim_mlag_local_membership_cmd);
 	install_element(VIEW_NODE,
 			&show_ip_pim_mlag_local_membership_vrf_all_cmd);
+	install_element(VIEW_NODE, &show_ip_pim_mlag_summary_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_neighbor_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_neighbor_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_rpf_cmd);
