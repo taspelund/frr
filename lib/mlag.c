@@ -65,6 +65,9 @@ char *zebra_mlag_lib_msgid_to_str(enum mlag_msg_type msg_type, char *buf,
 	case MLAG_MROUTE_DEL_BULK:
 		snprintf(buf, size, "Mroute Del Batch");
 		break;
+	case MLAG_STATUS_UPDATE:
+		snprintf(buf, size, "Mlag Status");
+		break;
 	case MLAG_PIM_STATUS_UPDATE:
 		snprintf(buf, size, "Mlag PIM Status");
 		break;
@@ -72,7 +75,7 @@ char *zebra_mlag_lib_msgid_to_str(enum mlag_msg_type msg_type, char *buf,
 		snprintf(buf, size, "Mlag vxlan update");
 		break;
 	default:
-		snprintf(buf, size, "Unknown");
+		snprintf(buf, size, "Unknown %d", msg_type);
 		break;
 	}
 	return buf;
