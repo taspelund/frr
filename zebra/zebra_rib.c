@@ -72,7 +72,7 @@ extern int allow_delete;
 /* Each route type's string and default distance value. */
 static const struct {
 	int key;
-	int distance;
+	uint8_t distance;
 	uint8_t meta_q_map;
 } route_info[ZEBRA_ROUTE_MAX] = {
 	[ZEBRA_ROUTE_SYSTEM] = {ZEBRA_ROUTE_SYSTEM, 0, 4},
@@ -3419,6 +3419,7 @@ static void check_route_info(void)
 		if (i == ZEBRA_ROUTE_SYSTEM || i == ZEBRA_ROUTE_ALL)
 			continue;
 		assert(route_info[i].key);
+		assert(route_info[i].meta_q_map < MQ_SIZE);
 	}
 }
 
