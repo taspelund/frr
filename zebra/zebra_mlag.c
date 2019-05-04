@@ -221,8 +221,8 @@ void zebra_mlag_handle_process_state(enum zebra_mlag_state state)
 {
 	if (state == MLAG_UP) {
 		zrouter.mlag_info.connected = true;
-		zebra_mlag_send_register();
 		zebra_mlag_publish_process_state(NULL, ZEBRA_MLAG_PROCESS_UP);
+		zebra_mlag_send_register();
 	} else if (state == MLAG_DOWN) {
 		zrouter.mlag_info.connected = false;
 		zebra_mlag_publish_process_state(NULL, ZEBRA_MLAG_PROCESS_DOWN);
