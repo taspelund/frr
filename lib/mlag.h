@@ -36,7 +36,6 @@ enum mlag_role {
 };
 
 enum mlag_state {
-	MLAG_STATE_NONE,
 	MLAG_STATE_DOWN,
 	MLAG_STATE_RUNNING,
 };

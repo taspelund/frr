@@ -91,9 +91,8 @@ message ZebraMlag_Header {
 
 message ZebraMlagStatusUpdate {
     enum ClagState {
-        CLAG_STATE_NONE = 0;
-        CLAG_STATE_DOWN = 1;
-        CLAG_STATE_RUNNING = 2;
+        CLAG_STATE_DOWN = 0;
+        CLAG_STATE_RUNNING = 1;
     }
 
     enum ClagRole {
