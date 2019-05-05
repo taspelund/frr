@@ -340,6 +340,26 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 		router->connected_to_mlag = true;
 }
 
+static void pim_mlag_process_vxlan_update(struct mlag_vxlan *msg)
+{
+	char addr_buf1[INET_ADDRSTRLEN];
+	char addr_buf2[INET_ADDRSTRLEN];
+
+	++router->mlag_stats.msg.vxlan_updates;
+	router->anycast_vtep_ip.s_addr = htonl(msg->anycast_ip);
+	router->local_vtep_ip.s_addr = htonl(msg->local_ip);
+
+	if (PIM_DEBUG_MLAG) {
+		inet_ntop(AF_INET, &router->local_vtep_ip,
+				addr_buf1, INET_ADDRSTRLEN);
+		inet_ntop(AF_INET, &router->anycast_vtep_ip,
+				addr_buf2, INET_ADDRSTRLEN);
+
+		zlog_debug("%s: msg dump: local-ip:%s, anycast-ip:%s",
+				__func__, addr_buf1, addr_buf2);
+	}
+}
+
 static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 {
 	struct vrf *vrf = NULL;
@@ -434,6 +454,16 @@ int pim_zebra_mlag_handle_msg(struct stream *s, int len)
 			return (rc);
 		pim_mlag_process_mlagd_state_change(msg);
 	} break;
+	case MLAG_VXLAN_UPDATE:
+	{
+		struct mlag_vxlan msg;
+
+		rc = zebra_mlag_lib_decode_vxlan_update(s, &msg);
+		if (rc)
+			return rc;
+		pim_mlag_process_vxlan_update(&msg);
+	}
+	break;
 	case MLAG_MROUTE_ADD: {
 		struct mlag_mroute_add msg;
 		rc = zebra_mlag_lib_decode_mroute_add(s, &msg);
@@ -544,6 +574,7 @@ static int pim_mlag_register(struct thread *thread)
 	SET_FLAG(bit_mask, (1 << MLAG_MROUTE_DEL_BULK));
 	SET_FLAG(bit_mask, (1 << MLAG_PIM_STATUS_UPDATE));
 	SET_FLAG(bit_mask, (1 << MLAG_PIM_CFG_DUMP));
+	SET_FLAG(bit_mask, (1 << MLAG_VXLAN_UPDATE));
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug(
