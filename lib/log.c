@@ -594,6 +594,8 @@ void zlog_backtrace_sigsafe(int priority, void *program_counter)
 		backtrace_symbols_fd(array, size, FD);                         \
 	}
 #elif defined(HAVE_PRINTSTACK)
+	size = 0;
+
 #define DUMP(FD)                                                               \
 	{                                                                      \
 		if (program_counter)                                           \
