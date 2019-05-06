@@ -297,6 +297,8 @@ static inline struct route_node *route_table_iter_next(route_table_iter_t *iter)
 		return NULL;
 
 	default:
+		/* Suppress uninitialized variable warning */
+		node = NULL;
 		assert(0);
 	}
 
