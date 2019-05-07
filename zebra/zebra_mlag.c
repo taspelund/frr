@@ -117,9 +117,11 @@ void zebra_mlag_process_mlag_data(uint8_t *data, uint32_t len)
 		msg_type = zebra_mlag_protobuf_decode_message(&s, data, len);
 	}
 
-	if (msg_type == 0) {
+	if (msg_type <= 0) {
 		/* Something went wrong in decoding */
 		stream_free(s);
+		zlog_err("%s: failed to process mlag data-%d, %u", __FUNCTION__,
+			 msg_type, len);
 		return;
 	}
 
@@ -932,6 +934,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 	struct mlag_msg mlag_msg;
 	uint8_t tmp_buf[ZEBRA_MLAG_BUF_LIMIT];
 	int len = 0;
+	int n_len = 0;
 	int rc = 0;
 	char buf[80];
 
@@ -1145,7 +1148,23 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		memcpy(hdr.data.data, tmp_buf, len);
 	}
 
-	len = zebra_mlag__header__pack(&hdr, mlag_wr_buffer);
+	/*
+	 * ProtoBuf Infra will not support to demarc the pointers whem multiple
+	 * mesasges  are posted inside a single Buffer.
+	 * 2 -sloutions exist to solve this
+	 * 1. add Unenoced length at the begining of every message, this will
+	 *    be used to point to next mesasge in the buffer
+	 * 2. another solution is defining all messages insides another message
+	 *    But this will permit only 32 messages. this can be extended with
+	 *    multiple levels.
+	 * for simplicity we are going with solution-1.
+	 */
+	len = zebra_mlag__header__pack(&hdr,
+				       (mlag_wr_buffer + ZEBRA_MLAG_LEN_SIZE));
+	n_len = htons(len);
+	memcpy(mlag_wr_buffer, &n_len, ZEBRA_MLAG_LEN_SIZE);
+	len += ZEBRA_MLAG_LEN_SIZE;
+
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug(
 			"%s: length of Mlag ProtoBuf encoding of message:%s "
@@ -1213,9 +1232,11 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			stream_putw(*s, MLAG_STATUS_MSGSIZE);
 			/* No Batching */
 			stream_putw(*s, MLAG_MSG_NO_BATCH);
-			/* Actual Data */
+			/* Peerlink Name */
+			stream_put(*s, msg->peerlink, VRF_NAMSIZ);
 			stream_putl(*s, msg->my_role);
 			stream_putl(*s, msg->peer_state);
+			stream_putl(*s, msg->anycast_ip);
 			zebra_mlag_status_update__free_unpacked(msg, NULL);
 		} break;
 		case ZEBRA_MLAG__HEADER__MESSAGE_TYPE__ZEBRA_MLAG_MROUTE_ADD: {
