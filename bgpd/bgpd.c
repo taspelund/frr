@@ -6168,8 +6168,15 @@ int peer_route_map_set(struct peer *peer, afi_t afi, safi_t safi, int direct,
 
 	/* Set configuration on peer. */
 	filter = &peer->filter[afi][safi];
-	if (filter->map[direct].name)
+	if (filter->map[direct].name) {
+		/* If the neighbor is configured with the same route-map
+		 * again then, ignore the duplicate configuration.
+		 */
+		if (strcmp(filter->map[direct].name, name) == 0)
+			return 0;
+
 		XFREE(MTYPE_BGP_FILTER_NAME, filter->map[direct].name);
+	}
 	filter->map[direct].name = XSTRDUP(MTYPE_BGP_FILTER_NAME, name);
 	filter->map[direct].map = route_map;
 
