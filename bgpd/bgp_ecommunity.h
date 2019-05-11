@@ -21,6 +21,8 @@
 #ifndef _QUAGGA_BGP_ECOMMUNITY_H
 #define _QUAGGA_BGP_ECOMMUNITY_H
 
+#include "bgpd/bgpd.h"
+
 /* High-order octet of the Extended Communities type field.  */
 #define ECOMMUNITY_ENCODE_AS                0x00
 #define ECOMMUNITY_ENCODE_IP                0x01
