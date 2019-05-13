@@ -31,11 +31,6 @@
 #endif
 
 #define ZEBRA_MLAG_BUF_LIMIT 2048
-/*
- * MLAG Supports maximum 2048 Bytes, so uint16_t is sufficient to process
- * the data
- */
-#define ZEBRA_MLAG_LEN_SIZE 2
 
 extern uint8_t mlag_wr_buffer[ZEBRA_MLAG_BUF_LIMIT];
 extern uint8_t mlag_rd_buffer[ZEBRA_MLAG_BUF_LIMIT];

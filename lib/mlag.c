@@ -50,9 +50,6 @@ char *zebra_mlag_lib_msgid_to_str(enum mlag_msg_type msg_type, char *buf,
 	case MLAG_DEREGISTER:
 		snprintf(buf, size, "De-Register");
 		break;
-	case MLAG_STATUS_UPDATE:
-		snprintf(buf, size, "MLAG Status");
-		break;
 	case MLAG_MROUTE_ADD:
 		snprintf(buf, size, "Mroute add");
 		break;

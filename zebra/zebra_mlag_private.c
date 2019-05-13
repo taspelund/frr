@@ -70,9 +70,6 @@ int zebra_mlag_private_write_data(uint8_t *data, uint32_t len)
 static int zebra_mlag_read(struct thread *thread)
 {
 	int data_len;
-	uint16_t msglen;
-	uint16_t h_msglen;
-	uint16_t offset = 0;
 
 	/*
 	 * The read currently ends with a `\n` so let's make sure
@@ -96,27 +93,7 @@ static int zebra_mlag_read(struct thread *thread)
 		zlog_hexdump(mlag_rd_buffer, data_len);
 	}
 
-	/*
-	 * Received message looks like below
-	 * | len-1 (2 Bytes) | payload-1 (len-1) |
-	 *   len-2 (2 Bytes) | payload-2 (len-2) | ..
-	 */
-	while (data_len > 0) {
-		memcpy(&msglen, mlag_rd_buffer + offset, ZEBRA_MLAG_LEN_SIZE);
-		h_msglen = ntohs(msglen);
-		offset += ZEBRA_MLAG_LEN_SIZE;
-
-		if (IS_ZEBRA_DEBUG_MLAG) {
-			zlog_debug(
-				"Processing a MLAG Message with len:%d "
-				"offset:%d",
-				h_msglen, offset);
-			zlog_hexdump(mlag_rd_buffer + offset, h_msglen);
-		}
-		zebra_mlag_process_mlag_data(mlag_rd_buffer + offset, h_msglen);
-		offset += h_msglen;
-		data_len -= (h_msglen + ZEBRA_MLAG_LEN_SIZE);
-	}
+	zebra_mlag_process_mlag_data(mlag_rd_buffer, data_len);
 
 	zrouter.mlag_info.t_read = NULL;
 	thread_add_read(zmlag_master, zebra_mlag_read, NULL, mlag_socket,
