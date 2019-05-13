@@ -30,6 +30,7 @@
 extern struct zclient *zclient;
 
 #define PIM_MLAG_METADATA_LEN 4
+static char pimMlagEmptyIf[INTERFACE_NAMSIZ];
 
 /*********************ACtual Data processing *****************************/
 /* TBD: There can be duplicate updates to FIB***/
@@ -413,7 +414,6 @@ static void pim_mlag_up_local_add_send(struct pim_instance *pim,
 {
 	struct stream *s = NULL;
 	struct vrf *vrf = pim->vrf;
-	char *ifName[INTERFACE_NAMSIZ];
 
 	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP))
 		return;
@@ -441,8 +441,7 @@ static void pim_mlag_up_local_add_send(struct pim_instance *pim,
 	stream_putc(s, !(PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags)));
 	stream_putl(s, vrf->vrf_id);
 	/* XXX - temp. this field should be removed. */
-	ifName[0] = 0;
-	stream_put(s, ifName, INTERFACE_NAMSIZ);
+	stream_put(s, pimMlagEmptyIf, INTERFACE_NAMSIZ);
 
 	stream_fifo_push_safe(router->mlag_fifo, s);
 	pim_mlag_signal_zpthread();
@@ -453,7 +452,6 @@ static void pim_mlag_up_local_del_send(struct pim_instance *pim,
 {
 	struct stream *s = NULL;
 	struct vrf *vrf = pim->vrf;
-	char *ifName[INTERFACE_NAMSIZ];
 
 	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP))
 		return;
@@ -476,8 +474,7 @@ static void pim_mlag_up_local_del_send(struct pim_instance *pim,
 	stream_putl(s, 0);
 	stream_putl(s, vrf->vrf_id);
 	/* XXX - temp. this field should be removed. */
-	ifName[0] = 0;
-	stream_put(s, ifName, INTERFACE_NAMSIZ);
+	stream_put(s, pimMlagEmptyIf, INTERFACE_NAMSIZ);
 
 	/* XXX - is this the the most optimal way to do things */
 	stream_fifo_push_safe(router->mlag_fifo, s);
@@ -834,7 +831,8 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 
 	++router->mlag_stats.msg.mroute_add_rx;
 
-	if (!msg.intf_name[0]) {
+	if (!msg.intf_name[0] ||
+		!strcmp(msg.intf_name, PIM_VXLAN_TERM_DEV_NAME)) {
 		pim_mlag_up_remote_add(&msg);
 		return;
 	}
@@ -890,7 +888,8 @@ static void pim_mlag_process_mroute_del(struct mlag_mroute_del msg)
 
 	++router->mlag_stats.msg.mroute_del_rx;
 
-	if (!msg.intf_name[0]) {
+	if (!msg.intf_name[0] ||
+		!strcmp(msg.intf_name, PIM_VXLAN_TERM_DEV_NAME)) {
 		pim_mlag_up_remote_del(&msg);
 		return;
 	}
@@ -1200,6 +1199,8 @@ void pim_instance_mlag_terminate(struct pim_instance *pim)
 
 void pim_mlag_init(void)
 {
+	memset(pimMlagEmptyIf, 0, sizeof(pimMlagEmptyIf));
+	strcpy(pimMlagEmptyIf, PIM_VXLAN_TERM_DEV_NAME);
 	pim_mlag_param_reset();
 	router->pim_mlag_intf_cnt = 0;
 	router->connected_to_mlag = false;
