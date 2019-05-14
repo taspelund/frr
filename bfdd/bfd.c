@@ -858,7 +858,7 @@ static struct hash *bfd_mhop_hash;
 static struct hash *bfd_vrf_hash;
 static struct hash *bfd_iface_hash;
 
-static unsigned int bfd_id_hash_do(void *p);
+static unsigned int bfd_id_hash_do(const void *p);
 static unsigned int bfd_shop_hash_do(void *p);
 static unsigned int bfd_mhop_hash_do(void *p);
 static unsigned int bfd_vrf_hash_do(void *p);
@@ -875,9 +875,9 @@ static void _vrf_free(void *arg);
 static void _iface_free(void *arg);
 
 /* BFD hash for our discriminator. */
-static unsigned int bfd_id_hash_do(void *p)
+static unsigned int bfd_id_hash_do(const void *p)
 {
-	struct bfd_session *bs = p;
+	const struct bfd_session *bs = p;
 
 	return jhash_1word(bs->discrs.my_discr, 0);
 }
@@ -907,7 +907,7 @@ static bool bfd_shop_hash_cmp(const void *n1, const void *n2)
 /* BFD hash for multi hop. */
 static unsigned int bfd_mhop_hash_do(void *p)
 {
-	struct bfd_session *bs = p;
+	const struct bfd_session *bs = p;
 
 	return jhash(&bs->mhop, sizeof(bs->mhop), 0);
 }
