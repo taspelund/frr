@@ -68,6 +68,9 @@ char *zebra_mlag_lib_msgid_to_str(enum mlag_msg_type msg_type, char *buf,
 	case MLAG_PIM_STATUS_UPDATE:
 		snprintf(buf, size, "Mlag PIM Status");
 		break;
+	case MLAG_VXLAN_UPDATE:
+		snprintf(buf, size, "Mlag vxlan update");
+		break;
 	default:
 		snprintf(buf, size, "Unknown");
 		break;
@@ -147,8 +150,21 @@ int zebra_mlag_lib_decode_mlag_status(struct stream *s, struct mlag_status *msg)
 	STREAM_GET(msg->peerlink_rif, s, INTERFACE_NAMSIZ);
 	STREAM_GETL(s, msg->my_role);
 	STREAM_GETL(s, msg->peer_state);
-	STREAM_GETL(s, msg->anycast_ip);
 	return (0);
 stream_failure:
 	return (-1);
+}
+
+int zebra_mlag_lib_decode_vxlan_update(struct stream *s,
+		struct mlag_vxlan *msg)
+{
+	if (s == NULL || msg == NULL)
+		return -1;
+
+	STREAM_GETL(s, msg->anycast_ip);
+	STREAM_GETL(s, msg->local_ip);
+	return 0;
+
+stream_failure:
+	return -1;
 }

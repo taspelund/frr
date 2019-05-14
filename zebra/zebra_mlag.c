@@ -1219,6 +1219,25 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			stream_putl(*s, msg->peer_state);
 			zebra_mlag_status_update__free_unpacked(msg, NULL);
 		} break;
+		case ZEBRA_MLAG__HEADER__MESSAGE_TYPE__ZEBRA_MLAG_VXLAN_UPDATE: {
+			ZebraMlagVxlanUpdate *msg = NULL;
+
+			msg = zebra_mlag_vxlan_update__unpack(
+				NULL, hdr->data.len, hdr->data.data);
+			if (msg == NULL) {
+				zebra_mlag__header__free_unpacked(hdr,
+						NULL);
+				return (-1);
+			}
+			/* Payload len */
+			stream_putw(*s, MLAG_VXLAN_MSGSIZE);
+			/* No Batching */
+			stream_putw(*s, MLAG_MSG_NO_BATCH);
+			/* Actual Data */
+			stream_putl(*s, msg->anycast_ip);
+			stream_putl(*s, msg->local_ip);
+			zebra_mlag_vxlan_update__free_unpacked(msg, NULL);
+		} break;
 		case ZEBRA_MLAG__HEADER__MESSAGE_TYPE__ZEBRA_MLAG_MROUTE_ADD: {
 			ZebraMlagMrouteAdd *msg = NULL;
 			msg = zebra_mlag_mroute_add__unpack(NULL, hdr->data.len,
