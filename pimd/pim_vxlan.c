@@ -548,6 +548,30 @@ static void pim_vxlan_term_mr_oif_del(struct pim_vxlan_sg *vxlan_sg)
 	pim_ifchannel_local_membership_del(vxlan_sg->term_oif, &vxlan_sg->sg);
 }
 
+static void pim_vxlan_update_sg_mlag(struct pim_instance *pim,
+		struct pim_upstream *up, bool enable)
+{
+	struct listnode *listnode;
+	struct pim_upstream *child;
+
+	for (ALL_LIST_ELEMENTS_RO(up->sources, listnode,
+				child)) {
+		if (enable) {
+			if (PIM_DEBUG_VXLAN)
+				zlog_debug("upstream %s inherited mlag vxlan flag from parent",
+						up->sg_str);
+			PIM_UPSTREAM_FLAG_SET_MLAG_VXLAN(child->flags);
+			pim_mlag_up_local_add(pim, child);
+		} else {
+			if (PIM_DEBUG_VXLAN)
+				zlog_debug("upstream %s cleared mlag vxlan flag; parent chg",
+						up->sg_str);
+			PIM_UPSTREAM_FLAG_UNSET_MLAG_VXLAN(child->flags);
+			pim_mlag_up_local_del(pim, child);
+		}
+	}
+}
+
 static void pim_vxlan_term_mr_up_add(struct pim_vxlan_sg *vxlan_sg)
 {
 	struct pim_upstream *up;
@@ -574,7 +598,11 @@ static void pim_vxlan_term_mr_up_add(struct pim_vxlan_sg *vxlan_sg)
 	if (!up) {
 		zlog_warn("vxlan SG %s term mroute-up add failed",
 			vxlan_sg->sg_str);
+		return;
 	}
+
+	/* update existing SG entries with the parent's MLAG flag */
+	pim_vxlan_update_sg_mlag(vxlan_sg->pim, up, true /*enable*/);
 }
 
 static void pim_vxlan_term_mr_up_del(struct pim_vxlan_sg *vxlan_sg)
@@ -589,6 +617,8 @@ static void pim_vxlan_term_mr_up_del(struct pim_vxlan_sg *vxlan_sg)
 			vxlan_sg->sg_str);
 	vxlan_sg->up = NULL;
 	if (up->flags & PIM_UPSTREAM_FLAG_MASK_SRC_VXLAN_TERM) {
+		/* update SG entries that are inheriting from this XG entry */
+		pim_vxlan_update_sg_mlag(vxlan_sg->pim, up, false /*enable*/);
 		/* clear out all the vxlan related flags */
 		up->flags &= ~(PIM_UPSTREAM_FLAG_MASK_SRC_VXLAN_TERM |
 			PIM_UPSTREAM_FLAG_MASK_MLAG_VXLAN);

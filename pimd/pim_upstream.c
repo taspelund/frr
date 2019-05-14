@@ -174,6 +174,9 @@ struct pim_upstream *pim_upstream_del(struct pim_instance *pim,
 	if (up->ref_count >= 1)
 		return up;
 
+	if (pim_up_mlag_is_local(up))
+		pim_mlag_up_local_del(pim, up);
+
 	THREAD_OFF(up->t_ka_timer);
 	THREAD_OFF(up->t_rs_timer);
 	THREAD_OFF(up->t_msdp_reg_timer);
@@ -772,6 +775,18 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 	}
 
 	listnode_add_sort(pim->upstream_list, up);
+
+	/* If (S, G) inherit the MLAG_VXLAN from the parent
+	 * (*, G) entry.
+	 */
+	if ((up->sg.src.s_addr != INADDR_ANY) &&
+		up->parent &&
+		PIM_UPSTREAM_FLAG_TEST_MLAG_VXLAN(up->parent->flags)) {
+		PIM_UPSTREAM_FLAG_SET_MLAG_VXLAN(up->flags);
+		if (PIM_DEBUG_VXLAN)
+			zlog_debug("upstream %s inherited mlag vxlan flag from parent",
+					up->sg_str);
+	}
 
 	/* send the entry to the MLAG peer */
 	/* XXX - duplicate send is possible here if pim_rpf_update
