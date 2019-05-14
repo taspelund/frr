@@ -548,6 +548,17 @@ static void pim_mlag_up_local_reeval(bool mlagd_send, const char *reason_code)
 
 /*****************PIM Actions for MLAG state chnages**********************/
 
+/* notify the anycast VTEP component about state changes */
+static inline void pim_mlag_vxlan_state_update(void)
+{
+	bool enable = !!(router->mlag_flags & PIM_MLAGF_STATUS_RXED);
+	bool peer_state = !!(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP);
+
+	pim_vxlan_mlag_update(enable, peer_state, router->mlag_role,
+			router->peerlink_rif_p, &router->local_vtep_ip);
+
+}
+
 void pim_mlag_update_dr_state_to_peer(struct interface *ifp)
 {
 	struct pim_interface *pim_ifp = ifp->info;
@@ -678,6 +689,8 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 {
 	bool role_chg = false;
 	bool state_chg = false;
+	bool notify_vxlan = false;
+	struct interface *peerlink_rif_p;
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: msg dump: my_role:%d, peer_state:%d",
@@ -694,14 +707,24 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 	/* evaluate the changes first */
 	if (router->mlag_role != msg.my_role) {
 		role_chg = true;
+		notify_vxlan = true;
 		router->mlag_role = msg.my_role;
 	}
 
 	strcpy(router->peerlink_rif, msg.peerlink_rif);
+	/* XXX - handle the case where we may rx the interface name from the
+	 * MLAG daemon before we get the interface from zebra.
+	 */
+	peerlink_rif_p = if_lookup_by_name(router->peerlink_rif, VRF_DEFAULT);
+	if (router->peerlink_rif_p != peerlink_rif_p) {
+		router->peerlink_rif_p = peerlink_rif_p;
+		notify_vxlan = true;
+	}
 
 	if (msg.peer_state == MLAG_STATE_RUNNING) {
 		if (!(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)) {
 			state_chg = true;
+			notify_vxlan = true;
 			router->mlag_flags |= PIM_MLAGF_REMOTE_CONN_UP;
 		}
 		router->connected_to_mlag = true;
@@ -709,6 +732,7 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 		if (router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP) {
 			++router->mlag_stats.peer_session_downs;
 			state_chg = true;
+			notify_vxlan = true;
 			router->mlag_flags &= ~PIM_MLAGF_REMOTE_CONN_UP;
 		}
 		router->connected_to_mlag = false;
@@ -722,12 +746,16 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 	 */
 	if (!(router->mlag_flags & PIM_MLAGF_STATUS_RXED)) {
 		router->mlag_flags |= PIM_MLAGF_STATUS_RXED;
+		pim_mlag_vxlan_state_update();
 		/* on session up re-eval DF status */
 		pim_mlag_up_local_reeval(false /*mlagd_send*/, "mlagd_up");
 		/* replay all the upstream entries to the local MLAG daemon */
 		pim_mlag_up_local_replay();
 		return;
 	}
+
+	if (notify_vxlan)
+		pim_mlag_vxlan_state_update();
 
 	if (state_chg) {
 		if (!(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)) {
@@ -743,18 +771,17 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 		 */
 		pim_mlag_up_local_reeval(true /*mlagd_send*/,
 				"peer_up");
-		return;
-	}
-
-	/* MLAG role changed without a state change */
-	if (role_chg)
+	} else if (role_chg) {
+		/* MLAG role changed without a state change */
 		pim_mlag_up_local_reeval(true /*mlagd_send*/, "role_chg");
+	}
 }
 
 static void pim_mlag_process_vxlan_update(struct mlag_vxlan *msg)
 {
 	char addr_buf1[INET_ADDRSTRLEN];
 	char addr_buf2[INET_ADDRSTRLEN];
+	uint32_t local_ip;
 
 	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
 		if (PIM_DEBUG_MLAG)
@@ -765,7 +792,11 @@ static void pim_mlag_process_vxlan_update(struct mlag_vxlan *msg)
 
 	++router->mlag_stats.msg.vxlan_updates;
 	router->anycast_vtep_ip.s_addr = htonl(msg->anycast_ip);
-	router->local_vtep_ip.s_addr = htonl(msg->local_ip);
+	local_ip = htonl(msg->local_ip);
+	if (router->local_vtep_ip.s_addr != local_ip) {
+		router->local_vtep_ip.s_addr = local_ip;
+		pim_mlag_vxlan_state_update();
+	}
 
 	if (PIM_DEBUG_MLAG) {
 		inet_ntop(AF_INET, &router->local_vtep_ip,
@@ -1006,6 +1037,8 @@ int pim_zebra_mlag_process_down(void)
 	pim_mlag_up_local_reeval(false /*mlagd_send*/, "mlagd_down");
 	/* flush all remote references */
 	pim_mlag_up_remote_del_all();
+	/* notify the vxlan component */
+	pim_mlag_vxlan_state_update();
 	thread_add_event(router->master, pim_mlag_down_handler, NULL, 0, NULL);
 	return (0);
 }

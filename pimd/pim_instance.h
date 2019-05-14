@@ -114,6 +114,7 @@ struct pim_router {
 	struct pim_mlag_stats mlag_stats;
 	enum pim_mlag_flags mlag_flags;
 	char peerlink_rif[INTERFACE_NAMSIZ];
+	struct interface *peerlink_rif_p;
 };
 
 /* Per VRF PIM DB */
