@@ -73,7 +73,7 @@ enum mlag_msg_type {
 };
 
 struct mlag_status {
-	char peerlink_name[VRF_NAMSIZ];
+	char peerlink_rif[INTERFACE_NAMSIZ];
 	enum mlag_role my_role;
 	enum mlag_state peer_state;
 	uint32_t anycast_ip;

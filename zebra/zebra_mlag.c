@@ -1214,6 +1214,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			/* No Batching */
 			stream_putw(*s, MLAG_MSG_NO_BATCH);
 			/* Actual Data */
+			stream_put(*s, msg->peerlink, INTERFACE_NAMSIZ);
 			stream_putl(*s, msg->my_role);
 			stream_putl(*s, msg->peer_state);
 			zebra_mlag_status_update__free_unpacked(msg, NULL);

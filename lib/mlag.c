@@ -144,7 +144,7 @@ int zebra_mlag_lib_decode_mlag_status(struct stream *s, struct mlag_status *msg)
 	if (s == NULL || msg == NULL)
 		return (-1);
 
-	STREAM_GET(msg->peerlink_name, s, VRF_NAMSIZ);
+	STREAM_GET(msg->peerlink_rif, s, INTERFACE_NAMSIZ);
 	STREAM_GETL(s, msg->my_role);
 	STREAM_GETL(s, msg->peer_state);
 	STREAM_GETL(s, msg->anycast_ip);
