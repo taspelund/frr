@@ -24,6 +24,7 @@
 #include "pim_mlag.h"
 #include "pim_zebra.h"
 #include "pim_oil.h"
+#include "pim_upstream.h"
 #include "pim_vxlan.h"
 
 extern struct zclient *zclient;
@@ -183,6 +184,368 @@ void pim_mlag_del_entry_to_peer(struct pim_ifchannel *ch)
 
 /******************End of posting local data to peer ********************/
 
+/******************************* pim upstream sync **************************/
+/* Update DF role for the upstream entry and return true on role change */
+static bool pim_mlag_up_df_role_update(struct pim_upstream *up,
+		bool is_df, const char *reason)
+{
+	struct channel_oil *c_oil = up->channel_oil;
+	bool old_is_df = !PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags);
+
+	if (is_df == old_is_df)
+		return false;
+
+	if (PIM_DEBUG_MLAG)
+		zlog_debug("local MLAG mroute %s role changed to %s based on %s",
+				up->sg_str, is_df ? "df" : "non-df", reason);
+
+	if (is_df)
+		PIM_UPSTREAM_FLAG_UNSET_MLAG_NON_DF(up->flags);
+	else
+		PIM_UPSTREAM_FLAG_SET_MLAG_NON_DF(up->flags);
+
+	/* If the DF role has changed re-install OIL. Active-Active devices
+	 * and vxlan termination device (ipmr-lo) are suppressed on the non-DF.
+	 * This may leave the mroute with the empty OIL in which case the
+	 * the forwarding entry's sole purpose is to just blackhole the flow
+	 * headed to the switch.
+	 */
+	if (c_oil && c_oil->installed)
+		pim_mroute_add(c_oil, __PRETTY_FUNCTION__);
+	return true;
+}
+
+/* Run per-upstream entry DF election and return true on role change */
+static bool pim_mlag_up_df_role_elect(struct pim_upstream *up)
+{
+	bool is_df;
+	uint32_t remote_cost;
+	uint32_t local_cost;
+	bool rv;
+
+	if (!pim_up_mlag_is_local(up))
+		return false;
+
+	/* We are yet to rx a status update from the local MLAG daemon so
+	 * we will assume DF status.
+	 */
+	if (!(router->mlag_flags & PIM_MLAGF_STATUS_RXED))
+		return pim_mlag_up_df_role_update(up,
+				true /*is_df*/, "mlagd-down");
+
+	/* If not connected to peer assume DF role on the MLAG primary
+	 * switch (and non-DF on the secondary switch.
+	 */
+	if (!(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)) {
+		is_df = (router->mlag_role == MLAG_ROLE_PRIMARY) ? true : false;
+		return pim_mlag_up_df_role_update(up,
+				is_df, "peer-down");
+	}
+
+	/* If we are connected to peer switch but don't have a mroute
+	 * from it we have to assume non-DF role to avoid duplicates.
+	 * Note: When the peer connection comes up we wait for initial
+	 * replay to complete before moving "strays" i.e. local-mlag-mroutes
+	 * without a remote reference to non-df role.
+	 */
+	if (!PIM_UPSTREAM_FLAG_TEST_MLAG_PEER(up->flags))
+		return pim_mlag_up_df_role_update(up,
+				false /*is_df*/, "no-peer-mroute");
+
+	/* switch with the lowest RPF cost wins. if both switches have the same
+	 * cost MLAG role is used as a tie breaker (MLAG primary wins).
+	 */
+	remote_cost = up->mlag.peer_mrib_metric;
+	local_cost = pim_up_mlag_local_cost(up);
+	if (local_cost == remote_cost) {
+		is_df = (router->mlag_role == MLAG_ROLE_PRIMARY) ? true : false;
+		rv = pim_mlag_up_df_role_update(up, is_df, "equal-cost");
+	} else {
+		is_df = (local_cost < remote_cost) ? true : false;
+		rv = pim_mlag_up_df_role_update(up, is_df, "cost");
+	}
+
+	return rv;
+}
+
+/* Handle upstream entry add from the peer MLAG switch -
+ * - if a local entry doesn't exist one is created with reference
+ *   _MLAG_PEER
+ * - if a local entry exists and has a MLAG OIF DF election is run.
+ *   the non-DF switch stop forwarding traffic to MLAG devices.
+ */
+static void pim_mlag_up_remote_add(struct mlag_mroute_add *msg)
+{
+	struct pim_upstream *up;
+	struct pim_instance *pim;
+	int flags = 0;
+	struct prefix_sg sg;
+	struct vrf *vrf;
+	char sg_str[PIM_SG_LEN];
+
+	memset(&sg, 0, sizeof(struct prefix_sg));
+	sg.src.s_addr = htonl(msg->source_ip);
+	sg.grp.s_addr = htonl(msg->group_ip);
+	if (PIM_DEBUG_MLAG)
+		pim_str_sg_set(&sg, sg_str);
+
+	if (PIM_DEBUG_MLAG)
+		zlog_debug("remote MLAG mroute add %s:%s cost %d",
+			msg->vrf_name, sg_str, msg->cost_to_rp);
+
+	/* XXX - this is not correct. we MUST cache updates to avoid losing
+	 * an entry because of race conditions with the peer switch.
+	 */
+	vrf = vrf_lookup_by_name(msg->vrf_name);
+	if  (!vrf) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug("remote MLAG mroute add failed %s:%s; no vrf",
+					msg->vrf_name, sg_str);
+		return;
+	}
+	pim = vrf->info;
+
+	up = pim_upstream_find(pim, &sg);
+	if (up) {
+		/* upstream already exists; create peer reference if it
+		 * doesn't already exist.
+		 */
+		if (!PIM_UPSTREAM_FLAG_TEST_MLAG_PEER(up->flags))
+			pim_upstream_ref(pim, up,
+					PIM_UPSTREAM_FLAG_MASK_MLAG_PEER,
+					__PRETTY_FUNCTION__);
+	} else {
+		PIM_UPSTREAM_FLAG_SET_MLAG_PEER(flags);
+		up = pim_upstream_add(pim, &sg, NULL /*iif*/, flags,
+				__PRETTY_FUNCTION__, NULL /*if_ch*/);
+
+		if (!up) {
+			if (PIM_DEBUG_MLAG)
+				zlog_debug("remote MLAG mroute add failed %s:%s",
+						vrf->name, sg_str);
+			return;
+		}
+	}
+	up->mlag.peer_mrib_metric = msg->cost_to_rp;
+	pim_mlag_up_df_role_elect(up);
+}
+
+/* Handle upstream entry del from the peer MLAG switch -
+ * - peer reference is removed. this can result in the upstream
+ *   being deleted altogether.
+ * - if a local entry continues to exisy and has a MLAG OIF DF election
+ *   is re-run (at the end of which the local entry will be the DF).
+ */
+static void pim_mlag_up_remote_deref(struct pim_instance *pim,
+		struct pim_upstream *up)
+{
+	if (!PIM_UPSTREAM_FLAG_TEST_MLAG_PEER(up->flags))
+		return;
+
+	PIM_UPSTREAM_FLAG_UNSET_MLAG_PEER(up->flags);
+	up = pim_upstream_del(pim, up, __PRETTY_FUNCTION__);
+	if (up)
+		pim_mlag_up_df_role_elect(up);
+}
+static void pim_mlag_up_remote_del(struct mlag_mroute_del *msg)
+{
+	struct pim_upstream *up;
+	struct pim_instance *pim;
+	struct prefix_sg sg;
+	struct vrf *vrf;
+	char sg_str[PIM_SG_LEN];
+
+	memset(&sg, 0, sizeof(struct prefix_sg));
+	sg.src.s_addr = htonl(msg->source_ip);
+	sg.grp.s_addr = htonl(msg->group_ip);
+	if (PIM_DEBUG_MLAG)
+		pim_str_sg_set(&sg, sg_str);
+
+	if (PIM_DEBUG_MLAG)
+		zlog_debug("remote MLAG mroute del %s:%s", msg->vrf_name,
+				sg_str);
+
+	vrf = vrf_lookup_by_name(msg->vrf_name);
+	if  (!vrf) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug("remote MLAG mroute del skipped %s:%s; no vrf",
+					msg->vrf_name, sg_str);
+		return;
+	}
+	pim = vrf->info;
+
+	up = pim_upstream_find(pim, &sg);
+	if  (!up) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug("remote MLAG mroute del skipped %s:%s; no up",
+					vrf->name, sg_str);
+		return;
+	}
+
+	pim_mlag_up_remote_deref(pim, up);
+}
+
+/* When we lose connection to the local MLAG daemon we can drop all remote
+ * references.
+ */
+static void pim_mlag_up_remote_del_all(void)
+{
+	struct listnode *upnode;
+	struct listnode *nextnode;
+	struct pim_upstream *up;
+	struct vrf *vrf;
+	struct pim_instance *pim;
+
+	RB_FOREACH(vrf, vrf_name_head, &vrfs_by_name) {
+		pim = vrf->info;
+		for (ALL_LIST_ELEMENTS(pim->upstream_list, upnode,
+			nextnode, up)) {
+			pim_mlag_up_remote_deref(pim, up);
+		}
+	}
+}
+
+/* Send upstream entry to the local MLAG daemon (which will subsequently
+ * send it to the peer MLAG switch).
+ */
+static void pim_mlag_up_local_add_send(struct pim_instance *pim,
+		struct pim_upstream *up)
+{
+	struct stream *s = NULL;
+	struct vrf *vrf = pim->vrf;
+	char *ifName[INTERFACE_NAMSIZ];
+
+	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP))
+		return;
+
+	s = stream_new(MLAG_MROUTE_ADD_MSGSIZE + PIM_MLAG_METADATA_LEN);
+	if (!s)
+		return;
+
+	if (PIM_DEBUG_MLAG)
+		zlog_debug("local MLAG mroute add %s:%s",
+				vrf->name, up->sg_str);
+
+	++router->mlag_stats.msg.mroute_add_tx;
+
+	stream_putl(s, MLAG_MROUTE_ADD);
+	stream_put(s, vrf->name, VRF_NAMSIZ);
+	stream_putl(s, ntohl(up->sg.src.s_addr));
+	stream_putl(s, ntohl(up->sg.grp.s_addr));
+
+	stream_putl(s, pim_up_mlag_local_cost(up));
+	/* XXX - VNI field should be removed */
+	stream_putl(s, 0);
+	/* XXX - am_i_DR field should be removed */
+	stream_putc(s, false);
+	stream_putc(s, !(PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags)));
+	stream_putl(s, vrf->vrf_id);
+	/* XXX - temp. this field should be removed. */
+	ifName[0] = 0;
+	stream_put(s, ifName, INTERFACE_NAMSIZ);
+
+	stream_fifo_push_safe(router->mlag_fifo, s);
+	pim_mlag_signal_zpthread();
+}
+
+static void pim_mlag_up_local_del_send(struct pim_instance *pim,
+		struct pim_upstream *up)
+{
+	struct stream *s = NULL;
+	struct vrf *vrf = pim->vrf;
+	char *ifName[INTERFACE_NAMSIZ];
+
+	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP))
+		return;
+
+	s = stream_new(MLAG_MROUTE_DEL_MSGSIZE + PIM_MLAG_METADATA_LEN);
+	if (!s)
+		return;
+
+	if (PIM_DEBUG_MLAG)
+		zlog_debug("local MLAG mroute del %s:%s",
+				vrf->name, up->sg_str);
+
+	++router->mlag_stats.msg.mroute_del_tx;
+
+	stream_putl(s, MLAG_MROUTE_DEL);
+	stream_put(s, vrf->name, VRF_NAMSIZ);
+	stream_putl(s, ntohl(up->sg.src.s_addr));
+	stream_putl(s, ntohl(up->sg.grp.s_addr));
+	/* XXX - VNI field should be removed */
+	stream_putl(s, 0);
+	stream_putl(s, vrf->vrf_id);
+	/* XXX - temp. this field should be removed. */
+	ifName[0] = 0;
+	stream_put(s, ifName, INTERFACE_NAMSIZ);
+
+	/* XXX - is this the the most optimal way to do things */
+	stream_fifo_push_safe(router->mlag_fifo, s);
+	pim_mlag_signal_zpthread();
+}
+
+
+/* Called when a local upstream entry is created or if it's cost changes */
+void pim_mlag_up_local_add(struct pim_instance *pim,
+		struct pim_upstream *up)
+{
+	pim_mlag_up_df_role_elect(up);
+	/* XXX - need to add some dup checks here */
+	pim_mlag_up_local_add_send(pim, up);
+}
+
+/* Called when local MLAG reference is removed from an upstream entry */
+void pim_mlag_up_local_del(struct pim_instance *pim,
+		struct pim_upstream *up)
+{
+	pim_mlag_up_df_role_elect(up);
+	pim_mlag_up_local_del_send(pim, up);
+}
+
+/* When connection to local MLAG daemon is established all the local
+ * MLAG upstream entries are replayed to it.
+ */
+static void pim_mlag_up_local_replay(void)
+{
+	struct listnode *upnode;
+	struct pim_upstream *up;
+	struct vrf *vrf;
+	struct pim_instance *pim;
+
+	RB_FOREACH(vrf, vrf_name_head, &vrfs_by_name) {
+		pim = vrf->info;
+		for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
+			if (pim_up_mlag_is_local(up))
+				pim_mlag_up_local_add_send(pim, up);
+		}
+	}
+}
+
+/* on local/remote mlag connection and role changes the DF status needs
+ * to be re-evaluated
+ */
+static void pim_mlag_up_local_reeval(bool mlagd_send, const char *reason_code)
+{
+	struct listnode *upnode;
+	struct pim_upstream *up;
+	struct vrf *vrf;
+	struct pim_instance *pim;
+
+	if (PIM_DEBUG_MLAG)
+		zlog_debug("%s re-run DF election because of %s",
+				__func__, reason_code);
+	RB_FOREACH(vrf, vrf_name_head, &vrfs_by_name) {
+		pim = vrf->info;
+		for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
+			if (!pim_up_mlag_is_local(up))
+				continue;
+			/* if role changes re-send to peer */
+			if (pim_mlag_up_df_role_elect(up) && mlagd_send)
+				pim_mlag_up_local_add_send(pim, up);
+		}
+	}
+}
+
 /*****************PIM Actions for MLAG state chnages**********************/
 
 void pim_mlag_update_dr_state_to_peer(struct interface *ifp)
@@ -313,38 +676,92 @@ static int pim_mlag_local_up_handler(struct thread *thread)
 
 static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 {
+	bool role_chg = false;
+	bool state_chg = false;
+
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: msg dump: my_role:%d, peer_state:%d",
 			   __FUNCTION__, msg.my_role, msg.peer_state);
 
+	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug("%s: msg ignored mlagd process state down",
+					__func__);
+		return;
+	}
 	++router->mlag_stats.msg.mlag_status_updates;
-	router->mlag_role = msg.my_role;
+
+	/* evaluate the changes first */
+	if (router->mlag_role != msg.my_role) {
+		role_chg = true;
+		router->mlag_role = msg.my_role;
+	}
+
 	strcpy(router->peerlink_rif, msg.peerlink_rif);
-	/*
-	 * This can be receieed when Peer clag down/peerlink failure.
-	 */
-	if (msg.peer_state == MLAG_STATE_DOWN) {
-		if (router->connected_to_mlag)
+
+	if (msg.peer_state == MLAG_STATE_RUNNING) {
+		if (!(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)) {
+			state_chg = true;
+			router->mlag_flags |= PIM_MLAGF_REMOTE_CONN_UP;
+		}
+		router->connected_to_mlag = true;
+	} else {
+		if (router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP) {
 			++router->mlag_stats.peer_session_downs;
+			state_chg = true;
+			router->mlag_flags &= ~PIM_MLAGF_REMOTE_CONN_UP;
+		}
 		router->connected_to_mlag = false;
 		thread_add_event(router->master, pim_mlag_down_handler, NULL, 0,
 				 NULL);
 	}
 
-	/*
-	 * In below case local clag is running, but connection with
-	 * peer is restored
-	 * Ideally in this case we no need to do anything, peer MLAG will
-	 * start replay the new data, just act on it.
+	/* apply the changes */
+	/* when connection to mlagd comes up we hold send mroutes till we have
+	 * rxed the status and had a chance to re-valuate DF state
 	 */
-	if (msg.peer_state == MLAG_STATE_RUNNING)
-		router->connected_to_mlag = true;
+	if (!(router->mlag_flags & PIM_MLAGF_STATUS_RXED)) {
+		router->mlag_flags |= PIM_MLAGF_STATUS_RXED;
+		/* on session up re-eval DF status */
+		pim_mlag_up_local_reeval(false /*mlagd_send*/, "mlagd_up");
+		/* replay all the upstream entries to the local MLAG daemon */
+		pim_mlag_up_local_replay();
+		return;
+	}
+
+	if (state_chg) {
+		if (!(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)) {
+			/* when a connection goes down the primary takes over
+			 * DF role for all entries
+			 */
+			pim_mlag_up_local_reeval(true /*mlagd_send*/,
+					"peer_down");
+		}
+		/* XXX - when session comes up we need to wait for
+		 * REMOTE_REPLAY_DONE before running re-election on local-mlag
+		 * entries that are missing remote reference
+		 */
+		pim_mlag_up_local_reeval(true /*mlagd_send*/,
+				"peer_up");
+		return;
+	}
+
+	/* MLAG role changed without a state change */
+	if (role_chg)
+		pim_mlag_up_local_reeval(true /*mlagd_send*/, "role_chg");
 }
 
 static void pim_mlag_process_vxlan_update(struct mlag_vxlan *msg)
 {
 	char addr_buf1[INET_ADDRSTRLEN];
 	char addr_buf2[INET_ADDRSTRLEN];
+
+	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug("%s: msg ignored mlagd process state down",
+					__func__);
+		return;
+	}
 
 	++router->mlag_stats.msg.vxlan_updates;
 	router->anycast_vtep_ip.s_addr = htonl(msg->anycast_ip);
@@ -377,7 +794,20 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 			msg.cost_to_rp, msg.vni_id, msg.am_i_dr,
 			msg.am_i_dual_active, msg.vrf_id, msg.intf_name);
 
+	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug("%s: msg ignored mlagd process state down",
+					__func__);
+		return;
+	}
+
 	++router->mlag_stats.msg.mroute_add_rx;
+
+	if (!msg.intf_name[0]) {
+		pim_mlag_up_remote_add(&msg);
+		return;
+	}
+
 	vrf = vrf_lookup_by_name(msg.vrf_name);
 	if (vrf)
 		ifp = if_lookup_by_name(msg.intf_name, vrf->vrf_id);
@@ -419,7 +849,20 @@ static void pim_mlag_process_mroute_del(struct mlag_mroute_del msg)
 			"vni_id:%d, vrf_id:0x%x intf_name:%s",
 			__FUNCTION__, msg.vrf_name, msg.source_ip, msg.group_ip,
 			msg.vni_id, msg.vrf_id, msg.intf_name);
+
+	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug("%s: msg ignored mlagd process state down",
+					__func__);
+		return;
+	}
+
 	++router->mlag_stats.msg.mroute_del_rx;
+
+	if (!msg.intf_name[0]) {
+		pim_mlag_up_remote_del(&msg);
+		return;
+	}
 }
 
 static void pim_mlag_process_peer_status_update(struct mlag_pim_status msg)
@@ -526,8 +969,8 @@ int pim_zebra_mlag_process_up(void)
 	 * Incase of local MLAG restyrat, PIM needs to replay all the dat
 	 * since MLAG is empty.
 	 */
-	router->mlag_process_up = true;
 	router->connected_to_mlag = true;
+	router->mlag_flags |= PIM_MLAGF_LOCAL_CONN_UP;
 	thread_add_event(router->master, pim_mlag_local_up_handler, NULL, 0,
 			 NULL);
 	return (0);
@@ -536,7 +979,9 @@ int pim_zebra_mlag_process_up(void)
 static void pim_mlag_param_reset(void)
 {
 	/* reset the cached params and stats */
-	router->mlag_process_up = false;
+	router->mlag_flags &= ~(PIM_MLAGF_STATUS_RXED |
+			PIM_MLAGF_LOCAL_CONN_UP |
+			PIM_MLAGF_REMOTE_CONN_UP);
 	router->local_vtep_ip.s_addr = INADDR_ANY;
 	router->anycast_vtep_ip.s_addr = INADDR_ANY;
 	router->mlag_role = MLAG_ROLE_NONE;
@@ -553,10 +998,14 @@ int pim_zebra_mlag_process_down(void)
 	 * Local CLAG is down, reset peer data
 	 * and forward teh traffic if we are DR
 	 */
-	if (router->connected_to_mlag)
+	if (router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)
 		++router->mlag_stats.peer_session_downs;
 	router->connected_to_mlag = false;
 	pim_mlag_param_reset();
+	/* on mlagd session down re-eval DF status */
+	pim_mlag_up_local_reeval(false /*mlagd_send*/, "mlagd_down");
+	/* flush all remote references */
+	pim_mlag_up_remote_del_all();
 	thread_add_event(router->master, pim_mlag_down_handler, NULL, 0, NULL);
 	return (0);
 }

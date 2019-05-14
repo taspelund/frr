@@ -195,6 +195,26 @@ static int nexthop_mismatch(const struct pim_nexthop *nh1,
 	       || (nh1->mrib_route_metric != nh2->mrib_route_metric);
 }
 
+static void pim_rpf_cost_change(struct pim_instance *pim,
+		struct pim_upstream *up)
+{
+	struct pim_rpf *rpf = &up->rpf;
+
+	/* Cost changed, it might Impact MLAG DF election, update */
+	if (PIM_DEBUG_MLAG)
+		zlog_debug(
+			"%s: Cost_to_rp of upstream-%s changed to:%u, dual_ifp_count:%u",
+			__func__, up->sg_str,
+			rpf->source_nexthop.mrib_route_metric,
+			up->dualactive_ifchannel_count);
+
+	if (up->dualactive_ifchannel_count)
+		pim_mlag_update_cost_to_rp_to_peer(up);
+
+	if (pim_up_mlag_is_local(up))
+		pim_mlag_up_local_add(pim, up);
+}
+
 enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 				   struct pim_upstream *up, struct pim_rpf *old,
 				   uint8_t is_new)
@@ -243,8 +263,12 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 		neigh_needed = FALSE;
 	pim_find_or_track_nexthop(pim, &nht_p, up, NULL, NULL);
 	if (!pim_ecmp_nexthop_lookup(pim, &rpf->source_nexthop, &src, &grp,
-				     neigh_needed))
+				neigh_needed)) {
+		if (saved_mrib_route_metric
+				!= rpf->source_nexthop.mrib_route_metric)
+			pim_rpf_cost_change(pim, up);
 		return PIM_RPF_FAILURE;
+	}
 
 	rpf->rpf_addr.family = AF_INET;
 	rpf->rpf_addr.u.prefix4 = pim_rpf_find_rpf_addr(up);
@@ -303,6 +327,9 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 			old->source_nexthop = saved.source_nexthop;
 			old->rpf_addr = saved.rpf_addr;
 		}
+		if (saved_mrib_route_metric
+				!= rpf->source_nexthop.mrib_route_metric)
+			pim_rpf_cost_change(pim, up);
 		return PIM_RPF_CHANGED;
 	}
 
@@ -313,18 +340,10 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 			__FUNCTION__, up->sg_str,
 			rpf->source_nexthop.mrib_route_metric,
 			up->dualactive_ifchannel_count);
+
 	/* Cost changed, it might Impact MLAG DF election, update */
-	if (saved_mrib_route_metric != rpf->source_nexthop.mrib_route_metric) {
-		if (PIM_DEBUG_MLAG)
-			zlog_debug(
-				"%s: Cost_to_rp of upstream-%s changed to:%u,"
-				" dual_ifp_count:%u",
-				__FUNCTION__, up->sg_str,
-				rpf->source_nexthop.mrib_route_metric,
-				up->dualactive_ifchannel_count);
-		if (up->dualactive_ifchannel_count)
-			pim_mlag_update_cost_to_rp_to_peer(up);
-	}
+	if (saved_mrib_route_metric != rpf->source_nexthop.mrib_route_metric)
+		pim_rpf_cost_change(pim, up);
 
 	return PIM_RPF_OK;
 }

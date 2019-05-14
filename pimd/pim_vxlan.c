@@ -38,6 +38,7 @@
 #include "pim_nht.h"
 #include "pim_zebra.h"
 #include "pim_vxlan.h"
+#include "pim_mlag.h"
 
 /* pim-vxlan global info */
 struct pim_vxlan vxlan_info, *pim_vxlan_p = &vxlan_info;
@@ -346,7 +347,8 @@ static void pim_vxlan_orig_mr_up_add(struct pim_vxlan_sg *vxlan_sg)
 			pim_delete_tracked_nexthop(vxlan_sg->pim,
 				&nht_p, up, NULL);
 		}
-		pim_upstream_ref(up, flags, __PRETTY_FUNCTION__);
+		pim_upstream_ref(vxlan_sg->pim, up, flags,
+				__PRETTY_FUNCTION__);
 		vxlan_sg->up = up;
 		pim_vxlan_orig_mr_up_iif_update(vxlan_sg);
 	} else {
@@ -590,7 +592,7 @@ static void pim_vxlan_term_mr_up_del(struct pim_vxlan_sg *vxlan_sg)
 		/* clear out all the vxlan related flags */
 		up->flags &= ~(PIM_UPSTREAM_FLAG_MASK_SRC_VXLAN_TERM |
 			PIM_UPSTREAM_FLAG_MASK_MLAG_VXLAN);
-
+		pim_mlag_up_local_del(vxlan_sg->pim, up);
 		pim_upstream_del(vxlan_sg->pim, up,
 				__PRETTY_FUNCTION__);
 	}

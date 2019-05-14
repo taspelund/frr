@@ -65,6 +65,21 @@ struct pim_mlag_stats {
 	uint32_t peer_session_downs;
 };
 
+enum pim_mlag_flags {
+	PIM_MLAGF_NONE = 0,
+	/* connection to the local MLAG daemon is up */
+	PIM_MLAGF_LOCAL_CONN_UP = (1 << 0),
+	/* connection to the MLAG daemon on the peer switch is up. note
+	 * that there is no direct connection between FRR and the peer MLAG
+	 * daemon. this is just a peer-session status provided by the local
+	 * MLAG daemon.
+	 */
+	PIM_MLAGF_REMOTE_CONN_UP = (1 << 1),
+	/* status update rxed from the local daemon */
+	PIM_MLAGF_STATUS_RXED = (1 << 2),
+	/* initial dump of data done post peerlink flap */
+	PIM_MLAGF_REMOTE_REPLAY_DONE = (1 << 3)
+};
 struct pim_router {
 	struct thread_master *master;
 
@@ -86,8 +101,6 @@ struct pim_router {
 	uint32_t pim_mlag_intf_cnt;
 	/* if true we have registered with MLAG */
 	bool mlag_process_register;
-	/* if true connection with the local MLAG process is up */
-	bool mlag_process_up;
 	/* if true local MLAG process reported that it is connected
 	 * with the peer MLAG process
 	 */
@@ -99,6 +112,7 @@ struct pim_router {
 	struct in_addr anycast_vtep_ip;
 	struct in_addr local_vtep_ip;
 	struct pim_mlag_stats mlag_stats;
+	enum pim_mlag_flags mlag_flags;
 	char peerlink_rif[INTERFACE_NAMSIZ];
 };
 
