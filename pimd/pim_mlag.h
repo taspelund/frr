@@ -57,4 +57,13 @@ extern void pim_zpthread_init(void);
 
 extern void pim_zpthread_terminate(void);
 
+extern void pim_mlag_register(void);
+
+extern void pim_mlag_deregister(void);
+
+extern void pim_mlag_up_local_add(struct pim_instance *pim,
+		struct pim_upstream *upstream);
+
+extern void pim_mlag_up_local_del(struct pim_instance *pim,
+		struct pim_upstream *upstream);
 #endif

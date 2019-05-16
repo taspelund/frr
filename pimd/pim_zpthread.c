@@ -18,6 +18,8 @@
  */
 
 #include <zebra.h>
+#include <lib/log.h>
+#include <lib/lib_errors.h>
 
 #include "pimd.h"
 #include "pim_mlag.h"
@@ -68,29 +70,44 @@ static void pim_mlag_zebra_fill_header(enum mlag_msg_type msg_type)
 	 */
 	stream_putw(router->mlag_stream, data_len);
 	stream_putw(router->mlag_stream, msg_cnt);
+
+	if (PIM_DEBUG_MLAG)
+		zlog_debug(":%s: msg_type: %d/%d len %d data_type %d",
+			__func__, msg_type, fill_msg_type, data_len,
+			ntohl(*((uint32_t *)router->mlag_stream->data)));
 }
 
 static void pim_mlag_zebra_flush_buffer(void)
 {
-	uint32_t *msg_type = NULL;
+	uint32_t msg_type;
 	/* Stream had bulk messages update the Hedaer */
 	if (mlag_bulk_cnt > 1) {
-		msg_type = (uint32_t *)router->mlag_stream->data;
-		if (*msg_type == MLAG_MROUTE_ADD_BULK) {
+		/*
+		 * No need to reset the pointer, below api reads from data[0]
+		 */
+		STREAM_GETL(router->mlag_stream, msg_type);
+		if (msg_type == MLAG_MROUTE_ADD_BULK) {
 			stream_putw_at(
 				router->mlag_stream, 4,
 				(mlag_bulk_cnt * MLAG_MROUTE_ADD_MSGSIZE));
 			stream_putw_at(router->mlag_stream, 6, mlag_bulk_cnt);
-		} else if (*msg_type == MLAG_MROUTE_DEL_BULK) {
+		} else if (msg_type == MLAG_MROUTE_DEL_BULK) {
 			stream_putw_at(
 				router->mlag_stream, 4,
 				(mlag_bulk_cnt * MLAG_MROUTE_DEL_MSGSIZE));
 			stream_putw_at(router->mlag_stream, 6, mlag_bulk_cnt);
-		} else
-			assert(0);
+		} else {
+			flog_err(EC_LIB_ZAPI_ENCODE,
+				"unknown bulk message type %d bulk_count %d",
+				msg_type, mlag_bulk_cnt);
+			stream_reset(router->mlag_stream);
+			mlag_bulk_cnt = 0;
+			return;
+		}
 	}
 
 	zclient_send_mlag_data(zclient, router->mlag_stream);
+stream_failure:
 	stream_reset(router->mlag_stream);
 	mlag_bulk_cnt = 0;
 }
@@ -106,8 +123,10 @@ static void pim_mlag_zebra_check_for_buffer_flush(uint32_t curr_msg_type,
 						  uint32_t prev_msg_type)
 {
 	/* First Message, keep bulking */
-	if (prev_msg_type == MLAG_MSG_NONE)
+	if (prev_msg_type == MLAG_MSG_NONE) {
+		mlag_bulk_cnt = 1;
 		return;
+	}
 
 	/*msg type is route add & delete, keep bulking */
 	if (curr_msg_type == prev_msg_type

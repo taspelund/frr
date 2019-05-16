@@ -3949,6 +3949,58 @@ DEFUN (show_ip_igmp_statistics,
 	return CMD_SUCCESS;
 }
 
+DEFUN (show_ip_pim_mlag_summary,
+       show_ip_pim_mlag_summary_cmd,
+       "show ip pim mlag summary [json]",
+       SHOW_STR
+       IP_STR
+       PIM_STR
+       "MLAG\n"
+       "status and stats\n"
+       JSON_STR)
+{
+	bool uj = use_json(argc, argv);
+	char role_buf[MLAG_ROLE_STRSIZE];
+	char addr_buf[INET_ADDRSTRLEN];
+
+	if (uj)
+		/* XXX: need to add json output */
+		return CMD_SUCCESS;
+
+	vty_out(vty, "MLAG daemon connection: %s\n",
+		(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)
+			? "up" : "down");
+	vty_out(vty, "MLAG peer state: %s\n",
+		(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)
+			? "up" : "down");
+	vty_out(vty, "MLAG role: %s\n",
+		mlag_role2str(router->mlag_role, role_buf, sizeof(role_buf)));
+	inet_ntop(AF_INET, &router->local_vtep_ip,
+			addr_buf, INET_ADDRSTRLEN);
+	vty_out(vty, "Local VTEP IP: %s\n", addr_buf);
+	inet_ntop(AF_INET, &router->anycast_vtep_ip,
+			addr_buf, INET_ADDRSTRLEN);
+	vty_out(vty, "Anycast VTEP IP: %s\n", addr_buf);
+	vty_out(vty, "Session flaps: mlagd: %d mlag-peer: %d\n",
+			router->mlag_stats.mlagd_session_downs,
+			router->mlag_stats.peer_session_downs);
+	vty_out(vty, "Message Statistics:\n");
+	vty_out(vty, "  mroute adds: rx: %d, tx: %d\n",
+			router->mlag_stats.msg.mroute_add_rx,
+			router->mlag_stats.msg.mroute_add_tx);
+	vty_out(vty, "  mroute dels: rx: %d, tx: %d\n",
+			router->mlag_stats.msg.mroute_del_rx,
+			router->mlag_stats.msg.mroute_del_tx);
+	vty_out(vty, "  MLAG status updates: %d\n",
+			router->mlag_stats.msg.mlag_status_updates);
+	vty_out(vty, "  PIM status updates: %d\n",
+			router->mlag_stats.msg.pim_status_updates);
+	vty_out(vty, "  VxLAN updates: %d\n",
+			router->mlag_stats.msg.vxlan_updates);
+
+	return CMD_SUCCESS;
+}
+
 DEFUN (show_ip_pim_assert,
        show_ip_pim_assert_cmd,
        "show ip pim [vrf NAME] assert",
@@ -4195,10 +4247,211 @@ DEFUN (show_ip_pim_local_membership,
 	return CMD_SUCCESS;
 }
 
-DEFUN(show_ip_pim_mlag_local_membership, show_ip_pim_mlag_local_membership_cmd,
-      "show ip pim [vrf NAME] mlag [interface IFNAME] [A.B.C.D [A.B.C.D]] [json]",
+static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
+		struct vty *vty, struct pim_upstream *up,
+		char *src_str, char *grp_str, bool uj)
+{
+
+	if (uj) {
+		json_object *json = NULL;
+		json_object *own_list = NULL;
+
+		json = json_object_new_object();
+		json_object_string_add(json, "source", src_str);
+		json_object_string_add(json, "group", grp_str);
+
+		own_list = json_object_new_array();
+		if (pim_up_mlag_is_local(up))
+			json_object_array_add(own_list,
+					json_object_new_string("local"));
+		if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
+			json_object_array_add(own_list,
+					json_object_new_string("remote"));
+		json_object_object_add(json, "owners", own_list);
+
+		json_object_int_add(json, "localCost",
+				pim_up_mlag_local_cost(up));
+		json_object_int_add(json, "remoteCost",
+				pim_up_mlag_remote_cost(up));
+		if (PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags))
+			json_object_boolean_false_add(json, "df");
+		else
+			json_object_boolean_true_add(json, "df");
+	} else {
+		char own_str[6];
+
+		own_str[0] = '\0';
+		if (pim_up_mlag_is_local(up))
+			strcpy(own_str + strlen(own_str), "L");
+		if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
+			strcpy(own_str + strlen(own_str), "R");
+		/* XXX - fixup, print paragraph output */
+		vty_out(vty,
+				"%-15s %-15s %-6s %-11d %-12d %2s\n",
+				src_str, grp_str, own_str,
+				pim_up_mlag_local_cost(up),
+				pim_up_mlag_remote_cost(up),
+				PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags)
+				? "n" : "y");
+	}
+}
+
+static void pim_show_mlag_up_detail(struct vrf *vrf,
+		struct vty *vty, const char *src_or_group,
+		const char *group, bool uj)
+{
+	char src_str[INET_ADDRSTRLEN];
+	char grp_str[INET_ADDRSTRLEN];
+	struct listnode *upnode;
+	struct pim_upstream *up;
+	struct pim_instance *pim = vrf->info;
+
+	for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
+		if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER) &&
+			!pim_up_mlag_is_local(up))
+			continue;
+
+		pim_inet4_dump("<src?>", up->sg.src, src_str, sizeof(src_str));
+		pim_inet4_dump("<grp?>", up->sg.grp, grp_str, sizeof(grp_str));
+		/* XXX: strcmps are clearly inefficient. we should do uint comps
+		 * here instead.
+		 */
+		if (group) {
+			if (strcmp(src_str, src_or_group) ||
+					strcmp(grp_str, group))
+				continue;
+		} else {
+			if (strcmp(src_str, src_or_group) &&
+					strcmp(grp_str, src_or_group))
+				continue;
+		}
+		pim_show_mlag_up_entry_detail(vrf, vty, up,
+				src_str, grp_str, uj);
+	}
+}
+
+static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
+{
+	json_object *json = NULL;
+	json_object *json_row;
+	struct listnode *upnode;
+	struct pim_upstream *up;
+	char src_str[INET_ADDRSTRLEN];
+	char grp_str[INET_ADDRSTRLEN];
+	struct pim_instance *pim = vrf->info;
+
+	if (uj) {
+		json = json_object_new_object();
+	} else {
+		vty_out(vty,
+			"Source          Group           Owner  Local-cost  Remote-cost  DF\n");
+	}
+
+	for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
+		if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER) &&
+			!pim_up_mlag_is_local(up))
+			continue;
+
+		json_row = json_object_new_object();
+		pim_inet4_dump("<src?>", up->sg.src, src_str, sizeof(src_str));
+		pim_inet4_dump("<grp?>", up->sg.grp, grp_str, sizeof(grp_str));
+		if (uj) {
+			json_object *own_list = NULL;
+
+			json_object_string_add(json_row, "vrf", vrf->name);
+			json_object_string_add(json_row, "source", src_str);
+			json_object_string_add(json_row, "group", grp_str);
+
+			own_list = json_object_new_array();
+			if (pim_up_mlag_is_local(up)) {
+
+				json_object_array_add(own_list,
+					json_object_new_string("local"));
+			}
+			if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER)) {
+				json_object_array_add(own_list,
+					json_object_new_string("remote"));
+			}
+			json_object_object_add(json_row, "owners", own_list);
+
+			json_object_int_add(json_row, "localCost",
+					pim_up_mlag_local_cost(up));
+			json_object_int_add(json_row, "remoteCost",
+					pim_up_mlag_remote_cost(up));
+			if (PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags))
+				json_object_boolean_false_add(json_row, "df");
+			else
+				json_object_boolean_true_add(json_row, "df");
+			json_object_object_add(json, up->sg_str,
+					json_row);
+		} else {
+			char own_str[6];
+
+			own_str[0] = '\0';
+			if (pim_up_mlag_is_local(up))
+				strcpy(own_str + strlen(own_str), "L");
+			if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
+				strcpy(own_str + strlen(own_str), "R");
+			vty_out(vty,
+				"%-15s %-15s %-6s %-11d %-12d %2s\n",
+				src_str, grp_str, own_str,
+				pim_up_mlag_local_cost(up),
+				pim_up_mlag_remote_cost(up),
+				PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags)
+					? "n" : "y");
+		}
+	}
+	if (uj) {
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					json, JSON_C_TO_STRING_PRETTY));
+		json_object_free(json);
+	}
+}
+
+DEFUN(show_ip_pim_mlag_up, show_ip_pim_mlag_up_cmd,
+      "show ip pim [vrf NAME] mlag upstream [A.B.C.D [A.B.C.D]] [json]",
+      SHOW_STR
+      IP_STR
+      PIM_STR
+      VRF_CMD_HELP_STR
+      "MLAG\n"
+      "upstream\n"
+      "Unicast or Multicast address\n"
+      "Multicast address\n" JSON_STR)
+{
+	const char *src_or_group = NULL;
+	const char *group = NULL;
+	int idx = 2;
+	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
+	bool uj = use_json(argc, argv);
+
+	if (!vrf || !vrf->info) {
+		vty_out(vty, "%s: VRF or Info missing\n", __func__);
+		return CMD_WARNING;
+	}
+
+	if (uj)
+		argc--;
+
+	if (argv_find(argv, argc, "A.B.C.D", &idx)) {
+		src_or_group = argv[idx]->arg;
+		if (idx + 1 < argc)
+			group = argv[idx + 1]->arg;
+	}
+
+	if (src_or_group || group)
+		pim_show_mlag_up_detail(vrf, vty, src_or_group, group, uj);
+	else
+		pim_show_mlag_up_vrf(vrf, vty, uj);
+
+	return CMD_SUCCESS;
+}
+
+DEFUN(show_ip_pim_mlag_mroute, show_ip_pim_mlag_mroute_cmd,
+      "show ip pim [vrf NAME] mlag mroute [interface IFNAME] [A.B.C.D [A.B.C.D]] [json]",
       SHOW_STR IP_STR PIM_STR VRF_CMD_HELP_STR
-      "MLAG interface local-membership\n"
+      "MLAG\n"
+      "mroute\n"
       "Specify the Interface\nThe Interface name\n"
       "Unicast or Multicast address\n"
       "Multicast address\n" JSON_STR)
@@ -4245,11 +4498,11 @@ DEFUN(show_ip_pim_mlag_local_membership, show_ip_pim_mlag_local_membership_cmd,
 	return CMD_SUCCESS;
 }
 
-DEFUN(show_ip_pim_mlag_local_membership_vrf_all,
-      show_ip_pim_mlag_local_membership_vrf_all_cmd,
-      "show ip pim vrf all mlag [json]",
+DEFUN(show_ip_pim_mlag_mroute_vrf_all,
+      show_ip_pim_mlag_mroute_vrf_all_cmd,
+      "show ip pim vrf all mlag mroute [json]",
       SHOW_STR IP_STR PIM_STR VRF_CMD_HELP_STR
-      "MLAG interface local-membership\n" JSON_STR)
+      "MLAG interface local-membership\n" "mroute\n" JSON_STR)
 {
 	struct vrf *vrf;
 	bool uj = use_json(argc, argv);
@@ -9486,8 +9739,8 @@ DEFUN_HIDDEN (no_ip_pim_mlag,
 
 	addr.s_addr = 0;
 	pim_vxlan_mlag_update(TRUE /*mlag_enable*/,
-		FALSE /*peer_state*/, PIM_VXLAN_MLAG_ROLE_SECONDARY,
-		NULL/*peerlink*/, &addr);
+			FALSE /*peer_state*/, MLAG_ROLE_NONE,
+			NULL/*peerlink*/, &addr);
 
 	return CMD_SUCCESS;
 }
@@ -9526,9 +9779,9 @@ DEFUN_HIDDEN (ip_pim_mlag,
 
 	idx += 2;
 	if (!strcmp(argv[idx]->arg, "primary")) {
-		role = PIM_VXLAN_MLAG_ROLE_PRIMARY;
+		role = MLAG_ROLE_PRIMARY;
 	} else if (!strcmp(argv[idx]->arg, "secondary")) {
-		role = PIM_VXLAN_MLAG_ROLE_SECONDARY;
+		role = MLAG_ROLE_SECONDARY;
 	} else {
 		vty_out(vty, "unknown MLAG role %s\n", argv[idx]->arg);
 		return CMD_WARNING;
@@ -9690,9 +9943,11 @@ void pim_cmd_init(void)
 	install_element(VIEW_NODE, &show_ip_pim_join_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_join_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_local_membership_cmd);
-	install_element(VIEW_NODE, &show_ip_pim_mlag_local_membership_cmd);
+	install_element(VIEW_NODE, &show_ip_pim_mlag_mroute_cmd);
 	install_element(VIEW_NODE,
-			&show_ip_pim_mlag_local_membership_vrf_all_cmd);
+			&show_ip_pim_mlag_mroute_vrf_all_cmd);
+	install_element(VIEW_NODE, &show_ip_pim_mlag_summary_cmd);
+	install_element(VIEW_NODE, &show_ip_pim_mlag_up_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_neighbor_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_neighbor_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_rpf_cmd);

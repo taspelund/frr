@@ -869,7 +869,7 @@ void pim_ifchannel_join_add(struct interface *ifp, struct in_addr neigh_addr,
 					     & PIM_UPSTREAM_FLAG_MASK_SRC_IGMP)
 		    && !(ch->upstream->flags
 			 & PIM_UPSTREAM_FLAG_MASK_SRC_LHR)) {
-			pim_upstream_ref(ch->upstream,
+			pim_upstream_ref(pim_ifp->pim, ch->upstream,
 					 PIM_UPSTREAM_FLAG_MASK_SRC_LHR,
 					 __PRETTY_FUNCTION__);
 			pim_upstream_keep_alive_timer_start(

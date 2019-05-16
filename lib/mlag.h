@@ -36,7 +36,6 @@ enum mlag_role {
 };
 
 enum mlag_state {
-	MLAG_STATE_NONE,
 	MLAG_STATE_DOWN,
 	MLAG_STATE_RUNNING,
 };
@@ -70,16 +69,25 @@ enum mlag_msg_type {
 	MLAG_MROUTE_DEL_BULK = 8,
 	MLAG_PIM_STATUS_UPDATE = 9,
 	MLAG_PIM_CFG_DUMP = 10,
+	MLAG_VXLAN_UPDATE = 11
 };
 
 struct mlag_status {
-	char peerlink_name[VRF_NAMSIZ];
+	char peerlink_rif[INTERFACE_NAMSIZ];
 	enum mlag_role my_role;
 	enum mlag_state peer_state;
 	uint32_t anycast_ip;
 };
 
 #define MLAG_STATUS_MSGSIZE (sizeof(struct mlag_status))
+#define MLAG_ROLE_STRSIZE 16
+
+struct mlag_vxlan {
+	uint32_t anycast_ip;
+	uint32_t local_ip;
+};
+
+#define MLAG_VXLAN_MSGSIZE (sizeof(struct mlag_vxlan))
 
 struct mlag_pim_status {
 	enum mlag_switchd_state switchd_state;
@@ -135,5 +143,8 @@ extern int zebra_mlag_lib_decode_pim_status(struct stream *s,
 					    struct mlag_pim_status *msg);
 extern int zebra_mlag_lib_decode_mlag_status(struct stream *s,
 					     struct mlag_status *msg);
+extern int
+zebra_mlag_lib_decode_vxlan_update(struct stream *s,
+		struct mlag_vxlan *msg);
 
 #endif

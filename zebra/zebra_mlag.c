@@ -221,8 +221,8 @@ void zebra_mlag_handle_process_state(enum zebra_mlag_state state)
 {
 	if (state == MLAG_UP) {
 		zrouter.mlag_info.connected = true;
-		zebra_mlag_send_register();
 		zebra_mlag_publish_process_state(NULL, ZEBRA_MLAG_PROCESS_UP);
+		zebra_mlag_send_register();
 	} else if (state == MLAG_DOWN) {
 		zrouter.mlag_info.connected = false;
 		zebra_mlag_publish_process_state(NULL, ZEBRA_MLAG_PROCESS_DOWN);
@@ -1214,9 +1214,29 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			/* No Batching */
 			stream_putw(*s, MLAG_MSG_NO_BATCH);
 			/* Actual Data */
+			stream_put(*s, msg->peerlink, INTERFACE_NAMSIZ);
 			stream_putl(*s, msg->my_role);
 			stream_putl(*s, msg->peer_state);
 			zebra_mlag_status_update__free_unpacked(msg, NULL);
+		} break;
+		case ZEBRA_MLAG__HEADER__MESSAGE_TYPE__ZEBRA_MLAG_VXLAN_UPDATE: {
+			ZebraMlagVxlanUpdate *msg = NULL;
+
+			msg = zebra_mlag_vxlan_update__unpack(
+				NULL, hdr->data.len, hdr->data.data);
+			if (msg == NULL) {
+				zebra_mlag__header__free_unpacked(hdr,
+						NULL);
+				return (-1);
+			}
+			/* Payload len */
+			stream_putw(*s, MLAG_VXLAN_MSGSIZE);
+			/* No Batching */
+			stream_putw(*s, MLAG_MSG_NO_BATCH);
+			/* Actual Data */
+			stream_putl(*s, msg->anycast_ip);
+			stream_putl(*s, msg->local_ip);
+			zebra_mlag_vxlan_update__free_unpacked(msg, NULL);
 		} break;
 		case ZEBRA_MLAG__HEADER__MESSAGE_TYPE__ZEBRA_MLAG_MROUTE_ADD: {
 			ZebraMlagMrouteAdd *msg = NULL;

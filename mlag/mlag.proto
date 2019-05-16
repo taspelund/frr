@@ -52,7 +52,7 @@ message ZebraMlag_Header {
         ZEBRA_MLAG_MROUTE_DEL_BULK = 8;
         ZEBRA_MLAG_PIM_STATUS_UPDATE = 9;
         ZEBRA_MLAG_PIM_CFG_DUMP = 10;
-        ZEBRA_MLAG_ANYCAST_IP_NOTIFY = 11;
+        ZEBRA_MLAG_VXLAN_UPDATE = 11;
     }
 
     /*
@@ -91,9 +91,8 @@ message ZebraMlag_Header {
 
 message ZebraMlagStatusUpdate {
     enum ClagState {
-        CLAG_STATE_NONE = 0;
-        CLAG_STATE_DOWN = 1;
-        CLAG_STATE_RUNNING = 2;
+        CLAG_STATE_DOWN = 0;
+        CLAG_STATE_RUNNING = 1;
     }
 
     enum ClagRole {
@@ -105,7 +104,17 @@ message ZebraMlagStatusUpdate {
     string    peerlink = 1;
     ClagRole  my_role = 2;
     ClagState peer_state = 3;
-    uint32    anycast_ip = 4;
+}
+
+/*
+ * ZEBRA_MLAG_VXLAN_UPDATE
+ *
+ * This message will be posted by CLAGD to inform zebra on
+ * anycast/local ip updates.
+ */
+message ZebraMlagVxlanUpdate {
+	uint32 anycast_ip = 1;
+	uint32 local_ip = 2;
 }
 
 /*
