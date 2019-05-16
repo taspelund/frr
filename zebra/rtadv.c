@@ -82,13 +82,6 @@ static void rtadv_event(struct zebra_vrf *, enum rtadv_event, int);
 static int if_join_all_router(int, struct interface *);
 static int if_leave_all_router(int, struct interface *);
 
-static int rtadv_get_socket(struct zebra_vrf *zvrf)
-{
-	if (zvrf->rtadv.sock >= 0)
-		return zvrf->rtadv.sock;
-	return zrouter.rtadv_sock;
-}
-
 static int rtadv_increment_received(struct zebra_vrf *zvrf, ifindex_t *ifindex)
 {
 	int ret = -1;
@@ -431,7 +424,7 @@ static int rtadv_timer(struct thread *thread)
 							"Fast RA Rexmit on interface %s",
 							ifp->name);
 
-					rtadv_send_packet(rtadv_get_socket(zvrf),
+					rtadv_send_packet(zvrf->rtadv.sock,
 							  ifp);
 				} else {
 					zif->rtadv.AdvIntervalTimer -= period;
@@ -445,8 +438,8 @@ static int rtadv_timer(struct thread *thread)
 							zif->rtadv
 								.MaxRtrAdvInterval;
 						rtadv_send_packet(
-							  rtadv_get_socket(zvrf),
-							  ifp);
+							zvrf->rtadv.sock,
+							ifp);
 					}
 				}
 			}
@@ -460,7 +453,7 @@ static void rtadv_process_solicit(struct interface *ifp)
 	struct zebra_vrf *zvrf = vrf_info_lookup(ifp->vrf_id);
 
 	assert(zvrf);
-	rtadv_send_packet(rtadv_get_socket(zvrf), ifp);
+	rtadv_send_packet(zvrf->rtadv.sock, ifp);
 }
 
 /*
@@ -816,7 +809,7 @@ static void ipv6_nd_suppress_ra_set(struct interface *ifp,
 			zif->rtadv.AdvIntervalTimer = 0;
 			zvrf->rtadv.adv_if_count--;
 
-			if_leave_all_router(rtadv_get_socket(zvrf), ifp);
+			if_leave_all_router(zvrf->rtadv.sock, ifp);
 
 			if (zvrf->rtadv.adv_if_count == 0)
 				rtadv_event(zvrf, RTADV_STOP, 0);
@@ -835,11 +828,11 @@ static void ipv6_nd_suppress_ra_set(struct interface *ifp,
 					RTADV_NUM_FAST_REXMITS;
 			}
 
-			if_join_all_router(rtadv_get_socket(zvrf), ifp);
+			if_join_all_router(zvrf->rtadv.sock, ifp);
 
 			if (zvrf->rtadv.adv_if_count == 1)
 				rtadv_event(zvrf, RTADV_START,
-					    rtadv_get_socket(zvrf));
+					    zvrf->rtadv.sock);
 		}
 	}
 }
@@ -1745,13 +1738,7 @@ static void rtadv_event(struct zebra_vrf *zvrf, enum rtadv_event event, int val)
 
 void rtadv_init(struct zebra_vrf *zvrf)
 {
-	if (vrf_is_backend_netns()) {
-		zvrf->rtadv.sock = rtadv_make_socket(zvrf->zns->ns_id);
-		zrouter.rtadv_sock = -1;
-	} else if (!zrouter.rtadv_sock) {
-		zvrf->rtadv.sock = -1;
-		zrouter.rtadv_sock = rtadv_make_socket(zvrf->zns->ns_id);
-	}
+	zvrf->rtadv.sock = rtadv_make_socket(zvrf->zns->ns_id);
 }
 
 void rtadv_terminate(struct zebra_vrf *zvrf)
@@ -1760,10 +1747,8 @@ void rtadv_terminate(struct zebra_vrf *zvrf)
 	if (zvrf->rtadv.sock >= 0) {
 		close(zvrf->rtadv.sock);
 		zvrf->rtadv.sock = -1;
-	} else if (zrouter.rtadv_sock >= 0) {
-		close(zrouter.rtadv_sock);
-		zrouter.rtadv_sock = -1;
 	}
+
 	zvrf->rtadv.adv_if_count = 0;
 	zvrf->rtadv.adv_msec_if_count = 0;
 }
