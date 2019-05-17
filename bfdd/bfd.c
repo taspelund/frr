@@ -859,10 +859,10 @@ static struct hash *bfd_vrf_hash;
 static struct hash *bfd_iface_hash;
 
 static unsigned int bfd_id_hash_do(const void *p);
-static unsigned int bfd_shop_hash_do(void *p);
-static unsigned int bfd_mhop_hash_do(void *p);
-static unsigned int bfd_vrf_hash_do(void *p);
-static unsigned int bfd_iface_hash_do(void *p);
+static unsigned int bfd_shop_hash_do(const void *p);
+static unsigned int bfd_mhop_hash_do(const void *p);
+static unsigned int bfd_vrf_hash_do(const void *p);
+static unsigned int bfd_iface_hash_do(const void *p);
 
 static void _shop_key(struct bfd_session *bs, const struct bfd_shop_key *shop);
 static void _shop_key2(struct bfd_session *bs, const struct bfd_shop_key *shop);
@@ -890,9 +890,9 @@ static bool bfd_id_hash_cmp(const void *n1, const void *n2)
 }
 
 /* BFD hash for single hop. */
-static unsigned int bfd_shop_hash_do(void *p)
+static unsigned int bfd_shop_hash_do(const void *p)
 {
-	struct bfd_session *bs = p;
+	const struct bfd_session *bs = p;
 
 	return jhash(&bs->shop, sizeof(bs->shop), 0);
 }
@@ -905,7 +905,7 @@ static bool bfd_shop_hash_cmp(const void *n1, const void *n2)
 }
 
 /* BFD hash for multi hop. */
-static unsigned int bfd_mhop_hash_do(void *p)
+static unsigned int bfd_mhop_hash_do(const void *p)
 {
 	const struct bfd_session *bs = p;
 
@@ -920,9 +920,9 @@ static bool bfd_mhop_hash_cmp(const void *n1, const void *n2)
 }
 
 /* BFD hash for VRFs. */
-static unsigned int bfd_vrf_hash_do(void *p)
+static unsigned int bfd_vrf_hash_do(const void *p)
 {
-	struct bfd_vrf *vrf = p;
+	const struct bfd_vrf *vrf = p;
 
 	return jhash_1word(vrf->vrf_id, 0);
 }
@@ -935,9 +935,9 @@ static bool bfd_vrf_hash_cmp(const void *n1, const void *n2)
 }
 
 /* BFD hash for interfaces. */
-static unsigned int bfd_iface_hash_do(void *p)
+static unsigned int bfd_iface_hash_do(const void *p)
 {
-	struct bfd_iface *iface = p;
+	const struct bfd_iface *iface = p;
 
 	return string_hash_make(iface->ifname);
 }

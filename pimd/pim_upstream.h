@@ -239,7 +239,7 @@ struct pim_upstream {
 	int64_t state_transition; /* Record current state uptime */
 };
 
-inline bool pim_up_mlag_is_local(struct pim_upstream *up)
+static inline bool pim_up_mlag_is_local(struct pim_upstream *up)
 {
 	/* XXX: extend this to also return true if the channel-oil has
 	 * any AA devices
