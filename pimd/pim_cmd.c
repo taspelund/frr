@@ -567,13 +567,13 @@ static void pim_show_mlag_membership_detail(struct vty *vty,
 	memset(&sg, 0, sizeof(struct prefix_sg));
 	rc = str2prefix_ipv4(src_str, &p);
 	if (rc <= 0) {
-		vty_out(vty, "%% %s: Malformed address\n", __FUNCTION__);
+		vty_out(vty, "%% %s: Malformed address\n", __func__);
 		return;
 	}
 	sg.src = p.prefix;
 	rc = str2prefix_ipv4(grp_str, &p);
 	if (rc <= 0) {
-		vty_out(vty, "%% %s: Malformed address\n", __FUNCTION__);
+		vty_out(vty, "%% %s: Malformed address\n", __func__);
 		return;
 	}
 	sg.grp = p.prefix;
@@ -668,8 +668,7 @@ static int pim_show_mlag_membership_for_interface(struct pim_instance *pim,
 	if (src_or_group) {
 		rc = str2prefix_ipv4(src_or_group, &p1);
 		if (rc <= 0) {
-			vty_out(vty, "%% %s: Malformed address\n",
-				__FUNCTION__);
+			vty_out(vty, "%% %s: Malformed address\n", __func__);
 			return -1;
 		}
 	}
@@ -677,8 +676,7 @@ static int pim_show_mlag_membership_for_interface(struct pim_instance *pim,
 	if (group) {
 		rc = str2prefix_ipv4(group, &p2);
 		if (rc <= 0) {
-			vty_out(vty, "%% %s: Malformed address\n",
-				__FUNCTION__);
+			vty_out(vty, "%% %s: Malformed address\n", __func__);
 			return -1;
 		}
 	}
@@ -4464,14 +4462,14 @@ DEFUN(show_ip_pim_mlag_mroute, show_ip_pim_mlag_mroute_cmd,
 	bool uj = use_json(argc, argv);
 
 	if (!vrf || !vrf->info) {
-		vty_out(vty, "%s: VRF or Info missing \n", __FUNCTION__);
+		vty_out(vty, "%s: VRF or Info missing \n", __func__);
 		return CMD_WARNING;
 	}
 
 	ifp = pim_cmd_lookup_ifp(vty, argv, argc, &idx, vrf);
 	if (ifp && !ifp->info) {
-		vty_out(vty, "%s: Interface Info missing for %s \n",
-			__FUNCTION__, ifp->name);
+		vty_out(vty, "%s: Interface Info missing for %s \n", __func__,
+			ifp->name);
 		return CMD_WARNING;
 	}
 

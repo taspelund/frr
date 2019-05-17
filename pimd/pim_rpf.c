@@ -337,7 +337,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 		zlog_debug(
 			"%s: Cost_to_rp of upstream-%s changed to:%u,"
 			" dual_ifp_count:%u",
-			__FUNCTION__, up->sg_str,
+			__func__, up->sg_str,
 			rpf->source_nexthop.mrib_route_metric,
 			up->dualactive_ifchannel_count);
 

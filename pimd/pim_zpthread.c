@@ -155,7 +155,7 @@ static int pim_mlag_zthread_handler(struct thread *event)
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug(":%s: Processing MLAG write, %d messages in queue",
-			   __FUNCTION__, wr_count);
+			   __func__, wr_count);
 
 	if (wr_count == 0)
 		return (0);
@@ -168,7 +168,7 @@ static int pim_mlag_zthread_handler(struct thread *event)
 		read_s = stream_fifo_pop_safe(router->mlag_fifo);
 		if (!read_s) {
 			zlog_debug(":%s: Got a NULL Messages, some thing wrong",
-				   __FUNCTION__);
+				   __func__);
 			break;
 		}
 
@@ -221,7 +221,7 @@ int pim_mlag_signal_zpthread(void)
 	if (router->master) {
 		if (PIM_DEBUG_MLAG)
 			zlog_debug(":%s: Scheduling PIM MLAG write Thread",
-				   __FUNCTION__);
+				   __func__);
 		thread_add_event(router->master, pim_mlag_zthread_handler, NULL,
 				 0, &router->zpthread_mlag_write);
 	}

@@ -136,7 +136,7 @@ void pim_ifchannel_delete(struct pim_ifchannel *ch)
 			zlog_debug(
 				"%s: if-chnanel-%s is deleted from a Dual "
 				"active Interface",
-				__FUNCTION__, ch->sg_str);
+				__func__, ch->sg_str);
 		pim_mlag_del_entry_to_peer(ch);
 		ch->upstream->dualactive_ifchannel_count--;
 	}
@@ -620,7 +620,7 @@ struct pim_ifchannel *pim_ifchannel_add(struct interface *ifp,
 			zlog_debug(
 				"%s: New if-chnanel-%s is added on a Dual "
 				"active Interface",
-				__FUNCTION__, ch->sg_str);
+				__func__, ch->sg_str);
 		pim_mlag_add_entry_to_peer(ch);
 		ch->upstream->dualactive_ifchannel_count++;
 	}

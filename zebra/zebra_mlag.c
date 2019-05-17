@@ -73,7 +73,7 @@ void zebra_mlag_send_register(void)
 
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug("%s: Enqueued MLAG Register to MLAG Thread ",
-			   __FUNCTION__);
+			   __func__);
 	return;
 }
 
@@ -97,7 +97,7 @@ void zebra_mlag_send_deregister(void)
 
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug("%s: Enqueued MLAG De-Register to MLAG Thread ",
-			   __FUNCTION__);
+			   __func__);
 	return;
 }
 
@@ -158,7 +158,7 @@ static int zebra_mlag_thread_handler(struct thread *event)
 	wr_count = stream_fifo_count_safe(zrouter.mlag_info.mlag_fifo);
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug(":%s: Processing MLAG write, %d messages in queue",
-			   __FUNCTION__, wr_count);
+			   __func__, wr_count);
 
 	zrouter.mlag_info.t_write = NULL;
 	for (wr_count = 0; wr_count < ZEBRA_MLAG_POST_LIMIT; wr_count++) {
@@ -169,7 +169,7 @@ static int zebra_mlag_thread_handler(struct thread *event)
 		s = stream_fifo_pop_safe(zrouter.mlag_info.mlag_fifo);
 		if (!s) {
 			zlog_debug(":%s: Got a NULL Messages, some thing wrong",
-				   __FUNCTION__);
+				   __func__);
 			break;
 		}
 
@@ -199,7 +199,7 @@ static int zebra_mlag_thread_handler(struct thread *event)
 	}
 
 	if (IS_ZEBRA_DEBUG_MLAG)
-		zlog_debug(":%s: Posted  %d messages to MLAGD", __FUNCTION__,
+		zlog_debug(":%s: Posted  %d messages to MLAGD", __func__,
 			   wr_count);
 	/*
 	 * Currently there is only message write task is enqueued to this
@@ -248,7 +248,7 @@ static int zebra_mlag_signal_write_thread(void)
 {
 	if (zrouter.mlag_info.zebra_pth_mlag) {
 		if (IS_ZEBRA_DEBUG_MLAG)
-			zlog_debug(":%s: Scheduling MLAG write", __FUNCTION__);
+			zlog_debug(":%s: Scheduling MLAG write", __func__);
 		thread_add_event(zrouter.mlag_info.th_master,
 				 zebra_mlag_thread_handler, NULL, 0,
 				 &zrouter.mlag_info.t_write);
@@ -274,7 +274,7 @@ static void zebra_mlag_publish_process_state(struct zserv *client,
 
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug("%s: Publishing MLAG process state:%s to %s Client",
-			   __FUNCTION__,
+			   __func__,
 			   (msg_type == ZEBRA_MLAG_PROCESS_UP) ? "UP" : "DOWN",
 			   (client) ? "one" : "all");
 
@@ -322,7 +322,7 @@ static int zebra_mlag_post_data_from_main_thread(struct thread *thread)
 		zlog_debug(
 			"%s: Posting MLAG data for msg_type:0x%x to "
 			"interested cleints",
-			__FUNCTION__, msg_type);
+			__func__, msg_type);
 
 	msg_len = s->endp - ZEBRA_MLAG_METADATA_LEN;
 	for (ALL_LIST_ELEMENTS_RO(zrouter.client_list, node, client)) {
@@ -337,7 +337,7 @@ static int zebra_mlag_post_data_from_main_thread(struct thread *thread)
 				zlog_debug(
 					"%s: Posting MLAG data of length-%d "
 					"to client:%d ",
-					__FUNCTION__, msg_len, client->proto);
+					__func__, msg_len, client->proto);
 
 			zebra_s = stream_new(msg_len);
 			STREAM_GET(zebra_s->data, s, msg_len);
@@ -583,7 +583,7 @@ void zebra_mlag_forward_client_msg(ZAPI_HANDLER_ARGS)
 		zlog_debug(
 			"%s: Enqueued Client:%d Forwarded data to "
 			"MLAG Thread ",
-			__FUNCTION__, client->proto);
+			__func__, client->proto);
 	return;
 }
 
@@ -644,7 +644,7 @@ static void test_mlag_post_mroute_add()
 
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug("%s: Enqueued MLAG Mroute-add to MLAG Thread ",
-			   __FUNCTION__);
+			   __func__);
 	return;
 }
 
@@ -681,7 +681,7 @@ static void test_mlag_post_mroute_del()
 
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug("%s: Enqueued MLAG Mroute-Del to MLAG Thread ",
-			   __FUNCTION__);
+			   __func__);
 	return;
 }
 
@@ -742,7 +742,7 @@ static void test_mlag_post_mroute_bulk_add()
 
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug("%s: Enqueued MLAG Mroute-Bulk to MLAG Thread ",
-			   __FUNCTION__);
+			   __func__);
 	return;
 }
 
@@ -794,7 +794,7 @@ static void test_mlag_post_mroute_bulk_del()
 
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug("%s: Enqueued MLAG Mroute-Bulk to MLAG Thread ",
-			   __FUNCTION__);
+			   __func__);
 	return;
 }
 
@@ -936,21 +936,20 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 	char buf[80];
 
 	if (IS_ZEBRA_DEBUG_MLAG)
-		zlog_debug("%s: Entering..", __FUNCTION__);
+		zlog_debug("%s: Entering..", __func__);
 
 	rc = zebra_mlag_lib_decode_mlag_hdr(s, &mlag_msg);
 	if (rc)
 		return (rc);
 
 	if (IS_ZEBRA_DEBUG_MLAG)
-		zlog_debug("%s: Decoded msg length:%d..", __FUNCTION__,
+		zlog_debug("%s: Decoded msg length:%d..", __func__,
 			   mlag_msg.data_len);
 
 	memset(tmp_buf, 0, ZEBRA_MLAG_BUF_LIMIT);
 
 	if (IS_ZEBRA_DEBUG_MLAG)
-		zlog_debug("%s: Mlag ProtoBuf encoding of message:%s",
-			   __FUNCTION__,
+		zlog_debug("%s: Mlag ProtoBuf encoding of message:%s", __func__,
 			   zebra_mlag_lib_msgid_to_str(mlag_msg.msg_type, buf,
 						       80));
 
@@ -1133,7 +1132,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug(
 			"%s: length of Mlag ProtoBuf encoding of message:%s, %d",
-			__FUNCTION__,
+			__func__,
 			zebra_mlag_lib_msgid_to_str(mlag_msg.msg_type, buf, 80),
 			len);
 	hdr.type = mlag_msg.msg_type;
@@ -1150,14 +1149,14 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		zlog_debug(
 			"%s: length of Mlag ProtoBuf encoding of message:%s "
 			"with Header  %d",
-			__FUNCTION__,
+			__func__,
 			zebra_mlag_lib_msgid_to_str(mlag_msg.msg_type, buf, 80),
 			len);
 	if (hdr.data.data)
 		free(hdr.data.data);
 
 	if (IS_ZEBRA_DEBUG_MLAG)
-		zlog_debug("%s: Exiting..", __FUNCTION__);
+		zlog_debug("%s: Exiting..", __func__);
 	return (len);
 }
 
@@ -1169,7 +1168,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 	char buf[80];
 
 	if (IS_ZEBRA_DEBUG_MLAG)
-		zlog_debug("%s: Entering..", __FUNCTION__);
+		zlog_debug("%s: Entering..", __func__);
 	hdr = zebra_mlag__header__unpack(NULL, len, data);
 	if (hdr == NULL)
 		return (-1);
@@ -1182,8 +1181,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 	msg_type = hdr->type;
 
 	if (IS_ZEBRA_DEBUG_MLAG)
-		zlog_debug("%s: Mlag ProtoBuf decoding of message:%s",
-			   __FUNCTION__,
+		zlog_debug("%s: Mlag ProtoBuf decoding of message:%s", __func__,
 			   zebra_mlag_lib_msgid_to_str(msg_type, buf, 80));
 
 	/*
@@ -1374,7 +1372,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 		} /*switch*/
 	}
 	if (IS_ZEBRA_DEBUG_MLAG)
-		zlog_debug("%s: Exiting..", __FUNCTION__);
+		zlog_debug("%s: Exiting..", __func__);
 	zebra_mlag__header__free_unpacked(hdr, NULL);
 	return (msg_type);
 }

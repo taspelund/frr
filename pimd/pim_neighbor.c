@@ -150,7 +150,7 @@ int pim_if_dr_election(struct interface *ifp)
 				zlog_debug(
 					"%s: DR is modified on a dual-active"
 					" interface-%s",
-					__FUNCTION__, ifp->name);
+					__func__, ifp->name);
 			pim_mlag_update_dr_state_to_peer(ifp);
 		}
 		return 1;

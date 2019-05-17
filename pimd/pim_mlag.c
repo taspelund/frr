@@ -40,8 +40,7 @@ static char pimMlagEmptyIf[INTERFACE_NAMSIZ];
 			zlog_debug(                                            \
 				"%s: add Dual-active Interface to %s "         \
 				"to oil:%s",                                   \
-				__FUNCTION__, ch->interface->name,             \
-				ch->sg_str);                                   \
+				__func__, ch->interface->name, ch->sg_str);    \
 		pim_channel_add_oif(ch_oil, ch->interface,                     \
 				    PIM_OIF_FLAG_PROTO_IGMP);                  \
 		ch->mlag_am_i_df = true;                                       \
@@ -53,8 +52,7 @@ static char pimMlagEmptyIf[INTERFACE_NAMSIZ];
 			zlog_debug(                                            \
 				"%s: del Dual-active Interface to %s "         \
 				"to oil:%s",                                   \
-				__FUNCTION__, ch->interface->name,             \
-				ch->sg_str);                                   \
+				__func__, ch->interface->name, ch->sg_str);    \
 		pim_channel_del_oif(ch_oil, ch->interface,                     \
 				    PIM_OIF_FLAG_PROTO_IGMP);                  \
 		ch->mlag_am_i_df = false;                                      \
@@ -84,7 +82,7 @@ static void pim_mlag_calculate_df_for_ifchannel(struct pim_ifchannel *ch)
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: Calculating DF for Dual active if-channel%s",
-			   __FUNCTION__, ch->sg_str);
+			   __func__, ch->sg_str);
 
 	/* Local Interface is not configured with Dual active */
 	if (!PIM_I_am_DualActive(pim_ifp)
@@ -93,7 +91,7 @@ static void pim_mlag_calculate_df_for_ifchannel(struct pim_ifchannel *ch)
 			zlog_debug(
 				"%s: Dual -active is not configured on "
 				"both sides local:%d, peer:%d",
-				__FUNCTION__, PIM_I_am_DualActive(pim_ifp),
+				__func__, PIM_I_am_DualActive(pim_ifp),
 				ch->mlag_peer_is_dual_active);
 		PIM_MLAG_UPDATE_OIL_BASED_ON_DR(pim_ifp, ch, ch_oil);
 	}
@@ -103,7 +101,7 @@ static void pim_mlag_calculate_df_for_ifchannel(struct pim_ifchannel *ch)
 			zlog_debug(
 				"%s: Cost_to_rp  is not same local:%u, "
 				"peer:%u",
-				__FUNCTION__, ch->mlag_local_cost_to_rp,
+				__func__, ch->mlag_local_cost_to_rp,
 				ch->mlag_peer_cost_to_rp);
 		if (ch->mlag_local_cost_to_rp < ch->mlag_peer_cost_to_rp)
 			/* My cost to RP is better then peer */
@@ -151,7 +149,7 @@ void pim_mlag_add_entry_to_peer(struct pim_ifchannel *ch)
 
 	pim_mlag_calculate_df_for_ifchannel(ch);
 	if (PIM_DEBUG_MLAG)
-		zlog_debug("%s: Enqueued MLAG Route add for %s", __FUNCTION__,
+		zlog_debug("%s: Enqueued MLAG Route add for %s", __func__,
 			   ch->sg_str);
 }
 
@@ -179,7 +177,7 @@ void pim_mlag_del_entry_to_peer(struct pim_ifchannel *ch)
 	pim_mlag_signal_zpthread();
 
 	if (PIM_DEBUG_MLAG)
-		zlog_debug("%s: Enqueued MLAG Route del for %s", __FUNCTION__,
+		zlog_debug("%s: Enqueued MLAG Route del for %s", __func__,
 			   ch->sg_str);
 }
 
@@ -573,7 +571,7 @@ void pim_mlag_update_dr_state_to_peer(struct interface *ifp)
 		zlog_debug(
 			"%s: DR Role of an Interface-%s changed, "
 			"updating to peer",
-			__FUNCTION__, ifp->name);
+			__func__, ifp->name);
 
 	for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, node, up)) {
 		ch = pim_ifchannel_find(ifp, &up->sg);
@@ -593,7 +591,7 @@ void pim_mlag_update_cost_to_rp_to_peer(struct pim_upstream *up)
 		zlog_debug(
 			"%s: RP cost of upstream-%s changed, "
 			"updating to peer",
-			__FUNCTION__, up->sg_str);
+			__func__, up->sg_str);
 
 	for (ALL_LIST_ELEMENTS(up->ifchannels, chnode, chnextnode, ch)) {
 		pim_ifp = (ch->interface) ? ch->interface->info : NULL;
@@ -690,8 +688,8 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 	struct interface *peerlink_rif_p;
 
 	if (PIM_DEBUG_MLAG)
-		zlog_debug("%s: msg dump: my_role:%d, peer_state:%d",
-			   __FUNCTION__, msg.my_role, msg.peer_state);
+		zlog_debug("%s: msg dump: my_role:%d, peer_state:%d", __func__,
+			   msg.my_role, msg.peer_state);
 
 	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
 		if (PIM_DEBUG_MLAG)
@@ -818,7 +816,7 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 			"%s: msg dump: vrf_name:%s, s.ip:0x%x, g.ip:0x%x "
 			"cost:%u, vni_id:%d, DR:%d, Dual active:%d, vrf_id:0x%x"
 			"intf_name:%s",
-			__FUNCTION__, msg.vrf_name, msg.source_ip, msg.group_ip,
+			__func__, msg.vrf_name, msg.source_ip, msg.group_ip,
 			msg.cost_to_rp, msg.vni_id, msg.am_i_dr,
 			msg.am_i_dual_active, msg.vrf_id, msg.intf_name);
 
@@ -846,7 +844,7 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 			zlog_debug(
 				"%s: Invalid params...vrf:%p, ifp,%p, "
 				"pim_ifp:%p",
-				__FUNCTION__, vrf, ifp, ifp->info);
+				__func__, vrf, ifp, ifp->info);
 		return;
 	}
 
@@ -858,7 +856,7 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 	if (ch) {
 		if (PIM_DEBUG_MLAG)
 			zlog_debug("%s: Updating ifchannel-%s peer mlag params",
-				   __FUNCTION__, ch->sg_str);
+				   __func__, ch->sg_str);
 		ch->mlag_peer_cost_to_rp = msg.cost_to_rp;
 		ch->mlag_peer_is_dr = msg.am_i_dr;
 		ch->mlag_peer_is_dual_active = msg.am_i_dual_active;
@@ -866,7 +864,7 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 	} else {
 		if (PIM_DEBUG_MLAG)
 			zlog_debug("%s: failed to find if-channel...",
-				   __FUNCTION__);
+				   __func__);
 	}
 }
 
@@ -876,7 +874,7 @@ static void pim_mlag_process_mroute_del(struct mlag_mroute_del msg)
 		zlog_debug(
 			"%s: msg dump: vrf_name:%s, s.ip:0x%x, g.ip:0x%x "
 			"vni_id:%d, vrf_id:0x%x intf_name:%s",
-			__FUNCTION__, msg.vrf_name, msg.source_ip, msg.group_ip,
+			__func__, msg.vrf_name, msg.source_ip, msg.group_ip,
 			msg.vni_id, msg.vrf_id, msg.intf_name);
 
 	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
@@ -899,7 +897,7 @@ static void pim_mlag_process_peer_status_update(struct mlag_pim_status msg)
 {
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: msg dump: switchd_state:%d, svi_state:%d",
-			   __FUNCTION__, msg.switchd_state, msg.svi_state);
+			   __func__, msg.switchd_state, msg.svi_state);
 	++router->mlag_stats.msg.pim_status_updates;
 }
 
@@ -916,7 +914,7 @@ int pim_zebra_mlag_handle_msg(struct stream *s, int len)
 	if (PIM_DEBUG_MLAG)
 		zlog_debug(
 			"%s: Received msg type:%s length:%d, bulk_cnt:%d",
-			__FUNCTION__,
+			__func__,
 			zebra_mlag_lib_msgid_to_str(mlag_msg.msg_type, buf, 80),
 			mlag_msg.data_len, mlag_msg.msg_cnt);
 
@@ -993,7 +991,7 @@ int pim_zebra_mlag_handle_msg(struct stream *s, int len)
 int pim_zebra_mlag_process_up(void)
 {
 	if (PIM_DEBUG_MLAG)
-		zlog_debug("%s: Received Process-Up from Mlag", __FUNCTION__);
+		zlog_debug("%s: Received Process-Up from Mlag", __func__);
 
 	/*
 	 * Incase of local MLAG restyrat, PIM needs to replay all the dat
@@ -1022,7 +1020,7 @@ static void pim_mlag_param_reset(void)
 int pim_zebra_mlag_process_down(void)
 {
 	if (PIM_DEBUG_MLAG)
-		zlog_debug("%s: Received Process-Down from Mlag", __FUNCTION__);
+		zlog_debug("%s: Received Process-Down from Mlag", __func__);
 
 	/*
 	 * Local CLAG is down, reset peer data
@@ -1062,7 +1060,7 @@ static int pim_mlag_register_handler(struct thread *thread)
 		zlog_debug(
 			"%s: Posting Client Register to MLAG from PIM, "
 			"mask:0x%x",
-			__FUNCTION__, bit_mask);
+			__func__, bit_mask);
 
 	zclient_send_mlag_register(zclient, bit_mask);
 	return (0);
@@ -1086,7 +1084,7 @@ static int pim_mlag_deregister_handler(struct thread *thread)
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: Posting Client De-Register to MLAG from PIM",
-			   __FUNCTION__);
+			   __func__);
 	router->connected_to_mlag = false;
 	zclient_send_mlag_deregister(zclient);
 	return (0);
@@ -1115,7 +1113,7 @@ void pim_if_configure_mlag_dualactive(struct pim_interface *pim_ifp)
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: Configuring active-active on Interface: %s",
-			   __FUNCTION__, "NULL");
+			   __func__, "NULL");
 
 	pim_ifp->activeactive = true;
 	if (pim_ifp->pim)
@@ -1126,7 +1124,7 @@ void pim_if_configure_mlag_dualactive(struct pim_interface *pim_ifp)
 		zlog_debug(
 			"%s: Total active-active configured Interfaces on "
 			"router: %d, Inst:%d",
-			__FUNCTION__, pim_ifp->pim->inst_mlag_intf_cnt,
+			__func__, pim_ifp->pim->inst_mlag_intf_cnt,
 			router->pim_mlag_intf_cnt);
 
 	if (router->pim_mlag_intf_cnt == 1) {
@@ -1145,7 +1143,7 @@ void pim_if_unconfigure_mlag_dualactive(struct pim_interface *pim_ifp)
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: UnConfiguring active-active on Interface: %s",
-			   __FUNCTION__, "NULL");
+			   __func__, "NULL");
 
 	pim_ifp->activeactive = false;
 	if (pim_ifp->pim)
@@ -1156,7 +1154,7 @@ void pim_if_unconfigure_mlag_dualactive(struct pim_interface *pim_ifp)
 		zlog_debug(
 			"%s: Total active-active configured Interfaces on "
 			"router: %d, Inst:%d",
-			__FUNCTION__, pim_ifp->pim->inst_mlag_intf_cnt,
+			__func__, pim_ifp->pim->inst_mlag_intf_cnt,
 			router->pim_mlag_intf_cnt);
 
 	if (router->pim_mlag_intf_cnt == 0) {
