@@ -85,21 +85,21 @@ char *zebra_mlag_lib_msgid_to_str(enum mlag_msg_type msg_type, char *buf,
 int zebra_mlag_lib_decode_mlag_hdr(struct stream *s, struct mlag_msg *msg)
 {
 	if (s == NULL || msg == NULL)
-		return (-1);
+		return -1;
 
 	STREAM_GETL(s, msg->msg_type);
 	STREAM_GETW(s, msg->data_len);
 	STREAM_GETW(s, msg->msg_cnt);
-	return (0);
+	return 0;
 stream_failure:
-	return (-1);
+	return -1;
 }
 
 int zebra_mlag_lib_decode_mroute_add(struct stream *s,
 				     struct mlag_mroute_add *msg)
 {
 	if (s == NULL || msg == NULL)
-		return (-1);
+		return -1;
 
 	STREAM_GET(msg->vrf_name, s, VRF_NAMSIZ);
 	STREAM_GETL(s, msg->source_ip);
@@ -110,16 +110,16 @@ int zebra_mlag_lib_decode_mroute_add(struct stream *s,
 	STREAM_GETC(s, msg->am_i_dual_active);
 	STREAM_GETL(s, msg->vrf_id);
 	STREAM_GET(msg->intf_name, s, INTERFACE_NAMSIZ);
-	return (0);
+	return 0;
 stream_failure:
-	return (-1);
+	return -1;
 }
 
 int zebra_mlag_lib_decode_mroute_del(struct stream *s,
 				     struct mlag_mroute_del *msg)
 {
 	if (s == NULL || msg == NULL)
-		return (-1);
+		return -1;
 
 	STREAM_GET(msg->vrf_name, s, VRF_NAMSIZ);
 	STREAM_GETL(s, msg->source_ip);
@@ -127,35 +127,35 @@ int zebra_mlag_lib_decode_mroute_del(struct stream *s,
 	STREAM_GETL(s, msg->vni_id);
 	STREAM_GETL(s, msg->vrf_id);
 	STREAM_GET(msg->intf_name, s, INTERFACE_NAMSIZ);
-	return (0);
+	return 0;
 stream_failure:
-	return (-1);
+	return -1;
 }
 
 int zebra_mlag_lib_decode_pim_status(struct stream *s,
 				     struct mlag_pim_status *msg)
 {
 	if (s == NULL || msg == NULL)
-		return (-1);
+		return -1;
 
 	STREAM_GETL(s, msg->switchd_state);
 	STREAM_GETL(s, msg->svi_state);
-	return (0);
+	return 0;
 stream_failure:
-	return (-1);
+	return -1;
 }
 
 int zebra_mlag_lib_decode_mlag_status(struct stream *s, struct mlag_status *msg)
 {
 	if (s == NULL || msg == NULL)
-		return (-1);
+		return -1;
 
 	STREAM_GET(msg->peerlink_rif, s, INTERFACE_NAMSIZ);
 	STREAM_GETL(s, msg->my_role);
 	STREAM_GETL(s, msg->peer_state);
-	return (0);
+	return 0;
 stream_failure:
-	return (-1);
+	return -1;
 }
 
 int zebra_mlag_lib_decode_vxlan_update(struct stream *s,

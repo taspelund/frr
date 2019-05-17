@@ -45,7 +45,7 @@
 
 #ifdef HAVE_CUMULUS
 
-static struct thread_master *zmlag_master = NULL;
+static struct thread_master *zmlag_master;
 static int mlag_socket;
 
 static int zebra_mlag_connect(struct thread *thread);
@@ -78,10 +78,8 @@ static int zebra_mlag_read(struct thread *thread)
 	data_len = read(mlag_socket, mlag_rd_buffer, ZEBRA_MLAG_BUF_LIMIT);
 	if (data_len <= 0) {
 		if (IS_ZEBRA_DEBUG_MLAG)
-			zlog_debug(
-				"Failure to read mlag socket: %d %s(%d), "
-				"starting over",
-				mlag_socket, safe_strerror(errno), errno);
+			zlog_debug("Failure on mlag socket: %d %s(%d), restart",
+				   mlag_socket, safe_strerror(errno), errno);
 		zebra_mlag_handle_process_state(MLAG_DOWN);
 		return -1;
 	}
@@ -123,8 +121,7 @@ static int zebra_mlag_connect(struct thread *thread)
 	if (connect(mlag_socket, (struct sockaddr *)&svr, sizeof(svr)) == -1) {
 		if (IS_ZEBRA_DEBUG_MLAG)
 			zlog_debug(
-				"Unable to connect to %s trying again "
-				"in 10 seconds",
+				"Unable to connect to %s try again in 10 secs",
 				svr.sun_path);
 		close(mlag_socket);
 		zrouter.mlag_info.timer_running = true;
@@ -174,8 +171,7 @@ int zebra_mlag_private_open_channel(void)
 	if (zrouter.mlag_info.timer_running == true) {
 		if (IS_ZEBRA_DEBUG_MLAG)
 			zlog_debug(
-				"%s: Connection retry is in progress for "
-				"MLAGD",
+				"%s: Connection retry is in progress for MLAGD",
 				__func__);
 		return 0;
 	}
@@ -197,11 +193,9 @@ int zebra_mlag_private_close_channel(void)
 
 	if (zrouter.mlag_info.clients_interested_cnt) {
 		if (IS_ZEBRA_DEBUG_MLAG)
-			zlog_debug(
-				"%s: still %d clients are connected, "
-				"can't close",
-				__func__,
-				zrouter.mlag_info.clients_interested_cnt);
+			zlog_debug("%s: still %d clients are connected, skip",
+				   __func__,
+				   zrouter.mlag_info.clients_interested_cnt);
 		return -1;
 	}
 
@@ -231,21 +225,19 @@ int zebra_mlag_private_write_data(uint8_t *data, uint32_t len)
 
 void zebra_mlag_private_monitor_state(void)
 {
-	return;
 }
 
-int zebra_mlag_private_open_channel()
+int zebra_mlag_private_open_channel(void)
 {
 	return 0;
 }
 
-int zebra_mlag_private_close_channel()
+int zebra_mlag_private_close_channel(void)
 {
 	return 0;
 }
 
 void zebra_mlag_private_cleanup_data(void)
 {
-	return;
 }
 #endif /*HAVE_CUMULUS*/

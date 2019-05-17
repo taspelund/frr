@@ -29,7 +29,7 @@ extern struct zclient *zclient;
 
 #define PIM_MLAG_POST_LIMIT 100
 
-int32_t mlag_bulk_cnt = 0;
+int32_t mlag_bulk_cnt;
 
 static void pim_mlag_zebra_fill_header(enum mlag_msg_type msg_type)
 {
@@ -158,7 +158,7 @@ static int pim_mlag_zthread_handler(struct thread *event)
 			   __func__, wr_count);
 
 	if (wr_count == 0)
-		return (0);
+		return 0;
 
 	for (wr_count = 0; wr_count < PIM_MLAG_POST_LIMIT; wr_count++) {
 		/* FIFO is empty,wait for teh message to be add */
@@ -212,7 +212,7 @@ stream_failure:
 	if (wr_count >= PIM_MLAG_POST_LIMIT)
 		pim_mlag_signal_zpthread();
 
-	return (0);
+	return 0;
 }
 
 
