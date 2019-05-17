@@ -8333,8 +8333,11 @@ void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
 						       bgp_path_selection_reason2str(bn->reason));
 			} else {
 				vty_out(vty, ", best");
-				vty_out(vty, " (%s)",
-					bgp_path_selection_reason2str(bn->reason));
+				/* Once internal testing is cleared up
+				 * remove this comment
+				 * vty_out(vty, " (%s)",
+				 * bgp_path_selection_reason2str(bn->reason));
+				 */
 			}
 		}
 
