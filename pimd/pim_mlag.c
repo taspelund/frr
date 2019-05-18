@@ -66,6 +66,14 @@ extern struct zclient *zclient;
 			PIM_MLAG_DEL_OIF_TO_OIL(ch, ch_oil);                   \
 	} while (0)
 
+#define PIM_MLAG_UPDATE_OIL_BASED_ON_MLAG_ROLE(ch, ch_oil)                     \
+	do {                                                                   \
+		if (router->mlag_role == MLAG_ROLE_PRIMARY)                    \
+			PIM_MLAG_ADD_OIF_TO_OIL(ch, ch_oil);                   \
+		else                                                           \
+			PIM_MLAG_DEL_OIF_TO_OIL(ch, ch_oil);                   \
+	} while (0)
+
 
 static void pim_mlag_calculate_df_for_ifchannel(struct pim_ifchannel *ch)
 {
@@ -83,6 +91,12 @@ static void pim_mlag_calculate_df_for_ifchannel(struct pim_ifchannel *ch)
 		zlog_debug("%s: Calculating DF for Dual active if-channel%s",
 			   __func__, ch->sg_str);
 
+	/* Standalone mode: Traffic will not be forwarded */
+	if (router->mlag_role == MLAG_ROLE_NONE) {
+		PIM_MLAG_UPDATE_OIL_BASED_ON_MLAG_ROLE(ch, ch_oil);
+		return;
+	}
+
 	/* Local Interface is not configured with Dual active */
 	if (!PIM_I_am_DualActive(pim_ifp)
 	    || ch->mlag_peer_is_dual_active == false) {
@@ -90,7 +104,8 @@ static void pim_mlag_calculate_df_for_ifchannel(struct pim_ifchannel *ch)
 			zlog_debug("%s: MLAG config miss local:%d, peer:%d",
 				   __func__, PIM_I_am_DualActive(pim_ifp),
 				   ch->mlag_peer_is_dual_active);
-		PIM_MLAG_UPDATE_OIL_BASED_ON_DR(pim_ifp, ch, ch_oil);
+		PIM_MLAG_UPDATE_OIL_BASED_ON_MLAG_ROLE(ch, ch_oil);
+		return;
 	}
 
 	if (ch->mlag_local_cost_to_rp != ch->mlag_peer_cost_to_rp) {
@@ -105,8 +120,8 @@ static void pim_mlag_calculate_df_for_ifchannel(struct pim_ifchannel *ch)
 		else
 			PIM_MLAG_DEL_OIF_TO_OIL(ch, ch_oil);
 	} else {
-		/* Cost is same, Tie break is DR */
-		PIM_MLAG_UPDATE_OIL_BASED_ON_DR(pim_ifp, ch, ch_oil);
+		/* Cost is same, Tie break is MLAG Role */
+		PIM_MLAG_UPDATE_OIL_BASED_ON_MLAG_ROLE(ch, ch_oil);
 	}
 }
 
@@ -600,28 +615,31 @@ void pim_mlag_update_cost_to_rp_to_peer(struct pim_upstream *up)
 
 static void pim_mlag_handle_state_change_for_ifp(struct pim_instance *pim,
 						 struct interface *ifp,
-						 bool is_up)
+						 bool role_change,
+						 bool state_change)
 {
-	struct pim_upstream *up;
 	struct pim_ifchannel *ch;
-	struct listnode *node;
+	struct pim_interface *pim_ifp = ifp->info;
 
-	for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, node, up)) {
-		ch = pim_ifchannel_find(ifp, &up->sg);
+	RB_FOREACH (ch, pim_ifchannel_rb, &pim_ifp->ifchannel_rb) {
 		if (ch) {
-			if (is_up)
-				pim_mlag_add_entry_to_peer(ch);
-			else {
-				/* Reset peer data */
-				ch->mlag_peer_cost_to_rp =
-					PIM_ASSERT_ROUTE_METRIC_MAX;
+			if (role_change == true)
 				pim_mlag_calculate_df_for_ifchannel(ch);
+			else if (state_change == true) {
+				if (router->connected_to_mlag == true)
+					pim_mlag_add_entry_to_peer(ch);
+				else {
+					/* Reset peer data */
+					ch->mlag_peer_cost_to_rp =
+						PIM_ASSERT_ROUTE_METRIC_MAX;
+					pim_mlag_calculate_df_for_ifchannel(ch);
+				}
 			}
 		}
 	}
 }
 
-static int pim_mlag_down_handler(struct thread *thread)
+static int pim_mlag_role_change_handler(struct thread *thread)
 {
 	struct vrf *vrf;
 	struct interface *ifp;
@@ -638,13 +656,13 @@ static int pim_mlag_down_handler(struct thread *thread)
 			if (!ifp->info || !PIM_I_am_DualActive(pim_ifp))
 				continue;
 			pim_mlag_handle_state_change_for_ifp(vrf->info, ifp,
-							     false);
+							     true, false);
 		}
 	}
 	return (0);
 }
 
-static int pim_mlag_local_up_handler(struct thread *thread)
+static int pim_mlag_state_change_handler(struct thread *thread)
 {
 	struct vrf *vrf;
 	struct interface *ifp;
@@ -661,7 +679,7 @@ static int pim_mlag_local_up_handler(struct thread *thread)
 			if (!ifp->info || !PIM_I_am_DualActive(pim_ifp))
 				continue;
 			pim_mlag_handle_state_change_for_ifp(vrf->info, ifp,
-							     true);
+							     false, true);
 		}
 	}
 	return (0);
@@ -723,8 +741,6 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 			router->mlag_flags &= ~PIM_MLAGF_REMOTE_CONN_UP;
 		}
 		router->connected_to_mlag = false;
-		thread_add_event(router->master, pim_mlag_down_handler, NULL, 0,
-				 NULL);
 	}
 
 	/* apply the changes */
@@ -761,6 +777,8 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 	} else if (role_chg) {
 		/* MLAG role changed without a state change */
 		pim_mlag_up_local_reeval(true /*mlagd_send*/, "role_chg");
+		thread_add_event(router->master, pim_mlag_role_change_handler,
+				 NULL, 0, NULL);
 	}
 }
 
@@ -996,7 +1014,7 @@ int pim_zebra_mlag_process_up(void)
 	 */
 	router->connected_to_mlag = true;
 	router->mlag_flags |= PIM_MLAGF_LOCAL_CONN_UP;
-	thread_add_event(router->master, pim_mlag_local_up_handler, NULL, 0,
+	thread_add_event(router->master, pim_mlag_state_change_handler, NULL, 0,
 			 NULL);
 	return 0;
 }
@@ -1033,7 +1051,8 @@ int pim_zebra_mlag_process_down(void)
 	pim_mlag_up_remote_del_all();
 	/* notify the vxlan component */
 	pim_mlag_vxlan_state_update();
-	thread_add_event(router->master, pim_mlag_down_handler, NULL, 0, NULL);
+	thread_add_event(router->master, pim_mlag_state_change_handler, NULL, 0,
+			 NULL);
 	return 0;
 }
 
