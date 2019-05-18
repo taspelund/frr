@@ -52,6 +52,11 @@ enum mlag_svi_state {
 	MLAG_SVI_STATE_UP,
 };
 
+enum mlag_owner {
+	MLAG_OWNER_NONE,
+	MLAG_OWNER_INTERFACE,
+	MLAG_OWNER_VXLAN,
+};
 
 /*
  * This message definition should match mlag.proto
@@ -101,7 +106,7 @@ struct mlag_mroute_add {
 	uint32_t source_ip;
 	uint32_t group_ip;
 	uint32_t cost_to_rp;
-	uint32_t vni_id;
+	enum mlag_owner owner_id;
 	uint8_t am_i_dr;
 	uint8_t am_i_dual_active;
 	uint32_t vrf_id;
@@ -114,7 +119,7 @@ struct mlag_mroute_del {
 	char vrf_name[VRF_NAMSIZ];
 	uint32_t source_ip;
 	uint32_t group_ip;
-	uint32_t vni_id;
+	enum mlag_owner owner_id;
 	uint32_t vrf_id;
 	char intf_name[INTERFACE_NAMSIZ];
 };

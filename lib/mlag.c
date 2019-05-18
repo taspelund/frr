@@ -105,7 +105,7 @@ int zebra_mlag_lib_decode_mroute_add(struct stream *s,
 	STREAM_GETL(s, msg->source_ip);
 	STREAM_GETL(s, msg->group_ip);
 	STREAM_GETL(s, msg->cost_to_rp);
-	STREAM_GETL(s, msg->vni_id);
+	STREAM_GETL(s, msg->owner_id);
 	STREAM_GETC(s, msg->am_i_dr);
 	STREAM_GETC(s, msg->am_i_dual_active);
 	STREAM_GETL(s, msg->vrf_id);
@@ -124,7 +124,7 @@ int zebra_mlag_lib_decode_mroute_del(struct stream *s,
 	STREAM_GET(msg->vrf_name, s, VRF_NAMSIZ);
 	STREAM_GETL(s, msg->source_ip);
 	STREAM_GETL(s, msg->group_ip);
-	STREAM_GETL(s, msg->vni_id);
+	STREAM_GETL(s, msg->owner_id);
 	STREAM_GETL(s, msg->vrf_id);
 	STREAM_GET(msg->intf_name, s, INTERFACE_NAMSIZ);
 	return 0;

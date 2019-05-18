@@ -30,7 +30,6 @@
 extern struct zclient *zclient;
 
 #define PIM_MLAG_METADATA_LEN 4
-static char pimMlagEmptyIf[INTERFACE_NAMSIZ];
 
 /*********************ACtual Data processing *****************************/
 /* TBD: There can be duplicate updates to FIB***/
@@ -135,7 +134,7 @@ void pim_mlag_add_entry_to_peer(struct pim_ifchannel *ch)
 	stream_putl(s, htonl(ch->sg.src.s_addr));
 	stream_putl(s, htonl(ch->sg.grp.s_addr));
 	stream_putl(s, ch->mlag_local_cost_to_rp);
-	stream_putl(s, 0xa5a5);
+	stream_putl(s, MLAG_OWNER_INTERFACE);
 	stream_putc(s, PIM_I_am_DR(pim_ifp));
 	stream_putc(s, PIM_I_am_DualActive(pim_ifp));
 	stream_putl(s, ch->interface->vrf_id);
@@ -166,7 +165,7 @@ void pim_mlag_del_entry_to_peer(struct pim_ifchannel *ch)
 	stream_put(s, vrf->name, VRF_NAMSIZ);
 	stream_putl(s, htonl(ch->sg.src.s_addr));
 	stream_putl(s, htonl(ch->sg.grp.s_addr));
-	stream_putl(s, 0xa5a5);
+	stream_putl(s, MLAG_OWNER_INTERFACE);
 	stream_putl(s, ch->interface->vrf_id);
 	stream_put(s, ch->interface->name, INTERFACE_NAMSIZ);
 
@@ -429,14 +428,14 @@ static void pim_mlag_up_local_add_send(struct pim_instance *pim,
 	stream_putl(s, ntohl(up->sg.grp.s_addr));
 
 	stream_putl(s, pim_up_mlag_local_cost(up));
-	/* XXX - VNI field should be removed */
-	stream_putl(s, 0);
+	/* XXX - who is addding*/
+	stream_putl(s, MLAG_OWNER_VXLAN);
 	/* XXX - am_i_DR field should be removed */
 	stream_putc(s, false);
 	stream_putc(s, !(PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags)));
 	stream_putl(s, vrf->vrf_id);
-	/* XXX - temp. this field should be removed. */
-	stream_put(s, pimMlagEmptyIf, INTERFACE_NAMSIZ);
+	/* XXX - this field is a No-op for VXLAN*/
+	stream_put(s, NULL, INTERFACE_NAMSIZ);
 
 	stream_fifo_push_safe(router->mlag_fifo, s);
 	pim_mlag_signal_zpthread();
@@ -465,11 +464,11 @@ static void pim_mlag_up_local_del_send(struct pim_instance *pim,
 	stream_put(s, vrf->name, VRF_NAMSIZ);
 	stream_putl(s, ntohl(up->sg.src.s_addr));
 	stream_putl(s, ntohl(up->sg.grp.s_addr));
-	/* XXX - VNI field should be removed */
-	stream_putl(s, 0);
+	/* XXX - who is adding */
+	stream_putl(s, MLAG_OWNER_VXLAN);
 	stream_putl(s, vrf->vrf_id);
-	/* XXX - temp. this field should be removed. */
-	stream_put(s, pimMlagEmptyIf, INTERFACE_NAMSIZ);
+	/* XXX - this field is a No-op for VXLAN */
+	stream_put(s, NULL, INTERFACE_NAMSIZ);
 
 	/* XXX - is this the the most optimal way to do things */
 	stream_fifo_push_safe(router->mlag_fifo, s);
@@ -810,8 +809,8 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 			__func__, msg.vrf_name, msg.source_ip, msg.group_ip,
 			msg.cost_to_rp);
 		zlog_debug(
-			"vni_id:%d, DR:%d, Dual active:%d, vrf_id:0x%x intf_name:%s",
-			msg.vni_id, msg.am_i_dr, msg.am_i_dual_active,
+			"owner_id:%d, DR:%d, Dual active:%d, vrf_id:0x%x intf_name:%s",
+			msg.owner_id, msg.am_i_dr, msg.am_i_dual_active,
 			msg.vrf_id, msg.intf_name);
 	}
 
@@ -824,8 +823,7 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 
 	++router->mlag_stats.msg.mroute_add_rx;
 
-	if (!msg.intf_name[0] ||
-		!strcmp(msg.intf_name, PIM_VXLAN_TERM_DEV_NAME)) {
+	if (msg.owner_id == MLAG_OWNER_VXLAN) {
 		pim_mlag_up_remote_add(&msg);
 		return;
 	}
@@ -867,7 +865,7 @@ static void pim_mlag_process_mroute_del(struct mlag_mroute_del msg)
 	if (PIM_DEBUG_MLAG) {
 		zlog_debug("%s: msg dump: vrf_name:%s, s.ip:0x%x, g.ip:0x%x ",
 			   __func__, msg.vrf_name, msg.source_ip, msg.group_ip);
-		zlog_debug("vni_id:%d, vrf_id:0x%x intf_name:%s", msg.vni_id,
+		zlog_debug("owner_id:%d, vrf_id:0x%x intf_name:%s", msg.owner_id,
 			   msg.vrf_id, msg.intf_name);
 	}
 
@@ -880,8 +878,7 @@ static void pim_mlag_process_mroute_del(struct mlag_mroute_del msg)
 
 	++router->mlag_stats.msg.mroute_del_rx;
 
-	if (!msg.intf_name[0] ||
-		!strcmp(msg.intf_name, PIM_VXLAN_TERM_DEV_NAME)) {
+	if (msg.owner_id == MLAG_OWNER_VXLAN) {
 		pim_mlag_up_remote_del(&msg);
 		return;
 	}
@@ -1193,8 +1190,6 @@ void pim_instance_mlag_terminate(struct pim_instance *pim)
 
 void pim_mlag_init(void)
 {
-	memset(pimMlagEmptyIf, 0, sizeof(pimMlagEmptyIf));
-	strcpy(pimMlagEmptyIf, PIM_VXLAN_TERM_DEV_NAME);
 	pim_mlag_param_reset();
 	router->pim_mlag_intf_cnt = 0;
 	router->connected_to_mlag = false;

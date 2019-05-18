@@ -136,7 +136,7 @@ message ZebraMlagMrouteAdd {
     uint32   source_ip = 2;
     uint32   group_ip = 3;
     uint32   cost_to_rp = 4;
-    uint32   vni_id = 5;
+    uint32   owner_id = 5;
     bool     am_i_DR = 6;
     bool     am_i_Dual_active = 7;
     uint32   vrf_id = 8;
@@ -147,7 +147,7 @@ message ZebraMlagMrouteDel {
     string   vrf_name = 1;
     uint32   source_ip = 2;
     uint32   group_ip = 3;
-    uint32   vni_id = 4;
+    uint32   owner_id = 4;
     uint32   vrf_id = 5;
     string   intf_name = 6;
 }
