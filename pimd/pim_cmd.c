@@ -3961,9 +3961,51 @@ DEFUN (show_ip_pim_mlag_summary,
 	char role_buf[MLAG_ROLE_STRSIZE];
 	char addr_buf[INET_ADDRSTRLEN];
 
-	if (uj)
-		/* XXX: need to add json output */
+	if (uj) {
+		json_object *json = NULL;
+		json_object *json_stat = NULL;
+
+		json = json_object_new_object();
+		if (router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)
+			json_object_boolean_true_add(json, "mlagConnUp");
+		if (router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)
+			json_object_boolean_true_add(json, "mlagPeerConnUp");
+		json_object_string_add(json, "mlagRole",
+				mlag_role2str(router->mlag_role,
+					role_buf, sizeof(role_buf)));
+		inet_ntop(AF_INET, &router->local_vtep_ip,
+				addr_buf, INET_ADDRSTRLEN);
+		json_object_string_add(json, "localVtepIp", addr_buf);
+		inet_ntop(AF_INET, &router->anycast_vtep_ip,
+				addr_buf, INET_ADDRSTRLEN);
+		json_object_string_add(json, "anycastVtepIp", addr_buf);
+
+		json_stat = json_object_new_object();
+		json_object_int_add(json_stat, "mlagConnFlaps",
+				router->mlag_stats.mlagd_session_downs);
+		json_object_int_add(json_stat, "mlagPeerConnFlaps",
+				router->mlag_stats.peer_session_downs);
+		json_object_int_add(json_stat, "mrouteAddRx",
+				router->mlag_stats.msg.mroute_add_rx);
+		json_object_int_add(json_stat, "mrouteAddTx",
+				router->mlag_stats.msg.mroute_add_tx);
+		json_object_int_add(json_stat, "mrouteDelRx",
+				router->mlag_stats.msg.mroute_del_rx);
+		json_object_int_add(json_stat, "mrouteDelTx",
+				router->mlag_stats.msg.mroute_del_tx);
+		json_object_int_add(json_stat, "mlagStatusUpdates",
+				router->mlag_stats.msg.mlag_status_updates);
+		json_object_int_add(json_stat, "pimStatusUpdates",
+				router->mlag_stats.msg.pim_status_updates);
+		json_object_int_add(json_stat, "vxlanUpdates",
+				router->mlag_stats.msg.vxlan_updates);
+		json_object_object_add(json, "connStats", json_stat);
+
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					json, JSON_C_TO_STRING_PRETTY));
+		json_object_free(json);
 		return CMD_SUCCESS;
+	}
 
 	vty_out(vty, "MLAG daemon connection: %s\n",
 		(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)
@@ -4247,16 +4289,25 @@ DEFUN (show_ip_pim_local_membership,
 
 static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 		struct vty *vty, struct pim_upstream *up,
-		char *src_str, char *grp_str, bool uj)
+		char *src_str, char *grp_str, json_object *json)
 {
 
-	if (uj) {
-		json_object *json = NULL;
+	if (json) {
+		json_object *json_row = NULL;
 		json_object *own_list = NULL;
+		json_object *json_group = NULL;
 
-		json = json_object_new_object();
-		json_object_string_add(json, "source", src_str);
-		json_object_string_add(json, "group", grp_str);
+
+		json_object_object_get_ex(json, grp_str, &json_group);
+		if (!json_group) {
+			json_group = json_object_new_object();
+			json_object_object_add(json, grp_str,
+					json_group);
+		}
+
+		json_row = json_object_new_object();
+		json_object_string_add(json_row, "source", src_str);
+		json_object_string_add(json_row, "group", grp_str);
 
 		own_list = json_object_new_array();
 		if (pim_up_mlag_is_local(up))
@@ -4264,17 +4315,18 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 					json_object_new_string("local"));
 		if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
 			json_object_array_add(own_list,
-					json_object_new_string("remote"));
-		json_object_object_add(json, "owners", own_list);
+					json_object_new_string("peer"));
+		json_object_object_add(json_row, "owners", own_list);
 
-		json_object_int_add(json, "localCost",
+		json_object_int_add(json_row, "localCost",
 				pim_up_mlag_local_cost(up));
-		json_object_int_add(json, "remoteCost",
+		json_object_int_add(json_row, "remoteCost",
 				pim_up_mlag_remote_cost(up));
 		if (PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags))
-			json_object_boolean_false_add(json, "df");
+			json_object_boolean_false_add(json_row, "df");
 		else
-			json_object_boolean_true_add(json, "df");
+			json_object_boolean_true_add(json_row, "df");
+		json_object_object_add(json_group, src_str, json_row);
 	} else {
 		char own_str[6];
 
@@ -4282,7 +4334,7 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 		if (pim_up_mlag_is_local(up))
 			strcpy(own_str + strlen(own_str), "L");
 		if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
-			strcpy(own_str + strlen(own_str), "R");
+			strcpy(own_str + strlen(own_str), "P");
 		/* XXX - fixup, print paragraph output */
 		vty_out(vty,
 				"%-15s %-15s %-6s %-11d %-12d %2s\n",
@@ -4303,6 +4355,10 @@ static void pim_show_mlag_up_detail(struct vrf *vrf,
 	struct listnode *upnode;
 	struct pim_upstream *up;
 	struct pim_instance *pim = vrf->info;
+	json_object *json = NULL;
+
+	if (uj)
+		json = json_object_new_object();
 
 	for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
 		if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER) &&
@@ -4324,7 +4380,13 @@ static void pim_show_mlag_up_detail(struct vrf *vrf,
 				continue;
 		}
 		pim_show_mlag_up_entry_detail(vrf, vty, up,
-				src_str, grp_str, uj);
+				src_str, grp_str, json);
+	}
+
+	if (uj) {
+		vty_out(vty, "%s\n", json_object_to_json_string_ext(
+					json, JSON_C_TO_STRING_PRETTY));
+		json_object_free(json);
 	}
 }
 
@@ -4337,6 +4399,7 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 	char src_str[INET_ADDRSTRLEN];
 	char grp_str[INET_ADDRSTRLEN];
 	struct pim_instance *pim = vrf->info;
+	json_object *json_group = NULL;
 
 	if (uj) {
 		json = json_object_new_object();
@@ -4349,13 +4412,19 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 		if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER) &&
 			!pim_up_mlag_is_local(up))
 			continue;
-
-		json_row = json_object_new_object();
 		pim_inet4_dump("<src?>", up->sg.src, src_str, sizeof(src_str));
 		pim_inet4_dump("<grp?>", up->sg.grp, grp_str, sizeof(grp_str));
 		if (uj) {
 			json_object *own_list = NULL;
 
+			json_object_object_get_ex(json, grp_str, &json_group);
+			if (!json_group) {
+				json_group = json_object_new_object();
+				json_object_object_add(json, grp_str,
+						json_group);
+			}
+
+			json_row = json_object_new_object();
 			json_object_string_add(json_row, "vrf", vrf->name);
 			json_object_string_add(json_row, "source", src_str);
 			json_object_string_add(json_row, "group", grp_str);
@@ -4368,7 +4437,7 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 			}
 			if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER)) {
 				json_object_array_add(own_list,
-					json_object_new_string("remote"));
+					json_object_new_string("peer"));
 			}
 			json_object_object_add(json_row, "owners", own_list);
 
@@ -4380,8 +4449,7 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 				json_object_boolean_false_add(json_row, "df");
 			else
 				json_object_boolean_true_add(json_row, "df");
-			json_object_object_add(json, up->sg_str,
-					json_row);
+			json_object_object_add(json_group, src_str, json_row);
 		} else {
 			char own_str[6];
 
@@ -4389,7 +4457,7 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 			if (pim_up_mlag_is_local(up))
 				strcpy(own_str + strlen(own_str), "L");
 			if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
-				strcpy(own_str + strlen(own_str), "R");
+				strcpy(own_str + strlen(own_str), "P");
 			vty_out(vty,
 				"%-15s %-15s %-6s %-11d %-12d %2s\n",
 				src_str, grp_str, own_str,
