@@ -219,7 +219,7 @@ static void concat(test_, TYPE)(void)
 	assert(l + list_count(&head) == k);
 	ts_ref("del");
 
-	for_each_safe(list, &head, item) {
+	frr_each_safe(list, &head, item) {
 		assert(item->scratchpad != 0);
 
 		if (item->val & 1) {
