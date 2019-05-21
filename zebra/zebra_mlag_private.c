@@ -49,7 +49,7 @@ static struct thread_master *zmlag_master;
 static int mlag_socket;
 
 static int zebra_mlag_connect(struct thread *thread);
-
+static int zebra_mlag_read(struct thread *thread);
 
 /*
  * Write teh data to MLAGD
@@ -66,36 +66,91 @@ int zebra_mlag_private_write_data(uint8_t *data, uint32_t len)
 	return rc;
 }
 
+static void zebra_mlag_sched_read(void)
+{
+	thread_add_read(zmlag_master, zebra_mlag_read, NULL, mlag_socket,
+			&zrouter.mlag_info.t_read);
+}
+
 static int zebra_mlag_read(struct thread *thread)
 {
-	int data_len;
+	uint32_t *msglen;
+	uint32_t h_msglen;
+	uint32_t tot_len, curr_len = mlag_rd_buf_offset;
+
+	zrouter.mlag_info.t_read = NULL;
 
 	/*
-	 * The read currently ends with a `\n` so let's make sure
-	 * we don't read beyond the end of the world here
+	 * Received message in sock_stream looks like below
+	 * | len-1 (4 Bytes) | payload-1 (len-1) |
+	 *   len-2 (4 Bytes) | payload-2 (len-2) | ..
+	 *
+	 * Idea is read one message completely, then process, until message is
+	 * read completely, keep on reading from the socket
 	 */
-	memset(mlag_rd_buffer, 0, ZEBRA_MLAG_BUF_LIMIT);
-	data_len = read(mlag_socket, mlag_rd_buffer, ZEBRA_MLAG_BUF_LIMIT);
-	if (data_len <= 0) {
-		if (IS_ZEBRA_DEBUG_MLAG)
-			zlog_debug("Failure on mlag socket: %d %s(%d), restart",
-				   mlag_socket, safe_strerror(errno), errno);
-		zebra_mlag_handle_process_state(MLAG_DOWN);
-		return -1;
+	if (curr_len < ZEBRA_MLAG_LEN_SIZE) {
+		ssize_t data_len;
+
+		data_len = read(mlag_socket, mlag_rd_buffer + curr_len,
+				ZEBRA_MLAG_LEN_SIZE - curr_len);
+		if (data_len == 0 || data_len == -1) {
+			if (IS_ZEBRA_DEBUG_MLAG)
+				zlog_debug("MLAG connection closed socket : %d",
+					   mlag_socket);
+			close(mlag_socket);
+			zebra_mlag_handle_process_state(MLAG_DOWN);
+			return -1;
+		}
+		if (data_len != (ssize_t)ZEBRA_MLAG_LEN_SIZE - curr_len) {
+			/* Try again later */
+			zebra_mlag_sched_read();
+			return 0;
+		}
+		curr_len = ZEBRA_MLAG_LEN_SIZE;
+	}
+
+	/* Get the actual packet length */
+	msglen = (uint32_t *)mlag_rd_buffer;
+	h_msglen = ntohl(*msglen);
+
+	/* This will be the actual length of the packet */
+	tot_len = h_msglen + ZEBRA_MLAG_LEN_SIZE;
+
+	if (curr_len < tot_len) {
+		ssize_t data_len;
+
+		data_len = read(mlag_socket, mlag_rd_buffer + curr_len,
+				tot_len - curr_len);
+		if (data_len == 0 || data_len == -1) {
+			if (IS_ZEBRA_DEBUG_MLAG)
+				zlog_debug("MLAG connection closed socket : %d",
+					   mlag_socket);
+			close(mlag_socket);
+			zebra_mlag_handle_process_state(MLAG_DOWN);
+			return -1;
+		}
+		if (data_len != (ssize_t)tot_len - curr_len) {
+			/* Try again later */
+			zebra_mlag_sched_read();
+			return 0;
+		}
 	}
 
 	if (IS_ZEBRA_DEBUG_MLAG) {
-		zlog_debug("Received MLAG Data from socket: %d, len:%d",
-			   mlag_socket, data_len);
-		zlog_hexdump(mlag_rd_buffer, data_len);
+		zlog_debug("Received a MLAG Message from socket: %d, len:%u ",
+			   mlag_socket, tot_len);
+		zlog_hexdump(mlag_rd_buffer, tot_len);
 	}
 
-	zebra_mlag_process_mlag_data(mlag_rd_buffer, data_len);
+	tot_len -= ZEBRA_MLAG_LEN_SIZE;
 
-	zrouter.mlag_info.t_read = NULL;
-	thread_add_read(zmlag_master, zebra_mlag_read, NULL, mlag_socket,
-			&zrouter.mlag_info.t_read);
+	/* Process the packet */
+	zebra_mlag_process_mlag_data(mlag_rd_buffer + ZEBRA_MLAG_LEN_SIZE,
+				     tot_len);
 
+	/* Register read thread. */
+	zebra_mlag_reset_read_buffer();
+	zebra_mlag_sched_read();
 	return 0;
 }
 

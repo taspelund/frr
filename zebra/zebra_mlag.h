@@ -31,15 +31,21 @@
 #endif
 
 #define ZEBRA_MLAG_BUF_LIMIT 2048
+#define ZEBRA_MLAG_LEN_SIZE 4
 
 extern uint8_t mlag_wr_buffer[ZEBRA_MLAG_BUF_LIMIT];
 extern uint8_t mlag_rd_buffer[ZEBRA_MLAG_BUF_LIMIT];
-extern uint32_t mlag_wr_buf_ptr;
+extern uint32_t mlag_rd_buf_offset;
 
 static inline void zebra_mlag_reset_write_buffer(void)
 {
 	memset(mlag_wr_buffer, 0, ZEBRA_MLAG_BUF_LIMIT);
-	mlag_wr_buf_ptr = 0;
+}
+
+static inline void zebra_mlag_reset_read_buffer(void)
+{
+	memset(mlag_rd_buffer, 0, ZEBRA_MLAG_BUF_LIMIT);
+	mlag_rd_buf_offset = 0;
 }
 
 enum zebra_mlag_state {

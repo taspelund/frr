@@ -41,7 +41,7 @@
 
 uint8_t mlag_wr_buffer[ZEBRA_MLAG_BUF_LIMIT];
 uint8_t mlag_rd_buffer[ZEBRA_MLAG_BUF_LIMIT];
-uint32_t mlag_wr_buf_ptr;
+uint32_t mlag_rd_buf_offset;
 
 static bool test_mlag_in_progress;
 
@@ -114,9 +114,11 @@ void zebra_mlag_process_mlag_data(uint8_t *data, uint32_t len)
 	if (s)
 		msg_type = zebra_mlag_protobuf_decode_message(&s, data, len);
 
-	if (msg_type == 0) {
+	if (msg_type <= 0) {
 		/* Something went wrong in decoding */
 		stream_free(s);
+		zlog_err("%s: failed to process mlag data-%d, %u", __func__,
+			 msg_type, len);
 		return;
 	}
 
@@ -892,6 +894,7 @@ void zebra_mlag_init(void)
 	zrouter.mlag_info.t_write = NULL;
 	test_mlag_in_progress = false;
 	zebra_mlag_reset_write_buffer();
+	zebra_mlag_reset_read_buffer();
 }
 
 void zebra_mlag_terminate(void)
@@ -912,6 +915,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 	struct mlag_msg mlag_msg;
 	uint8_t tmp_buf[ZEBRA_MLAG_BUF_LIMIT];
 	int len = 0;
+	int n_len = 0;
 	int rc = 0;
 	char buf[80];
 
@@ -1142,7 +1146,23 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		memcpy(hdr.data.data, tmp_buf, len);
 	}
 
-	len = zebra_mlag__header__pack(&hdr, mlag_wr_buffer);
+	/*
+	 * ProtoBuf Infra will not support to demarc the pointers whem multiple
+	 * mesasges  are posted inside a single Buffer.
+	 * 2 -sloutions exist to solve this
+	 * 1. add Unenoced length at the beginning of every message, this will
+	 *    be used to point to next mesasge in the buffer
+	 * 2. another solution is defining all messages insides another message
+	 *    But this will permit only 32 messages. this can be extended with
+	 *    multiple levels.
+	 * for simplicity we are going with solution-1.
+	 */
+	len = zebra_mlag__header__pack(&hdr,
+				       (mlag_wr_buffer + ZEBRA_MLAG_LEN_SIZE));
+	n_len = htonl(len);
+	memcpy(mlag_wr_buffer, &n_len, ZEBRA_MLAG_LEN_SIZE);
+	len += ZEBRA_MLAG_LEN_SIZE;
+
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug(
 			"%s: length of Mlag ProtoBuf message:%s with Header  %d",
