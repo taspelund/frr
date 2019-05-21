@@ -946,12 +946,16 @@ int pim_mroute_add(struct channel_oil *c_oil, const char *name)
 		 * origination mroute (and that can actually happen because
 		 * of XG inheritance from the termination mroute) otherwise
 		 * traffic will end up looping.
+		 * PS: This check has also been extended to non-orig mroutes
+		 * that have a local SIP as such mroutes can move back and
+		 * forth between orig<=>non-orig type.
 		 * 2. vxlan termination device should be removed from the non-DF
 		 * to prevent duplicates to the overlay rxer
 		 */
 		if (vxlan_ifp &&
 			(PIM_UPSTREAM_FLAG_TEST_SRC_VXLAN_ORIG(c_oil->up->flags) ||
-			 PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(c_oil->up->flags))) {
+			 PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(c_oil->up->flags) ||
+			 pim_vxlan_is_local_sip(c_oil->up))) {
 			orig_term_ttl_reset = true;
 			orig_term_ttl =
 				c_oil->oil.mfcc_ttls[vxlan_ifp->mroute_vif_index];
