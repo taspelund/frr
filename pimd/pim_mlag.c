@@ -83,6 +83,16 @@ static void pim_mlag_calculate_df_for_ifchannel(struct pim_ifchannel *ch)
 		zlog_debug("%s: Calculating DF for Dual active if-channel%s",
 			   __func__, ch->sg_str);
 
+	/* Standalone mode */
+	if (!(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug(
+				"%s: Standalone mode. progrma based on DR Role",
+				__func__);
+		PIM_MLAG_UPDATE_OIL_BASED_ON_DR(pim_ifp, ch, ch_oil);
+		return;
+	}
+
 	/* Local Interface is not configured with Dual active */
 	if (!PIM_I_am_DualActive(pim_ifp)
 	    || ch->mlag_peer_is_dual_active == false) {
@@ -91,6 +101,7 @@ static void pim_mlag_calculate_df_for_ifchannel(struct pim_ifchannel *ch)
 				   __func__, PIM_I_am_DualActive(pim_ifp),
 				   ch->mlag_peer_is_dual_active);
 		PIM_MLAG_UPDATE_OIL_BASED_ON_DR(pim_ifp, ch, ch_oil);
+		return;
 	}
 
 	if (ch->mlag_local_cost_to_rp != ch->mlag_peer_cost_to_rp) {
@@ -119,8 +130,12 @@ void pim_mlag_add_entry_to_peer(struct pim_ifchannel *ch)
 	struct pim_interface *pim_ifp = ch->interface->info;
 	struct vrf *vrf = vrf_lookup_by_id(ch->interface->vrf_id);
 
-	if (router->connected_to_mlag == false) {
-		/* Not connected to peer, update FIB based on DR role*/
+	/* Not connected to peer, update FIB based on DR role*/
+	if (!(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug(
+				"%s: Standalone mode. progrma based on DR Role",
+				__func__);
 		pim_mlag_calculate_df_for_ifchannel(ch);
 		return;
 	}
@@ -678,10 +693,13 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 	bool state_chg = false;
 	bool notify_vxlan = false;
 	struct interface *peerlink_rif_p;
+	char buf[80];
 
 	if (PIM_DEBUG_MLAG)
-		zlog_debug("%s: msg dump: my_role:%d, peer_state:%d", __func__,
-			   msg.my_role, msg.peer_state);
+		zlog_debug("%s: msg dump: my_role:%s, peer_state:%s", __func__,
+			   mlag_role2str(msg.my_role, buf, sizeof(buf)),
+			   (msg.peer_state == MLAG_STATE_RUNNING ? "RUNNING"
+								 : "DOWN"));
 
 	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
 		if (PIM_DEBUG_MLAG)
@@ -845,6 +863,14 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 	sg.grp.s_addr = ntohl(msg.group_ip);
 
 	ch = pim_ifchannel_find(ifp, &sg);
+	if (!ch) {
+		if (PIM_DEBUG_MLAG)
+			zlog_debug("%s: failed to find if-channel, creating",
+				   __func__);
+		pim_ifchannel_local_membership_add(ifp, &sg);
+		ch = pim_ifchannel_find(ifp, &sg);
+	}
+
 	if (ch) {
 		if (PIM_DEBUG_MLAG)
 			zlog_debug("%s: Updating ifchannel-%s peer mlag params",
@@ -855,8 +881,7 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 		pim_mlag_calculate_df_for_ifchannel(ch);
 	} else {
 		if (PIM_DEBUG_MLAG)
-			zlog_debug("%s: failed to find if-channel...",
-				   __func__);
+			zlog_debug("%s: failed to add if-channel...", __func__);
 	}
 }
 
@@ -1157,6 +1182,7 @@ void pim_if_unconfigure_mlag_dualactive(struct pim_interface *pim_ifp)
 		 * De-register to Zebra
 		 */
 		pim_mlag_deregister();
+		pim_mlag_param_reset();
 	}
 }
 
