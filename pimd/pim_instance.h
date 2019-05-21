@@ -74,11 +74,11 @@ enum pim_mlag_flags {
 	 * daemon. this is just a peer-session status provided by the local
 	 * MLAG daemon.
 	 */
-	PIM_MLAGF_REMOTE_CONN_UP = (1 << 1),
+	PIM_MLAGF_PEER_CONN_UP = (1 << 1),
 	/* status update rxed from the local daemon */
 	PIM_MLAGF_STATUS_RXED = (1 << 2),
 	/* initial dump of data done post peerlink flap */
-	PIM_MLAGF_REMOTE_REPLAY_DONE = (1 << 3)
+	PIM_MLAGF_PEER_REPLAY_DONE = (1 << 3)
 };
 struct pim_router {
 	struct thread_master *master;

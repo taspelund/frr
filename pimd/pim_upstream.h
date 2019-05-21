@@ -340,5 +340,5 @@ struct pim_upstream *pim_upstream_keep_alive_timer_proc(
 void pim_upstream_fill_static_iif(struct pim_upstream *up,
 				struct interface *incoming);
 uint32_t pim_up_mlag_local_cost(struct pim_upstream *up);
-uint32_t pim_up_mlag_remote_cost(struct pim_upstream *up);
+uint32_t pim_up_mlag_peer_cost(struct pim_upstream *up);
 #endif /* PIM_UPSTREAM_H */

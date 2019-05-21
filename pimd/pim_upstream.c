@@ -813,7 +813,7 @@ uint32_t pim_up_mlag_local_cost(struct pim_upstream *up)
 	return up->rpf.source_nexthop.mrib_route_metric;
 }
 
-uint32_t pim_up_mlag_remote_cost(struct pim_upstream *up)
+uint32_t pim_up_mlag_peer_cost(struct pim_upstream *up)
 {
 	if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
 		return router->infinite_assert_metric.route_metric;

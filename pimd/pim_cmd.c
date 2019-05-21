@@ -3968,7 +3968,7 @@ DEFUN (show_ip_pim_mlag_summary,
 		json = json_object_new_object();
 		if (router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)
 			json_object_boolean_true_add(json, "mlagConnUp");
-		if (router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)
+		if (router->mlag_flags & PIM_MLAGF_PEER_CONN_UP)
 			json_object_boolean_true_add(json, "mlagPeerConnUp");
 		json_object_string_add(json, "mlagRole",
 				mlag_role2str(router->mlag_role,
@@ -4011,7 +4011,7 @@ DEFUN (show_ip_pim_mlag_summary,
 		(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)
 			? "up" : "down");
 	vty_out(vty, "MLAG peer state: %s\n",
-		(router->mlag_flags & PIM_MLAGF_REMOTE_CONN_UP)
+		(router->mlag_flags & PIM_MLAGF_PEER_CONN_UP)
 			? "up" : "down");
 	vty_out(vty, "MLAG role: %s\n",
 		mlag_role2str(router->mlag_role, role_buf, sizeof(role_buf)));
@@ -4320,8 +4320,8 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 
 		json_object_int_add(json_row, "localCost",
 				pim_up_mlag_local_cost(up));
-		json_object_int_add(json_row, "remoteCost",
-				pim_up_mlag_remote_cost(up));
+		json_object_int_add(json_row, "peerCost",
+				pim_up_mlag_peer_cost(up));
 		if (PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags))
 			json_object_boolean_false_add(json_row, "df");
 		else
@@ -4337,10 +4337,10 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 			strcpy(own_str + strlen(own_str), "P");
 		/* XXX - fixup, print paragraph output */
 		vty_out(vty,
-				"%-15s %-15s %-6s %-11d %-12d %2s\n",
+				"%-15s %-15s %-6s %-11d %-10d %2s\n",
 				src_str, grp_str, own_str,
 				pim_up_mlag_local_cost(up),
-				pim_up_mlag_remote_cost(up),
+				pim_up_mlag_peer_cost(up),
 				PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags)
 				? "n" : "y");
 	}
@@ -4405,7 +4405,7 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 		json = json_object_new_object();
 	} else {
 		vty_out(vty,
-			"Source          Group           Owner  Local-cost  Remote-cost  DF\n");
+			"Source          Group           Owner  Local-cost  Peer-cost  DF\n");
 	}
 
 	for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
@@ -4443,8 +4443,8 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 
 			json_object_int_add(json_row, "localCost",
 					pim_up_mlag_local_cost(up));
-			json_object_int_add(json_row, "remoteCost",
-					pim_up_mlag_remote_cost(up));
+			json_object_int_add(json_row, "peerCost",
+					pim_up_mlag_peer_cost(up));
 			if (PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags))
 				json_object_boolean_false_add(json_row, "df");
 			else
@@ -4459,10 +4459,10 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 			if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
 				strcpy(own_str + strlen(own_str), "P");
 			vty_out(vty,
-				"%-15s %-15s %-6s %-11d %-12d %2s\n",
+				"%-15s %-15s %-6s %-11d %-10d %2s\n",
 				src_str, grp_str, own_str,
 				pim_up_mlag_local_cost(up),
-				pim_up_mlag_remote_cost(up),
+				pim_up_mlag_peer_cost(up),
 				PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags)
 					? "n" : "y");
 		}
