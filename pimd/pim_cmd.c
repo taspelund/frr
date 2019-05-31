@@ -4359,6 +4359,9 @@ static void pim_show_mlag_up_detail(struct vrf *vrf,
 
 	if (uj)
 		json = json_object_new_object();
+	else
+		vty_out(vty,
+			"Source          Group           Owner  Local-cost  Peer-cost  DF\n");
 
 	for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
 		if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER) &&
