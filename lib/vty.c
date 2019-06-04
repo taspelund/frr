@@ -149,7 +149,7 @@ int vty_out(struct vty *vty, const char *format, ...)
 	va_list args;
 	ssize_t len;
 	char buf[1024];
-	char *p = buf;
+	char *p = NULL;
 	char *filtered;
 
 	if (vty->frame_pos) {
