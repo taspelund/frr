@@ -55,6 +55,7 @@ check_PROGRAMS = \
 	tests/lib/test_idalloc \
 	tests/lib/test_memory \
 	tests/lib/test_nexthop_iter \
+	tests/lib/test_ntop \
 	tests/lib/test_privs \
 	tests/lib/test_ringbuf \
 	tests/lib/test_srcdest_table \
@@ -224,6 +225,10 @@ tests_lib_test_nexthop_iter_CFLAGS = $(TESTS_CFLAGS)
 tests_lib_test_nexthop_iter_CPPFLAGS = $(TESTS_CPPFLAGS)
 tests_lib_test_nexthop_iter_LDADD = $(ALL_TESTS_LDADD)
 tests_lib_test_nexthop_iter_SOURCES = tests/lib/test_nexthop_iter.c tests/helpers/c/prng.c
+tests_lib_test_ntop_CFLAGS = $(TESTS_CFLAGS)
+tests_lib_test_ntop_CPPFLAGS = $(TESTS_CPPFLAGS)
+tests_lib_test_ntop_LDADD = # none
+tests_lib_test_ntop_SOURCES = tests/lib/test_ntop.c tests/helpers/c/prng.c
 tests_lib_test_privs_CFLAGS = $(TESTS_CFLAGS)
 tests_lib_test_privs_CPPFLAGS = $(TESTS_CPPFLAGS)
 tests_lib_test_privs_LDADD = $(ALL_TESTS_LDADD)
@@ -311,6 +316,7 @@ EXTRA_DIST += \
 	tests/lib/northbound/test_oper_data.refout \
 	tests/lib/test_atomlist.py \
 	tests/lib/test_nexthop_iter.py \
+	tests/lib/test_ntop.py \
 	tests/lib/test_ringbuf.py \
 	tests/lib/test_srcdest_table.py \
 	tests/lib/test_stream.py \
