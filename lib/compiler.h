@@ -29,6 +29,9 @@
 #endif
 # define _CONSTRUCTOR(x)  constructor(x)
 # define _DEPRECATED(x) deprecated(x)
+# if __has_builtin(assume)
+#  define assume(x) __builtin_assume(x)
+# endif
 #elif defined(__GNUC__)
 #if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 9)
 #  define _RET_NONNULL    , returns_nonnull
@@ -40,11 +43,27 @@
 #endif
 #if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
 #  define _DEPRECATED(x) deprecated(x)
+#  define assume(x) do { if (!(x)) __builtin_unreachable(); } while (0)
+#endif
+#if __GNUC__ < 5
+#  define __has_attribute(x) 0
 #endif
 #if __GNUC__ >= 7
 #  define _FALLTHROUGH __attribute__((fallthrough));
 #endif
 #endif
+
+#if __has_attribute(hot)
+#  define _OPTIMIZE_HOT __attribute__((hot))
+#else
+#  define _OPTIMIZE_HOT
+#endif
+#if __has_attribute(optimize)
+#  define _OPTIMIZE_O3 __attribute__((optimize("3")))
+#else
+#  define _OPTIMIZE_O3
+#endif
+#define OPTIMIZE _OPTIMIZE_O3 _OPTIMIZE_HOT
 
 #if !defined(__GNUC__)
 #error module code needs GCC visibility extensions
@@ -80,6 +99,9 @@
 #endif
 #ifndef _DEPRECATED
 #define _DEPRECATED(x) deprecated
+#endif
+#ifndef assume
+#define assume(x)
 #endif
 
 /* pure = function does not modify memory & return value is the same if
