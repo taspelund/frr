@@ -4410,9 +4410,15 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 	char grp_str[INET_ADDRSTRLEN];
 	struct pim_instance *pim = vrf->info;
 	json_object *json_group = NULL;
+	json_object *json_vrf = NULL;
 
 	if (uj) {
 		json = json_object_new_object();
+		json_object_object_get_ex(json, vrf->name, &json_vrf);
+		if (!json_vrf) {
+			json_vrf = json_object_new_object();
+			json_object_object_add(json, vrf->name, json_vrf);
+                }
 	} else {
 		vty_out(vty,
 			"Source          Group           Owner  Local-cost  Peer-cost  DF\n");
@@ -4427,10 +4433,10 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 		if (uj) {
 			json_object *own_list = NULL;
 
-			json_object_object_get_ex(json, grp_str, &json_group);
+			json_object_object_get_ex(json_vrf, grp_str, &json_group);
 			if (!json_group) {
 				json_group = json_object_new_object();
-				json_object_object_add(json, grp_str,
+				json_object_object_add(json_vrf, grp_str,
 						json_group);
 			}
 
@@ -4590,6 +4596,22 @@ DEFUN(show_ip_pim_mlag_mroute_vrf_all,
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
 		pim_show_mlag_membership_for_vrf(vrf, vty, NULL, NULL, NULL,
 						 uj);
+	}
+
+	return CMD_SUCCESS;
+}
+
+DEFUN(show_ip_pim_mlag_up_vrf_all, show_ip_pim_mlag_up_vrf_all_cmd,
+      "show ip pim vrf all mlag upstream [json]",
+      SHOW_STR IP_STR PIM_STR VRF_CMD_HELP_STR
+      "MLAG\n"
+      "upstream\n" JSON_STR)
+{
+	struct vrf *vrf;
+	bool uj = use_json(argc, argv);
+
+	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		pim_show_mlag_up_vrf(vrf, vty, uj);
 	}
 
 	return CMD_SUCCESS;
@@ -10258,6 +10280,7 @@ void pim_cmd_init(void)
 			&show_ip_pim_mlag_mroute_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_mlag_summary_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_mlag_up_cmd);
+	install_element(VIEW_NODE, &show_ip_pim_mlag_up_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_neighbor_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_neighbor_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_rpf_cmd);
