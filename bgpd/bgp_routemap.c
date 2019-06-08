@@ -60,7 +60,6 @@
 #include "bgpd/bgp_evpn_private.h"
 #include "bgpd/bgp_evpn_vty.h"
 #include "bgpd/bgp_mplsvpn.h"
-#include "bgpd/bgp_encap_types.h"
 
 #if ENABLE_BGP_VNC
 #include "bgpd/rfapi/bgp_rfapi_cfg.h"
@@ -796,49 +795,26 @@ struct route_map_rule_cmd route_match_mac_address_cmd = {
 	"mac address", route_match_mac_address, route_match_mac_address_compile,
 	route_match_mac_address_free};
 
-/*
- * Match function returns:
- * ...RMAP_MATCH if match is found.
- * ...RMAP_NOMATCH if match is not found.
- * ...RMAP_NOOP to ignore this match check.
- */
+/* `match vni' */
+
+/* Match function should return 1 if match is success else return
+   zero. */
 static enum route_map_match_result_t
 route_match_vni(void *rule, const struct prefix *prefix,
 		route_map_object_t type, void *object)
 {
 	vni_t vni = 0;
-	unsigned int label_cnt = 0;
 	struct bgp_path_info *path = NULL;
-	struct prefix_evpn *evp = (struct prefix_evpn *) prefix;
 
 	if (type == RMAP_BGP) {
 		vni = *((vni_t *)rule);
 		path = (struct bgp_path_info *)object;
 
-		/*
-		 * This rmap filter is valid for vxlan tunnel type only.
-		 * For any other tunnel type, return noop to ignore
-		 * this check.
-		 */
-		if (path->attr && path->attr->encap_tunneltype !=
-			BGP_ENCAP_TYPE_VXLAN)
-			return RMAP_NOOP;
-
-		/*
-		 * We do not want to filter type 3 routes because
-		 * they do not have vni associated with them.
-		 */
-		if (evp && evp->prefix.route_type == BGP_EVPN_IMET_ROUTE)
-			return RMAP_NOOP;
-
 		if (path->extra == NULL)
 			return RMAP_NOMATCH;
 
-		for ( ; label_cnt < BGP_MAX_LABELS &&
-			label_cnt < path->extra->num_labels; label_cnt++) {
-			if (vni == label2vni(&path->extra->label[label_cnt]))
-				return RMAP_MATCH;
-		}
+		if (vni == label2vni(&path->extra->label[0]))
+			return RMAP_MATCH;
 	}
 
 	return RMAP_NOMATCH;
