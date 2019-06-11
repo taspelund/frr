@@ -140,6 +140,12 @@
 #define PIM_UPSTREAM_FLAG_UNSET_MLAG_NON_DF(flags) ((flags) &= ~PIM_UPSTREAM_FLAG_MASK_MLAG_NON_DF)
 #define PIM_UPSTREAM_FLAG_UNSET_MLAG_PEER(flags) ((flags) &= ~PIM_UPSTREAM_FLAG_MASK_MLAG_PEER)
 
+/* The RPF cost is incremented by 10 if the RPF interface is the peerlink-rif.
+ * This is used to force the MLAG switch with the lowest cost to the RPF
+ * to become the MLAG DF.
+ */
+#define PIM_UPSTREAM_MLAG_PEERLINK_PLUS_METRIC 10
+
 enum pim_upstream_state {
 	PIM_UPSTREAM_NOTJOINED,
 	PIM_UPSTREAM_JOINED,
@@ -340,6 +346,7 @@ struct pim_upstream *pim_upstream_keep_alive_timer_proc(
 		struct pim_upstream *up);
 void pim_upstream_fill_static_iif(struct pim_upstream *up,
 				struct interface *incoming);
-uint32_t pim_up_mlag_local_cost(struct pim_upstream *up);
+uint32_t pim_up_mlag_local_cost(struct pim_instance *pim,
+		struct pim_upstream *up);
 uint32_t pim_up_mlag_peer_cost(struct pim_upstream *up);
 #endif /* PIM_UPSTREAM_H */
