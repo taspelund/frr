@@ -1015,8 +1015,8 @@ and will share updates.
 
    This command defines a new peer group.
 
-.. index:: neighbor PEER peer-group WORD
-.. clicmd:: neighbor PEER peer-group WORD
+.. index:: neighbor PEER peer-group PGNAME
+.. clicmd:: neighbor PEER peer-group PGNAME
 
    This command bind specific peer to peer group WORD.
 
