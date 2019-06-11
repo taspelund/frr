@@ -226,7 +226,8 @@ static bool pim_mlag_up_df_role_update(struct pim_upstream *up,
 }
 
 /* Run per-upstream entry DF election and return true on role change */
-static bool pim_mlag_up_df_role_elect(struct pim_upstream *up)
+static bool pim_mlag_up_df_role_elect(struct pim_instance *pim,
+		struct pim_upstream *up)
 {
 	bool is_df;
 	uint32_t peer_cost;
@@ -266,7 +267,7 @@ static bool pim_mlag_up_df_role_elect(struct pim_upstream *up)
 	 * cost MLAG role is used as a tie breaker (MLAG primary wins).
 	 */
 	peer_cost = up->mlag.peer_mrib_metric;
-	local_cost = pim_up_mlag_local_cost(up);
+	local_cost = pim_up_mlag_local_cost(pim, up);
 	if (local_cost == peer_cost) {
 		is_df = (router->mlag_role == MLAG_ROLE_PRIMARY) ? true : false;
 		rv = pim_mlag_up_df_role_update(up, is_df, "equal-cost");
@@ -337,7 +338,7 @@ static void pim_mlag_up_peer_add(struct mlag_mroute_add *msg)
 		}
 	}
 	up->mlag.peer_mrib_metric = msg->cost_to_rp;
-	pim_mlag_up_df_role_elect(up);
+	pim_mlag_up_df_role_elect(pim, up);
 }
 
 /* Handle upstream entry del from the peer MLAG switch -
@@ -355,7 +356,7 @@ static void pim_mlag_up_peer_deref(struct pim_instance *pim,
 	PIM_UPSTREAM_FLAG_UNSET_MLAG_PEER(up->flags);
 	up = pim_upstream_del(pim, up, __PRETTY_FUNCTION__);
 	if (up)
-		pim_mlag_up_df_role_elect(up);
+		pim_mlag_up_df_role_elect(pim, up);
 }
 static void pim_mlag_up_peer_del(struct mlag_mroute_del *msg)
 {
@@ -442,7 +443,7 @@ static void pim_mlag_up_local_add_send(struct pim_instance *pim,
 	stream_putl(s, ntohl(up->sg.src.s_addr));
 	stream_putl(s, ntohl(up->sg.grp.s_addr));
 
-	stream_putl(s, pim_up_mlag_local_cost(up));
+	stream_putl(s, pim_up_mlag_local_cost(pim, up));
 	/* XXX - who is addding*/
 	stream_putl(s, MLAG_OWNER_VXLAN);
 	/* XXX - am_i_DR field should be removed */
@@ -495,7 +496,7 @@ static void pim_mlag_up_local_del_send(struct pim_instance *pim,
 void pim_mlag_up_local_add(struct pim_instance *pim,
 		struct pim_upstream *up)
 {
-	pim_mlag_up_df_role_elect(up);
+	pim_mlag_up_df_role_elect(pim, up);
 	/* XXX - need to add some dup checks here */
 	pim_mlag_up_local_add_send(pim, up);
 }
@@ -504,7 +505,7 @@ void pim_mlag_up_local_add(struct pim_instance *pim,
 void pim_mlag_up_local_del(struct pim_instance *pim,
 		struct pim_upstream *up)
 {
-	pim_mlag_up_df_role_elect(up);
+	pim_mlag_up_df_role_elect(pim, up);
 	pim_mlag_up_local_del_send(pim, up);
 }
 
@@ -546,7 +547,8 @@ static void pim_mlag_up_local_reeval(bool mlagd_send, const char *reason_code)
 			if (!pim_up_mlag_is_local(up))
 				continue;
 			/* if role changes re-send to peer */
-			if (pim_mlag_up_df_role_elect(up) && mlagd_send)
+			if (pim_mlag_up_df_role_elect(pim, up) &&
+					mlagd_send)
 				pim_mlag_up_local_add_send(pim, up);
 		}
 	}

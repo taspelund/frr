@@ -4305,6 +4305,7 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 		struct vty *vty, struct pim_upstream *up,
 		char *src_str, char *grp_str, json_object *json)
 {
+	struct pim_instance *pim = vrf->info;
 
 	if (json) {
 		json_object *json_row = NULL;
@@ -4333,7 +4334,7 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 		json_object_object_add(json_row, "owners", own_list);
 
 		json_object_int_add(json_row, "localCost",
-				pim_up_mlag_local_cost(up));
+				pim_up_mlag_local_cost(pim, up));
 		json_object_int_add(json_row, "peerCost",
 				pim_up_mlag_peer_cost(up));
 		if (PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags))
@@ -4353,7 +4354,7 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 		vty_out(vty,
 				"%-15s %-15s %-6s %-11d %-10d %2s\n",
 				src_str, grp_str, own_str,
-				pim_up_mlag_local_cost(up),
+				pim_up_mlag_local_cost(pim, up),
 				pim_up_mlag_peer_cost(up),
 				PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags)
 				? "n" : "y");
@@ -4459,7 +4460,7 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 			json_object_object_add(json_row, "owners", own_list);
 
 			json_object_int_add(json_row, "localCost",
-					pim_up_mlag_local_cost(up));
+					pim_up_mlag_local_cost(pim, up));
 			json_object_int_add(json_row, "peerCost",
 					pim_up_mlag_peer_cost(up));
 			if (PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags))
@@ -4478,7 +4479,7 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 			vty_out(vty,
 				"%-15s %-15s %-6s %-11d %-10d %2s\n",
 				src_str, grp_str, own_str,
-				pim_up_mlag_local_cost(up),
+				pim_up_mlag_local_cost(pim, up),
 				pim_up_mlag_peer_cost(up),
 				PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags)
 					? "n" : "y");
