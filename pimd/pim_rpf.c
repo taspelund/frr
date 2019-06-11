@@ -196,10 +196,15 @@ static int nexthop_mismatch(const struct pim_nexthop *nh1,
 }
 
 static void pim_rpf_cost_change(struct pim_instance *pim,
-		struct pim_upstream *up)
+		struct pim_upstream *up, uint32_t old_cost)
 {
 	struct pim_rpf *rpf = &up->rpf;
+	uint32_t new_cost;
 
+	new_cost = pim_up_mlag_local_cost(pim, up);
+	if (old_cost == new_cost) {
+		return;
+	}
 	/* Cost changed, it might Impact MLAG DF election, update */
 	if (PIM_DEBUG_MLAG)
 		zlog_debug(
@@ -236,7 +241,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 
 	saved.source_nexthop = rpf->source_nexthop;
 	saved.rpf_addr = rpf->rpf_addr;
-	saved_mrib_route_metric = rpf->source_nexthop.mrib_route_metric;
+	saved_mrib_route_metric = pim_up_mlag_local_cost(pim, up);
 
 	nht_p.family = AF_INET;
 	nht_p.prefixlen = IPV4_MAX_BITLEN;
@@ -255,9 +260,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 	pim_find_or_track_nexthop(pim, &nht_p, up, NULL, NULL);
 	if (!pim_ecmp_nexthop_lookup(pim, &rpf->source_nexthop, &src, &grp,
 				neigh_needed)) {
-		if (saved_mrib_route_metric
-				!= rpf->source_nexthop.mrib_route_metric)
-			pim_rpf_cost_change(pim, up);
+		pim_rpf_cost_change(pim, up, saved_mrib_route_metric);
 		return PIM_RPF_FAILURE;
 	}
 
@@ -318,9 +321,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 			old->source_nexthop = saved.source_nexthop;
 			old->rpf_addr = saved.rpf_addr;
 		}
-		if (saved_mrib_route_metric
-				!= rpf->source_nexthop.mrib_route_metric)
-			pim_rpf_cost_change(pim, up);
+		pim_rpf_cost_change(pim, up, saved_mrib_route_metric);
 		return PIM_RPF_CHANGED;
 	}
 
@@ -332,9 +333,7 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 			rpf->source_nexthop.mrib_route_metric,
 			up->dualactive_ifchannel_count);
 
-	/* Cost changed, it might Impact MLAG DF election, update */
-	if (saved_mrib_route_metric != rpf->source_nexthop.mrib_route_metric)
-		pim_rpf_cost_change(pim, up);
+	pim_rpf_cost_change(pim, up, saved_mrib_route_metric);
 
 	return PIM_RPF_OK;
 }
