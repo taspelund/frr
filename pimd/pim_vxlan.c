@@ -940,15 +940,16 @@ static void pim_vxlan_up_cost_update(struct pim_instance *pim,
 			((up->rpf.source_nexthop.interface ==
 			  pim->vxlan.peerlink_rif) ||
 			 (up->rpf.source_nexthop.interface ==
-			  old_peerlink_rif)))
+			  old_peerlink_rif))) {
 		if (PIM_DEBUG_VXLAN)
 			zlog_debug("RPF cost adjust for %s on peerlink-rif (old: %s, new: %s) change",
 					up->sg_str,
 					old_peerlink_rif ?
 					old_peerlink_rif->name : "-",
 					pim->vxlan.peerlink_rif ?
-					pim->vxlan.peerlink_rif : "-");
+					pim->vxlan.peerlink_rif->name : "-");
 		pim_mlag_up_local_add(pim, up);
+	}
 }
 
 static void pim_vxlan_term_mr_cost_update(struct hash_backet *backet,
