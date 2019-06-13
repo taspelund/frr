@@ -42,6 +42,7 @@ lib_libfrr_la_SOURCES = \
 	lib/libfrr.c \
 	lib/linklist.c \
 	lib/log.c \
+	lib/log_vty.c \
 	lib/md5.c \
 	lib/memory.c \
 	lib/memory_vty.c \
@@ -135,6 +136,8 @@ lib/nexthop_group_clippy.c: $(CLIPPY_DEPS)
 lib/nexthop_group.lo: lib/nexthop_group_clippy.c
 lib/northbound_cli_clippy.c: $(CLIPPY_DEPS)
 lib/northbound_cli.lo: lib/northbound_cli_clippy.c
+lib/log_vty_clippy.c: $(CLIPPY_DEPS)
+lib/log_vty.lo: lib/log_vty_clippy.c
 
 pkginclude_HEADERS += \
 	lib/agg_table.h \
@@ -177,6 +180,7 @@ pkginclude_HEADERS += \
 	lib/libospf.h \
 	lib/linklist.h \
 	lib/log.h \
+	lib/log_vty.h \
 	lib/md5.h \
 	lib/memory.h \
 	lib/memory_vty.h \
