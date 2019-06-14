@@ -979,7 +979,8 @@ void igmp_source_forward_start(struct pim_instance *pim,
 					      source->source_addr, sg.grp)) {
 			/*Create a dummy channel oil */
 			source->source_channel_oil =
-			    pim_channel_oil_add(pim, &sg, MAXVIFS);
+				pim_channel_oil_add(pim, &sg, MAXVIFS,
+						"igmp_fwd_dummy");
 
 			if (!source->source_channel_oil) {
 				if (PIM_DEBUG_IGMP_TRACE) {
@@ -1039,7 +1040,8 @@ void igmp_source_forward_start(struct pim_instance *pim,
 					    source_str);
 				}
 				source->source_channel_oil =
-				    pim_channel_oil_add(pim, &sg, MAXVIFS);
+					pim_channel_oil_add(pim, &sg, MAXVIFS,
+							"igmp_fwd_no_iif");
 			}
 
 			else {
@@ -1070,7 +1072,7 @@ void igmp_source_forward_start(struct pim_instance *pim,
 
 				source->source_channel_oil =
 				    pim_channel_oil_add(pim, &sg,
-					input_iface_vif_index);
+					input_iface_vif_index, "igmp_fwd");
 				if (!source->source_channel_oil) {
 					if (PIM_DEBUG_IGMP_TRACE) {
 						zlog_debug(
@@ -1247,12 +1249,13 @@ void pim_forward_start(struct pim_ifchannel *ch)
 					source_str);
 			}
 			up->channel_oil = pim_channel_oil_add(pim, &up->sg,
-								MAXVIFS);
+						MAXVIFS, "pim_fwd_no_iif");
 		}
 
 		else {
 			up->channel_oil = pim_channel_oil_add(pim, &up->sg,
-							input_iface_vif_index);
+							input_iface_vif_index,
+							"pim_fwd_with_iif");
 			if (!up->channel_oil) {
 				if (PIM_DEBUG_PIM_TRACE)
 					zlog_debug(
@@ -1274,7 +1277,7 @@ void pim_forward_start(struct pim_ifchannel *ch)
 		}
 
 		up->channel_oil = pim_channel_oil_add(pim, &up->sg,
-						      input_iface_vif_index);
+				      input_iface_vif_index, "pim_fwd");
 		if (!up->channel_oil) {
 			if (PIM_DEBUG_PIM_TRACE)
 				zlog_debug(

@@ -745,12 +745,14 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 		pim_ifp = up->rpf.source_nexthop.interface->info;
 		assert(pim_ifp);
 		up->channel_oil = pim_channel_oil_add(pim,
-				&up->sg, pim_ifp->mroute_vif_index);
+				&up->sg, pim_ifp->mroute_vif_index,
+				"up_new_static_iif");
 	} else if (up->upstream_addr.s_addr == INADDR_ANY) {
 		/* Create a dummmy channel oil with incoming ineterface MAXVIFS,
 		 * since RP is not configured
 		 */
-		up->channel_oil = pim_channel_oil_add(pim, &up->sg, MAXVIFS);
+		up->channel_oil = pim_channel_oil_add(pim, &up->sg, MAXVIFS,
+				"up_new_dummy");
 
 	} else {
 		rpf_result = pim_rpf_update(pim, up, NULL);
@@ -763,14 +765,17 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 			 * MAXVIFS, since RP is not reachable
 			 */
 			up->channel_oil = pim_channel_oil_add(
-				pim, &up->sg, MAXVIFS);
+					pim, &up->sg, MAXVIFS,
+					"up_new_rpf_fail");
 		}
 
 		if (up->rpf.source_nexthop.interface) {
 			pim_ifp = up->rpf.source_nexthop.interface->info;
 			if (pim_ifp)
 				up->channel_oil = pim_channel_oil_add(pim,
-					&up->sg, pim_ifp->mroute_vif_index);
+						&up->sg,
+						pim_ifp->mroute_vif_index,
+						"up_new");
 		}
 	}
 
@@ -1583,7 +1588,8 @@ int pim_upstream_inherited_olist_decide(struct pim_instance *pim,
 	}
 	if (pim_ifp && !up->channel_oil)
 		up->channel_oil = pim_channel_oil_add(
-			pim, &up->sg, pim_ifp->mroute_vif_index);
+			pim, &up->sg, pim_ifp->mroute_vif_index,
+			__func__);
 
 	FOR_ALL_INTERFACES (pim->vrf, ifp) {
 		if (!ifp->info)

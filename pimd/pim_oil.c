@@ -145,7 +145,8 @@ struct channel_oil *pim_find_channel_oil(struct pim_instance *pim,
 
 struct channel_oil *pim_channel_oil_add(struct pim_instance *pim,
 					struct prefix_sg *sg,
-					int input_vif_index)
+					int input_vif_index,
+					const char *caller)
 {
 	struct channel_oil *c_oil;
 	struct interface *ifp;
@@ -164,6 +165,10 @@ struct channel_oil *pim_channel_oil_add(struct pim_instance *pim,
 		}
 		c_oil->oil.mfcc_parent = input_vif_index;
 		++c_oil->oil_ref_count;
+		if (PIM_DEBUG_MROUTE)
+			zlog_debug("%s(%s): c_oil %s ref count %d increment",
+					__func__, caller, pim_str_sg_dump(sg),
+					c_oil->oil_ref_count);
 		c_oil->up = pim_upstream_find(
 			pim, sg); // channel might be present prior to upstream
 		return c_oil;
@@ -192,6 +197,9 @@ struct channel_oil *pim_channel_oil_add(struct pim_instance *pim,
 	c_oil->up = pim_upstream_find(pim, sg);
 	c_oil->pim = pim;
 
+	if (PIM_DEBUG_MROUTE)
+		zlog_debug("%s(%s): c_oil %s add",
+				__func__, caller, pim_str_sg_dump(sg));
 	listnode_add_sort(pim->channel_oil_list, c_oil);
 
 	return c_oil;

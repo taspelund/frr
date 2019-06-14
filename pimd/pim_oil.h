@@ -113,7 +113,8 @@ struct channel_oil *pim_find_channel_oil(struct pim_instance *pim,
 					 struct prefix_sg *sg);
 struct channel_oil *pim_channel_oil_add(struct pim_instance *pim,
 					struct prefix_sg *sg,
-					int input_vif_index);
+					int input_vif_index,
+					const char *caller);
 void pim_channel_oil_del(struct channel_oil *c_oil);
 
 int pim_channel_add_oif(struct channel_oil *c_oil, struct interface *oif,
