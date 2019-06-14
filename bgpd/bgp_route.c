@@ -6684,6 +6684,7 @@ void route_vty_out(struct vty *vty, struct prefix *p,
 	json_object *json_nexthops = NULL;
 	json_object *json_nexthop_global = NULL;
 	json_object *json_nexthop_ll = NULL;
+	json_object *json_ext_community = NULL;
 	char vrf_id_str[VRF_NAMSIZ] = {0};
 	bool nexthop_self =
 		CHECK_FLAG(path->flags, BGP_PATH_ANNC_NH_SELF) ? true : false;
@@ -7010,6 +7011,17 @@ void route_vty_out(struct vty *vty, struct prefix *p,
 		vty_out(vty, "%s", bgp_origin_str[attr->origin]);
 
 	if (json_paths) {
+		if (safi == SAFI_EVPN &&
+		    attr->flag & ATTR_FLAG_BIT(BGP_ATTR_EXT_COMMUNITIES)) {
+			json_ext_community = json_object_new_object();
+			json_object_string_add(json_ext_community,
+					       "string",
+					       attr->ecommunity->str);
+			json_object_object_add(json_path,
+					       "extendedCommunity",
+					       json_ext_community);
+		}
+
 		if (nexthop_self)
 			json_object_boolean_true_add(json_path,
 				"announceNexthopSelf");
@@ -7043,6 +7055,13 @@ void route_vty_out(struct vty *vty, struct prefix *p,
 		json_object_array_add(json_paths, json_path);
 	} else {
 		vty_out(vty, "\n");
+
+		if (safi == SAFI_EVPN &&
+		    attr->flag & ATTR_FLAG_BIT(BGP_ATTR_EXT_COMMUNITIES)) {
+			vty_out(vty, "%*s", 20, " ");
+			vty_out(vty, "%s\n", attr->ecommunity->str);
+		}
+
 #if ENABLE_BGP_VNC
 		/* prints an additional line, indented, with VNC info, if
 		 * present */
