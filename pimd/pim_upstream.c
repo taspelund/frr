@@ -778,6 +778,18 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 						&up->sg,
 						pim_ifp->mroute_vif_index,
 						"up_new");
+			else {
+				/*
+				 * Yeah this should not happen
+				 * but let's be sure that we are not
+				 * doing something stupid, all paths
+				 * through upstream creation will
+				 * create a channel oil
+				 */
+				up->channel_oil = pim_channel_oil_add(
+					pim, &up->sg, MAXVIFS,
+					"up_no_pim_ifp");
+			}
 		}
 	}
 
