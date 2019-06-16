@@ -41,7 +41,7 @@ extern struct zclient *zclient;
 				"to oil:%s",                                   \
 				__func__, ch->interface->name, ch->sg_str);    \
 		pim_channel_add_oif(ch_oil, ch->interface,                     \
-				    PIM_OIF_FLAG_PROTO_IGMP);                  \
+				    PIM_OIF_FLAG_PROTO_IGMP, __func__);        \
 		ch->mlag_am_i_df = true;                                       \
 	} while (0)
 
@@ -53,7 +53,7 @@ extern struct zclient *zclient;
 				"to oil:%s",                                   \
 				__func__, ch->interface->name, ch->sg_str);    \
 		pim_channel_del_oif(ch_oil, ch->interface,                     \
-				    PIM_OIF_FLAG_PROTO_IGMP);                  \
+				    PIM_OIF_FLAG_PROTO_IGMP, __func__);        \
 		ch->mlag_am_i_df = false;                                      \
 	} while (0)
 
