@@ -543,7 +543,7 @@ static void pim_vxlan_term_mr_oif_add(struct pim_vxlan_sg *vxlan_sg)
 			vxlan_sg->sg_str, vxlan_sg->term_oif->name);
 
 	if (pim_ifchannel_local_membership_add(vxlan_sg->term_oif,
-				&vxlan_sg->sg)) {
+				&vxlan_sg->sg, true /*is_vxlan */)) {
 		vxlan_sg->flags |= PIM_VXLAN_SGF_OIF_INSTALLED;
 		/* update the inherited OIL */
 		/* XXX - I don't see the inherited OIL updated when a local
@@ -551,7 +551,7 @@ static void pim_vxlan_term_mr_oif_add(struct pim_vxlan_sg *vxlan_sg)
 		 * that happens we do a force update on the inherited OIL
 		 * here.
 		 */
-		pim_upstream_inherited_olist(vxlan_sg->pim, up);
+		pim_upstream_inherited_olist(vxlan_sg->pim, vxlan_sg->up);
 	} else {
 		zlog_warn("vxlan SG %s term-oif %s add failed",
 			vxlan_sg->sg_str, vxlan_sg->term_oif->name);

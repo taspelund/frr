@@ -869,7 +869,8 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 		if (PIM_DEBUG_MLAG)
 			zlog_debug("%s: failed to find if-channel, creating",
 				   __func__);
-		pim_ifchannel_local_membership_add(ifp, &sg);
+		pim_ifchannel_local_membership_add(ifp, &sg,
+			false /*is_vxlan*/);
 		ch = pim_ifchannel_find(ifp, &sg);
 	}
 
