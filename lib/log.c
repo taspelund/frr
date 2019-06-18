@@ -87,30 +87,33 @@ int zlog_filter_add(const char *filter)
 {
 	pthread_mutex_lock(&loglock);
 
+	int ret = 0;
+
 	if (zlog_filter_count >= ZLOG_FILTERS_MAX) {
-		pthread_mutex_unlock(&loglock);
-		return 1;
+		ret = 1;
+		goto done;
 	}
 
 	if (zlog_filter_lookup(filter) != -1) {
 		/* Filter already present */
-		pthread_mutex_unlock(&loglock);
-		return -1;
+		ret = -1;
+		goto done;
 	}
 
 	strlcpy(zlog_filters[zlog_filter_count], filter,
 		sizeof(zlog_filters[0]));
 
-	if (zlog_filters[zlog_filter_count] == NULL
-	    || zlog_filters[zlog_filter_count][0] == '\0') {
-		pthread_mutex_unlock(&loglock);
-		return -1;
+	if (zlog_filters[zlog_filter_count][0] == '\0') {
+		/* Filter was either empty or didn't get copied correctly */
+		ret = -1;
+		goto done;
 	}
 
 	zlog_filter_count++;
 
+done:
 	pthread_mutex_unlock(&loglock);
-	return 0;
+	return ret;
 }
 
 int zlog_filter_del(const char *filter)
@@ -119,11 +122,12 @@ int zlog_filter_del(const char *filter)
 
 	int found_idx = zlog_filter_lookup(filter);
 	int last_idx = zlog_filter_count - 1;
+	int ret = 0;
 
 	if (found_idx == -1) {
 		/* Didn't find the filter to delete */
-		pthread_mutex_unlock(&loglock);
-		return -1;
+		ret = -1;
+		goto done;
 	}
 
 	/* Adjust the filter array */
@@ -132,8 +136,9 @@ int zlog_filter_del(const char *filter)
 
 	zlog_filter_count--;
 
+done:
 	pthread_mutex_unlock(&loglock);
-	return 0;
+	return ret;
 }
 
 /* Dump all filters to buffer, delimited by new line */
@@ -149,13 +154,13 @@ int zlog_filter_dump(char *buf, size_t max_size)
 			       zlog_filters[i]);
 		len += ret;
 		if ((ret < 0) || ((size_t)len >= max_size)) {
-			pthread_mutex_unlock(&loglock);
-			return -1;
+			len = -1;
+			goto done;
 		}
 	}
 
+done:
 	pthread_mutex_unlock(&loglock);
-
 	return len;
 }
 
@@ -337,7 +342,7 @@ static int vzlog_filter(struct zlog *zl, struct timestamp_control *tsctl,
 
 	len += ret;
 	if ((ret < 0) || ((size_t)len >= sizeof(buf)))
-		return search_buf(buf);
+		goto search;
 
 	if (zl && zl->record_priority)
 		snprintf(buf + len, sizeof(buf) - len, "%s: %s: %s",
@@ -346,6 +351,7 @@ static int vzlog_filter(struct zlog *zl, struct timestamp_control *tsctl,
 		snprintf(buf + len, sizeof(buf) - len, "%s: %s", proto_str,
 			 msg);
 
+search:
 	return search_buf(buf);
 }
 
