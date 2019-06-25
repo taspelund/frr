@@ -28,6 +28,7 @@ ospf6d=no
 ripd=no
 ripngd=no
 isisd=no
+fabricd=no
 pimd=no
 ldpd=no
 nhrpd=no
