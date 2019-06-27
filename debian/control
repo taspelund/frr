@@ -118,8 +118,7 @@ Package: frr-pythontools
 Architecture: all
 Depends:
  ${misc:Depends},
- frr (<< ${source:Upstream-Version}.0-~),
- frr (>= ${source:Version}~),
+ frr (>= 7.0-cl4u1),
  python3:any
 Description: FRRouting suite - Python tools
  The FRRouting suite uses a small Python tool to provide configuration
