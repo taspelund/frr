@@ -784,6 +784,15 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 	}
 }
 
+static void pim_mlag_process_peer_frr_state(struct mlag_frr_status msg)
+{
+
+	if (PIM_DEBUG_MLAG)
+		zlog_debug(
+			"%s: msg dump: peer_frr_state:%s", __func__,
+			(msg.frr_state == MLAG_FRR_STATE_UP ? "UP" : "DOWN"));
+}
+
 static void pim_mlag_process_vxlan_update(struct mlag_vxlan *msg)
 {
 	char addr_buf1[INET_ADDRSTRLEN];
@@ -946,6 +955,14 @@ int pim_zebra_mlag_handle_msg(struct stream *s, int len)
 			return (rc);
 		pim_mlag_process_mlagd_state_change(msg);
 	} break;
+	case MLAG_PEER_FRR_STATUS: {
+		struct mlag_frr_status msg;
+
+		rc = zebra_mlag_lib_decode_frr_status(s, &msg);
+		if (rc)
+			return (rc);
+		pim_mlag_process_peer_frr_state(msg);
+	} break;
 	case MLAG_VXLAN_UPDATE:
 	{
 		struct mlag_vxlan msg;
@@ -1081,6 +1098,7 @@ static int pim_mlag_register_handler(struct thread *thread)
 	SET_FLAG(bit_mask, (1 << MLAG_PIM_STATUS_UPDATE));
 	SET_FLAG(bit_mask, (1 << MLAG_PIM_CFG_DUMP));
 	SET_FLAG(bit_mask, (1 << MLAG_VXLAN_UPDATE));
+	SET_FLAG(bit_mask, (1 << MLAG_PEER_FRR_STATUS));
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: Posting Client Register to MLAG mask:0x%x",
