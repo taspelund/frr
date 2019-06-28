@@ -41,9 +41,9 @@ Depends:
  ${misc:Depends},
  ${shlibs:Depends},
  iproute2 | iproute,
- logrotate (>= 3.2-11)
+ logrotate (>= 3.2-11),
+ frr-pythontools (>= 7.0-cl4u1)
 Pre-Depends: adduser
-Recommends: frr-pythontools
 Suggests: frr-doc
 Conflicts:
  zebra,
