@@ -4595,6 +4595,22 @@ DEFUN(show_ip_pim_mlag_mroute_vrf_all,
 	return CMD_SUCCESS;
 }
 
+DEFUN(show_ip_pim_mlag_up_vrf_all, show_ip_pim_mlag_up_vrf_all_cmd,
+      "show ip pim vrf all mlag upstream [json]",
+      SHOW_STR IP_STR PIM_STR VRF_CMD_HELP_STR
+      "MLAG\n"
+      "upstream\n" JSON_STR)
+{
+	struct vrf *vrf;
+	bool uj = use_json(argc, argv);
+
+	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		pim_show_mlag_up_vrf(vrf, vty, uj);
+	}
+
+	return CMD_SUCCESS;
+}
+
 DEFUN (show_ip_pim_neighbor,
        show_ip_pim_neighbor_cmd,
        "show ip pim [vrf NAME] neighbor [detail|WORD] [json]",
@@ -10284,6 +10300,7 @@ void pim_cmd_init(void)
 			&show_ip_pim_mlag_mroute_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_mlag_summary_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_mlag_up_cmd);
+	install_element(VIEW_NODE, &show_ip_pim_mlag_up_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_neighbor_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_neighbor_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_rpf_cmd);
