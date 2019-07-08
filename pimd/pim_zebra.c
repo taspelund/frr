@@ -1250,23 +1250,15 @@ void pim_forward_start(struct pim_ifchannel *ch)
 					__FILE__, __PRETTY_FUNCTION__,
 					source_str);
 			}
-			up->channel_oil = pim_channel_oil_add(pim, &up->sg,
-						MAXVIFS, "pim_fwd_no_iif");
+			pim_channel_oil_change_iif(pim, up->channel_oil,
+						   MAXVIFS,
+						   __PRETTY_FUNCTION__);
 		}
 
-		else {
-			up->channel_oil = pim_channel_oil_add(pim, &up->sg,
-							input_iface_vif_index,
-							"pim_fwd_with_iif");
-			if (!up->channel_oil) {
-				if (PIM_DEBUG_PIM_TRACE)
-					zlog_debug(
-					    "%s %s: could not create OIL for channel (S,G)=%s",
-					    __FILE__, __PRETTY_FUNCTION__,
-					    up->sg_str);
-				return;
-			}
-		}
+		else
+			pim_channel_oil_change_iif(pim, up->channel_oil,
+						   input_iface_vif_index,
+						   __PRETTY_FUNCTION__);
 
 		if (PIM_DEBUG_TRACE) {
 			struct interface *in_intf = pim_if_find_by_vif_index(
@@ -1276,17 +1268,6 @@ void pim_forward_start(struct pim_ifchannel *ch)
 				__PRETTY_FUNCTION__,
 				in_intf ? in_intf->name : "Unknown",
 				input_iface_vif_index, up->sg_str);
-		}
-
-		up->channel_oil = pim_channel_oil_add(pim, &up->sg,
-				      input_iface_vif_index, "pim_fwd");
-		if (!up->channel_oil) {
-			if (PIM_DEBUG_PIM_TRACE)
-				zlog_debug(
-					"%s %s: could not create OIL for channel (S,G)=%s",
-					__FILE__, __PRETTY_FUNCTION__,
-					up->sg_str);
-			return;
 		}
 	}
 
