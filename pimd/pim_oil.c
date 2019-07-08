@@ -146,6 +146,43 @@ struct channel_oil *pim_find_channel_oil(struct pim_instance *pim,
 	return c_oil;
 }
 
+void pim_channel_oil_change_iif(struct pim_instance *pim,
+				struct channel_oil *c_oil,
+				int input_vif_index,
+				const char *name)
+{
+	int old_vif_index = c_oil->oil.mfcc_parent;
+	struct prefix_sg sg = {.src = c_oil->oil.mfcc_mcastgrp,
+			       .grp = c_oil->oil.mfcc_origin};
+
+	if (c_oil->oil.mfcc_parent == input_vif_index) {
+		if (PIM_DEBUG_MROUTE_DETAIL)
+			zlog_debug("%s(%s): Existing channel oil %pSG4 already using %d as IIF",
+				   __PRETTY_FUNCTION__, name, &sg,
+				   input_vif_index);
+
+		return;
+	}
+
+	if (PIM_DEBUG_MROUTE_DETAIL)
+		zlog_debug("%s(%s): Changing channel oil %pSG4 IIF from %d to %d installed: %d",
+			   __PRETTY_FUNCTION__, name, &sg,
+			   c_oil->oil.mfcc_parent, input_vif_index,
+			   c_oil->installed);
+
+	c_oil->oil.mfcc_parent = input_vif_index;
+	if (c_oil->installed) {
+		if (input_vif_index == MAXVIFS)
+			pim_mroute_del(c_oil, name);
+		else
+			pim_mroute_add(c_oil, name);
+	} else
+		if (old_vif_index == MAXVIFS)
+			pim_mroute_add(c_oil, name);
+
+	return;
+}
+
 struct channel_oil *pim_channel_oil_add(struct pim_instance *pim,
 					struct prefix_sg *sg,
 					int input_vif_index,
@@ -166,7 +203,8 @@ struct channel_oil *pim_channel_oil_add(struct pim_instance *pim,
 					c_oil->oil.mfcc_parent,
 					input_vif_index);
 		}
-		c_oil->oil.mfcc_parent = input_vif_index;
+		pim_channel_oil_change_iif(pim, c_oil, input_vif_index,
+					   caller);
 		++c_oil->oil_ref_count;
 		if (PIM_DEBUG_MROUTE)
 			zlog_debug("%s(%s): c_oil %s ref count %d increment",
@@ -209,8 +247,8 @@ struct channel_oil *pim_channel_oil_add(struct pim_instance *pim,
 	c_oil->pim = pim;
 
 	if (PIM_DEBUG_MROUTE)
-		zlog_debug("%s(%s): c_oil %s add",
-				__func__, caller, pim_str_sg_dump(sg));
+		zlog_debug("%s(%s): c_oil %s add %d as IIF",
+				__func__, caller, pim_str_sg_dump(sg), input_vif_index);
 	listnode_add_sort(pim->channel_oil_list, c_oil);
 
 	return c_oil;
