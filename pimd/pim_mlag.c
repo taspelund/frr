@@ -196,8 +196,8 @@ void pim_mlag_del_entry_to_peer(struct pim_ifchannel *ch)
 
 /******************************* pim upstream sync **************************/
 /* Update DF role for the upstream entry and return true on role change */
-static bool pim_mlag_up_df_role_update(struct pim_upstream *up,
-		bool is_df, const char *reason)
+bool pim_mlag_up_df_role_update(struct pim_instance *pim,
+		struct pim_upstream *up, bool is_df, const char *reason)
 {
 	struct channel_oil *c_oil = up->channel_oil;
 	bool old_is_df = !PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags);
@@ -222,6 +222,14 @@ static bool pim_mlag_up_df_role_update(struct pim_upstream *up,
 	 */
 	if (c_oil && c_oil->installed)
 		pim_mroute_add(c_oil, __PRETTY_FUNCTION__);
+
+	/* If DF role changed on a (*,G) termination mroute update the
+	 * associated DF role on the inherited (S,G) entries
+	 */
+	if ((up->sg.src.s_addr == INADDR_ANY) &&
+			PIM_UPSTREAM_FLAG_TEST_MLAG_VXLAN(up->flags))
+		pim_vxlan_inherit_mlag_flags(pim, up, true /* inherit */);
+
 	return true;
 }
 
@@ -241,7 +249,7 @@ static bool pim_mlag_up_df_role_elect(struct pim_instance *pim,
 	 * we will assume DF status.
 	 */
 	if (!(router->mlag_flags & PIM_MLAGF_STATUS_RXED))
-		return pim_mlag_up_df_role_update(up,
+		return pim_mlag_up_df_role_update(pim, up,
 				true /*is_df*/, "mlagd-down");
 
 	/* If not connected to peer assume DF role on the MLAG primary
@@ -249,7 +257,7 @@ static bool pim_mlag_up_df_role_elect(struct pim_instance *pim,
 	 */
 	if (!(router->mlag_flags & PIM_MLAGF_PEER_CONN_UP)) {
 		is_df = (router->mlag_role == MLAG_ROLE_PRIMARY) ? true : false;
-		return pim_mlag_up_df_role_update(up,
+		return pim_mlag_up_df_role_update(pim, up,
 				is_df, "peer-down");
 	}
 
@@ -260,7 +268,7 @@ static bool pim_mlag_up_df_role_elect(struct pim_instance *pim,
 	 * without a peer reference to non-df role.
 	 */
 	if (!PIM_UPSTREAM_FLAG_TEST_MLAG_PEER(up->flags))
-		return pim_mlag_up_df_role_update(up,
+		return pim_mlag_up_df_role_update(pim, up,
 				false /*is_df*/, "no-peer-mroute");
 
 	/* switch with the lowest RPF cost wins. if both switches have the same
@@ -270,10 +278,10 @@ static bool pim_mlag_up_df_role_elect(struct pim_instance *pim,
 	local_cost = pim_up_mlag_local_cost(pim, up);
 	if (local_cost == peer_cost) {
 		is_df = (router->mlag_role == MLAG_ROLE_PRIMARY) ? true : false;
-		rv = pim_mlag_up_df_role_update(up, is_df, "equal-cost");
+		rv = pim_mlag_up_df_role_update(pim, up, is_df, "equal-cost");
 	} else {
 		is_df = (local_cost < peer_cost) ? true : false;
-		rv = pim_mlag_up_df_role_update(up, is_df, "cost");
+		rv = pim_mlag_up_df_role_update(pim, up, is_df, "cost");
 	}
 
 	return rv;

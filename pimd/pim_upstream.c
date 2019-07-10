@@ -739,8 +739,21 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 	up->ifchannels = list_new();
 	up->ifchannels->cmp = (int (*)(void *, void *))pim_ifchannel_compare;
 
-	if (up->sg.src.s_addr != INADDR_ANY)
+	if (up->sg.src.s_addr != INADDR_ANY) {
 		wheel_add_item(pim->upstream_sg_wheel, up);
+
+		/* Inherit the DF role from the parent (*, G) entry for
+		 * VxLAN BUM groups
+		 */
+		if (up->parent &&
+			PIM_UPSTREAM_FLAG_TEST_MLAG_VXLAN(up->parent->flags) &&
+			PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->parent->flags)) {
+			PIM_UPSTREAM_FLAG_SET_MLAG_NON_DF(up->flags);
+			if (PIM_DEBUG_VXLAN)
+				zlog_debug("upstream %s inherited mlag non-df flag from parent",
+						up->sg_str);
+		}
+	}
 
 	if (PIM_UPSTREAM_FLAG_TEST_STATIC_IIF(up->flags)) {
 		pim_upstream_fill_static_iif(up, incoming);
@@ -794,19 +807,6 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 	}
 
 	listnode_add_sort(pim->upstream_list, up);
-
-	/* If (S, G) inherit the MLAG_VXLAN from the parent
-	 * (*, G) entry.
-	 */
-	if ((up->sg.src.s_addr != INADDR_ANY) &&
-		up->parent &&
-		PIM_UPSTREAM_FLAG_TEST_MLAG_VXLAN(up->parent->flags) &&
-		!PIM_UPSTREAM_FLAG_TEST_SRC_VXLAN_ORIG(up->flags)) {
-		PIM_UPSTREAM_FLAG_SET_MLAG_VXLAN(up->flags);
-		if (PIM_DEBUG_VXLAN)
-			zlog_debug("upstream %s inherited mlag vxlan flag from parent",
-					up->sg_str);
-	}
 
 	/* send the entry to the MLAG peer */
 	/* XXX - duplicate send is possible here if pim_rpf_update
