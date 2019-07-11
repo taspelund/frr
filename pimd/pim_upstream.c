@@ -142,13 +142,20 @@ static struct pim_upstream *pim_upstream_find_parent(struct pim_instance *pim,
 
 static void upstream_channel_oil_detach(struct pim_upstream *up)
 {
-	if (up->channel_oil) {
+	struct channel_oil *channel_oil = up->channel_oil;
+
+	if (channel_oil) {
 		/* Detaching from channel_oil, channel_oil may exist post del,
 		   but upstream would not keep reference of it
 		 */
-		up->channel_oil->up = NULL;
-		pim_channel_oil_del(up->channel_oil);
+		channel_oil->up = NULL;
 		up->channel_oil = NULL;
+
+		/* attempt to delete channel_oil; if channel_oil is being held
+		 * because of other references cleanup info such as "Mute"
+		 * inferred from the parent upstream
+		 */
+		pim_channel_oil_upstream_deref(channel_oil);
 	}
 }
 

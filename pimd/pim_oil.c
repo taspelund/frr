@@ -33,6 +33,8 @@
 #include "pim_time.h"
 #include "pim_vxlan.h"
 
+static void pim_channel_update_mute(struct channel_oil *c_oil);
+
 char *pim_channel_oil_dump(struct channel_oil *c_oil, char *buf, size_t size)
 {
 	struct interface *ifp;
@@ -170,8 +172,16 @@ struct channel_oil *pim_channel_oil_add(struct pim_instance *pim,
 			zlog_debug("%s(%s): c_oil %s ref count %d increment",
 					__func__, caller, pim_str_sg_dump(sg),
 					c_oil->oil_ref_count);
-		c_oil->up = pim_upstream_find(
-			pim, sg); // channel might be present prior to upstream
+		if (!c_oil->up) {
+			/* channel might be present prior to upstream */
+			c_oil->up = pim_upstream_find(
+					pim, sg);
+			/* if the upstream entry is being anchored to an
+			 * already existing channel OIL we need to re-evaluate
+			 * the "Mute" state on AA OIFs
+			 */
+			pim_channel_update_mute(c_oil);
+		}
 		return c_oil;
 	}
 
@@ -206,7 +216,7 @@ struct channel_oil *pim_channel_oil_add(struct pim_instance *pim,
 	return c_oil;
 }
 
-void pim_channel_oil_del(struct channel_oil *c_oil)
+struct channel_oil *pim_channel_oil_del(struct channel_oil *c_oil)
 {
 	--c_oil->oil_ref_count;
 
@@ -221,6 +231,24 @@ void pim_channel_oil_del(struct channel_oil *c_oil)
 		hash_release(c_oil->pim->channel_oil_hash, c_oil);
 
 		pim_channel_oil_free(c_oil);
+		return NULL;
+	}
+
+	return c_oil;
+}
+
+void pim_channel_oil_upstream_deref(struct channel_oil *c_oil)
+{
+	/* The upstream entry associated with a channel_oil is abt to be
+	 * deleted. If the channel_oil is kept around because of other
+	 * references we need to remove upstream based states out of it.
+	 */
+	c_oil = pim_channel_oil_del(c_oil);
+	if (c_oil) {
+		/* note: here we assume that c_oil->up has already been
+		 * cleared
+		 */
+		pim_channel_update_mute(c_oil);
 	}
 }
 
@@ -397,6 +425,22 @@ void pim_channel_update_oif_mute(struct channel_oil *c_oil,
 			~PIM_OIF_FLAG_MUTE;
 
 	pim_mroute_add(c_oil, __PRETTY_FUNCTION__);
+}
+
+/* pim_upstream has been set or cleared on the c_oil. re-eval mute state
+ * on all existing OIFs
+ */
+static void pim_channel_update_mute(struct channel_oil *c_oil)
+{
+	struct pim_interface *pim_reg_ifp;
+	struct pim_interface *vxlan_ifp;
+
+	pim_reg_ifp = c_oil->pim->regiface->info;
+	if (pim_reg_ifp)
+		pim_channel_update_oif_mute(c_oil, pim_reg_ifp);
+	vxlan_ifp = pim_vxlan_get_term_ifp(c_oil->pim);
+	if (vxlan_ifp)
+		pim_channel_update_oif_mute(c_oil, vxlan_ifp);
 }
 
 int pim_channel_add_oif(struct channel_oil *channel_oil, struct interface *oif,
