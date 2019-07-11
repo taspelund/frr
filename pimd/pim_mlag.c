@@ -201,6 +201,7 @@ bool pim_mlag_up_df_role_update(struct pim_instance *pim,
 {
 	struct channel_oil *c_oil = up->channel_oil;
 	bool old_is_df = !PIM_UPSTREAM_FLAG_TEST_MLAG_NON_DF(up->flags);
+	struct pim_interface *vxlan_ifp;
 
 	if (is_df == old_is_df)
 		return false;
@@ -214,14 +215,18 @@ bool pim_mlag_up_df_role_update(struct pim_instance *pim,
 	else
 		PIM_UPSTREAM_FLAG_SET_MLAG_NON_DF(up->flags);
 
-	/* If the DF role has changed re-install OIL. Active-Active devices
-	 * and vxlan termination device (ipmr-lo) are suppressed on the non-DF.
+	/* If the DF role has changed check if ipmr-lo needs to be
+	 * muted/un-muted. Active-Active devices and vxlan termination
+	 * devices (ipmr-lo) are suppressed on the non-DF.
 	 * This may leave the mroute with the empty OIL in which case the
 	 * the forwarding entry's sole purpose is to just blackhole the flow
 	 * headed to the switch.
 	 */
-	if (c_oil && c_oil->installed)
-		pim_mroute_add(c_oil, __PRETTY_FUNCTION__);
+	if (c_oil) {
+		vxlan_ifp = pim_vxlan_get_term_ifp(pim);
+		if (vxlan_ifp)
+			pim_channel_update_oif_mute(c_oil, vxlan_ifp);
+	}
 
 	/* If DF role changed on a (*,G) termination mroute update the
 	 * associated DF role on the inherited (S,G) entries
