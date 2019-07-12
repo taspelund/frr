@@ -3994,6 +3994,8 @@ DEFUN (show_ip_pim_mlag_summary,
 		inet_ntop(AF_INET, &router->anycast_vtep_ip,
 				addr_buf, INET_ADDRSTRLEN);
 		json_object_string_add(json, "anycastVtepIp", addr_buf);
+		json_object_string_add(json, "peerlinkRif",
+				router->peerlink_rif);
 
 		json_stat = json_object_new_object();
 		json_object_int_add(json_stat, "mlagConnFlaps",
@@ -4036,6 +4038,7 @@ DEFUN (show_ip_pim_mlag_summary,
 	inet_ntop(AF_INET, &router->anycast_vtep_ip,
 			addr_buf, INET_ADDRSTRLEN);
 	vty_out(vty, "Anycast VTEP IP: %s\n", addr_buf);
+	vty_out(vty, "Peerlink: %s\n", router->peerlink_rif);
 	vty_out(vty, "Session flaps: mlagd: %d mlag-peer: %d\n",
 			router->mlag_stats.mlagd_session_downs,
 			router->mlag_stats.peer_session_downs);
