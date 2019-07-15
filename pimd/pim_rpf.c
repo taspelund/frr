@@ -202,6 +202,11 @@ static void pim_rpf_cost_change(struct pim_instance *pim,
 	uint32_t new_cost;
 
 	new_cost = pim_up_mlag_local_cost(pim, up);
+	if (PIM_DEBUG_MLAG)
+		zlog_debug(
+			"%s: Cost_to_rp of upstream-%s changed to:%u, from:%u",
+			__func__, up->sg_str, new_cost, old_cost);
+
 	if (old_cost == new_cost) {
 		return;
 	}
@@ -260,6 +265,8 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 	pim_find_or_track_nexthop(pim, &nht_p, up, NULL, NULL);
 	if (!pim_ecmp_nexthop_lookup(pim, &rpf->source_nexthop, &src, &grp,
 				neigh_needed)) {
+		/* Route is Deleted in Zebra, reset the stored NH data */
+		pim_upstream_rpf_clear(pim, up);
 		pim_rpf_cost_change(pim, up, saved_mrib_route_metric);
 		return PIM_RPF_FAILURE;
 	}
