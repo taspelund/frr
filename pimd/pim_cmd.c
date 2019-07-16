@@ -3985,6 +3985,8 @@ DEFUN (show_ip_pim_mlag_summary,
 			json_object_boolean_true_add(json, "mlagConnUp");
 		if (router->mlag_flags & PIM_MLAGF_PEER_CONN_UP)
 			json_object_boolean_true_add(json, "mlagPeerConnUp");
+		if (router->mlag_flags & PIM_MLAGF_PEER_ZEBRA_UP)
+			json_object_boolean_true_add(json, "mlagPeerZebraUp");
 		json_object_string_add(json, "mlagRole",
 				mlag_role2str(router->mlag_role,
 					role_buf, sizeof(role_buf)));
@@ -4002,6 +4004,8 @@ DEFUN (show_ip_pim_mlag_summary,
 				router->mlag_stats.mlagd_session_downs);
 		json_object_int_add(json_stat, "mlagPeerConnFlaps",
 				router->mlag_stats.peer_session_downs);
+		json_object_int_add(json_stat, "mlagPeerZebraFlaps",
+				router->mlag_stats.peer_zebra_downs);
 		json_object_int_add(json_stat, "mrouteAddRx",
 				router->mlag_stats.msg.mroute_add_rx);
 		json_object_int_add(json_stat, "mrouteAddTx",
@@ -4012,6 +4016,8 @@ DEFUN (show_ip_pim_mlag_summary,
 				router->mlag_stats.msg.mroute_del_tx);
 		json_object_int_add(json_stat, "mlagStatusUpdates",
 				router->mlag_stats.msg.mlag_status_updates);
+		json_object_int_add(json_stat, "peerZebraStatusUpdates",
+			router->mlag_stats.msg.peer_zebra_status_updates);
 		json_object_int_add(json_stat, "pimStatusUpdates",
 				router->mlag_stats.msg.pim_status_updates);
 		json_object_int_add(json_stat, "vxlanUpdates",
@@ -4030,6 +4036,9 @@ DEFUN (show_ip_pim_mlag_summary,
 	vty_out(vty, "MLAG peer state: %s\n",
 		(router->mlag_flags & PIM_MLAGF_PEER_CONN_UP)
 			? "up" : "down");
+	vty_out(vty, "Zebra peer state: %s\n",
+		(router->mlag_flags & PIM_MLAGF_PEER_ZEBRA_UP)
+			? "up" : "down");
 	vty_out(vty, "MLAG role: %s\n",
 		mlag_role2str(router->mlag_role, role_buf, sizeof(role_buf)));
 	inet_ntop(AF_INET, &router->local_vtep_ip,
@@ -4039,9 +4048,10 @@ DEFUN (show_ip_pim_mlag_summary,
 			addr_buf, INET_ADDRSTRLEN);
 	vty_out(vty, "Anycast VTEP IP: %s\n", addr_buf);
 	vty_out(vty, "Peerlink: %s\n", router->peerlink_rif);
-	vty_out(vty, "Session flaps: mlagd: %d mlag-peer: %d\n",
+	vty_out(vty, "Session flaps: mlagd: %d mlag-peer: %d zebra-peer: %d\n",
 			router->mlag_stats.mlagd_session_downs,
-			router->mlag_stats.peer_session_downs);
+			router->mlag_stats.peer_session_downs,
+			router->mlag_stats.peer_zebra_downs);
 	vty_out(vty, "Message Statistics:\n");
 	vty_out(vty, "  mroute adds: rx: %d, tx: %d\n",
 			router->mlag_stats.msg.mroute_add_rx,
@@ -4049,8 +4059,8 @@ DEFUN (show_ip_pim_mlag_summary,
 	vty_out(vty, "  mroute dels: rx: %d, tx: %d\n",
 			router->mlag_stats.msg.mroute_del_rx,
 			router->mlag_stats.msg.mroute_del_tx);
-	vty_out(vty, "  MLAG status updates: %d\n",
-			router->mlag_stats.msg.mlag_status_updates);
+	vty_out(vty, "  peer zebra status updates: %d\n",
+			router->mlag_stats.msg.peer_zebra_status_updates);
 	vty_out(vty, "  PIM status updates: %d\n",
 			router->mlag_stats.msg.pim_status_updates);
 	vty_out(vty, "  VxLAN updates: %d\n",
