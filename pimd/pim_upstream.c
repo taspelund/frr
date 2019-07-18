@@ -1583,18 +1583,14 @@ int pim_upstream_inherited_olist_decide(struct pim_instance *pim,
 					struct pim_upstream *up)
 {
 	struct interface *ifp;
-	struct pim_interface *pim_ifp = NULL;
 	struct pim_ifchannel *ch, *starch;
 	struct pim_upstream *starup = up->parent;
 	int output_intf = 0;
 
-	if (up->rpf.source_nexthop.interface)
-		pim_ifp = up->rpf.source_nexthop.interface->info;
-	else {
+	if (!up->rpf.source_nexthop.interface)
 		if (PIM_DEBUG_TRACE)
 			zlog_debug("%s: up %s RPF is not present",
 				   __PRETTY_FUNCTION__, up->sg_str);
-	}
 
 	FOR_ALL_INTERFACES (pim->vrf, ifp) {
 		if (!ifp->info)

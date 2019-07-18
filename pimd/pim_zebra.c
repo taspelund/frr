@@ -602,7 +602,6 @@ void pim_scan_individual_oil(struct channel_oil *c_oil, int in_vif_index)
 {
 	struct in_addr vif_source;
 	int input_iface_vif_index;
-	int old_vif_index;
 
 	pim_rp_set_upstream_addr(c_oil->pim, &vif_source,
 				      c_oil->oil.mfcc_origin,
@@ -702,7 +701,6 @@ void pim_scan_individual_oil(struct channel_oil *c_oil, int in_vif_index)
 	}
 
 	/* update iif vif_index */
-	old_vif_index = c_oil->oil.mfcc_parent;
 	pim_channel_oil_change_iif(c_oil->pim, c_oil, input_iface_vif_index,
 				   __PRETTY_FUNCTION__);
 	pim_mroute_add(c_oil, __PRETTY_FUNCTION__);
