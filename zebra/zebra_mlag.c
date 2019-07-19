@@ -924,7 +924,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 
 	rc = zebra_mlag_lib_decode_mlag_hdr(s, &mlag_msg);
 	if (rc)
-		return (rc);
+		return rc;
 
 	if (IS_ZEBRA_DEBUG_MLAG)
 		zlog_debug("%s: Decoded msg length:%d..", __func__,
@@ -946,11 +946,11 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 
 		rc = zebra_mlag_lib_decode_mroute_add(s, &msg);
 		if (rc)
-			return (rc);
+			return rc;
 		vrf_name_len = strlen(msg.vrf_name);
 		pay_load.vrf_name = malloc(vrf_name_len);
 		if (pay_load.vrf_name == NULL)
-			return (-1);
+			return -1;
 		strncpy(pay_load.vrf_name, msg.vrf_name, vrf_name_len);
 		pay_load.source_ip = msg.source_ip;
 		pay_load.group_ip = msg.group_ip;
@@ -979,11 +979,11 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 
 		rc = zebra_mlag_lib_decode_mroute_del(s, &msg);
 		if (rc)
-			return (rc);
+			return rc;
 		vrf_name_len = strlen(msg.vrf_name);
 		pay_load.vrf_name = malloc(vrf_name_len);
 		if (pay_load.vrf_name == NULL)
-			return (-1);
+			return -1;
 		strncpy(pay_load.vrf_name, msg.vrf_name, vrf_name_len);
 		pay_load.source_ip = msg.source_ip;
 		pay_load.group_ip = msg.group_ip;
@@ -1014,23 +1014,23 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 				  * Bulk_msg.n_mroute_add);
 
 		if (pay_load == NULL)
-			return (-1);
+			return -1;
 		for (i = 0; i < mlag_msg.msg_cnt; i++) {
 
 			uint32_t vrf_name_len = 0;
 
 			rc = zebra_mlag_lib_decode_mroute_add(s, &msg);
 			if (rc)
-				return (rc);
+				return rc;
 			pay_load[i] = malloc(sizeof(ZebraMlagMrouteAdd));
 			if (pay_load[i] == NULL)
-				return (-1);
+				return -1;
 			zebra_mlag_mroute_add__init(pay_load[i]);
 
 			vrf_name_len = strlen(msg.vrf_name);
 			pay_load[i]->vrf_name = malloc(vrf_name_len);
 			if (pay_load[i]->vrf_name == NULL)
-				return (-1);
+				return -1;
 
 			strncpy(pay_load[i]->vrf_name, msg.vrf_name,
 				vrf_name_len);
@@ -1072,23 +1072,23 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 				  * Bulk_msg.n_mroute_del);
 
 		if (pay_load == NULL)
-			return (-1);
+			return -1;
 		for (i = 0; i < mlag_msg.msg_cnt; i++) {
 
 			uint32_t vrf_name_len = 0;
 
 			rc = zebra_mlag_lib_decode_mroute_del(s, &msg);
 			if (rc)
-				return (rc);
+				return rc;
 			pay_load[i] = malloc(sizeof(ZebraMlagMrouteDel));
 			if (pay_load[i] == NULL)
-				return (-1);
+				return -1;
 			zebra_mlag_mroute_del__init(pay_load[i]);
 
 			vrf_name_len = strlen(msg.vrf_name);
 			pay_load[i]->vrf_name = malloc(vrf_name_len);
 			if (pay_load[i]->vrf_name == NULL)
-				return (-1);
+				return -1;
 
 			strncpy(pay_load[i]->vrf_name, msg.vrf_name,
 				vrf_name_len);
@@ -1130,7 +1130,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		hdr.data.len = len;
 		hdr.data.data = malloc(len);
 		if (hdr.data.data == NULL)
-			return (-1);
+			return -1;
 		memcpy(hdr.data.data, tmp_buf, len);
 	}
 
@@ -1176,7 +1176,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 		zlog_debug("%s: Entering..", __func__);
 	hdr = zebra_mlag__header__unpack(NULL, len, data);
 	if (hdr == NULL)
-		return (-1);
+		return -1;
 
 	/*
 	 * ADD The MLAG Header
@@ -1211,7 +1211,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 				NULL, hdr->data.len, hdr->data.data);
 			if (msg == NULL) {
 				zebra_mlag__header__free_unpacked(hdr, NULL);
-				return (-1);
+				return -1;
 			}
 			/* Payload len */
 			stream_putw(*s, MLAG_STATUS_MSGSIZE);
@@ -1231,7 +1231,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			if (msg == NULL) {
 				zebra_mlag__header__free_unpacked(hdr,
 						NULL);
-				return (-1);
+				return -1;
 			}
 			/* Payload len */
 			stream_putw(*s, MLAG_VXLAN_MSGSIZE);
@@ -1249,7 +1249,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 							    hdr->data.data);
 			if (msg == NULL) {
 				zebra_mlag__header__free_unpacked(hdr, NULL);
-				return (-1);
+				return -1;
 			}
 			/* Payload len */
 			stream_putw(*s, MLAG_MROUTE_ADD_MSGSIZE);
@@ -1279,7 +1279,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 							    hdr->data.data);
 			if (msg == NULL) {
 				zebra_mlag__header__free_unpacked(hdr, NULL);
-				return (-1);
+				return -1;
 			}
 			/* Payload len */
 			stream_putw(*s, MLAG_MROUTE_DEL_MSGSIZE);
@@ -1308,7 +1308,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 				NULL, hdr->data.len, hdr->data.data);
 			if (Bulk_msg == NULL) {
 				zebra_mlag__header__free_unpacked(hdr, NULL);
-				return (-1);
+				return -1;
 			}
 			/* Payload len */
 			stream_putw(*s, (Bulk_msg->n_mroute_add
@@ -1347,7 +1347,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 				NULL, hdr->data.len, hdr->data.data);
 			if (Bulk_msg == NULL) {
 				zebra_mlag__header__free_unpacked(hdr, NULL);
-				return (-1);
+				return -1;
 			}
 			/* Payload len */
 			stream_putw(*s, (Bulk_msg->n_mroute_del
@@ -1381,7 +1381,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 				NULL, hdr->data.len, hdr->data.data);
 			if (msg == NULL) {
 				zebra_mlag__header__free_unpacked(hdr, NULL);
-				return (-1);
+				return -1;
 			}
 			/* Payload len */
 			stream_putw(*s, MLAG_FRR_STATUS_MSGSIZE);
