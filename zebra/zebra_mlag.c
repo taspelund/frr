@@ -1125,7 +1125,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 			__func__,
 			zebra_mlag_lib_msgid_to_str(mlag_msg.msg_type, buf, 80),
 			len);
-	hdr.type = mlag_msg.msg_type;
+	hdr.type = (ZebraMlagHeader__MessageType)mlag_msg.msg_type;
 	if (len != 0) {
 		hdr.data.len = len;
 		hdr.data.data = malloc(len);
