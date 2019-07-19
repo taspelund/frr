@@ -1115,18 +1115,6 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		}
 		free(pay_load);
 	} break;
-	case MLAG_PIM_STATUS_UPDATE: {
-		struct mlag_pim_status msg;
-		ZebraMlagPimStatusUpdate pay_load =
-			ZEBRA_MLAG_PIM_STATUS_UPDATE__INIT;
-
-		rc = zebra_mlag_lib_decode_pim_status(s, &msg);
-		if (rc)
-			return (rc);
-		pay_load.switchd_state = msg.switchd_state;
-		pay_load.svi_state = msg.svi_state;
-		len = zebra_mlag_pim_status_update__pack(&pay_load, tmp_buf);
-	} break;
 	default:
 		break;
 	}
@@ -1385,24 +1373,6 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			}
 			zebra_mlag_mroute_del_bulk__free_unpacked(Bulk_msg,
 								  NULL);
-		} break;
-		case ZEBRA_MLAG__HEADER__MESSAGE_TYPE__ZEBRA_MLAG_PIM_STATUS_UPDATE: {
-			ZebraMlagPimStatusUpdate *msg = NULL;
-
-			msg = zebra_mlag_pim_status_update__unpack(
-				NULL, hdr->data.len, hdr->data.data);
-			if (msg == NULL) {
-				zebra_mlag__header__free_unpacked(hdr, NULL);
-				return (-1);
-			}
-			/* Payload len */
-			stream_putw(*s, MLAG_PIM_STATUS_MSGSIZE);
-			/* No Batching */
-			stream_putw(*s, MLAG_MSG_NO_BATCH);
-			/* Actual Data */
-			stream_putl(*s, msg->switchd_state);
-			stream_putl(*s, msg->svi_state);
-			zebra_mlag_pim_status_update__free_unpacked(msg, NULL);
 		} break;
 		case ZEBRA_MLAG__HEADER__MESSAGE_TYPE__ZEBRA_MLAG_ZEBRA_STATUS_UPDATE: {
 			ZebraMlagZebraStatusUpdate *msg = NULL;
