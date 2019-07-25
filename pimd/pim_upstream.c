@@ -79,8 +79,13 @@ static void pim_upstream_remove_children(struct pim_instance *pim,
 			child = pim_upstream_del(pim, child,
 						 __PRETTY_FUNCTION__);
 		}
-		if (child)
+		if (child) {
 			child->parent = NULL;
+			if (PIM_UPSTREAM_FLAG_TEST_USE_RPT(child->flags))
+				pim_upstream_mroute_iif_update(
+						child->channel_oil,
+						__func__);
+		}
 	}
 	list_delete(&up->sources);
 }
@@ -110,6 +115,10 @@ static void pim_upstream_find_new_children(struct pim_instance *pim,
 		    && (child != up)) {
 			child->parent = up;
 			listnode_add_sort(up->sources, child);
+			if (PIM_UPSTREAM_FLAG_TEST_USE_RPT(child->flags))
+				pim_upstream_mroute_iif_update(
+						child->channel_oil,
+						__func__);
 		}
 	}
 }
