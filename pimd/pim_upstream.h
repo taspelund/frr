@@ -371,4 +371,5 @@ uint32_t pim_up_mlag_local_cost(struct pim_instance *pim,
 uint32_t pim_up_mlag_peer_cost(struct pim_upstream *up);
 void pim_upstream_update_use_rpt(struct pim_upstream *up,
 			bool update_mroute);
+void pim_upstream_reeval_use_rpt(struct pim_instance *pim);
 #endif /* PIM_UPSTREAM_H */

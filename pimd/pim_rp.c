@@ -273,6 +273,7 @@ struct rp_info *pim_rp_find_match_group(struct pim_instance *pim,
 static void pim_rp_refresh_group_to_rp_mapping(struct pim_instance *pim)
 {
 	pim_msdp_i_am_rp_changed(pim);
+	pim_upstream_reeval_use_rpt(pim);
 }
 
 void pim_rp_prefix_list_update(struct pim_instance *pim,
@@ -855,6 +856,7 @@ void pim_rp_check_on_if_add(struct pim_interface *pim_ifp)
 
 	if (i_am_rp_changed) {
 		pim_msdp_i_am_rp_changed(pim);
+		pim_upstream_reeval_use_rpt(pim);
 	}
 }
 
@@ -897,6 +899,7 @@ void pim_i_am_rp_re_evaluate(struct pim_instance *pim)
 
 	if (i_am_rp_changed) {
 		pim_msdp_i_am_rp_changed(pim);
+		pim_upstream_reeval_use_rpt(pim);
 	}
 }
 
