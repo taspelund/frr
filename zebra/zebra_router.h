@@ -184,6 +184,7 @@ extern void zebra_router_release_table(struct zebra_vrf *zvrf, uint32_t tableid,
 extern int zebra_router_config_write(struct vty *vty);
 
 extern void zebra_router_sweep_route(void);
+extern void zebra_router_sweep_nhgs(void);
 
 extern uint32_t zebra_router_get_next_sequence(void);
 
