@@ -37,8 +37,6 @@
 #include "zebra/zebra_mlag_clippy.c"
 #endif
 
-DEFINE_MTYPE_STATIC(ZEBRA, MLAG_PBUF, "ZEBRA MLAG PROTOBUF")
-
 #define ZEBRA_MLAG_METADATA_LEN 4
 #define ZEBRA_MLAG_MSG_BCAST 0xFFFFFFFF
 
@@ -911,6 +909,8 @@ void zebra_mlag_terminate(void)
  */
 
 #ifdef HAVE_PROTOBUF
+
+DEFINE_MTYPE_STATIC(ZEBRA, MLAG_PBUF, "ZEBRA MLAG PROTOBUF")
 
 int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 {
