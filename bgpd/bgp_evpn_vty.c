@@ -1092,11 +1092,9 @@ static int bgp_show_ethernet_vpn(struct vty *vty, struct prefix_rd *prd,
 			     pi = pi->next) {
 				total_count++;
 				if (type == bgp_show_type_neighbor) {
-					union sockunion *su = output_arg;
+				        struct peer *peer = output_arg;
 
-					if (pi->peer->su_remote == NULL
-					    || !sockunion_same(
-						       pi->peer->su_remote, su))
+					if (peer_cmp(peer, pi->peer) != 0)
 						continue;
 				}
 				if (header) {
@@ -1315,29 +1313,41 @@ DEFUN(show_ip_bgp_l2vpn_evpn_rd_tags,
 				     0);
 }
 
-DEFUN(show_ip_bgp_l2vpn_evpn_all_neighbor_routes,
-      show_ip_bgp_l2vpn_evpn_all_neighbor_routes_cmd,
-      "show [ip] bgp l2vpn evpn all neighbors A.B.C.D routes [json]",
+DEFUN(show_ip_bgp_l2vpn_evpn_neighbor_routes,
+      show_ip_bgp_l2vpn_evpn_neighbor_routes_cmd,
+      "show [ip] bgp l2vpn evpn neighbors <A.B.C.D|X:X::X:X|WORD> routes [json]",
       SHOW_STR
       IP_STR
       BGP_STR
       L2VPN_HELP_STR
       EVPN_HELP_STR
-      "Display information about all EVPN NLRIs\n"
       "Detailed information on TCP and BGP neighbor connections\n"
-      "Neighbor to display information about\n"
+      "IPv4 Neighbor to display information about\n"
+      "IPv6 Neighbor to display information about\n"
+      "Neighbor on BGP configured interface\n"
       "Display routes learned from neighbor\n" JSON_STR)
 {
-	int idx_ipv4 = 0;
-	union sockunion su;
+	int idx = 0;
 	struct peer *peer;
-	int ret;
+	char *peerstr = NULL;
 	bool uj = use_json(argc, argv);
+	afi_t afi = AFI_L2VPN;
+	safi_t safi = SAFI_EVPN;
+	struct bgp *bgp = NULL;
 
-	argv_find(argv, argc, "A.B.C.D", &idx_ipv4);
+	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
+					    &bgp, uj);
+	if (!idx) {
+	        vty_out(vty, "No index\n");
+		return CMD_WARNING;
+	}
 
-	ret = str2sockunion(argv[idx_ipv4]->arg, &su);
-	if (ret < 0) {
+	/* neighbors <A.B.C.D|X:X::X:X|WORD> */
+	argv_find(argv, argc, "neighbors", &idx);
+	peerstr = argv[++idx]->arg;
+
+	peer = peer_lookup_in_view(vty, bgp, peerstr, uj);
+	if (!peer) {
 		if (uj) {
 			json_object *json_no = NULL;
 			json_no = json_object_new_object();
@@ -1348,11 +1358,9 @@ DEFUN(show_ip_bgp_l2vpn_evpn_all_neighbor_routes,
 			json_object_free(json_no);
 		} else
 			vty_out(vty, "Malformed address: %s\n",
-				argv[idx_ipv4]->arg);
+				argv[idx]->arg);
 		return CMD_WARNING;
 	}
-
-	peer = peer_lookup(NULL, &su);
 	if (!peer || !peer->afc[AFI_L2VPN][SAFI_EVPN]) {
 		if (uj) {
 			json_object *json_no = NULL;
@@ -1368,13 +1376,13 @@ DEFUN(show_ip_bgp_l2vpn_evpn_all_neighbor_routes,
 		return CMD_WARNING;
 	}
 
-	return bgp_show_ethernet_vpn(vty, NULL, bgp_show_type_neighbor, &su, 0,
+	return bgp_show_ethernet_vpn(vty, NULL, bgp_show_type_neighbor, peer, 0,
 				     uj);
 }
 
 DEFUN(show_ip_bgp_l2vpn_evpn_rd_neighbor_routes,
       show_ip_bgp_l2vpn_evpn_rd_neighbor_routes_cmd,
-      "show [ip] bgp l2vpn evpn rd ASN:NN_OR_IP-ADDRESS:NN neighbors A.B.C.D routes [json]",
+      "show [ip] bgp l2vpn evpn rd ASN:NN_OR_IP-ADDRESS:NN neighbors <A.B.C.D|X:X::X:X|WORD> routes [json]",
       SHOW_STR
       IP_STR
       BGP_STR
@@ -1383,20 +1391,30 @@ DEFUN(show_ip_bgp_l2vpn_evpn_rd_neighbor_routes,
       "Display information for a route distinguisher\n"
       "VPN Route Distinguisher\n"
       "Detailed information on TCP and BGP neighbor connections\n"
-      "Neighbor to display information about\n"
+      "IPv4 Neighbor to display information about\n"
+      "IPv6 Neighbor to display information about\n"
+      "Neighbor on BGP configured interface\n"
       "Display routes learned from neighbor\n" JSON_STR)
 {
 	int idx_ext_community = 0;
-	int idx_ipv4 = 0;
+	int idx = 0;
 	int ret;
-	union sockunion su;
 	struct peer *peer;
+	char *peerstr = NULL;
 	struct prefix_rd prd;
 	bool uj = use_json(argc, argv);
+	afi_t afi = AFI_L2VPN;
+	safi_t safi = SAFI_EVPN;
+	struct bgp *bgp = NULL;
+
+	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
+					    &bgp, uj);
+	if (!idx) {
+	        vty_out(vty, "No index\n");
+		return CMD_WARNING;
+	}
 
 	argv_find(argv, argc, "ASN:NN_OR_IP-ADDRESS:NN", &idx_ext_community);
-	argv_find(argv, argc, "A.B.C.D", &idx_ipv4);
-
 	ret = str2prefix_rd(argv[idx_ext_community]->arg, &prd);
 	if (!ret) {
 		if (uj) {
@@ -1412,8 +1430,12 @@ DEFUN(show_ip_bgp_l2vpn_evpn_rd_neighbor_routes,
 		return CMD_WARNING;
 	}
 
-	ret = str2sockunion(argv[idx_ipv4]->arg, &su);
-	if (ret < 0) {
+	/* neighbors <A.B.C.D|X:X::X:X|WORD> */
+	argv_find(argv, argc, "neighbors", &idx);
+	peerstr = argv[++idx]->arg;
+
+	peer = peer_lookup_in_view(vty, bgp, peerstr, uj);
+	if (!peer) {
 		if (uj) {
 			json_object *json_no = NULL;
 			json_no = json_object_new_object();
@@ -1424,11 +1446,9 @@ DEFUN(show_ip_bgp_l2vpn_evpn_rd_neighbor_routes,
 			json_object_free(json_no);
 		} else
 			vty_out(vty, "Malformed address: %s\n",
-				argv[idx_ext_community]->arg);
+				argv[idx]->arg);
 		return CMD_WARNING;
 	}
-
-	peer = peer_lookup(NULL, &su);
 	if (!peer || !peer->afc[AFI_L2VPN][SAFI_EVPN]) {
 		if (uj) {
 			json_object *json_no = NULL;
@@ -1444,33 +1464,48 @@ DEFUN(show_ip_bgp_l2vpn_evpn_rd_neighbor_routes,
 		return CMD_WARNING;
 	}
 
-	return bgp_show_ethernet_vpn(vty, &prd, bgp_show_type_neighbor, &su, 0,
+	return bgp_show_ethernet_vpn(vty, &prd, bgp_show_type_neighbor, peer, 0,
 				     uj);
 }
 
-DEFUN(show_ip_bgp_l2vpn_evpn_all_neighbor_advertised_routes,
-      show_ip_bgp_l2vpn_evpn_all_neighbor_advertised_routes_cmd,
-      "show [ip] bgp l2vpn evpn all neighbors A.B.C.D advertised-routes [json]",
+DEFUN(show_ip_bgp_l2vpn_evpn_neighbor_advertised_routes,
+      show_ip_bgp_l2vpn_evpn_neighbor_advertised_routes_cmd,
+      "show [ip] bgp l2vpn evpn neighbors <A.B.C.D|X:X::X:X|WORD> advertised-routes [json]",
       SHOW_STR
       IP_STR
       BGP_STR
       L2VPN_HELP_STR
       EVPN_HELP_STR
-      "Display information about all EVPN NLRIs\n"
       "Detailed information on TCP and BGP neighbor connections\n"
-      "Neighbor to display information about\n"
+      "IPv4 Neighbor to display information about\n"
+      "IPv6 Neighbor to display information about\n"
+      "Neighbor on BGP configured interface\n"
       "Display the routes advertised to a BGP neighbor\n" JSON_STR)
 {
-	int idx_ipv4 = 0;
-	int ret;
+	int idx = 0;
 	struct peer *peer;
-	union sockunion su;
 	bool uj = use_json(argc, argv);
+	struct bgp *bgp = NULL;
+	afi_t afi = AFI_L2VPN;
+	safi_t safi = SAFI_EVPN;
+	char *peerstr = NULL;
 
-	argv_find(argv, argc, "A.B.C.D", &idx_ipv4);
+	if (uj)
+		argc--;
 
-	ret = str2sockunion(argv[idx_ipv4]->arg, &su);
-	if (ret < 0) {
+	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
+					    &bgp, uj);
+	if (!idx) {
+	        vty_out(vty, "No index\n");
+		return CMD_WARNING;
+	}
+
+	/* neighbors <A.B.C.D|X:X::X:X|WORD> */
+	argv_find(argv, argc, "neighbors", &idx);
+	peerstr = argv[++idx]->arg;
+
+	peer = peer_lookup_in_view(vty, bgp, peerstr, uj);
+	if (!peer) {
 		if (uj) {
 			json_object *json_no = NULL;
 			json_no = json_object_new_object();
@@ -1481,10 +1516,9 @@ DEFUN(show_ip_bgp_l2vpn_evpn_all_neighbor_advertised_routes,
 			json_object_free(json_no);
 		} else
 			vty_out(vty, "Malformed address: %s\n",
-				argv[idx_ipv4]->arg);
+				argv[idx]->arg);
 		return CMD_WARNING;
 	}
-	peer = peer_lookup(NULL, &su);
 	if (!peer || !peer->afc[AFI_L2VPN][SAFI_EVPN]) {
 		if (uj) {
 			json_object *json_no = NULL;
@@ -1505,7 +1539,7 @@ DEFUN(show_ip_bgp_l2vpn_evpn_all_neighbor_advertised_routes,
 
 DEFUN(show_ip_bgp_l2vpn_evpn_rd_neighbor_advertised_routes,
       show_ip_bgp_l2vpn_evpn_rd_neighbor_advertised_routes_cmd,
-      "show [ip] bgp l2vpn evpn rd ASN:NN_OR_IP-ADDRESS:NN neighbors A.B.C.D advertised-routes [json]",
+      "show [ip] bgp l2vpn evpn rd ASN:NN_OR_IP-ADDRESS:NN neighbors <A.B.C.D|X:X::X:X|WORD> advertised-routes [json]",
       SHOW_STR
       IP_STR
       BGP_STR
@@ -1514,22 +1548,43 @@ DEFUN(show_ip_bgp_l2vpn_evpn_rd_neighbor_advertised_routes,
       "Display information for a route distinguisher\n"
       "VPN Route Distinguisher\n"
       "Detailed information on TCP and BGP neighbor connections\n"
-      "Neighbor to display information about\n"
+      "IPv4 Neighbor to display information about\n"
+      "IPv6 Neighbor to display information about\n"
+      "Neighbor on BGP configured interface\n"
       "Display the routes advertised to a BGP neighbor\n" JSON_STR)
 {
 	int idx_ext_community = 0;
-	int idx_ipv4 = 0;
+	int idx = 0;
 	int ret;
 	struct peer *peer;
 	struct prefix_rd prd;
-	union sockunion su;
+	struct bgp *bgp = NULL;
 	bool uj = use_json(argc, argv);
+	char *peerstr = NULL;
+	afi_t afi = AFI_L2VPN;
+	safi_t safi = SAFI_EVPN;
+
+	if (uj)
+		argc--;
+
+	if (uj)
+		argc--;
+
+	bgp_vty_find_and_parse_afi_safi_bgp(vty, argv, argc, &idx, &afi, &safi,
+					    &bgp, uj);
+	if (!idx) {
+	        vty_out(vty, "No index\n");
+		return CMD_WARNING;
+	}
 
 	argv_find(argv, argc, "ASN:NN_OR_IP-ADDRESS:NN", &idx_ext_community);
-	argv_find(argv, argc, "A.B.C.D", &idx_ipv4);
 
-	ret = str2sockunion(argv[idx_ipv4]->arg, &su);
-	if (ret < 0) {
+	/* neighbors <A.B.C.D|X:X::X:X|WORD> */
+	argv_find(argv, argc, "neighbors", &idx);
+	peerstr = argv[++idx]->arg;
+
+	peer = peer_lookup_in_view(vty, bgp, peerstr, uj);
+	if (!peer) {
 		if (uj) {
 			json_object *json_no = NULL;
 			json_no = json_object_new_object();
@@ -1540,10 +1595,9 @@ DEFUN(show_ip_bgp_l2vpn_evpn_rd_neighbor_advertised_routes,
 			json_object_free(json_no);
 		} else
 			vty_out(vty, "Malformed address: %s\n",
-				argv[idx_ext_community]->arg);
+				argv[idx]->arg);
 		return CMD_WARNING;
 	}
-	peer = peer_lookup(NULL, &su);
 	if (!peer || !peer->afc[AFI_L2VPN][SAFI_EVPN]) {
 		if (uj) {
 			json_object *json_no = NULL;
@@ -1622,7 +1676,7 @@ DEFUN(show_ip_bgp_evpn_rd_overlay,
 				     use_json(argc, argv));
 }
 
-/* For testing purpose, static route of MPLS-VPN. */
+/* For testing purpose, static route of EVPN RT-5. */
 DEFUN(evpnrt5_network,
       evpnrt5_network_cmd,
       "network <A.B.C.D/M|X:X::X:X/M> rd ASN:NN_OR_IP-ADDRESS:NN ethtag WORD label WORD esi WORD gwip <A.B.C.D|X:X::X:X> routermac WORD [route-map WORD]",
@@ -1661,7 +1715,7 @@ DEFUN(evpnrt5_network,
 		argv[idx_routermac]->arg);
 }
 
-/* For testing purpose, static route of MPLS-VPN. */
+/* For testing purpose, static route of EVPN RT-5. */
 DEFUN(no_evpnrt5_network,
       no_evpnrt5_network_cmd,
       "no network <A.B.C.D/M|X:X::X:X/M> rd ASN:NN_OR_IP-ADDRESS:NN ethtag WORD label WORD esi WORD gwip <A.B.C.D|X:X::X:X>",
@@ -5492,12 +5546,12 @@ void bgp_ethernetvpn_init(void)
 	install_element(VIEW_NODE, &show_ip_bgp_l2vpn_evpn_all_tags_cmd);
 	install_element(VIEW_NODE, &show_ip_bgp_l2vpn_evpn_rd_tags_cmd);
 	install_element(VIEW_NODE,
-			&show_ip_bgp_l2vpn_evpn_all_neighbor_routes_cmd);
+			&show_ip_bgp_l2vpn_evpn_neighbor_routes_cmd);
 	install_element(VIEW_NODE,
 			&show_ip_bgp_l2vpn_evpn_rd_neighbor_routes_cmd);
 	install_element(
 		VIEW_NODE,
-		&show_ip_bgp_l2vpn_evpn_all_neighbor_advertised_routes_cmd);
+		&show_ip_bgp_l2vpn_evpn_neighbor_advertised_routes_cmd);
 	install_element(
 		VIEW_NODE,
 		&show_ip_bgp_l2vpn_evpn_rd_neighbor_advertised_routes_cmd);
