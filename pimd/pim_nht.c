@@ -282,8 +282,7 @@ static int pim_update_upstream_nh_helper(struct hash_bucket *bucket, void *arg)
 	/* update kernel multicast forwarding cache (MFC) */
 	pim_upstream_mroute_iif_update(up->channel_oil, __func__);
 
-	if (rpf_result == PIM_RPF_CHANGED ||
-		(rpf_result == PIM_RPF_FAILURE && old.source_nexthop.interface))
+	if (rpf_result == PIM_RPF_CHANGED)
 		pim_zebra_upstream_rpf_changed(pim, up, &old);
 
 
