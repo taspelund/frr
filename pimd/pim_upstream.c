@@ -594,7 +594,7 @@ void pim_upstream_update_use_rpt(struct pim_upstream *up,
 	if (up->sg.src.s_addr == INADDR_ANY)
 		return;
 
-	old_use_rpt = PIM_UPSTREAM_FLAG_TEST_USE_RPT(up->flags);
+	old_use_rpt = !!PIM_UPSTREAM_FLAG_TEST_USE_RPT(up->flags);
 
 	/* We will use the SPT (IIF=RPF_interface(S) if -
 	 * 1. We have decided to join the SPT
