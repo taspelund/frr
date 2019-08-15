@@ -57,6 +57,7 @@
 static void join_timer_stop(struct pim_upstream *up);
 static void
 pim_upstream_update_assert_tracking_desired(struct pim_upstream *up);
+static bool pim_upstream_sg_running_proc(struct pim_upstream *up);
 
 /*
  * A (*,G) or a (*,*) is going away
@@ -1468,6 +1469,11 @@ static int pim_upstream_keep_alive_timer(struct thread *t)
 
 	up = THREAD_ARG(t);
 
+	/* pull the stats and re-check */
+	if (pim_upstream_sg_running_proc(up))
+		/* kat was restarted because of new activity */
+		return 0;
+
 	pim_upstream_keep_alive_timer_proc(up);
 	return 0;
 }
@@ -1988,6 +1994,61 @@ static bool pim_upstream_kat_start_ok(struct pim_upstream *up)
 	return false;
 }
 
+static bool pim_upstream_sg_running_proc(struct pim_upstream *up)
+{
+	bool rv = false;
+	struct pim_instance *pim = up->pim;
+
+	if (!up->channel_oil->installed) {
+		return rv;
+	}
+
+	pim_mroute_update_counters(up->channel_oil);
+
+	// Have we seen packets?
+	if ((up->channel_oil->cc.oldpktcnt >= up->channel_oil->cc.pktcnt)
+	    && (up->channel_oil->cc.lastused / 100 > 30)) {
+		if (PIM_DEBUG_TRACE) {
+			zlog_debug(
+				"%s[%s]: %s old packet count is equal or lastused is greater than 30, (%ld,%ld,%lld)",
+				__PRETTY_FUNCTION__, up->sg_str, pim->vrf->name,
+				up->channel_oil->cc.oldpktcnt,
+				up->channel_oil->cc.pktcnt,
+				up->channel_oil->cc.lastused / 100);
+		}
+		return rv;
+	}
+
+	if (pim_upstream_kat_start_ok(up)) {
+		/* Add a source reference to the stream if
+		 * one doesn't already exist */
+		if (!PIM_UPSTREAM_FLAG_TEST_SRC_STREAM(up->flags)) {
+			if (PIM_DEBUG_TRACE)
+				zlog_debug(
+					"source reference created on kat restart %s[%s]",
+					up->sg_str, pim->vrf->name);
+
+			pim_upstream_ref(pim, up,
+					PIM_UPSTREAM_FLAG_MASK_SRC_STREAM,
+					__PRETTY_FUNCTION__);
+			PIM_UPSTREAM_FLAG_SET_SRC_STREAM(up->flags);
+			pim_upstream_fhr_kat_start(up);
+		}
+		pim_upstream_keep_alive_timer_start(up, pim->keep_alive_time);
+		rv = true;
+	} else if (PIM_UPSTREAM_FLAG_TEST_SRC_LHR(up->flags)) {
+		pim_upstream_keep_alive_timer_start(up, pim->keep_alive_time);
+		rv = true;
+	}
+
+	if ((up->sptbit != PIM_UPSTREAM_SPTBIT_TRUE) &&
+	    (up->rpf.source_nexthop.interface)) {
+		pim_upstream_set_sptbit(up, up->rpf.source_nexthop.interface);
+	}
+
+	return rv;
+}
+
 /*
  * Code to check and see if we've received packets on a S,G mroute
  * and if so to set the SPT bit appropriately
@@ -2023,46 +2084,8 @@ static void pim_upstream_sg_running(void *arg)
 		pim_upstream_inherited_olist_decide(pim, up);
 		up->channel_oil->oil_inherited_rescan = 0;
 	}
-	pim_mroute_update_counters(up->channel_oil);
 
-	// Have we seen packets?
-	if ((up->channel_oil->cc.oldpktcnt >= up->channel_oil->cc.pktcnt)
-	    && (up->channel_oil->cc.lastused / 100 > 30)) {
-		if (PIM_DEBUG_TRACE) {
-			zlog_debug(
-				"%s[%s]: %s old packet count is equal or lastused is greater than 30, (%ld,%ld,%lld)",
-				__PRETTY_FUNCTION__, up->sg_str, pim->vrf->name,
-				up->channel_oil->cc.oldpktcnt,
-				up->channel_oil->cc.pktcnt,
-				up->channel_oil->cc.lastused / 100);
-		}
-		return;
-	}
-
-	if (pim_upstream_kat_start_ok(up)) {
-		/* Add a source reference to the stream if
-		 * one doesn't already exist */
-		if (!PIM_UPSTREAM_FLAG_TEST_SRC_STREAM(up->flags)) {
-			if (PIM_DEBUG_TRACE)
-				zlog_debug(
-					"source reference created on kat restart %s[%s]",
-					up->sg_str, pim->vrf->name);
-
-			pim_upstream_ref(pim, up,
-					PIM_UPSTREAM_FLAG_MASK_SRC_STREAM,
-					__PRETTY_FUNCTION__);
-			PIM_UPSTREAM_FLAG_SET_SRC_STREAM(up->flags);
-			pim_upstream_fhr_kat_start(up);
-		}
-		pim_upstream_keep_alive_timer_start(up, pim->keep_alive_time);
-	} else if (PIM_UPSTREAM_FLAG_TEST_SRC_LHR(up->flags))
-		pim_upstream_keep_alive_timer_start(up, pim->keep_alive_time);
-
-	if ((up->sptbit != PIM_UPSTREAM_SPTBIT_TRUE) &&
-	    (up->rpf.source_nexthop.interface)) {
-		pim_upstream_set_sptbit(up, up->rpf.source_nexthop.interface);
-	}
-	return;
+	pim_upstream_sg_running_proc(up);
 }
 
 void pim_upstream_add_lhr_star_pimreg(struct pim_instance *pim)
