@@ -248,6 +248,10 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 	saved.source_nexthop = rpf->source_nexthop;
 	saved.rpf_addr = rpf->rpf_addr;
 	saved_mrib_route_metric = pim_up_mlag_local_cost(pim, up);
+	if (old) {
+		old->source_nexthop = saved.source_nexthop;
+		old->rpf_addr = saved.rpf_addr;
+	}
 
 	nht_p.family = AF_INET;
 	nht_p.prefixlen = IPV4_MAX_BITLEN;
@@ -324,11 +328,6 @@ enum pim_rpf_result pim_rpf_update(struct pim_instance *pim,
 	    || saved.source_nexthop
 			       .interface != rpf->source_nexthop.interface) {
 
-		/* return old rpf to caller ? */
-		if (old) {
-			old->source_nexthop = saved.source_nexthop;
-			old->rpf_addr = saved.rpf_addr;
-		}
 		pim_rpf_cost_change(pim, up, saved_mrib_route_metric);
 		return PIM_RPF_CHANGED;
 	}
