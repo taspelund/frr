@@ -190,6 +190,11 @@ struct pim_upstream *pim_upstream_del(struct pim_instance *pim,
 	if (up->ref_count >= 1)
 		return up;
 
+	if (PIM_DEBUG_TRACE)
+		zlog_debug(
+			"pim_upstream free vrf:%s %s flags 0x%x",
+			pim->vrf->name, up->sg_str, up->flags);
+
 	if (pim_up_mlag_is_local(up))
 		pim_mlag_up_local_del(pim, up);
 
@@ -336,7 +341,7 @@ static void join_timer_stop(struct pim_upstream *up)
 					up->rpf.rpf_addr.u.prefix4);
 
 	if (nbr)
-		pim_jp_agg_remove_group(nbr->upstream_jp_agg, up);
+		pim_jp_agg_remove_group(nbr->upstream_jp_agg, up, nbr);
 
 	pim_jp_agg_upstream_verification(up, false);
 }
@@ -358,7 +363,7 @@ void join_timer_start(struct pim_upstream *up)
 	}
 
 	if (nbr)
-		pim_jp_agg_add_group(nbr->upstream_jp_agg, up, 1);
+		pim_jp_agg_add_group(nbr->upstream_jp_agg, up, 1, nbr);
 	else {
 		THREAD_OFF(up->t_join_timer);
 		thread_add_timer(router->master, on_join_timer, up,
