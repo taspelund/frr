@@ -177,7 +177,7 @@ void pim_jp_agg_remove_group(struct list *group, struct pim_upstream *up,
 			zlog_debug(
 				"up %s remove from nbr %s/%s jp-agg-list",
 				up->sg_str,
-				up->rpf.source_nexthop.interface->name,
+				nbr->interface->name,
 				src_str);
 		}
 	}
