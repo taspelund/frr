@@ -137,7 +137,12 @@ void pim_ifchannel_delete(struct pim_ifchannel *ch)
 				"%s: if-chnanel-%s is deleted from a Dual "
 				"active Interface",
 				__func__, ch->sg_str);
-		pim_mlag_del_entry_to_peer(ch);
+		/* Post Delete only if it is the last Dual-active Interface */
+		if (ch->upstream->dualactive_ifchannel_count == 1) {
+			pim_mlag_up_local_del(pim_ifp->pim, ch->upstream);
+			PIM_UPSTREAM_FLAG_UNSET_MLAG_INTERFACE(
+				ch->upstream->flags);
+		}
 		ch->upstream->dualactive_ifchannel_count--;
 	}
 
@@ -607,23 +612,21 @@ struct pim_ifchannel *pim_ifchannel_add(struct interface *ifp,
 		PIM_IF_FLAG_UNSET_ASSERT_TRACKING_DESIRED(ch->flags);
 
 	/*
-	 * Intialiaze MLAG Data
+	 * advertise MLAG Data to MLAG peer
 	 */
-	ch->mlag_am_i_df = false;
-	ch->mlag_am_i_dr = PIM_I_am_DR(pim_ifp);
-	ch->mlag_am_i_dual_active = PIM_I_am_DualActive(pim_ifp);
-	ch->mlag_peer_is_dr = false;
-	ch->mlag_peer_is_dual_active = false;
-	ch->mlag_local_cost_to_rp = up->rpf.source_nexthop.mrib_route_metric;
-	ch->mlag_peer_cost_to_rp = PIM_ASSERT_ROUTE_METRIC_MAX;
 	if (PIM_I_am_DualActive(pim_ifp)) {
+		up->dualactive_ifchannel_count++;
+		/* Sync once for upstream */
+		if (up->dualactive_ifchannel_count == 1) {
+			PIM_UPSTREAM_FLAG_SET_MLAG_INTERFACE(up->flags);
+			pim_mlag_up_local_add(pim_ifp->pim, up);
+		}
 		if (PIM_DEBUG_MLAG)
 			zlog_debug(
-				"%s: New if-chnanel-%s is added on a Dual "
-				"active Interface",
-				__func__, ch->sg_str);
-		pim_mlag_add_entry_to_peer(ch);
-		ch->upstream->dualactive_ifchannel_count++;
+				"%s: New Dual active if-chnanel is added to upstream:%s "
+				"count:%d, flags:0x%x",
+				__func__, up->sg_str,
+				up->dualactive_ifchannel_count, up->flags);
 	}
 
 	if (PIM_DEBUG_PIM_TRACE)

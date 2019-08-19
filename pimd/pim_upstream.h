@@ -89,7 +89,12 @@
  * This flag is only relevant for (S,G) entries.
  */
 #define PIM_UPSTREAM_FLAG_MASK_USE_RPT                 (1 << 20)
-
+/*
+ * PIM Syncs upstream entries to peer Nodes via MLAG in 2 cases.
+ * one is to support plain PIM Redundancy and another one is to support
+ * PIM REdundancy.
+ */
+#define PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE (1 << 21)
 #define PIM_UPSTREAM_FLAG_ALL 0xFFFFFFFF
 
 #define PIM_UPSTREAM_FLAG_TEST_DR_JOIN_DESIRED(flags) ((flags) & PIM_UPSTREAM_FLAG_MASK_DR_JOIN_DESIRED)
@@ -158,6 +163,13 @@
 #define PIM_UPSTREAM_FLAG_UNSET_MLAG_PEER(flags) ((flags) &= ~PIM_UPSTREAM_FLAG_MASK_MLAG_PEER)
 #define PIM_UPSTREAM_FLAG_UNSET_SRC_NOCACHE(flags) ((flags) &= ~PIM_UPSTREAM_FLAG_MASK_SRC_NOCACHE)
 #define PIM_UPSTREAM_FLAG_UNSET_USE_RPT(flags) ((flags) &= ~PIM_UPSTREAM_FLAG_MASK_USE_RPT)
+
+#define PIM_UPSTREAM_FLAG_SET_MLAG_INTERFACE(flags)                            \
+	((flags) |= PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE)
+#define PIM_UPSTREAM_FLAG_UNSET_MLAG_INTERFACE(flags)                          \
+	((flags) &= ~PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE)
+#define PIM_UPSTREAM_FLAG_TEST_MLAG_INTERFACE(flags)                           \
+	((flags)&PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE)
 
 /* The RPF cost is incremented by 10 if the RPF interface is the peerlink-rif.
  * This is used to force the MLAG switch with the lowest cost to the RPF

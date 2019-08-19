@@ -550,248 +550,6 @@ static void pim_show_membership(struct pim_instance *pim, struct vty *vty,
 	json_object_free(json);
 }
 
-
-static void pim_show_mlag_membership_detail(struct vty *vty,
-					    struct interface *ifp,
-					    const char *src_str,
-					    const char *grp_str, bool uj)
-{
-	struct prefix_sg sg;
-	struct prefix_ipv4 p;
-	struct pim_ifchannel *ch;
-	json_object *json = NULL;
-	json_object *json_local = NULL;
-	json_object *json_peer = NULL;
-	int rc = 0;
-
-	memset(&sg, 0, sizeof(struct prefix_sg));
-	rc = str2prefix_ipv4(src_str, &p);
-	if (rc <= 0) {
-		vty_out(vty, "%% %s: Malformed address\n", __func__);
-		return;
-	}
-	sg.src = p.prefix;
-	rc = str2prefix_ipv4(grp_str, &p);
-	if (rc <= 0) {
-		vty_out(vty, "%% %s: Malformed address\n", __func__);
-		return;
-	}
-	sg.grp = p.prefix;
-
-	ch = pim_ifchannel_find(ifp, &sg);
-	if (!ch)
-		return;
-
-	if (uj) {
-		json = json_object_new_object();
-	} else {
-		vty_out(vty,
-			"\nMLAG Local Membership Info of %s on "
-			"Interface:%s\n",
-			ch->sg_str, ifp->name);
-		vty_out(vty, "Param             Local            Peer\n");
-	}
-
-	if (uj) {
-		json_object_object_get_ex(json, "local", &json_local);
-		if (!json_local) {
-			json_local = json_object_new_object();
-			json_object_object_add(json, "local", json_local);
-		}
-		json_object_int_add(json_local, "cost_to_rp",
-				    ch->mlag_local_cost_to_rp);
-		json_object_string_add(json_local, "DR",
-				       ch->mlag_am_i_dr ? "yes" : "no");
-		json_object_string_add(json_local, "Dual Active",
-				       ch->mlag_am_i_dual_active ? "yes"
-								 : "no");
-		json_object_string_add(json_local, "DF",
-				       ch->mlag_am_i_df ? "yes" : "no");
-
-		json_object_object_get_ex(json, "peer", &json_peer);
-		if (!json_peer) {
-			json_peer = json_object_new_object();
-			json_object_object_add(json, "peer", json_peer);
-		}
-		json_object_int_add(json_peer, "cost_to_rp",
-				    ch->mlag_peer_cost_to_rp);
-		json_object_string_add(json_peer, "DR",
-				       ch->mlag_am_i_dr ? "no" : "yes");
-		json_object_string_add(json_peer, "Dual Active",
-				       ch->mlag_peer_is_dual_active ? "yes"
-								    : "no");
-		json_object_string_add(json_peer, "DF",
-				       ch->mlag_am_i_df ? "no" : "yes");
-	} else {
-		vty_out(vty, "%-16s  %-15u  %-15u\n", "cost_to_rp",
-			ch->mlag_local_cost_to_rp, ch->mlag_peer_cost_to_rp);
-		vty_out(vty, "%-16s  %-15s  %-15s\n", "DR",
-			ch->mlag_am_i_dr ? "yes" : "no",
-			ch->mlag_am_i_dr ? "no" : "yes");
-		vty_out(vty, "%-16s  %-15s  %-15s\n", "Dual Active",
-			ch->mlag_am_i_dual_active ? "yes" : "no",
-			ch->mlag_peer_is_dual_active ? "yes" : "no");
-		vty_out(vty, "%-16s  %-15s  %-15s\n", "DF",
-			ch->mlag_am_i_df ? "yes" : "no",
-			ch->mlag_am_i_df ? "no" : "yes");
-	}
-
-	if (uj) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
-		json_object_free(json);
-	} else {
-		vty_out(vty, "\n");
-	}
-}
-
-static int pim_show_mlag_membership_for_interface(struct pim_instance *pim,
-						  struct interface *ifp,
-						  struct vty *vty,
-						  const char *src_or_group,
-						  const char *group, bool uj,
-						  json_object *json_vrf)
-{
-	struct prefix_ipv4 p1;
-	struct prefix_ipv4 p2;
-	struct pim_ifchannel *ch;
-	struct pim_interface *pim_ifp = NULL;
-	char grp_str[INET_ADDRSTRLEN];
-	char src_str[INET_ADDRSTRLEN];
-	json_object *json_intf = NULL;
-	json_object *json_ifch = NULL;
-	int rc = 0;
-
-	pim_ifp = ifp->info;
-
-	if (src_or_group) {
-		rc = str2prefix_ipv4(src_or_group, &p1);
-		if (rc <= 0) {
-			vty_out(vty, "%% %s: Malformed address\n", __func__);
-			return -1;
-		}
-	}
-
-	if (group) {
-		rc = str2prefix_ipv4(group, &p2);
-		if (rc <= 0) {
-			vty_out(vty, "%% %s: Malformed address\n", __func__);
-			return -1;
-		}
-	}
-
-	if (uj) {
-		json_object_object_get_ex(json_vrf, ifp->name, &json_intf);
-		if (!json_intf) {
-			json_intf = json_object_new_object();
-			json_object_object_add(json_vrf, ifp->name, json_intf);
-		}
-	}
-
-	RB_FOREACH (ch, pim_ifchannel_rb, &pim_ifp->ifchannel_rb) {
-		if (ch) {
-			/* if source/group passed filter based on that */
-			if (src_or_group) {
-				if (p1.prefix.s_addr != ch->sg.src.s_addr
-				    && p1.prefix.s_addr != ch->sg.grp.s_addr)
-					continue;
-
-				if (group
-				    && p2.prefix.s_addr != ch->sg.grp.s_addr)
-					continue;
-			}
-			pim_inet4_dump("<src?>", ch->sg.src, src_str,
-				       sizeof(src_str));
-			pim_inet4_dump("<grp?>", ch->sg.grp, grp_str,
-				       sizeof(grp_str));
-			if (uj) {
-				json_object_object_get_ex(json_intf, ch->sg_str,
-							  &json_ifch);
-				if (!json_ifch) {
-					json_ifch = json_object_new_object();
-					json_object_object_add(json_intf,
-							       ch->sg_str,
-							       json_ifch);
-				}
-				json_object_string_add(json_ifch, "Source",
-						       src_str);
-				json_object_string_add(json_ifch, "Group",
-						       grp_str);
-				json_object_int_add(json_ifch, "Cost to RP",
-						    ch->mlag_local_cost_to_rp);
-				json_object_int_add(json_ifch,
-						    "Peer cost to RP",
-						    ch->mlag_peer_cost_to_rp);
-				json_object_string_add(
-					json_ifch, "Am i DR",
-					(ch->mlag_am_i_dr) ? "yes" : "no");
-				json_object_string_add(
-					json_ifch, "Am i DF",
-					(ch->mlag_am_i_df) ? "yes" : "no");
-			} else {
-				vty_out(vty, "%-16s  %-16s  %-15s  %-10s\n",
-					ifp->name, src_str, grp_str,
-					(ch->mlag_am_i_df) ? "yes" : "no");
-			}
-		}
-	}
-
-	return 0;
-}
-
-static void pim_show_mlag_membership_for_vrf(struct vrf *vrf, struct vty *vty,
-					     struct interface *ifp,
-					     const char *src_or_group,
-					     const char *group, bool uj)
-{
-	struct pim_interface *pim_ifp = NULL;
-	struct interface *lifp = NULL;
-	json_object *json = NULL;
-	json_object *json_vrf = NULL;
-	int rc = 0;
-
-	if (uj) {
-		json = json_object_new_object();
-		json_object_object_get_ex(json, vrf->name, &json_vrf);
-		if (!json_vrf) {
-			json_vrf = json_object_new_object();
-			json_object_object_add(json, vrf->name, json_vrf);
-		}
-	} else {
-		vty_out(vty, "MLAG Local Membership in VRF:%s\n", vrf->name);
-		vty_out(vty,
-			"Interface         Source            Group            Am i DF\n");
-	}
-
-	FOR_ALL_INTERFACES (vrf, lifp) {
-		/*
-		 * when Interface is passed, we should dump only for that,
-		 * otheriwse dump enetries on all Dual-active/MLAG Interfaces
-		 */
-		if (ifp && lifp != ifp)
-			continue;
-
-		pim_ifp = lifp->info;
-		if (!pim_ifp || !PIM_I_am_DualActive(pim_ifp))
-			continue;
-		rc = pim_show_mlag_membership_for_interface(
-			vrf->info, lifp, vty, src_or_group, group, uj,
-			json_vrf);
-		if (rc < 0)
-			break;
-	}
-
-	if (uj) {
-		vty_out(vty, "%s\n",
-			json_object_to_json_string_ext(
-				json, JSON_C_TO_STRING_PRETTY));
-		json_object_free(json);
-	} else {
-		vty_out(vty, "\n");
-	}
-}
-
 static void pim_print_ifp_flags(struct vty *vty, struct interface *ifp,
 				int mloop)
 {
@@ -4511,6 +4269,9 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 		if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
 			json_object_array_add(own_list,
 					json_object_new_string("peer"));
+		if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE))
+			json_object_array_add(
+				own_list, json_object_new_string("Interface"));
 		json_object_object_add(json_row, "owners", own_list);
 
 		json_object_int_add(json_row, "localCost",
@@ -4530,6 +4291,8 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 			strcpy(own_str + strlen(own_str), "L");
 		if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
 			strcpy(own_str + strlen(own_str), "P");
+		if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE))
+			strcpy(own_str + strlen(own_str), "I");
 		/* XXX - fixup, print paragraph output */
 		vty_out(vty,
 				"%-15s %-15s %-6s %-11d %-10d %2s\n",
@@ -4559,8 +4322,9 @@ static void pim_show_mlag_up_detail(struct vrf *vrf,
 			"Source          Group           Owner  Local-cost  Peer-cost  DF\n");
 
 	for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
-		if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER) &&
-			!pim_up_mlag_is_local(up))
+		if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER)
+		    && !(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE)
+		    && !pim_up_mlag_is_local(up))
 			continue;
 
 		pim_inet4_dump("<src?>", up->sg.src, src_str, sizeof(src_str));
@@ -4607,8 +4371,9 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 	}
 
 	for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
-		if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER) &&
-			!pim_up_mlag_is_local(up))
+		if (!(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_PEER)
+		    && !(up->flags & PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE)
+		    && !pim_up_mlag_is_local(up))
 			continue;
 		pim_inet4_dump("<src?>", up->sg.src, src_str, sizeof(src_str));
 		pim_inet4_dump("<grp?>", up->sg.grp, grp_str, sizeof(grp_str));
@@ -4656,6 +4421,8 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 				strcpy(own_str + strlen(own_str), "L");
 			if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_PEER))
 				strcpy(own_str + strlen(own_str), "P");
+			if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE))
+				strcpy(own_str + strlen(own_str), "I");
 			vty_out(vty,
 				"%-15s %-15s %-6s %-11d %-10d %2s\n",
 				src_str, grp_str, own_str,
@@ -4711,77 +4478,6 @@ DEFUN(show_ip_pim_mlag_up, show_ip_pim_mlag_up_cmd,
 	return CMD_SUCCESS;
 }
 
-DEFUN(show_ip_pim_mlag_mroute, show_ip_pim_mlag_mroute_cmd,
-      "show ip pim [vrf NAME] mlag mroute [interface IFNAME] [A.B.C.D [A.B.C.D]] [json]",
-      SHOW_STR IP_STR PIM_STR VRF_CMD_HELP_STR
-      "MLAG\n"
-      "mroute\n"
-      "Specify the Interface\nThe Interface name\n"
-      "Unicast or Multicast address\n"
-      "Multicast address\n" JSON_STR)
-{
-	const char *src_or_group = NULL;
-	const char *group = NULL;
-	int idx = 2;
-	struct vrf *vrf = pim_cmd_lookup_vrf(vty, argv, argc, &idx);
-	struct interface *ifp = NULL;
-	bool uj = use_json(argc, argv);
-
-	if (!vrf || !vrf->info) {
-		vty_out(vty, "%s: VRF or Info missing \n", __func__);
-		return CMD_WARNING;
-	}
-
-	ifp = pim_cmd_lookup_ifp(vty, argv, argc, &idx, vrf);
-	if (ifp && !ifp->info) {
-		vty_out(vty, "%s: Interface Info missing for %s \n", __func__,
-			ifp->name);
-		return CMD_WARNING;
-	}
-
-	if (uj)
-		argc--;
-
-	if (argv_find(argv, argc, "A.B.C.D", &idx)) {
-		src_or_group = argv[idx]->arg;
-		if (idx + 1 < argc)
-			group = argv[idx + 1]->arg;
-	}
-
-	vty_out(vty, "Connection status with MLAG : %s\n",
-		(router->connected_to_mlag == true) ? "Connected"
-						    : "Not-Connceted");
-
-	if (ifp && src_or_group && group)
-		pim_show_mlag_membership_detail(vty, ifp, src_or_group, group,
-						uj);
-	else
-		pim_show_mlag_membership_for_vrf(vrf, vty, ifp, src_or_group,
-						 group, uj);
-
-	return CMD_SUCCESS;
-}
-
-DEFUN(show_ip_pim_mlag_mroute_vrf_all,
-      show_ip_pim_mlag_mroute_vrf_all_cmd,
-      "show ip pim vrf all mlag mroute [json]",
-      SHOW_STR IP_STR PIM_STR VRF_CMD_HELP_STR
-      "MLAG interface local-membership\n" "mroute\n" JSON_STR)
-{
-	struct vrf *vrf;
-	bool uj = use_json(argc, argv);
-
-	vty_out(vty, "Connection status with MLAG : %s\n",
-		(router->connected_to_mlag == true) ? "Connected"
-						    : "Not-Connceted");
-
-	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
-		pim_show_mlag_membership_for_vrf(vrf, vty, NULL, NULL, NULL,
-						 uj);
-	}
-
-	return CMD_SUCCESS;
-}
 
 DEFUN(show_ip_pim_mlag_up_vrf_all, show_ip_pim_mlag_up_vrf_all_cmd,
       "show ip pim vrf all mlag upstream [json]",
@@ -10525,9 +10221,6 @@ void pim_cmd_init(void)
 	install_element(VIEW_NODE, &show_ip_pim_join_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_jp_agg_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_local_membership_cmd);
-	install_element(VIEW_NODE, &show_ip_pim_mlag_mroute_cmd);
-	install_element(VIEW_NODE,
-			&show_ip_pim_mlag_mroute_vrf_all_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_mlag_summary_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_mlag_up_cmd);
 	install_element(VIEW_NODE, &show_ip_pim_mlag_up_vrf_all_cmd);
