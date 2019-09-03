@@ -75,7 +75,7 @@
 
 static vlanid_t filter_vlan = 0;
 
-static bool supports_nh = false;
+static bool supports_nh;
 
 struct gw_family_t {
 	uint16_t filler;
@@ -1936,7 +1936,7 @@ static int netlink_nexthop(int cmd, struct zebra_dplane_ctx *ctx)
 	req.n.nlmsg_pid = dplane_ctx_get_ns(ctx)->nls.snl.nl_pid;
 
 	req.nhm.nh_family = AF_UNSPEC;
-	// TODO: Scope?
+	/* TODO: Scope? */
 
 	uint32_t id = dplane_ctx_get_nhe_id(ctx);
 
@@ -2099,7 +2099,6 @@ enum zebra_dplane_result kernel_nexthop_update(struct zebra_dplane_ctx *ctx)
 			"Context received for kernel nexthop update with incorrect OP code (%u)",
 			dplane_ctx_get_op(ctx));
 		return ZEBRA_DPLANE_REQUEST_FAILURE;
-		break;
 	}
 
 	ret = netlink_nexthop(cmd, ctx);
@@ -2509,7 +2508,7 @@ static int netlink_vxlan_flood_list_update(struct interface *ifp,
 	req.n.nlmsg_type = cmd;
 	req.ndm.ndm_family = PF_BRIDGE;
 	req.ndm.ndm_state = NUD_NOARP | NUD_PERMANENT;
-	req.ndm.ndm_flags |= NTF_SELF; // Handle by "self", not "master"
+	req.ndm.ndm_flags |= NTF_SELF; /* Handle by "self", not "master" */
 
 
 	addattr_l(&req.n, sizeof(req), NDA_LLADDR, &dst_mac, 6);
