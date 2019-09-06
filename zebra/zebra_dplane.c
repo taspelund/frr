@@ -1453,6 +1453,7 @@ static int dplane_ctx_nexthop_init(struct zebra_dplane_ctx *ctx,
 				   enum dplane_op_e op,
 				   struct nhg_hash_entry *nhe)
 {
+	struct zebra_vrf *zvrf = NULL;
 	struct zebra_ns *zns = NULL;
 
 	int ret = EINVAL;
@@ -1477,7 +1478,13 @@ static int dplane_ctx_nexthop_init(struct zebra_dplane_ctx *ctx,
 		ctx->u.rinfo.nhe.nh_grp_count = zebra_nhg_nhe2grp(
 			ctx->u.rinfo.nhe.nh_grp, nhe, MULTIPATH_NUM);
 
-	zns = ((struct zebra_vrf *)vrf_info_lookup(nhe->vrf_id))->zns;
+	zvrf = vrf_info_lookup(nhe->vrf_id);
+
+	/*
+	 * Fallback to default namespace if the vrf got ripped out from under
+	 * us.
+	 */
+	zns = zvrf ? zvrf->zns : zebra_ns_lookup(NS_DEFAULT);
 
 	/*
 	 * TODO: Might not need to mark this as an update, since
