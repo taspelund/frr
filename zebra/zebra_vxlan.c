@@ -7562,7 +7562,7 @@ int zebra_vxlan_check_readd_vtep(struct interface *ifp,
 			"Del MAC for remote VTEP %s intf %s(%u) VNI %u - readd",
 			inet_ntoa(vtep_ip), ifp->name, ifp->ifindex, vni);
 
-	zvni_vtep_install (zvni, &vtep_ip);
+	zvni_vtep_install(zvni, zvtep);
 	return 0;
 }
 
