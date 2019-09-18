@@ -1207,6 +1207,26 @@ static int rip_interface_delete_hook(struct interface *ifp)
 	return 0;
 }
 
+static int rip_ifp_create(struct interface *ifp)
+{
+	return 0;
+}
+
+static int rip_ifp_up(struct interface *ifp)
+{
+	return 0;
+}
+
+static int rip_ifp_down(struct interface *ifp)
+{
+	return 0;
+}
+
+static int rip_ifp_destroy(struct interface *ifp)
+{
+	return 0;
+}
+
 /* Allocate and initialize interface vector. */
 void rip_if_init(void)
 {
@@ -1224,4 +1244,6 @@ void rip_if_init(void)
 	/* Install interface node. */
 	install_node(&interface_node, rip_interface_config_write);
 	if_cmd_init();
+	if_zapi_callbacks(rip_ifp_create, rip_ifp_up,
+			  rip_ifp_down, rip_ifp_destroy);
 }
