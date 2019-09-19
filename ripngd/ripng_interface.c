@@ -247,19 +247,8 @@ static int ripng_ifp_create(struct interface *ifp)
 	return 0;
 }
 
-int ripng_interface_delete(ZAPI_CALLBACK_ARGS)
+static int ripng_ifp_destroy(struct interface *ifp)
 {
-	struct interface *ifp;
-	struct stream *s;
-
-	s = zclient->ibuf;
-	/*  zebra_interface_state_read() updates interface structure in iflist
-	 */
-	ifp = zebra_interface_state_read(s, vrf_id);
-
-	if (ifp == NULL)
-		return 0;
-
 	if (if_is_up(ifp)) {
 		ripng_if_down(ifp);
 	}
@@ -267,10 +256,6 @@ int ripng_interface_delete(ZAPI_CALLBACK_ARGS)
 	zlog_info("interface delete %s index %d flags %#llx metric %d mtu %d",
 		  ifp->name, ifp->ifindex, (unsigned long long)ifp->flags,
 		  ifp->metric, ifp->mtu6);
-
-	/* To support pseudo interface do not free interface structure.  */
-	/* if_delete(ifp); */
-	if_set_index(ifp, IFINDEX_INTERNAL);
 
 	return 0;
 }
@@ -897,11 +882,6 @@ static int interface_config_write(struct vty *vty)
 static struct cmd_node interface_node = {
 	INTERFACE_NODE, "%s(config-if)# ", 1 /* VTYSH */
 };
-
-static int ripng_ifp_destroy(struct interface *ifp)
-{
-	return 0;
-}
 
 /* Initialization of interface. */
 void ripng_if_init(void)
