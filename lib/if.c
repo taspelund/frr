@@ -175,6 +175,12 @@ void if_up_via_zapi(struct interface *ifp)
 		(*ifp_master.up_hook)(ifp);
 }
 
+void if_down_via_zapi(struct interface *ifp)
+{
+	if (ifp_master.down_hook)
+		(*ifp_master.down_hook)(ifp);
+}
+
 struct interface *if_create_name(const char *name, vrf_id_t vrf_id)
 {
 	struct interface *ifp;

@@ -85,15 +85,9 @@ babel_interface_up (ZAPI_CALLBACK_ARGS)
 }
 
 int
-babel_interface_down (ZAPI_CALLBACK_ARGS)
+babel_ifp_down(struct interface *ifp)
 {
-    struct stream *s = NULL;
-    struct interface *ifp = NULL;
-
     debugf(BABEL_DEBUG_IF, "receive a 'interface down'");
-
-    s = zclient->ibuf;
-    ifp = zebra_interface_state_read(s, vrf_id); /* it updates iflist */
 
     if (ifp == NULL) {
         return 0;
@@ -1251,11 +1245,6 @@ DEFUN (show_babel_parameters,
 }
 
 int babel_ifp_up(struct interface *ifp)
-{
-	return 0;
-}
-
-int babel_ifp_down(struct interface *ifp)
 {
 	return 0;
 }
