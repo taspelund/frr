@@ -163,6 +163,12 @@ static struct interface *if_new(vrf_id_t vrf_id)
 	return ifp;
 }
 
+void if_new_via_zapi(struct interface *ifp)
+{
+	if (ifp_master.create_hook)
+		(*ifp_master.create_hook)(ifp);
+}
+
 struct interface *if_create_name(const char *name, vrf_id_t vrf_id)
 {
 	struct interface *ifp;
