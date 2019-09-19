@@ -380,17 +380,8 @@ int rip_interface_down(ZAPI_CALLBACK_ARGS)
 }
 
 /* Inteface link up message processing */
-int rip_interface_up(ZAPI_CALLBACK_ARGS)
+static int rip_ifp_up(struct interface *ifp)
 {
-	struct interface *ifp;
-
-	/* zebra_interface_state_read () updates interface structure in
-	   iflist. */
-	ifp = zebra_interface_state_read(zclient->ibuf, vrf_id);
-
-	if (ifp == NULL)
-		return 0;
-
 	if (IS_RIP_DEBUG_ZEBRA)
 		zlog_debug(
 			"interface %s index %d flags %#llx metric %d mtu %d is up",
@@ -1200,11 +1191,6 @@ static int rip_interface_delete_hook(struct interface *ifp)
 	rip_interface_reset(ifp->info);
 	XFREE(MTYPE_RIP_INTERFACE, ifp->info);
 	ifp->info = NULL;
-	return 0;
-}
-
-static int rip_ifp_up(struct interface *ifp)
-{
 	return 0;
 }
 
