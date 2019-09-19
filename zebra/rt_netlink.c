@@ -1452,6 +1452,7 @@ static void _netlink_mpls_debug(int cmd, uint32_t label, const char *routedesc)
 static int netlink_neigh_update(int cmd, int ifindex, uint32_t addr, char *lla,
 				int llalen, ns_id_t ns_id)
 {
+	uint8_t protocol = RTPROT_ZEBRA;
 	struct {
 		struct nlmsghdr n;
 		struct ndmsg ndm;
@@ -1472,6 +1473,8 @@ static int netlink_neigh_update(int cmd, int ifindex, uint32_t addr, char *lla,
 	req.ndm.ndm_ifindex = ifindex;
 	req.ndm.ndm_type = RTN_UNICAST;
 
+	addattr_l(&req.n, sizeof(req),
+		  NDA_PROTOCOL, &protocol, sizeof(protocol));
 	addattr_l(&req.n, sizeof(req), NDA_DST, &addr, 4);
 	addattr_l(&req.n, sizeof(req), NDA_LLADDR, lla, llalen);
 
@@ -2490,6 +2493,7 @@ static int netlink_vxlan_flood_list_update(struct interface *ifp,
 					   struct in_addr *vtep_ip, int cmd)
 {
 	struct zebra_ns *zns;
+	uint8_t protocol = RTPROT_ZEBRA;
 	struct {
 		struct nlmsghdr n;
 		struct ndmsg ndm;
@@ -2511,6 +2515,8 @@ static int netlink_vxlan_flood_list_update(struct interface *ifp,
 	req.ndm.ndm_flags |= NTF_SELF; /* Handle by "self", not "master" */
 
 
+	addattr_l(&req.n, sizeof(req),
+		  NDA_PROTOCOL, &protocol, sizeof(protocol));
 	addattr_l(&req.n, sizeof(req), NDA_LLADDR, &dst_mac, 6);
 	req.ndm.ndm_ifindex = ifp->ifindex;
 	addattr_l(&req.n, sizeof(req), NDA_DST, &vtep_ip->s_addr, 4);
@@ -2864,6 +2870,7 @@ static int netlink_macfdb_update(struct interface *ifp, vlanid_t vid,
 				 int cmd, bool sticky)
 {
 	struct zebra_ns *zns;
+	uint8_t protocol = RTPROT_ZEBRA;
 	struct {
 		struct nlmsghdr n;
 		struct ndmsg ndm;
@@ -2904,6 +2911,8 @@ static int netlink_macfdb_update(struct interface *ifp, vlanid_t vid,
 	else
 		req.ndm.ndm_flags |= NTF_EXT_LEARNED;
 
+	addattr_l(&req.n, sizeof(req),
+		  NDA_PROTOCOL, &protocol, sizeof(protocol));
 	addattr_l(&req.n, sizeof(req), NDA_LLADDR, mac, 6);
 	req.ndm.ndm_ifindex = ifp->ifindex;
 	dst_alen = 4; // TODO: hardcoded
@@ -3307,6 +3316,7 @@ static int netlink_neigh_update2(struct interface *ifp, struct ipaddr *ip,
 				 struct ethaddr *mac, uint8_t flags,
 				 uint16_t state, int cmd)
 {
+	uint8_t protocol = RTPROT_ZEBRA;
 	struct {
 		struct nlmsghdr n;
 		struct ndmsg ndm;
@@ -3333,6 +3343,8 @@ static int netlink_neigh_update2(struct interface *ifp, struct ipaddr *ip,
 	req.ndm.ndm_type = RTN_UNICAST;
 	req.ndm.ndm_flags = flags;
 
+	addattr_l(&req.n, sizeof(req),
+		  NDA_PROTOCOL, &protocol, sizeof(protocol));
 	ipa_len = IS_IPADDR_V4(ip) ? IPV4_MAX_BYTELEN : IPV6_MAX_BYTELEN;
 	addattr_l(&req.n, sizeof(req), NDA_DST, &ip->ip.addr, ipa_len);
 	if (mac)
