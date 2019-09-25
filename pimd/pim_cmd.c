@@ -91,23 +91,6 @@ static struct vrf *pim_cmd_lookup_vrf(struct vty *vty, struct cmd_token *argv[],
 	return vrf;
 }
 
-static struct interface *pim_cmd_lookup_ifp(struct vty *vty,
-					    struct cmd_token *argv[],
-					    const int argc, int *idx,
-					    struct vrf *vrf)
-{
-	struct interface *ifp = NULL;
-
-	if (argv_find(argv, argc, "IFNAME", idx)) {
-		ifp = if_lookup_by_name(argv[*idx]->arg, vrf->vrf_id);
-		if (!ifp)
-			vty_out(vty, "Specified Interface: %s does not exist\n",
-				argv[*idx]->arg);
-	}
-
-	return ifp;
-}
-
 static void pim_if_membership_clear(struct interface *ifp)
 {
 	struct pim_interface *pim_ifp;
