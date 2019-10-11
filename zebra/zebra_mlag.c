@@ -951,7 +951,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		if (rc)
 			return rc;
 		vrf_name_len = strlen(msg.vrf_name);
-		pay_load.vrf_name = XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
+		pay_load.vrf_name = XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
 		strncpy(pay_load.vrf_name, msg.vrf_name, vrf_name_len);
 		pay_load.source_ip = msg.source_ip;
 		pay_load.group_ip = msg.group_ip;
@@ -964,7 +964,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		if (msg.owner_id == MLAG_OWNER_INTERFACE) {
 			vrf_name_len = strlen(msg.intf_name);
 			pay_load.intf_name =
-				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
+				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
 			strncpy(pay_load.intf_name, msg.intf_name,
 				vrf_name_len);
 		}
@@ -983,7 +983,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		if (rc)
 			return rc;
 		vrf_name_len = strlen(msg.vrf_name);
-		pay_load.vrf_name = XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
+		pay_load.vrf_name = XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
 		strncpy(pay_load.vrf_name, msg.vrf_name, vrf_name_len);
 		pay_load.source_ip = msg.source_ip;
 		pay_load.group_ip = msg.group_ip;
@@ -993,7 +993,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		if (msg.owner_id == MLAG_OWNER_INTERFACE) {
 			vrf_name_len = strlen(msg.intf_name);
 			pay_load.intf_name =
-				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
+				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
 			strncpy(pay_load.intf_name, msg.intf_name,
 				vrf_name_len);
 		}
@@ -1031,7 +1031,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 
 			vrf_name_len = strlen(msg.vrf_name);
 			pay_load[i]->vrf_name =
-				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
+				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
 			strncpy(pay_load[i]->vrf_name, msg.vrf_name,
 				vrf_name_len);
 			pay_load[i]->source_ip = msg.source_ip;
@@ -1043,8 +1043,8 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 			pay_load[i]->vrf_id = msg.vrf_id;
 			if (msg.owner_id == MLAG_OWNER_INTERFACE) {
 				vrf_name_len = strlen(msg.intf_name);
-				pay_load[i]->intf_name =
-					XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
+				pay_load[i]->intf_name = XMALLOC(
+					MTYPE_MLAG_PBUF, vrf_name_len + 1);
 
 				strncpy(pay_load[i]->intf_name, msg.intf_name,
 					vrf_name_len);
@@ -1098,7 +1098,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 
 			vrf_name_len = strlen(msg.vrf_name);
 			pay_load[i]->vrf_name =
-				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
+				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
 
 			strncpy(pay_load[i]->vrf_name, msg.vrf_name,
 				vrf_name_len);
@@ -1108,8 +1108,8 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 			pay_load[i]->vrf_id = msg.vrf_id;
 			if (msg.owner_id == MLAG_OWNER_INTERFACE) {
 				vrf_name_len = strlen(msg.intf_name);
-				pay_load[i]->intf_name =
-					XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
+				pay_load[i]->intf_name = XMALLOC(
+					MTYPE_MLAG_PBUF, vrf_name_len + 1);
 
 				strncpy(pay_load[i]->intf_name, msg.intf_name,
 					vrf_name_len);
@@ -1184,6 +1184,15 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 	return len;
 }
 
+
+static void zebra_fill_protobuf_msg(struct stream **s, char *name, int len)
+{
+	int str_len = strlen(name);
+	stream_put(*s, name, str_len);
+	/* Fill the rest with Null Character for aligning */
+	stream_put(*s, NULL, len - str_len);
+}
+
 int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 				       uint32_t len)
 {
@@ -1237,7 +1246,8 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			/* No Batching */
 			stream_putw(*s, MLAG_MSG_NO_BATCH);
 			/* Actual Data */
-			stream_put(*s, msg->peerlink, INTERFACE_NAMSIZ);
+			zebra_fill_protobuf_msg(s, msg->peerlink,
+						INTERFACE_NAMSIZ);
 			stream_putl(*s, msg->my_role);
 			stream_putl(*s, msg->peer_state);
 			zebra_mlag_status_update__free_unpacked(msg, NULL);
@@ -1275,7 +1285,7 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			/* No Batching */
 			stream_putw(*s, MLAG_MSG_NO_BATCH);
 			/* Actual Data */
-			stream_put(*s, msg->vrf_name, VRF_NAMSIZ);
+			zebra_fill_protobuf_msg(s, msg->vrf_name, VRF_NAMSIZ);
 
 			stream_putl(*s, msg->source_ip);
 			stream_putl(*s, msg->group_ip);
@@ -1285,8 +1295,8 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			stream_putc(*s, msg->am_i_dual_active);
 			stream_putl(*s, msg->vrf_id);
 			if (msg->owner_id == MLAG_OWNER_INTERFACE)
-				stream_put(*s, msg->intf_name,
-					   INTERFACE_NAMSIZ);
+				zebra_fill_protobuf_msg(s, msg->intf_name,
+							INTERFACE_NAMSIZ);
 			else
 				stream_put(*s, NULL, INTERFACE_NAMSIZ);
 			zebra_mlag_mroute_add__free_unpacked(msg, NULL);
@@ -1305,15 +1315,15 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 			/* No Batching */
 			stream_putw(*s, MLAG_MSG_NO_BATCH);
 			/* Actual Data */
-			stream_put(*s, msg->vrf_name, VRF_NAMSIZ);
+			zebra_fill_protobuf_msg(s, msg->vrf_name, VRF_NAMSIZ);
 
 			stream_putl(*s, msg->source_ip);
 			stream_putl(*s, msg->group_ip);
 			stream_putl(*s, msg->owner_id);
 			stream_putl(*s, msg->vrf_id);
 			if (msg->owner_id == MLAG_OWNER_INTERFACE)
-				stream_put(*s, msg->intf_name,
-					   INTERFACE_NAMSIZ);
+				zebra_fill_protobuf_msg(s, msg->intf_name,
+							INTERFACE_NAMSIZ);
 			else
 				stream_put(*s, NULL, INTERFACE_NAMSIZ);
 			zebra_mlag_mroute_del__free_unpacked(msg, NULL);
@@ -1340,7 +1350,8 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 
 				msg = Bulk_msg->mroute_add[i];
 
-				stream_put(*s, msg->vrf_name, VRF_NAMSIZ);
+				zebra_fill_protobuf_msg(s, msg->vrf_name,
+							VRF_NAMSIZ);
 				stream_putl(*s, msg->source_ip);
 				stream_putl(*s, msg->group_ip);
 				stream_putl(*s, msg->cost_to_rp);
@@ -1349,8 +1360,9 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 				stream_putc(*s, msg->am_i_dual_active);
 				stream_putl(*s, msg->vrf_id);
 				if (msg->owner_id == MLAG_OWNER_INTERFACE)
-					stream_put(*s, msg->intf_name,
-						   INTERFACE_NAMSIZ);
+					zebra_fill_protobuf_msg(
+						s, msg->intf_name,
+						INTERFACE_NAMSIZ);
 				else
 					stream_put(*s, NULL, INTERFACE_NAMSIZ);
 			}
@@ -1379,14 +1391,16 @@ int zebra_mlag_protobuf_decode_message(struct stream **s, uint8_t *data,
 
 				msg = Bulk_msg->mroute_del[i];
 
-				stream_put(*s, msg->vrf_name, VRF_NAMSIZ);
+				zebra_fill_protobuf_msg(s, msg->vrf_name,
+							VRF_NAMSIZ);
 				stream_putl(*s, msg->source_ip);
 				stream_putl(*s, msg->group_ip);
 				stream_putl(*s, msg->owner_id);
 				stream_putl(*s, msg->vrf_id);
 				if (msg->owner_id == MLAG_OWNER_INTERFACE)
-					stream_put(*s, msg->intf_name,
-						   INTERFACE_NAMSIZ);
+					zebra_fill_protobuf_msg(
+						s, msg->intf_name,
+						INTERFACE_NAMSIZ);
 				else
 					stream_put(*s, NULL, INTERFACE_NAMSIZ);
 			}
