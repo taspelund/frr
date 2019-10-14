@@ -131,6 +131,11 @@ void pim_ifchannel_delete(struct pim_ifchannel *ch)
 
 	pim_ifp = ch->interface->info;
 
+	if (PIM_DEBUG_PIM_TRACE)
+		zlog_debug("%s: ifchannel entry %s(%s) del start",
+			   __PRETTY_FUNCTION__, ch->sg_str,
+			   ch->interface->name);
+
 	if (PIM_I_am_DualActive(pim_ifp)) {
 		if (PIM_DEBUG_MLAG)
 			zlog_debug(
@@ -630,8 +635,8 @@ struct pim_ifchannel *pim_ifchannel_add(struct interface *ifp,
 	}
 
 	if (PIM_DEBUG_PIM_TRACE)
-		zlog_debug("%s: ifchannel %s is created ", __PRETTY_FUNCTION__,
-			   ch->sg_str);
+		zlog_debug("%s: ifchannel %s(%s) is created ", __PRETTY_FUNCTION__,
+			   ch->sg_str, ch->interface->name);
 
 	return ch;
 }
