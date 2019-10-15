@@ -935,8 +935,8 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		rc = zebra_mlag_lib_decode_mroute_add(s, &msg);
 		if (rc)
 			return rc;
-		vrf_name_len = strlen(msg.vrf_name);
-		pay_load.vrf_name = XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
+		vrf_name_len = strlen(msg.vrf_name) + 1;
+		pay_load.vrf_name = XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
 		strncpy(pay_load.vrf_name, msg.vrf_name, vrf_name_len);
 		pay_load.source_ip = msg.source_ip;
 		pay_load.group_ip = msg.group_ip;
@@ -947,9 +947,9 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		pay_load.vrf_id = msg.vrf_id;
 
 		if (msg.owner_id == MLAG_OWNER_INTERFACE) {
-			vrf_name_len = strlen(msg.intf_name);
+			vrf_name_len = strlen(msg.intf_name) + 1;
 			pay_load.intf_name =
-				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
+				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
 			strncpy(pay_load.intf_name, msg.intf_name,
 				vrf_name_len);
 		}
@@ -967,8 +967,8 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		rc = zebra_mlag_lib_decode_mroute_del(s, &msg);
 		if (rc)
 			return rc;
-		vrf_name_len = strlen(msg.vrf_name);
-		pay_load.vrf_name = XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
+		vrf_name_len = strlen(msg.vrf_name) + 1;
+		pay_load.vrf_name = XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
 		strncpy(pay_load.vrf_name, msg.vrf_name, vrf_name_len);
 		pay_load.source_ip = msg.source_ip;
 		pay_load.group_ip = msg.group_ip;
@@ -976,9 +976,9 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 		pay_load.vrf_id = msg.vrf_id;
 
 		if (msg.owner_id == MLAG_OWNER_INTERFACE) {
-			vrf_name_len = strlen(msg.intf_name);
+			vrf_name_len = strlen(msg.intf_name) + 1;
 			pay_load.intf_name =
-				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
+				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
 			strncpy(pay_load.intf_name, msg.intf_name,
 				vrf_name_len);
 		}
@@ -1014,9 +1014,9 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 					      sizeof(ZebraMlagMrouteAdd));
 			zebra_mlag_mroute_add__init(pay_load[i]);
 
-			vrf_name_len = strlen(msg.vrf_name);
+			vrf_name_len = strlen(msg.vrf_name) + 1;
 			pay_load[i]->vrf_name =
-				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
+				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
 			strncpy(pay_load[i]->vrf_name, msg.vrf_name,
 				vrf_name_len);
 			pay_load[i]->source_ip = msg.source_ip;
@@ -1027,9 +1027,9 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 			pay_load[i]->am_i_dual_active = msg.am_i_dual_active;
 			pay_load[i]->vrf_id = msg.vrf_id;
 			if (msg.owner_id == MLAG_OWNER_INTERFACE) {
-				vrf_name_len = strlen(msg.intf_name);
+				vrf_name_len = strlen(msg.intf_name) + 1;
 				pay_load[i]->intf_name = XMALLOC(
-					MTYPE_MLAG_PBUF, vrf_name_len + 1);
+					MTYPE_MLAG_PBUF, vrf_name_len);
 
 				strncpy(pay_load[i]->intf_name, msg.intf_name,
 					vrf_name_len);
@@ -1081,9 +1081,9 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 					      sizeof(ZebraMlagMrouteDel));
 			zebra_mlag_mroute_del__init(pay_load[i]);
 
-			vrf_name_len = strlen(msg.vrf_name);
+			vrf_name_len = strlen(msg.vrf_name) + 1;
 			pay_load[i]->vrf_name =
-				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len + 1);
+				XMALLOC(MTYPE_MLAG_PBUF, vrf_name_len);
 
 			strncpy(pay_load[i]->vrf_name, msg.vrf_name,
 				vrf_name_len);
@@ -1092,9 +1092,9 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 			pay_load[i]->owner_id = msg.owner_id;
 			pay_load[i]->vrf_id = msg.vrf_id;
 			if (msg.owner_id == MLAG_OWNER_INTERFACE) {
-				vrf_name_len = strlen(msg.intf_name);
+				vrf_name_len = strlen(msg.intf_name) + 1;
 				pay_load[i]->intf_name = XMALLOC(
-					MTYPE_MLAG_PBUF, vrf_name_len + 1);
+					MTYPE_MLAG_PBUF, vrf_name_len);
 
 				strncpy(pay_load[i]->intf_name, msg.intf_name,
 					vrf_name_len);
@@ -1171,7 +1171,7 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s, uint32_t *msg_type)
 
 static void zebra_fill_protobuf_msg(struct stream *s, char *name, int len)
 {
-	int str_len = strlen(name);
+	int str_len = strlen(name) + 1;
 
 	stream_put(s, name, str_len);
 	/* Fill the rest with Null Character for aligning */
