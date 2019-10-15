@@ -63,8 +63,6 @@ void zebra_mlag_send_register(void)
 	struct stream *s = NULL;
 
 	s = stream_new(MLAG_HDR_MSGSIZE);
-	if (!s)
-		return;
 
 	stream_putl(s, MLAG_REGISTER);
 	stream_putw(s, MLAG_MSG_NULL_PAYLOAD);
@@ -86,8 +84,6 @@ void zebra_mlag_send_deregister(void)
 	struct stream *s = NULL;
 
 	s = stream_new(MLAG_HDR_MSGSIZE);
-	if (!s)
-		return;
 
 	stream_putl(s, MLAG_DEREGISTER);
 	stream_putw(s, MLAG_MSG_NULL_PAYLOAD);
@@ -112,8 +108,7 @@ void zebra_mlag_process_mlag_data(uint8_t *data, uint32_t len)
 	int msg_type = 0;
 
 	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
-	if (s)
-		msg_type = zebra_mlag_protobuf_decode_message(s, data, len);
+	msg_type = zebra_mlag_protobuf_decode_message(s, data, len);
 
 	if (msg_type <= 0) {
 		/* Something went wrong in decoding */
@@ -557,8 +552,6 @@ void zebra_mlag_forward_client_msg(ZAPI_HANDLER_ARGS)
 	/* Get input stream.  */
 	zebra_s = msg;
 	mlag_s = stream_new(zebra_s->endp);
-	if (!mlag_s)
-		return;
 
 	/*
 	 * Client data is | Zebra Header + MLAG Data |
@@ -603,8 +596,6 @@ static void test_mlag_post_mroute_add(void)
 	char intf_temp[20];
 
 	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
-	if (!s)
-		return;
 
 	memset(vrf_temp, 0, 20);
 	memset(intf_temp, 0, 20);
@@ -642,8 +633,6 @@ static void test_mlag_post_mroute_del(void)
 
 
 	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
-	if (!s)
-		return;
 
 	memset(vrf_temp, 0, 20);
 	memset(intf_temp, 0, 20);
@@ -677,8 +666,6 @@ static void test_mlag_post_mroute_bulk_add(void)
 	char intf_temp[20];
 
 	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
-	if (!s)
-		return;
 
 	memset(vrf_temp, 0, 20);
 	memset(intf_temp, 0, 20);
@@ -737,8 +724,6 @@ static void test_mlag_post_mroute_bulk_del(void)
 	char intf_temp[20];
 
 	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
-	if (!s)
-		return;
 
 	memset(vrf_temp, 0, 20);
 	memset(intf_temp, 0, 20);
