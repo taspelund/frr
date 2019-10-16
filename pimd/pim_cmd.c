@@ -7437,6 +7437,11 @@ DEFPY(interface_ip_pim_activeactive, interface_ip_pim_activeactive_cmd,
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
+
+        if (PIM_DEBUG_MLAG)
+                zlog_debug("%sConfiguring PIM active-active on Interface: %s",
+                           no ? "Un-":" ", ifp->name);
+
 	pim_ifp = ifp->info;
 	if (no)
 		pim_if_unconfigure_mlag_dualactive(pim_ifp);
