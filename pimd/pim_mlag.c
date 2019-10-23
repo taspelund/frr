@@ -339,19 +339,53 @@ static void pim_mlag_up_peer_del(struct mlag_mroute_del *msg)
  */
 static void pim_mlag_up_peer_del_all(void)
 {
+	struct list *temp = list_new();
 	struct listnode *upnode;
-	struct listnode *nextnode;
 	struct pim_upstream *up;
 	struct vrf *vrf;
 	struct pim_instance *pim;
 
+	/*
+	 * So why these gyrations?
+	 * pim->upstream_list has the list of *,G and S,G
+	 * that are in the system.  The problem of course
+	 * is that it is an ordered list:
+	 * (*,G1) -> (S1,G1) -> (S2,G2) -> (S3, G2) -> (*,G2) -> (S1,G2)
+	 * And the *,G1 has pointers to S1,G1 and S2,G1
+	 * if we delete *,G1 then we have a situation where
+	 * S1,G1 and S2,G2 can be deleted as well.  Then a
+	 * simple ALL_LIST_ELEMENTS will have the next listnode
+	 * pointer become invalid and we crash.
+	 * So let's grab the list of MLAG_PEER upstreams
+	 * add a refcount put on another list and delete safely
+	 */
 	RB_FOREACH(vrf, vrf_name_head, &vrfs_by_name) {
 		pim = vrf->info;
-		for (ALL_LIST_ELEMENTS(pim->upstream_list, upnode,
-			nextnode, up)) {
+		for (ALL_LIST_ELEMENTS_RO(pim->upstream_list, upnode, up)) {
+			if (!PIM_UPSTREAM_FLAG_TEST_MLAG_PEER(up->flags))
+				continue;
+			listnode_add(temp, up);
+			/*
+			 * Add a reference since we are adding to this
+			 * list for deletion
+			 */
+			up->ref_count++;
+		}
+
+		while (temp->count) {
+			up = listnode_head(temp);
+			listnode_delete(temp, up);
+
 			pim_mlag_up_peer_deref(pim, up);
+			/*
+			 * This is the deletion of the reference added
+			 * above
+			 */
+			pim_upstream_del(pim, up, __PRETTY_FUNCTION__);
 		}
 	}
+
+	list_delete(&temp);
 }
 
 /* Send upstream entry to the local MLAG daemon (which will subsequently
