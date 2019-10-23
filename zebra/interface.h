@@ -27,7 +27,7 @@
 #include "hook.h"
 
 #include "zebra/zebra_l2.h"
-#include "zebra/zebra_nhg.h"
+#include "zebra/zebra_nhg_private.h"
 
 /* For interface multicast configuration. */
 #define IF_ZEBRA_MULTICAST_UNSPEC 0
