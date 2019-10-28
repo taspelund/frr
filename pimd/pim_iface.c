@@ -1485,6 +1485,12 @@ void pim_if_create_pimreg(struct pim_instance *pim)
 
 		pim_if_new(pim->regiface, false, false, true,
 			false /*vxlan_term*/);
+		/*
+		 * On vrf moves we delete the interface if there
+		 * is nothing going on with it.  We cannot have
+		 * the pimregiface deleted.
+		 */
+		pim->regiface->configured = true;
 	}
 }
 
