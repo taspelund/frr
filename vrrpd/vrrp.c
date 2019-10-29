@@ -287,12 +287,14 @@ void vrrp_check_start(struct vrrp_vrouter *vr)
 	r = vr->v4;
 	/* Must not already be started */
 	start = r->fsm.state == VRRP_STATE_INITIALIZE;
+	whynot = (!start && !whynot) ? "Already running" : whynot;
 	/* Must have a parent interface */
 	start = start && (vr->ifp != NULL);
 	whynot = (!start && !whynot) ? "No base interface" : whynot;
 #if 0
 	/* Parent interface must be up */
 	start = start && if_is_operative(vr->ifp);
+	start = (!start && !whynot) ? "Base interface inoperative" : whynot;
 #endif
 	/* Parent interface must have at least one v4 */
 	start = start && connected_count_by_family(vr->ifp, AF_INET) > 0;
@@ -303,6 +305,7 @@ void vrrp_check_start(struct vrrp_vrouter *vr)
 #if 0
 	/* Macvlan interface must be admin up */
 	start = start && CHECK_FLAG(r->mvl_ifp->flags, IFF_UP);
+	start = (!start && !whynot) ? "Macvlan device admin down" : whynot;
 #endif
 	/* Must have at least one VIP configured */
 	start = start && r->addrs->count > 0;
@@ -315,9 +318,12 @@ void vrrp_check_start(struct vrrp_vrouter *vr)
 			  "Refusing to start Virtual Router: %s",
 			  vr->vrid, family2str(r->family), whynot);
 
+	whynot = NULL;
+
 	r = vr->v6;
 	/* Must not already be started */
 	start = r->fsm.state == VRRP_STATE_INITIALIZE;
+	whynot = (!start && !whynot) ? "Already running" : whynot;
 	/* Must not be v2 */
 	start = start && vr->version != 2;
 	whynot = (!start && !whynot) ? "VRRPv2 does not support v6" : whynot;
@@ -327,6 +333,7 @@ void vrrp_check_start(struct vrrp_vrouter *vr)
 #if 0
 	/* Parent interface must be up */
 	start = start && if_is_operative(vr->ifp);
+	start = (!start && !whynot) ? "Base interface inoperative" : whynot;
 #endif
 	/* Must have a macvlan interface */
 	start = start && (r->mvl_ifp != NULL);
@@ -334,6 +341,7 @@ void vrrp_check_start(struct vrrp_vrouter *vr)
 #if 0
 	/* Macvlan interface must be admin up */
 	start = start && CHECK_FLAG(r->mvl_ifp->flags, IFF_UP);
+	start = (!start && !whynot) ? "Macvlan device admin down" : whynot;
 	/* Macvlan interface must have a link local */
 	start = start && connected_get_linklocal(r->mvl_ifp);
 	whynot =
