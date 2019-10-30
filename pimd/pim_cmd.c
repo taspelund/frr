@@ -6354,6 +6354,7 @@ static int pim_ssm_cmd_worker(struct pim_instance *pim, struct vty *vty,
 			      const char *plist)
 {
 	int result = pim_ssm_range_set(pim, pim->vrf_id, plist);
+	int ret = CMD_WARNING_CONFIG_FAILED;
 
 	if (result == PIM_SSM_ERR_NONE)
 		return CMD_SUCCESS;
@@ -6364,12 +6365,13 @@ static int pim_ssm_cmd_worker(struct pim_instance *pim, struct vty *vty,
 		break;
 	case PIM_SSM_ERR_DUP:
 		vty_out(vty, "%% duplicate config\n");
+		ret = CMD_WARNING;
 		break;
 	default:
 		vty_out(vty, "%% ssm range config failed\n");
 	}
 
-	return CMD_WARNING_CONFIG_FAILED;
+	return ret;
 }
 
 DEFUN (ip_pim_ssm_prefix_list,
