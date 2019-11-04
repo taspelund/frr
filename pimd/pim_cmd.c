@@ -4296,7 +4296,7 @@ static void pim_show_mlag_up_entry_detail(struct vrf *vrf,
 			strcpy(own_str + strlen(own_str), "I");
 		/* XXX - fixup, print paragraph output */
 		vty_out(vty,
-				"%-15s %-15s %-6s %-11d %-10d %2s\n",
+				"%-15s %-15s %-6s %-11u %-10d %2s\n",
 				src_str, grp_str, own_str,
 				pim_up_mlag_local_cost(pim, up),
 				pim_up_mlag_peer_cost(up),
@@ -4425,7 +4425,7 @@ static void pim_show_mlag_up_vrf(struct vrf *vrf, struct vty *vty, bool uj)
 			if (up->flags & (PIM_UPSTREAM_FLAG_MASK_MLAG_INTERFACE))
 				strcpy(own_str + strlen(own_str), "I");
 			vty_out(vty,
-				"%-15s %-15s %-6s %-11d %-10d %2s\n",
+				"%-15s %-15s %-6s %-11u %-10u %2s\n",
 				src_str, grp_str, own_str,
 				pim_up_mlag_local_cost(pim, up),
 				pim_up_mlag_peer_cost(up),
