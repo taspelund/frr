@@ -2749,6 +2749,8 @@ static int install_evpn_route_entry(struct bgp *bgp, struct bgpevpn *vpn,
 	/* Perform route selection and update zebra, if required. */
 	ret = evpn_route_select_install(bgp, vpn, rn);
 
+	bgp_unlock_node(rn);
+
 	return ret;
 }
 
