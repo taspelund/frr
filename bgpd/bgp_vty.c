@@ -14020,6 +14020,9 @@ static void community_list_perror(struct vty *vty, int ret)
 		vty_out(vty,
 			"%% Community name conflict, previously defined as expanded community\n");
 		break;
+	case COMMUNITY_LIST_ERR_MALFORMED_TOKEN:
+		vty_out(vty, "%% Only rt & soo ecom types are supported\n");
+		break;
 	}
 }
 
