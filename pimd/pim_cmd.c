@@ -7390,6 +7390,8 @@ static int pim_cmd_interface_add(struct interface *ifp)
 
 	pim_if_addr_add_all(ifp);
 	pim_if_membership_refresh(ifp);
+
+	pim_if_create_pimreg(pim_ifp->pim);
 	return 1;
 }
 
