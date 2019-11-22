@@ -875,8 +875,6 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 				zlog_debug("upstream %s inherited mlag non-df flag from parent",
 						up->sg_str);
 		}
-		pim_upstream_update_use_rpt(up,
-				false /*update_mroute*/);
 	}
 
 	if (PIM_UPSTREAM_FLAG_TEST_STATIC_IIF(up->flags)
@@ -884,12 +882,16 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 		pim_upstream_fill_static_iif(up, incoming);
 		pim_ifp = up->rpf.source_nexthop.interface->info;
 		assert(pim_ifp);
+		pim_upstream_update_use_rpt(up,
+				false /*update_mroute*/);
 		pim_upstream_mroute_iif_update(up->channel_oil, __func__);
 
 		if (PIM_UPSTREAM_FLAG_TEST_SRC_NOCACHE(up->flags))
 			pim_upstream_keep_alive_timer_start(
 				up, pim->keep_alive_time);
 	} else if (up->upstream_addr.s_addr != INADDR_ANY) {
+		pim_upstream_update_use_rpt(up,
+				false /*update_mroute*/);
 		rpf_result = pim_rpf_update(pim, up, NULL, __func__);
 		if (rpf_result == PIM_RPF_FAILURE) {
 			if (PIM_DEBUG_PIM_TRACE)
@@ -900,9 +902,8 @@ static struct pim_upstream *pim_upstream_new(struct pim_instance *pim,
 
 		if (up->rpf.source_nexthop.interface) {
 			pim_ifp = up->rpf.source_nexthop.interface->info;
-			if (pim_ifp)
-				pim_upstream_mroute_iif_update(up->channel_oil,
-						__func__);
+			pim_upstream_mroute_iif_update(up->channel_oil,
+					__func__);
 		}
 	}
 
