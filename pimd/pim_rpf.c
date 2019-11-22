@@ -103,11 +103,15 @@ bool pim_nexthop_lookup(struct pim_instance *pim, struct pim_nexthop *nexthop,
 	num_ifindex = zclient_lookup_nexthop(pim, nexthop_tab, MULTIPATH_NUM,
 					     addr, PIM_NEXTHOP_LOOKUP_MAX);
 	if (num_ifindex < 1) {
-		char addr_str[INET_ADDRSTRLEN];
-		pim_inet4_dump("<addr?>", addr, addr_str, sizeof(addr_str));
-		zlog_warn(
-			"%s %s: could not find nexthop ifindex for address %s",
-			__FILE__, __PRETTY_FUNCTION__, addr_str);
+		if (PIM_DEBUG_ZEBRA) {
+			char addr_str[INET_ADDRSTRLEN];
+
+			pim_inet4_dump("<addr?>", addr,
+				       addr_str, sizeof(addr_str));
+			zlog_warn(
+				"%s %s: could not find nexthop ifindex for address %s",
+				__FILE__, __PRETTY_FUNCTION__, addr_str);
+		}
 		return false;
 	}
 
