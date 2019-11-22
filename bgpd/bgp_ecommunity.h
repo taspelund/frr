@@ -104,8 +104,6 @@ struct ecommunity_val {
 	char val[ECOMMUNITY_SIZE];
 };
 
-#define ecom_length(X)    ((X)->size * ECOMMUNITY_SIZE)
-
 /*
  * Encode BGP Route Target AS:nn.
  */
