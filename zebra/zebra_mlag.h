@@ -55,23 +55,14 @@ enum zebra_mlag_state {
 
 void zebra_mlag_init(void);
 void zebra_mlag_terminate(void);
-
 enum mlag_role zebra_mlag_get_role(void);
-
 void zebra_mlag_client_register(ZAPI_HANDLER_ARGS);
-
 void zebra_mlag_client_unregister(ZAPI_HANDLER_ARGS);
-
 void zebra_mlag_forward_client_msg(ZAPI_HANDLER_ARGS);
-
 void zebra_mlag_send_register(void);
-
 void zebra_mlag_send_deregister(void);
-
 void zebra_mlag_handle_process_state(enum zebra_mlag_state state);
-
 void zebra_mlag_process_mlag_data(uint8_t *data, uint32_t len);
-
 /*
  * ProtoBuffer Api's
  */
@@ -79,5 +70,4 @@ int zebra_mlag_protobuf_encode_client_data(struct stream *s,
 					   uint32_t *msg_type);
 int zebra_mlag_protobuf_decode_message(struct stream *s, uint8_t *data,
 				       uint32_t len);
-
 #endif
