@@ -108,6 +108,8 @@ typedef enum {
 extern void rtadv_init(struct zebra_ns *);
 extern void rtadv_terminate(struct zebra_ns *);
 extern void rtadv_cmd_init(void);
+extern void rtadv_stop_ra(struct interface *ifp);
+extern void rtadv_stop_ra_all(void);
 extern void zebra_interface_radv_disable(ZAPI_HANDLER_ARGS);
 extern void zebra_interface_radv_enable(ZAPI_HANDLER_ARGS);
 

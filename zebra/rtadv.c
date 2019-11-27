@@ -153,7 +153,8 @@ static int rtadv_recv_packet(struct zebra_ns *zns, int sock, uint8_t *buf,
 #define RTADV_MSG_SIZE 4096
 
 /* Send router advertisement packet. */
-static void rtadv_send_packet(int sock, struct interface *ifp)
+static void rtadv_send_packet(int sock, struct interface *ifp,
+			      ipv6_nd_suppress_ra_status stop)
 {
 	struct msghdr msg;
 	struct iovec iov;
@@ -239,7 +240,10 @@ static void rtadv_send_packet(int sock, struct interface *ifp)
 		zif->rtadv.AdvDefaultLifetime != -1
 			? zif->rtadv.AdvDefaultLifetime
 			: MAX(1, 0.003 * zif->rtadv.MaxRtrAdvInterval);
-	rtadv->nd_ra_router_lifetime = htons(pkt_RouterLifetime);
+
+	/* send RA lifetime of 0 before stopping. rfc4861/6.2.5 */
+	rtadv->nd_ra_router_lifetime =
+		(stop == RA_SUPPRESS) ? htons(0) : htons(pkt_RouterLifetime);
 	rtadv->nd_ra_reachable = htonl(zif->rtadv.AdvReachableTime);
 	rtadv->nd_ra_retransmit = htonl(0);
 
@@ -427,7 +431,7 @@ static int rtadv_timer(struct thread *thread)
 							ifp->name);
 
 					rtadv_send_packet(zrouter.rtadv.sock,
-							  ifp);
+							  ifp, RA_ENABLE);
 				} else {
 					zif->rtadv.AdvIntervalTimer -= period;
 					if (zif->rtadv.AdvIntervalTimer <= 0) {
@@ -441,7 +445,7 @@ static int rtadv_timer(struct thread *thread)
 								.MaxRtrAdvInterval;
 						rtadv_send_packet(
 							zrouter.rtadv.sock,
-							ifp);
+							ifp, RA_ENABLE);
 					}
 				}
 			}
@@ -472,7 +476,7 @@ static void rtadv_process_solicit(struct interface *ifp)
 	if ((zif->rtadv.UseFastRexmit)
 	    || (zif->rtadv.AdvIntervalTimer <=
 		(zif->rtadv.MaxRtrAdvInterval - MIN_DELAY_BETWEEN_RAS))) {
-		rtadv_send_packet(zrouter.rtadv.sock, ifp);
+		rtadv_send_packet(zrouter.rtadv.sock, ifp, RA_ENABLE);
 		zif->rtadv.AdvIntervalTimer = zif->rtadv.MaxRtrAdvInterval;
 	} else
 		zif->rtadv.AdvIntervalTimer = MIN_DELAY_BETWEEN_RAS;
@@ -829,6 +833,7 @@ static void ipv6_nd_suppress_ra_set(struct interface *ifp,
 	if (status == RA_SUPPRESS) {
 		/* RA is currently enabled */
 		if (zif->rtadv.AdvSendAdvertisements) {
+			rtadv_send_packet(zrouter.rtadv.sock, ifp, RA_SUPPRESS);
 			zif->rtadv.AdvSendAdvertisements = 0;
 			zif->rtadv.AdvIntervalTimer = 0;
 			zrouter.rtadv.adv_if_count--;
@@ -862,6 +867,36 @@ static void ipv6_nd_suppress_ra_set(struct interface *ifp,
 					    zrouter.rtadv.sock);
 		}
 	}
+}
+
+/*
+ * send router lifetime value of zero in RAs on this interface since we're
+ * ceasing to advertise and want to let our neighbors know.
+ * RFC 4861 secion 6.2.5
+ */
+void rtadv_stop_ra(struct interface *ifp)
+{
+	struct zebra_if *zif;
+
+	zif = ifp->info;
+
+	if (zif->rtadv.AdvSendAdvertisements)
+		rtadv_send_packet(zrouter.rtadv.sock, ifp, RA_SUPPRESS);
+}
+
+/*
+ * send router lifetime value of zero in RAs on all interfaces since we're
+ * ceasing to advertise globally and want to let all of our neighbors know
+ * RFC 4861 secion 6.2.5
+ */
+void rtadv_stop_ra_all(void)
+{
+	struct vrf *vrf;
+	struct interface *ifp;
+
+	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
+		FOR_ALL_INTERFACES (vrf, ifp)
+			rtadv_stop_ra(ifp);
 }
 
 /*
