@@ -1,23 +1,25 @@
-/* PIM Mlag Code.
- * Copyright (C) 2018 Cumulus Networks, Inc.
- *                    Donald Sharp
+/*
+ * This is an implementation of PIM MLAG Functionality
  *
- * This file is part of FRR.
+ * Module name: PIM MLAG
  *
- * FRR is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2, or (at your option) any
- * later version.
+ * Author: sathesh Kumar karra <sathk@cumulusnetworks.com>
  *
- * FRR is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
+ * Copyright (C) 2019 Cumulus Networks http://www.cumulusnetworks.com
  *
- * You should have received a copy of the GNU General Public License
- * along with FRR; see the file COPYING.  If not, write to the Free
- * Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
- * 02111-1307, USA.
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; see the file COPYING; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "pimd.h"
@@ -573,10 +575,11 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 	bool state_chg = false;
 	bool notify_vxlan = false;
 	struct interface *peerlink_rif_p;
-	char buf[80];
+	char buf[MLAG_ROLE_STRSIZE];
 
 	if (PIM_DEBUG_MLAG)
-		zlog_debug("%s: msg dump: my_role:%s, peer_state:%s", __func__,
+		zlog_debug("%s: msg dump: my_role: %s, peer_state: %s",
+			   __func__,
 			   mlag_role2str(msg.my_role, buf, sizeof(buf)),
 			   (msg.peer_state == MLAG_STATE_RUNNING ? "RUNNING"
 								 : "DOWN"));
@@ -660,12 +663,11 @@ static void pim_mlag_process_mlagd_state_change(struct mlag_status msg)
 	}
 }
 
-static void pim_mlag_process_peer_frr_state_change(
-		struct mlag_frr_status msg)
+static void pim_mlag_process_peer_frr_state_change(struct mlag_frr_status msg)
 {
 	if (PIM_DEBUG_MLAG)
 		zlog_debug(
-			"%s: msg dump: peer_frr_state:%s", __func__,
+			"%s: msg dump: peer_frr_state: %s", __func__,
 			(msg.frr_state == MLAG_FRR_STATE_UP ? "UP" : "DOWN"));
 
 	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
@@ -734,11 +736,11 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 {
 	if (PIM_DEBUG_MLAG) {
 		zlog_debug(
-			"%s: msg dump: vrf_name:%s, s.ip:0x%x, g.ip:0x%x cost:%u",
+			"%s: msg dump: vrf_name: %s, s.ip: 0x%x, g.ip: 0x%x cost: %u",
 			__func__, msg.vrf_name, msg.source_ip, msg.group_ip,
 			msg.cost_to_rp);
 		zlog_debug(
-			"owner_id:%d, DR:%d, Dual active:%d, vrf_id:0x%x intf_name:%s",
+			"owner_id: %d, DR: %d, Dual active: %d, vrf_id: 0x%x intf_name: %s",
 			msg.owner_id, msg.am_i_dr, msg.am_i_dual_active,
 			msg.vrf_id, msg.intf_name);
 	}
@@ -759,10 +761,11 @@ static void pim_mlag_process_mroute_add(struct mlag_mroute_add msg)
 static void pim_mlag_process_mroute_del(struct mlag_mroute_del msg)
 {
 	if (PIM_DEBUG_MLAG) {
-		zlog_debug("%s: msg dump: vrf_name:%s, s.ip:0x%x, g.ip:0x%x ",
-			   __func__, msg.vrf_name, msg.source_ip, msg.group_ip);
-		zlog_debug("owner_id:%d, vrf_id:0x%x intf_name:%s", msg.owner_id,
-			   msg.vrf_id, msg.intf_name);
+		zlog_debug(
+			"%s: msg dump: vrf_name: %s, s.ip: 0x%x, g.ip: 0x%x ",
+			__func__, msg.vrf_name, msg.source_ip, msg.group_ip);
+		zlog_debug("owner_id: %d, vrf_id: 0x%x intf_name: %s",
+			   msg.owner_id, msg.vrf_id, msg.intf_name);
 	}
 
 	if (!(router->mlag_flags & PIM_MLAGF_LOCAL_CONN_UP)) {
@@ -781,7 +784,7 @@ static void pim_mlag_process_mroute_del(struct mlag_mroute_del msg)
 int pim_zebra_mlag_handle_msg(struct stream *s, int len)
 {
 	struct mlag_msg mlag_msg;
-	char buf[80];
+	char buf[ZLOG_FILTER_LENGTH_MAX];
 	int rc = 0;
 	size_t length;
 
@@ -790,9 +793,10 @@ int pim_zebra_mlag_handle_msg(struct stream *s, int len)
 		return (rc);
 
 	if (PIM_DEBUG_MLAG)
-		zlog_debug("%s: Received msg type:%s length:%d, bulk_cnt:%d",
+		zlog_debug("%s: Received msg type: %s length: %d, bulk_cnt: %d",
 			   __func__,
-			   mlag_lib_msgid_to_str(mlag_msg.msg_type, buf, 80),
+			   mlag_lib_msgid_to_str(mlag_msg.msg_type, buf,
+						 sizeof(buf)),
 			   mlag_msg.data_len, mlag_msg.msg_cnt);
 
 	switch (mlag_msg.msg_type) {
@@ -840,7 +844,7 @@ int pim_zebra_mlag_handle_msg(struct stream *s, int len)
 	} break;
 	case MLAG_MROUTE_ADD_BULK: {
 		struct mlag_mroute_add msg;
-		int i = 0;
+		int i;
 
 		for (i = 0; i < mlag_msg.msg_cnt; i++) {
 
@@ -852,7 +856,7 @@ int pim_zebra_mlag_handle_msg(struct stream *s, int len)
 	} break;
 	case MLAG_MROUTE_DEL_BULK: {
 		struct mlag_mroute_del msg;
-		int i = 0;
+		int i;
 
 		for (i = 0; i < mlag_msg.msg_cnt; i++) {
 
@@ -940,7 +944,7 @@ static int pim_mlag_register_handler(struct thread *thread)
 	SET_FLAG(bit_mask, (1 << MLAG_PEER_FRR_STATUS));
 
 	if (PIM_DEBUG_MLAG)
-		zlog_debug("%s: Posting Client Register to MLAG mask:0x%x",
+		zlog_debug("%s: Posting Client Register to MLAG mask: 0x%x",
 			   __func__, bit_mask);
 
 	zclient_send_mlag_register(zclient, bit_mask);
@@ -954,8 +958,8 @@ void pim_mlag_register(void)
 
 	router->mlag_process_register = true;
 
-	thread_add_event(router->master, pim_mlag_register_handler,
-			NULL, 0, NULL);
+	thread_add_event(router->master, pim_mlag_register_handler, NULL, 0,
+			 NULL);
 }
 
 static int pim_mlag_deregister_handler(struct thread *thread)
@@ -983,23 +987,26 @@ void pim_mlag_deregister(void)
 
 	router->mlag_process_register = false;
 
-	thread_add_event(router->master, pim_mlag_deregister_handler,
-			NULL, 0, NULL);
+	thread_add_event(router->master, pim_mlag_deregister_handler, NULL, 0,
+			 NULL);
 }
 
 void pim_if_configure_mlag_dualactive(struct pim_interface *pim_ifp)
 {
-	if (!pim_ifp || pim_ifp->activeactive == true)
+	if (!pim_ifp || !pim_ifp->pim || pim_ifp->activeactive == true)
 		return;
 
+	if (PIM_DEBUG_MLAG)
+		zlog_debug("%s: Configuring active-active on Interface: %s",
+			   __func__, "NULL");
+
 	pim_ifp->activeactive = true;
-	if (pim_ifp->pim)
-		pim_ifp->pim->inst_mlag_intf_cnt++;
+	pim_ifp->pim->inst_mlag_intf_cnt++;
 
 	router->pim_mlag_intf_cnt++;
 	if (PIM_DEBUG_MLAG)
 		zlog_debug(
-			"%s: Total MLAG configured Interfaces on router: %d, Inst:%d",
+			"%s: Total MLAG configured Interfaces on router: %d, Inst: %d",
 			__func__, router->pim_mlag_intf_cnt,
 			pim_ifp->pim->inst_mlag_intf_cnt);
 
@@ -1014,17 +1021,20 @@ void pim_if_configure_mlag_dualactive(struct pim_interface *pim_ifp)
 
 void pim_if_unconfigure_mlag_dualactive(struct pim_interface *pim_ifp)
 {
-	if (!pim_ifp || pim_ifp->activeactive == false)
+	if (!pim_ifp || !pim_ifp->pim || pim_ifp->activeactive == false)
 		return;
 
+	if (PIM_DEBUG_MLAG)
+		zlog_debug("%s: UnConfiguring active-active on Interface: %s",
+			   __func__, "NULL");
+
 	pim_ifp->activeactive = false;
-	if (pim_ifp->pim)
-		pim_ifp->pim->inst_mlag_intf_cnt--;
+	pim_ifp->pim->inst_mlag_intf_cnt--;
 
 	router->pim_mlag_intf_cnt--;
 	if (PIM_DEBUG_MLAG)
 		zlog_debug(
-			"%s: Total MLAG configured Interfaces on router: %d, Inst:%d",
+			"%s: Total MLAG configured Interfaces on router: %d, Inst: %d",
 			__func__, router->pim_mlag_intf_cnt,
 			pim_ifp->pim->inst_mlag_intf_cnt);
 
