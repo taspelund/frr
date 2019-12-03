@@ -127,14 +127,16 @@ DEFPY(pbr_map_match_src, pbr_map_match_src_cmd,
 	pbrms->family = prefix->family;
 
 	if (!no) {
-		if (pbrms->src && prefix_same(pbrms->src, prefix))
-			return CMD_SUCCESS;
-		else if (pbrms->src) {
+		if (pbrms->src) {
+			if (prefix_same(pbrms->src, prefix))
+				return CMD_SUCCESS;
+
 			vty_out(vty,
 				"A `match src-ip XX` command already exists, please remove that first\n");
 			return CMD_WARNING_CONFIG_FAILED;
-		} else
-			pbrms->src = prefix_new();
+		}
+
+		pbrms->src = prefix_new();
 		prefix_copy(pbrms->src, prefix);
 	} else {
 		prefix_free(pbrms->src);
@@ -159,14 +161,16 @@ DEFPY(pbr_map_match_dst, pbr_map_match_dst_cmd,
 	pbrms->family = prefix->family;
 
 	if (!no) {
-		if (pbrms->dst && prefix_same(pbrms->dst, prefix))
-			return CMD_SUCCESS;
-		else if (pbrms->dst) {
+		if (pbrms->dst) {
+			if (prefix_same(pbrms->dst, prefix))
+				return CMD_SUCCESS;
+
 			vty_out(vty,
 				"A `match dst-ip XX` command already exists, please remove that first\n");
 			return CMD_WARNING_CONFIG_FAILED;
-		} else
-			pbrms->dst = prefix_new();
+		}
+
+		pbrms->dst = prefix_new();
 		prefix_copy(pbrms->dst, prefix);
 	} else {
 		prefix_free(pbrms->dst);
