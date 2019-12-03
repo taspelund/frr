@@ -1684,7 +1684,7 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 	}
 
 	/* For modify attribute, copy it to temporary structure. */
-	bgp_attr_dup(attr, piattr);
+	*attr = *piattr;
 
 	/* If local-preference is not set. */
 	if ((peer->sort == BGP_PEER_IBGP || peer->sort == BGP_PEER_CONFED)
@@ -1799,7 +1799,7 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 		if ((from->sort == BGP_PEER_IBGP && peer->sort == BGP_PEER_IBGP)
 		    && !bgp_flag_check(bgp,
 				       BGP_FLAG_RR_ALLOW_OUTBOUND_POLICY)) {
-			bgp_attr_dup(&dummy_attr, attr);
+			dummy_attr = *attr;
 			rmap_path.attr = &dummy_attr;
 		}
 
@@ -3116,7 +3116,7 @@ int bgp_update(struct peer *peer, struct prefix *p, uint32_t addpath_id,
 		goto filtered;
 	}
 
-	bgp_attr_dup(&new_attr, attr);
+	new_attr = *attr;
 
 	/* Apply incoming route-map.
 	 * NB: new_attr may now contain newly allocated values from route-map
@@ -6403,7 +6403,7 @@ void bgp_redistribute_add(struct bgp *bgp, struct prefix *p,
 		struct attr attr_new;
 
 		/* Copy attribute for modification. */
-		bgp_attr_dup(&attr_new, &attr);
+		attr_new = attr;
 
 		if (red->redist_metric_flag)
 			attr_new.med = red->redist_metric;
@@ -8830,7 +8830,7 @@ static int bgp_show_table(struct vty *vty, struct bgp *bgp, safi_t safi,
 				struct attr dummy_attr;
 				int ret;
 
-				bgp_attr_dup(&dummy_attr, pi->attr);
+				dummy_attr = *pi->attr;
 
 				path.peer = pi->peer;
 				path.attr = &dummy_attr;
@@ -10903,7 +10903,7 @@ static void show_adj_route(struct vty *vty, struct peer *peer, afi_t afi,
 					header2 = 0;
 				}
 
-				bgp_attr_dup(&attr, ain->attr);
+				attr = *ain->attr;
 				route_filtered = false;
 
 				/* Filter prefix using distribute list,
@@ -11004,7 +11004,7 @@ static void show_adj_route(struct vty *vty, struct peer *peer, afi_t afi,
 						header2 = 0;
 					}
 
-					bgp_attr_dup(&attr, adj->attr);
+					attr = *adj->attr;
 					ret = bgp_output_modifier(
 						peer, &rn->p, &attr, afi, safi,
 						rmap_name);
