@@ -801,6 +801,12 @@ static int zapi_nexthop_cmp_no_labels(const struct zapi_nexthop *next1,
 	if (next1->type > next2->type)
 		return 1;
 
+	if (next1->weight < next2->weight)
+		return -1;
+
+	if (next1->weight > next2->weight)
+		return 1;
+
 	switch (next1->type) {
 	case NEXTHOP_TYPE_IPV4:
 	case NEXTHOP_TYPE_IPV6:
@@ -969,6 +975,8 @@ int zapi_route_encode(uint8_t cmd, struct stream *s, struct zapi_route *api)
 						   * sizeof(mpls_label_t));
 			}
 
+			stream_putl(s, api_nh->weight);
+
 			/* Router MAC for EVPN routes. */
 			if (CHECK_FLAG(api->flags, ZEBRA_FLAG_EVPN_ROUTE))
 				stream_put(s, &(api_nh->rmac),
@@ -1131,6 +1139,8 @@ int zapi_route_decode(struct stream *s, struct zapi_route *api)
 					   api_nh->label_num
 						   * sizeof(mpls_label_t));
 			}
+
+			STREAM_GETL(s, api_nh->weight);
 
 			/* Router MAC for EVPN routes. */
 			if (CHECK_FLAG(api->flags, ZEBRA_FLAG_EVPN_ROUTE))
