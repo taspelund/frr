@@ -77,7 +77,7 @@ int allow_delete = 0;
 
 int graceful_restart;
 
-bool v6_rr_semantics = false;
+bool v6_rr_semantics = true;
 
 #ifdef HAVE_NETLINK
 /* Receive buffer size for netlink socket */
