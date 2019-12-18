@@ -1086,10 +1086,11 @@ static int vrrp_socket(struct vrrp_router *r)
 	int ret;
 	bool failed = false;
 
-	frr_elevate_privs(&vrrp_privs)
-	{
-		r->sock_rx = socket(r->family, SOCK_RAW, IPPROTO_VRRP);
-		r->sock_tx = socket(r->family, SOCK_RAW, IPPROTO_VRRP);
+	frr_with_privs(&vrrp_privs) {
+		r->sock_rx = vrf_socket(r->family, SOCK_RAW, IPPROTO_VRRP,
+					r->vr->ifp->vrf_id, NULL);
+		r->sock_tx = vrf_socket(r->family, SOCK_RAW, IPPROTO_VRRP,
+					r->vr->ifp->vrf_id, NULL);
 	}
 
 	if (r->sock_rx < 0 || r->sock_tx < 0) {
