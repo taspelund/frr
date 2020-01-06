@@ -1425,6 +1425,7 @@ static void _zebra_ptm_reroute(struct zserv *zs, struct stream *msg,
 	return;
 
 stream_failure:
+	stream_free(msgc);
 	zlog_err("%s:%d failed to registrate client pid", __FILE__, __LINE__);
 }
 
