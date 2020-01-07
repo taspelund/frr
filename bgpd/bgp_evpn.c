@@ -1567,6 +1567,7 @@ static int update_evpn_type5_route(struct bgp *bgp_vrf, struct prefix_evpn *evp,
 	struct bgp_node *rn = NULL;
 	struct bgp *bgp_evpn = NULL;
 	int route_changed = 0;
+	char buf2[INET6_ADDRSTRLEN];
 
 	bgp_evpn = bgp_get_evpn();
 	if (!bgp_evpn)
@@ -1616,7 +1617,8 @@ static int update_evpn_type5_route(struct bgp *bgp_vrf, struct prefix_evpn *evp,
 			   vrf_id_to_name(bgp_vrf->vrf_id),
 			   prefix2str(evp, buf1, sizeof(buf1)),
 			   prefix_mac2str(&attr.rmac, buf, sizeof(buf)),
-			   inet_ntoa(attr.nexthop));
+			   inet_ntop(AF_INET, &attr.nexthop, buf2,
+				     INET_ADDRSTRLEN));
 	}
 
 	attr.mp_nexthop_len = BGP_ATTR_NHLEN_IPV4;
