@@ -1289,6 +1289,7 @@ static void zebra_ptm_send_bfdd(struct stream *msg)
 	}
 
 	stream_free(msgc);
+	stream_free(msg);
 }
 
 static void zebra_ptm_send_clients(struct stream *msg)
@@ -1320,6 +1321,7 @@ static void zebra_ptm_send_clients(struct stream *msg)
 	}
 
 	stream_free(msgc);
+	stream_free(msg);
 }
 
 static int _zebra_ptm_bfd_client_deregister(struct zserv *zs)
@@ -1360,8 +1362,6 @@ static int _zebra_ptm_bfd_client_deregister(struct zserv *zs)
 	stream_putw_at(msg, 0, stream_get_endp(msg));
 
 	zebra_ptm_send_bfdd(msg);
-
-	stream_free(msg);
 
 	pp_free(pp);
 
@@ -1417,6 +1417,7 @@ static void _zebra_ptm_reroute(struct zserv *zs, struct stream *msg,
 	stream_putw_at(msgc, 0, STREAM_READABLE(msgc));
 
 	zebra_ptm_send_bfdd(msgc);
+	msgc = NULL;
 
 	/* Registrate process PID for shutdown hook. */
 	STREAM_GETL(msg, ppid);
@@ -1425,7 +1426,8 @@ static void _zebra_ptm_reroute(struct zserv *zs, struct stream *msg,
 	return;
 
 stream_failure:
-	stream_free(msgc);
+	if (msgc)
+		stream_free(msgc);
 	zlog_err("%s:%d failed to registrate client pid", __FILE__, __LINE__);
 }
 
