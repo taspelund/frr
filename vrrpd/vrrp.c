@@ -1086,7 +1086,7 @@ static int vrrp_socket(struct vrrp_router *r)
 	int ret;
 	bool failed = false;
 
-	frr_with_privs(&vrrp_privs) {
+	frr_elevate_privs(&vrrp_privs) {
 		r->sock_rx = vrf_socket(r->family, SOCK_RAW, IPPROTO_VRRP,
 					r->vr->ifp->vrf_id, NULL);
 		r->sock_tx = vrf_socket(r->family, SOCK_RAW, IPPROTO_VRRP,
@@ -1108,7 +1108,7 @@ static int vrrp_socket(struct vrrp_router *r)
 	 * otherwise the kernel will select the vrf device
 	 */
 	if (r->vr->ifp->vrf_id != VRF_DEFAULT) {
-		frr_with_privs (&vrrp_privs) {
+		frr_elevate_privs(&vrrp_privs) {
 			ret = setsockopt(r->sock_tx, SOL_SOCKET,
 					 SO_BINDTODEVICE, r->mvl_ifp->name,
 					 strlen(r->mvl_ifp->name));
