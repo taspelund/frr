@@ -1047,3 +1047,42 @@ int ecommunity_fill_pbr_action(struct ecommunity_val *ecom_eval,
 		return -1;
 	return 0;
 }
+
+/*
+ * return the BGP link bandwidth extended community, if present;
+ * the actual bandwidth is returned via param
+ */
+uint8_t *ecommunity_linkbw_present(struct ecommunity *ecom, uint32_t *bw)
+{
+	uint8_t *eval;
+	int i;
+
+	if (bw)
+		*bw = 0;
+
+	if (!ecom || !ecom->size)
+		return NULL;
+
+	for (i = 0; i < ecom->size; i++) {
+		uint8_t *pnt;
+		uint8_t type, sub_type;
+		uint32_t bwval;
+
+		eval = pnt = (ecom->val + (i * ECOMMUNITY_SIZE));
+		type = *pnt++;
+		sub_type = *pnt++;
+
+		if ((type == ECOMMUNITY_ENCODE_AS ||
+		     type == ECOMMUNITY_ENCODE_AS_NON_TRANS) &&
+		    sub_type == ECOMMUNITY_LINK_BANDWIDTH) {
+			pnt += 2; /* bandwidth is encoded as AS:val */
+			pnt = ptr_get_be32(pnt, &bwval);
+			(void)pnt; /* consume value */
+			if (bw)
+				*bw = bwval;
+			return eval;
+		}
+	}
+
+	return NULL;
+}

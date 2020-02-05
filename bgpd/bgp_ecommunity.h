@@ -219,4 +219,6 @@ struct bgp_pbr_entry_action;
 extern int ecommunity_fill_pbr_action(struct ecommunity_val *ecom_eval,
 			       struct bgp_pbr_entry_action *api);
 
+extern uint8_t *ecommunity_linkbw_present(struct ecommunity *ecom,
+					  uint32_t *bw);
 #endif /* _QUAGGA_BGP_ECOMMUNITY_H */

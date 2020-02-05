@@ -534,6 +534,11 @@ void bgp_path_info_mpath_update(struct bgp_node *rn,
 							    cur_mpath);
 				prev_mpath = cur_mpath;
 				mpath_count++;
+				if (ecommunity_linkbw_present(
+					cur_mpath->attr->ecommunity, &bwval))
+					cum_bw += bwval;
+				else
+					all_paths_lb = false;
 				if (debug) {
 					bgp_path_info_path_with_addpath_rx_str(
 						cur_mpath, path_buf);
@@ -623,6 +628,11 @@ void bgp_path_info_mpath_update(struct bgp_node *rn,
 				prev_mpath = new_mpath;
 				mpath_changed = 1;
 				mpath_count++;
+				if (ecommunity_linkbw_present(
+					new_mpath->attr->ecommunity, &bwval))
+					cum_bw += bwval;
+				else
+					all_paths_lb = false;
 				if (debug) {
 					bgp_path_info_path_with_addpath_rx_str(
 						new_mpath, path_buf);
@@ -642,6 +652,16 @@ void bgp_path_info_mpath_update(struct bgp_node *rn,
 	}
 
 	if (new_best) {
+		bgp_path_info_mpath_count_set(new_best, mpath_count - 1);
+		if (mpath_count <= 1 ||
+		    !ecommunity_linkbw_present(
+			new_best->attr->ecommunity, &bwval))
+			all_paths_lb = false;
+		else
+			cum_bw += bwval;
+		bgp_path_info_mpath_lb_update(new_best, true,
+					      all_paths_lb, cum_bw);
+
 		if (debug)
 			zlog_debug(
 				"%s: New mpath count (incl newbest) %d mpath-change %s",
