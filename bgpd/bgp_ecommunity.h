@@ -205,11 +205,11 @@ extern char *ecommunity_str(struct ecommunity *);
 extern struct ecommunity_val *ecommunity_lookup(const struct ecommunity *,
 						uint8_t, uint8_t);
 extern int ecommunity_add_val(struct ecommunity *ecom,
-			      struct ecommunity_val *eval);
+			      struct ecommunity_val *eval,
+			      bool unique, bool overwrite);
 
 /* for vpn */
 extern struct ecommunity *ecommunity_new(void);
-extern int ecommunity_add_val(struct ecommunity *, struct ecommunity_val *);
 extern int ecommunity_strip(struct ecommunity *ecom, uint8_t type,
 			    uint8_t subtype);
 extern struct ecommunity *ecommunity_new(void);
