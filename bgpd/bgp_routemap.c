@@ -60,6 +60,7 @@
 #include "bgpd/bgp_evpn_private.h"
 #include "bgpd/bgp_evpn_vty.h"
 #include "bgpd/bgp_mplsvpn.h"
+#include "bgpd/bgp_mpath.h"
 
 #if ENABLE_BGP_VNC
 #include "bgpd/rfapi/bgp_rfapi_cfg.h"
@@ -2263,6 +2264,7 @@ static route_map_result_t route_set_ecommunity_lb(void *rule,
 	struct ecommunity ecom_lb;
 	struct ecommunity_val lb_eval;
 	uint32_t bw_bytes = 0;
+	uint16_t mpath_count = 0;
 	struct ecommunity *new_ecom;
 	struct ecommunity *old_ecom;
 	as_t as;
@@ -2278,12 +2280,47 @@ static route_map_result_t route_set_ecommunity_lb(void *rule,
 	/* Build link bandwidth extended community */
 	as = (peer->bgp->as > BGP_AS_MAX) ? BGP_AS_TRANS : peer->bgp->as;
 	memset(&ecom_lb, 0, sizeof(ecom_lb));
-	if (rels->lb_type == RMAP_ECOMM_LB_SET_VALUE)
+	if (rels->lb_type == RMAP_ECOMM_LB_SET_VALUE) {
 		bw_bytes = ((uint64_t)(rels->bw * 1024 * 1024))/8;
 
 if (bgp_debug_update(peer, NULL, NULL, 0))
-zlog_debug("Setting LB, RMAP type %d bw %u non-trans %d, bw-calc %u",
+zlog_debug("Setting LB in RMAP, type %d bw %u non-trans %d, bw-calc %u",
 rels->lb_type, rels->bw, rels->non_trans, bw_bytes);
+	} else if (rels->lb_type == RMAP_ECOMM_LB_SET_CUMUL) {
+		/* process this only for the best path. */
+		if (!CHECK_FLAG(path->flags, BGP_PATH_SELECTED)) {
+if (bgp_debug_update(peer, NULL, NULL, 0))
+zlog_debug("Skipping LB in RMAP type %d flags 0x%x", rels->lb_type, path->flags);
+			return RMAP_OKAY;
+		}
+
+		bw_bytes = (uint32_t)bgp_path_info_mpath_cumbw(path);
+		if (!bw_bytes) {
+if (bgp_debug_update(peer, NULL, NULL, 0))
+zlog_debug("Skipping LB in RMAP type %d -- cumbw is 0", rels->lb_type);
+			return RMAP_OKAY;
+		}
+
+if (bgp_debug_update(peer, NULL, NULL, 0))
+zlog_debug("Setting LB in RMAP, type %d non-trans %d, bw-calc %u",
+rels->lb_type, rels->non_trans, bw_bytes);
+	} else if (rels->lb_type == RMAP_ECOMM_LB_SET_NUM_MPATH) {
+
+		/* process this only for the best path. */
+		if (!CHECK_FLAG(path->flags, BGP_PATH_SELECTED)) {
+if (bgp_debug_update(peer, NULL, NULL, 0))
+zlog_debug("Skipping LB in RMAP type %d flags 0x%x", rels->lb_type, path->flags);
+			return RMAP_OKAY;
+		}
+
+		bw_bytes = ((uint64_t)(peer->bgp->lb_ref_bw * 1024 * 1024))/8;
+		mpath_count = bgp_path_info_mpath_count(path) + 1;
+		bw_bytes *= mpath_count;
+
+if (bgp_debug_update(peer, NULL, NULL, 0))
+zlog_debug("Setting LB in RMAP, type %d refbw %u mpc %d non-trans %d, bw-calc %u",
+rels->lb_type, peer->bgp->lb_ref_bw, mpath_count, rels->non_trans, bw_bytes);
+	}
 
 	encode_lb_extcomm(as, bw_bytes, rels->non_trans, &lb_eval);
 

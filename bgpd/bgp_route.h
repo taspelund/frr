@@ -228,6 +228,7 @@ struct bgp_path_info {
 #define BGP_PATH_MULTIPATH_CHG (1 << 12)
 #define BGP_PATH_RIB_ATTR_CHG (1 << 13)
 #define BGP_PATH_ANNC_NH_SELF (1 << 14)
+#define BGP_PATH_LINK_BW_CHG (1 << 15)
 
 	/* BGP route type.  This can be static, RIP, OSPF, BGP etc.  */
 	uint8_t type;

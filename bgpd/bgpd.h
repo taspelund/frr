@@ -337,6 +337,13 @@ struct bgp {
 #define BGP_UPDATE_DELAY_MIN              0
 #define BGP_UPDATE_DELAY_MAX              3600
 
+	/* Reference bandwidth for BGP link-bandwidth. Used when
+	 * the LB value has to be computed based on some other
+	 * factor (e.g., number of multipaths for the prefix)
+	 */
+	uint32_t lb_ref_bw;
+#define BGP_LINK_BW_REF_BW                1024
+
 	/* BGP flags. */
 	uint32_t flags;
 #define BGP_FLAG_ALWAYS_COMPARE_MED       (1 << 0)
