@@ -2286,17 +2286,19 @@ zlog_debug("Setting LB, RMAP type %d bw %u non-trans %d, bw-calc %u",
 rels->lb_type, rels->bw, rels->non_trans, bw_bytes);
 
 	encode_lb_extcomm(as, bw_bytes, rels->non_trans, &lb_eval);
-	ecom_lb.size = 1;
-	ecom_lb.val = (uint8_t *)lb_eval.val;
 
 	/* add to route or merge with existing */
 	old_ecom = path->attr->ecommunity;
 	if (old_ecom) {
-		new_ecom = ecommunity_merge(ecommunity_dup(old_ecom), &ecom_lb);
+		new_ecom = ecommunity_dup(old_ecom);
+		ecommunity_add_val(new_ecom, &lb_eval, true, true);
 		if (!old_ecom->refcnt)
 			ecommunity_free(&old_ecom);
-	} else
+	} else {
+		ecom_lb.size = 1;
+		ecom_lb.val = (uint8_t *)lb_eval.val;
 		new_ecom = ecommunity_dup(&ecom_lb);
+	}
 
 	/* new_ecom will be intern()'d or attr_flush()'d in call stack */
 	path->attr->ecommunity = new_ecom;
