@@ -1439,7 +1439,7 @@ void bgp_attr_add_gshut_community(struct attr *attr)
 }
 
 
-static void subgroup_announce_reset_nhop(uint8_t family, struct attr *attr)
+static bool subgroup_announce_reset_nhop(uint8_t family, struct attr *attr)
 {
 	if (family == AF_INET) {
 		attr->nexthop.s_addr = 0;
@@ -1449,6 +1449,7 @@ static void subgroup_announce_reset_nhop(uint8_t family, struct attr *attr)
 		memset(&attr->mp_nexthop_global, 0, IPV6_MAX_BYTELEN);
 	if (family == AF_EVPN)
 		memset(&attr->mp_nexthop_global_in, 0, BGP_ATTR_NHLEN_IPV4);
+	return true;
 }
 
 int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
@@ -1468,6 +1469,8 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 	afi_t afi;
 	safi_t safi;
 	int samepeer_safe = 0; /* for synthetic mplsvpns routes */
+	bool nh_reset = false;
+	uint64_t cum_bw;
 
 	if (DISABLE_BGP_ANNOUNCE)
 		return 0;
@@ -1869,12 +1872,14 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 				  PEER_FLAG_FORCE_NEXTHOP_SELF)) {
 			if (!reflect
 			    || CHECK_FLAG(peer->af_flags[afi][safi],
-					  PEER_FLAG_FORCE_NEXTHOP_SELF))
+					  PEER_FLAG_FORCE_NEXTHOP_SELF)) {
 				subgroup_announce_reset_nhop(
 					(peer_cap_enhe(peer, afi, safi)
 						 ? AF_INET6
 						 : p->family),
 					attr);
+				nh_reset = true;
+			}
 		} else if (peer->sort == BGP_PEER_EBGP) {
 			/* Can also reset the nexthop if announcing to EBGP, but
 			 * only if
@@ -1885,22 +1890,26 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 			if ((p->family == AF_INET) &&
 				(!bgp_subgrp_multiaccess_check_v4(
 					piattr->nexthop,
-					subgrp)))
+					subgrp))) {
 				subgroup_announce_reset_nhop(
 					(peer_cap_enhe(peer, afi, safi)
 						 ? AF_INET6
 						 : p->family),
 						attr);
+				nh_reset = true;
+			}
 
 			if ((p->family == AF_INET6) &&
 				(!bgp_subgrp_multiaccess_check_v6(
 					piattr->mp_nexthop_global,
-					subgrp)))
+					subgrp))) {
 				subgroup_announce_reset_nhop(
 					(peer_cap_enhe(peer, afi, safi)
 						? AF_INET6
 						: p->family),
 						attr);
+				nh_reset = true;
+			}
 
 
 
@@ -1918,6 +1927,7 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 					"%s: BGP_PATH_ANNC_NH_SELF, family=%s",
 					__func__, family2str(family));
 			subgroup_announce_reset_nhop(family, attr);
+			nh_reset = true;
 		}
 
 		/* If IPv6/MP and nexthop does not have any override and happens
@@ -1929,10 +1939,25 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 		 * the same interface.
 		 */
 		if (p->family == AF_INET6 || peer_cap_enhe(peer, afi, safi)) {
-			if (IN6_IS_ADDR_LINKLOCAL(&attr->mp_nexthop_global))
+			if (IN6_IS_ADDR_LINKLOCAL(&attr->mp_nexthop_global)) {
 				subgroup_announce_reset_nhop(AF_INET6, attr);
+				nh_reset = true;
+			}
 		}
 	}
+
+	/*
+	 * When the next hop is set to ourselves, if all multipaths have
+	 * link-bandwidth announce the cumulative bandwidth as that makes
+	 * the most sense. However, don't modify if the link-bandwidth has
+	 * been explicitly set by user policy.
+	 */
+	if (nh_reset &&
+	    bgp_path_info_mpath_chkwtd(pi) &&
+	    (cum_bw = bgp_path_info_mpath_cumbw(pi)) != 0 &&
+	    !CHECK_FLAG(attr->rmap_change_flags, BATTR_RMAP_LINK_BW_SET))
+		attr->ecommunity = ecommunity_replace_linkbw(
+					bgp->as, attr->ecommunity, cum_bw);
 
 	return 1;
 }
