@@ -50,7 +50,7 @@ static void listnode_free(struct listnode *node)
 	XFREE(MTYPE_LINK_NODE, node);
 }
 
-void listnode_add(struct list *list, void *val)
+struct listnode *listnode_add(struct list *list, void *val)
 {
 	struct listnode *node;
 
@@ -68,6 +68,8 @@ void listnode_add(struct list *list, void *val)
 	list->tail = node;
 
 	list->count++;
+
+	return node;
 }
 
 void listnode_add_head(struct list *list, void *val)
@@ -204,7 +206,7 @@ void listnode_move_to_tail(struct list *l, struct listnode *n)
 	LISTNODE_ATTACH(l, n);
 }
 
-void listnode_delete(struct list *list, void *val)
+void listnode_delete(struct list *list, const void *val)
 {
 	struct listnode *node = listnode_lookup(list, val);
 
@@ -248,7 +250,7 @@ void list_delete(struct list **list)
 	*list = NULL;
 }
 
-struct listnode *listnode_lookup(struct list *list, void *data)
+struct listnode *listnode_lookup(struct list *list, const void *data)
 {
 	struct listnode *node;
 
@@ -317,4 +319,19 @@ void list_sort(struct list *list, int (*cmp)(const void **, const void **))
 		listnode_add(list, items[j]);
 
 	XFREE(MTYPE_TMP, items);
+}
+
+void **list_to_array(struct list *list, void **arr, size_t arrlen)
+{
+	struct listnode *ln;
+	void *vp;
+	size_t idx = 0;
+
+	for (ALL_LIST_ELEMENTS_RO(list, ln, vp)) {
+		arr[idx++] = vp;
+		if (idx == arrlen)
+			break;
+	}
+
+	return arr;
 }

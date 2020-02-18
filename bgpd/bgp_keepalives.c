@@ -85,7 +85,7 @@ static void pkat_del(void *pkat)
  *
  * @return maximum time to wait until next update (0 if infinity)
  */
-static void peer_process(struct hash_backet *hb, void *arg)
+static void peer_process(struct hash_bucket *hb, void *arg)
 {
 	struct pkat *pkat = hb->data;
 
@@ -131,9 +131,9 @@ static bool peer_hash_cmp(const void *f, const void *s)
 	return p1->peer == p2->peer;
 }
 
-static unsigned int peer_hash_key(void *arg)
+static unsigned int peer_hash_key(const void *arg)
 {
-	struct pkat *pkat = arg;
+	const struct pkat *pkat = arg;
 	return (uintptr_t)pkat->peer;
 }
 
@@ -181,7 +181,11 @@ void *bgp_keepalives_start(void *arg)
 	pthread_cond_init(peerhash_cond, &attrs);
 	pthread_condattr_destroy(&attrs);
 
-	frr_pthread_set_name(fpt, NULL, "bgpd_ka");
+	/*
+	 * We are not using normal FRR pthread mechanics and are
+	 * not using fpt_run
+	 */
+	frr_pthread_set_name(fpt);
 
 	/* initialize peer hashtable */
 	peerhash = hash_create_size(2048, peer_hash_key, peer_hash_cmp, NULL);
@@ -284,7 +288,7 @@ void bgp_keepalives_off(struct peer *peer)
 	pthread_mutex_unlock(peerhash_mtx);
 }
 
-void bgp_keepalives_wake()
+void bgp_keepalives_wake(void)
 {
 	pthread_mutex_lock(peerhash_mtx);
 	{

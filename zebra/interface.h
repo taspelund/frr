@@ -1,3 +1,4 @@
+
 /* Interface function header.
  * Copyright (C) 1999 Kunihiro Ishiguro
  *
@@ -26,6 +27,7 @@
 #include "hook.h"
 
 #include "zebra/zebra_l2.h"
+#include "zebra/zebra_nhg_private.h"
 
 /* For interface multicast configuration. */
 #define IF_ZEBRA_MULTICAST_UNSPEC 0
@@ -41,7 +43,7 @@
 struct rtadvconf {
 	/* A flag indicating whether or not the router sends periodic Router
 	   Advertisements and responds to Router Solicitations.
-	   Default: FALSE */
+	   Default: false */
 	int AdvSendAdvertisements;
 
 	/* The maximum time allowed between sending unsolicited multicast
@@ -65,19 +67,19 @@ struct rtadvconf {
 	/* Unsolicited Router Advertisements' interval timer. */
 	int AdvIntervalTimer;
 
-	/* The TRUE/FALSE value to be placed in the "Managed address
+	/* The true/false value to be placed in the "Managed address
 	   configuration" flag field in the Router Advertisement.  See
 	   [ADDRCONF].
 
-	   Default: FALSE */
+	   Default: false */
 	int AdvManagedFlag;
 
 
-	/* The TRUE/FALSE value to be placed in the "Other stateful
+	/* The true/false value to be placed in the "Other stateful
 	   configuration" flag field in the Router Advertisement.  See
 	   [ADDRCONF].
 
-	   Default: FALSE */
+	   Default: false */
 	int AdvOtherConfigFlag;
 
 	/* The value to be placed in MTU options sent by the router.  A
@@ -131,10 +133,10 @@ struct rtadvconf {
 	   included in the list of advertised prefixes. */
 	struct list *AdvPrefixList;
 
-	/* The TRUE/FALSE value to be placed in the "Home agent"
+	/* The true/false value to be placed in the "Home agent"
 	   flag field in the Router Advertisement.  See [RFC6275 7.1].
 
-	   Default: FALSE */
+	   Default: false */
 	int AdvHomeAgentFlag;
 #ifndef ND_RA_FLAG_HOME_AGENT
 #define ND_RA_FLAG_HOME_AGENT 	0x20
@@ -154,10 +156,10 @@ struct rtadvconf {
 	int HomeAgentLifetime;
 #define RTADV_MAX_HALIFETIME 65520 /* 18.2 hours */
 
-	/* The TRUE/FALSE value to insert or not an Advertisement Interval
+	/* The true/false value to insert or not an Advertisement Interval
 	   option. See [RFC 6275 7.3]
 
-	   Default: FALSE */
+	   Default: false */
 	int AdvIntervalOption;
 
 	/* The value to be placed in the Default Router Preference field of
@@ -166,6 +168,13 @@ struct rtadvconf {
 	   Default: 0 (medium) */
 	int DefaultPreference;
 #define RTADV_PREF_MEDIUM 0x0 /* Per RFC4191. */
+
+	/*
+	 * rfc4861 states RAs must be sent at least 3 seconds apart.
+	 * We allow faster retransmits to speed up convergence but can
+	 * turn that capability off to meet the rfc if needed.
+	 */
+	bool UseFastRexmit; /* True if fast rexmits are enabled */
 
 	uint8_t inFastRexmit; /* True if we're rexmits faster than usual */
 
@@ -192,6 +201,8 @@ typedef enum {
 	ZEBRA_IF_VLAN,      /* VLAN sub-interface */
 	ZEBRA_IF_MACVLAN,   /* MAC VLAN interface*/
 	ZEBRA_IF_VETH,      /* VETH interface*/
+	ZEBRA_IF_BOND,	    /* Bond */
+	ZEBRA_IF_BOND_SLAVE,	    /* Bond */
 } zebra_iftype_t;
 
 /* Zebra "slave" interface type */
@@ -199,6 +210,7 @@ typedef enum {
 	ZEBRA_IF_SLAVE_NONE,   /* Not a slave */
 	ZEBRA_IF_SLAVE_VRF,    /* Member of a VRF */
 	ZEBRA_IF_SLAVE_BRIDGE, /* Member of a bridge */
+	ZEBRA_IF_SLAVE_BOND,   /* Bond member */
 	ZEBRA_IF_SLAVE_OTHER,  /* Something else - e.g., bond slave */
 } zebra_slave_iftype_t;
 
@@ -217,6 +229,15 @@ struct zebra_if {
 
 	/* Installed addresses chains tree. */
 	struct route_table *ipv4_subnets;
+
+	/* Nexthops pointing to this interface */
+	/**
+	 * Any nexthop that we get should have an
+	 * interface. When an interface goes down,
+	 * we will use this list to update the nexthops
+	 * pointing to it with that info.
+	 */
+	struct nhg_connected_tree_head nhg_dependents;
 
 	/* Information about up/down changes */
 	unsigned int up_count;
@@ -268,6 +289,8 @@ struct zebra_if {
 	 */
 	struct zebra_l2info_brslave brslave_info;
 
+	struct zebra_l2info_bondslave bondslave_info;
+
 	/* Link fields - for sub-interfaces. */
 	ifindex_t link_ifindex;
 	struct interface *link;
@@ -281,6 +304,9 @@ struct zebra_if {
 	bool v6_2_v4_ll_neigh_entry;
 	char neigh_mac[6];
 	struct in6_addr v6_2_v4_ll_addr6;
+
+	/* The description of the interface */
+	char *desc;
 };
 
 DECLARE_HOOK(zebra_if_extra_info, (struct vty * vty, struct interface *ifp),
@@ -324,6 +350,10 @@ static inline void zebra_if_set_ziftype(struct interface *ifp,
 #define IS_ZEBRA_IF_VRF_SLAVE(ifp)                                             \
 	(((struct zebra_if *)(ifp->info))->zif_slave_type == ZEBRA_IF_SLAVE_VRF)
 
+#define IS_ZEBRA_IF_BOND_SLAVE(ifp)					\
+	(((struct zebra_if *)(ifp->info))->zif_slave_type                      \
+	 == ZEBRA_IF_SLAVE_BOND)
+
 extern void zebra_if_init(void);
 
 extern struct interface *if_lookup_by_index_per_ns(struct zebra_ns *, uint32_t);
@@ -354,6 +384,15 @@ extern void if_handle_vrf_change(struct interface *ifp, vrf_id_t vrf_id);
 extern void zebra_if_update_link(struct interface *ifp, ifindex_t link_ifindex,
 				 ns_id_t ns_id);
 extern void zebra_if_update_all_links(void);
+extern void zebra_if_set_protodown(struct interface *ifp, bool down);
+
+/* Nexthop group connected functions */
+extern void if_nhg_dependents_add(struct interface *ifp,
+				  struct nhg_hash_entry *nhe);
+extern void if_nhg_dependents_del(struct interface *ifp,
+				  struct nhg_hash_entry *nhe);
+extern unsigned int if_nhg_dependents_count(const struct interface *ifp);
+extern bool if_nhg_dependents_is_empty(const struct interface *ifp);
 
 extern void vrf_add_update(struct vrf *vrfp);
 

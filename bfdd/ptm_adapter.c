@@ -381,6 +381,21 @@ static int _ptm_msg_read(struct stream *msg, int command,
 		if (bpc->bpc_has_localif) {
 			STREAM_GET(bpc->bpc_localif, msg, ifnamelen);
 			bpc->bpc_localif[ifnamelen] = 0;
+
+			/*
+			 * IPv6 link-local addresses must use scope id,
+			 * otherwise the session lookup will always fail
+			 * and we'll have multiple sessions showing up.
+			 *
+			 * This problem only happens with single hop
+			 * since it is not possible to have link-local
+			 * address for multi hop sessions.
+			 */
+			if (bpc->bpc_ipv4 == false
+			    && IN6_IS_ADDR_LINKLOCAL(
+				       &bpc->bpc_peer.sa_sin6.sin6_addr))
+				bpc->bpc_peer.sa_sin6.sin6_scope_id =
+					ptm_bfd_fetch_ifindex(bpc->bpc_localif);
 		}
 	}
 
@@ -511,9 +526,9 @@ stream_failure:
 	log_error("ptm-del-client: failed to deregister client");
 }
 
-static int bfdd_replay(int cmd, struct zclient *zc, uint16_t len, vrf_id_t vid)
+static int bfdd_replay(ZAPI_CALLBACK_ARGS)
 {
-	struct stream *msg = zc->ibuf;
+	struct stream *msg = zclient->ibuf;
 	uint32_t rcmd;
 
 	STREAM_GETL(msg, rcmd);
@@ -564,9 +579,10 @@ static void bfdd_zebra_connected(struct zclient *zc)
 	zclient_send_message(zclient);
 }
 
+
 void bfdd_zclient_init(struct zebra_privs_t *bfdd_priv)
 {
-	zclient = zclient_new_notify(master, &zclient_options_default);
+	zclient = zclient_new(master, &zclient_options_default);
 	assert(zclient != NULL);
 	zclient_init(zclient, ZEBRA_ROUTE_BFD, 0, bfdd_priv);
 
@@ -618,8 +634,6 @@ static struct ptm_client *pc_new(uint32_t pid)
 
 	/* Allocate the client data and save it. */
 	pc = XCALLOC(MTYPE_BFDD_CONTROL, sizeof(*pc));
-	if (pc == NULL)
-		return NULL;
 
 	pc->pc_pid = pid;
 	TAILQ_INSERT_HEAD(&pcqueue, pc, pc_entry);
@@ -665,8 +679,6 @@ static struct ptm_client_notification *pcn_new(struct ptm_client *pc,
 
 	/* Save the client notification data. */
 	pcn = XCALLOC(MTYPE_BFDD_NOTIFICATION, sizeof(*pcn));
-	if (pcn == NULL)
-		return NULL;
 
 	TAILQ_INSERT_HEAD(&pc->pc_pcnqueue, pcn, pcn_entry);
 	pcn->pcn_pc = pc;

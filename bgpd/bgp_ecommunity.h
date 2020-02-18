@@ -21,6 +21,8 @@
 #ifndef _QUAGGA_BGP_ECOMMUNITY_H
 #define _QUAGGA_BGP_ECOMMUNITY_H
 
+#include "bgpd/bgpd.h"
+
 /* High-order octet of the Extended Communities type field.  */
 #define ECOMMUNITY_ENCODE_AS                0x00
 #define ECOMMUNITY_ENCODE_IP                0x01
@@ -41,6 +43,10 @@
 #define ECOMMUNITY_REDIRECT_VRF             0x08
 #define ECOMMUNITY_TRAFFIC_MARKING          0x09
 #define ECOMMUNITY_REDIRECT_IP_NH           0x00
+/* from IANA: bgp-extended-communities/bgp-extended-communities.xhtml
+ * 0x0c Flow-spec Redirect to IPv4 - draft-ietf-idr-flowspec-redirect
+ */
+#define ECOMMUNITY_FLOWSPEC_REDIRECT_IPV4   0x0c
 
 /* Low-order octet of the Extended Communities type field for EVPN types */
 #define ECOMMUNITY_EVPN_SUBTYPE_MACMOBILITY  0x00
@@ -98,8 +104,6 @@ struct ecommunity_val {
 	char val[ECOMMUNITY_SIZE];
 };
 
-#define ecom_length(X)    ((X)->size * ECOMMUNITY_SIZE)
-
 /*
  * Encode BGP Route Target AS:nn.
  */
@@ -156,7 +160,7 @@ extern struct ecommunity *ecommunity_uniq_sort(struct ecommunity *);
 extern struct ecommunity *ecommunity_intern(struct ecommunity *);
 extern bool ecommunity_cmp(const void *arg1, const void *arg2);
 extern void ecommunity_unintern(struct ecommunity **);
-extern unsigned int ecommunity_hash_make(void *);
+extern unsigned int ecommunity_hash_make(const void *);
 extern struct ecommunity *ecommunity_str2com(const char *, int, int);
 extern char *ecommunity_ecom2str(struct ecommunity *, int, int);
 extern void ecommunity_strfree(char **s);

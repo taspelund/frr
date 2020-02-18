@@ -34,8 +34,8 @@
 
 DEFINE_MTYPE_STATIC(LIB, BFD_INFO, "BFD info")
 
-int bfd_debug = 0;
-struct bfd_gbl bfd_gbl;
+static int bfd_debug = 0;
+static struct bfd_gbl bfd_gbl;
 
 /*
  * bfd_gbl_init - Initialize the BFD global structure
@@ -134,7 +134,7 @@ void bfd_peer_sendmsg(struct zclient *zclient, struct bfd_info *bfd_info,
 	int ret;
 	int len;
 
-	/* Individual reg/dereg messages are supressed during shutdown. */
+	/* Individual reg/dereg messages are suppressed during shutdown. */
 	if (CHECK_FLAG(bfd_gbl.flags, BFD_GBL_FLAG_IN_SHUTDOWN)) {
 		if (bfd_debug)
 			zlog_debug(

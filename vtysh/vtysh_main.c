@@ -47,6 +47,8 @@
 #include "linklist.h"
 #include "memory_vty.h"
 #include "libfrr.h"
+#include "ferr.h"
+#include "lib_errors.h"
 
 #include "vtysh/vtysh.h"
 #include "vtysh/vtysh_user.h"
@@ -59,6 +61,7 @@ static uid_t elevuid, realuid;
 static gid_t elevgid, realgid;
 
 #define VTYSH_CONFIG_NAME "vtysh.conf"
+#define FRR_CONFIG_NAME "frr.conf"
 
 /* Configuration file name and directory. */
 static char vtysh_config[MAXPATHLEN * 3];
@@ -161,7 +164,6 @@ static void usage(int status)
 		       "-m, --markfile           Mark input file with context end\n"
 		       "    --vty_socket         Override vty socket path\n"
 		       "    --config_dir         Override config directory path\n"
-		       "-q  --quagga             Use existing configs in /etc/quagga\n"
 		       "-N  --pathspace          Insert prefix into config & socket paths\n"
 		       "-u  --user               Run as an unprivileged user\n"
 		       "-w, --writeconfig        Write integrated config (frr.conf) and exit\n"
@@ -192,7 +194,6 @@ struct option longopts[] = {
 	{"help", no_argument, NULL, 'h'},
 	{"noerror", no_argument, NULL, 'n'},
 	{"mark", no_argument, NULL, 'm'},
-	{"quagga", no_argument, NULL, 'q'},
 	{"writeconfig", no_argument, NULL, 'w'},
 	{"pathspace", required_argument, NULL, 'N'},
 	{"user", no_argument, NULL, 'u'},
@@ -319,7 +320,6 @@ int main(int argc, char **argv, char **env)
 	char sysconfdir[MAXPATHLEN];
 	const char *pathspace_arg = NULL;
 	char pathspace[MAXPATHLEN] = "";
-	bool quagga_compat = false;
 
 	/* SUID: drop down to calling user & go back up when needed */
 	elevuid = geteuid();
@@ -338,7 +338,7 @@ int main(int argc, char **argv, char **env)
 
 	/* Option handling. */
 	while (1) {
-		opt = getopt_long(argc, argv, "be:c:d:nf:mEhCqwN:u",
+		opt = getopt_long(argc, argv, "be:c:d:nf:mEhCwN:u",
 				  longopts, 0);
 
 		if (opt == EOF)
@@ -397,11 +397,6 @@ int main(int argc, char **argv, char **env)
 		case 'C':
 			dryrun = 1;
 			break;
-		case 'q':
-			snprintf(sysconfdir, sizeof(sysconfdir),
-				 QUAGGA_CONFDIR);
-			quagga_compat = true;
-			break;
 		case 'u':
 			user_mode = 1;
 			break;
@@ -436,8 +431,8 @@ int main(int argc, char **argv, char **env)
 
 	snprintf(vtysh_config, sizeof(vtysh_config), "%s%s%s", sysconfdir,
 		 pathspace, VTYSH_CONFIG_NAME);
-	snprintf(frr_config, sizeof(frr_config), "%s%s/%s", sysconfdir,
-		 pathspace, quagga_compat ? QUAGGA_INTCONF : FRR_INTCONF);
+	snprintf(frr_config, sizeof(frr_config), "%s%s%s", sysconfdir,
+		 pathspace, FRR_CONFIG_NAME);
 
 	if (pathspace_arg) {
 		strlcat(vtydir, "/", sizeof(vtydir));
@@ -466,6 +461,9 @@ int main(int argc, char **argv, char **env)
 		vtysh_read_config(vtysh_config);
 		suid_off();
 	}
+	/* Error code library system */
+	log_ref_init();
+	lib_error_init();
 
 	if (markfile) {
 		if (!inputfile) {
@@ -535,6 +533,9 @@ int main(int argc, char **argv, char **env)
 	/* Do not connect until we have passed authentication. */
 	if (vtysh_connect_all(daemon_name) <= 0) {
 		fprintf(stderr, "Exiting: failed to connect to any daemons.\n");
+		if (geteuid() != 0)
+			fprintf(stderr,
+				"Hint: if this seems wrong, try running me as a privileged user!\n");
 		if (no_error)
 			exit(0);
 		else
@@ -681,8 +682,6 @@ int main(int argc, char **argv, char **env)
 		} else
 			exit(0);
 	}
-
-	vtysh_pager_init();
 
 	vtysh_readline_init();
 

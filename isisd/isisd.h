@@ -28,8 +28,10 @@
 #include "isisd/isis_constants.h"
 #include "isisd/isis_common.h"
 #include "isisd/isis_redist.h"
+#include "isisd/isis_pdu_counter.h"
+#include "isisd/isis_circuit.h"
 #include "isis_flags.h"
-#include "dict.h"
+#include "isis_lsp.h"
 #include "isis_memory.h"
 #include "qobj.h"
 
@@ -49,6 +51,7 @@ static const bool fabricd = false;
 #define PROTO_REDIST_STR FRR_REDIST_STR_ISISD
 #define PROTO_REDIST_HELP FRR_REDIST_HELP_STR_ISISD
 #define ROUTER_NODE ISIS_NODE
+extern void isis_cli_init(void);
 #endif
 
 extern struct zebra_privs_t isisd_privs;
@@ -60,6 +63,7 @@ extern struct zebra_privs_t isisd_privs;
 struct fabricd;
 
 struct isis {
+	vrf_id_t vrf_id;
 	unsigned long process_id;
 	int sysid_set;
 	uint8_t sysid[ISIS_SYS_ID_LEN]; /* SystemID for this IS */
@@ -95,9 +99,16 @@ struct lsp_refresh_arg {
 	int level;
 };
 
+/* for yang configuration */
+enum isis_metric_style {
+	ISIS_NARROW_METRIC = 0,
+	ISIS_WIDE_METRIC,
+	ISIS_TRANSITION_METRIC,
+};
+
 struct isis_area {
 	struct isis *isis;			       /* back pointer */
-	dict_t *lspdb[ISIS_LEVELS];		       /* link-state dbs */
+	struct lspdb_head lspdb[ISIS_LEVELS];	       /* link-state dbs */
 	struct isis_spftree *spftree[SPFTREE_COUNT][ISIS_LEVELS];
 #define DEFAULT_LSP_MTU 1497
 	unsigned int lsp_mtu;      /* Size of LSPs to generate */
@@ -148,6 +159,8 @@ struct isis_area {
 	uint16_t min_spf_interval[ISIS_LEVELS];
 	/* the percentage of LSP mtu size used, before generating a new frag */
 	int lsp_frag_threshold;
+	uint64_t lsp_gen_count[ISIS_LEVELS];
+	uint64_t lsp_purge_count[ISIS_LEVELS];
 	int ip_circuits;
 	/* logging adjacency changes? */
 	uint8_t log_adj_changes;
@@ -168,16 +181,22 @@ struct isis_area {
 
 	struct lsp_refresh_arg lsp_refresh_arg[ISIS_LEVELS];
 
+	pdu_counter_t pdu_tx_counters;
+	pdu_counter_t pdu_rx_counters;
+	uint64_t lsp_rxmt_count;
+
 	QOBJ_FIELDS
 };
 DECLARE_QOBJ_TYPE(isis_area)
 
 void isis_init(void);
-void isis_new(unsigned long);
+void isis_new(unsigned long process_id, vrf_id_t vrf_id);
 struct isis_area *isis_area_create(const char *);
 struct isis_area *isis_area_lookup(const char *);
 int isis_area_get(struct vty *vty, const char *area_tag);
+int isis_area_destroy(const char *area_tag);
 void print_debug(struct vty *, int, int);
+struct isis_lsp *lsp_for_arg(struct lspdb_head *head, const char *argv);
 
 void isis_area_invalidate_routes(struct isis_area *area, int levels);
 void isis_area_verify_routes(struct isis_area *area);
@@ -200,26 +219,67 @@ int isis_area_passwd_cleartext_set(struct isis_area *area, int level,
 int isis_area_passwd_hmac_md5_set(struct isis_area *area, int level,
 				  const char *passwd, uint8_t snp_auth);
 
+extern const struct frr_yang_module_info frr_isisd_info;
+extern void isis_northbound_init(void);
+
+/* YANG northbound notifications */
+extern void isis_notif_db_overload(const struct isis_area *area, bool overload);
+extern void isis_notif_lsp_too_large(const struct isis_circuit *circuit,
+				     uint32_t pdu_size, const char *lsp_id);
+extern void isis_notif_if_state_change(const struct isis_circuit *circuit,
+				       bool down);
+extern void isis_notif_corrupted_lsp(const struct isis_area *area,
+				     const char *lsp_id); /* currently unused */
+extern void isis_notif_lsp_exceed_max(const struct isis_area *area,
+				      const char *lsp_id);
+extern void
+isis_notif_max_area_addr_mismatch(const struct isis_circuit *circuit,
+				  uint8_t max_area_addrs, const char *raw_pdu);
+extern void
+isis_notif_authentication_type_failure(const struct isis_circuit *circuit,
+				       const char *raw_pdu);
+extern void
+isis_notif_authentication_failure(const struct isis_circuit *circuit,
+				  const char *raw_pdu);
+extern void isis_notif_adj_state_change(const struct isis_adjacency *adj,
+					int new_state, const char *reason);
+extern void isis_notif_reject_adjacency(const struct isis_circuit *circuit,
+					const char *reason,
+					const char *raw_pdu);
+extern void isis_notif_area_mismatch(const struct isis_circuit *circuit,
+				     const char *raw_pdu);
+extern void isis_notif_lsp_received(const struct isis_circuit *circuit,
+				    const char *lsp_id, uint32_t seqno,
+				    uint32_t timestamp, const char *sys_id);
+extern void isis_notif_lsp_gen(const struct isis_area *area, const char *lsp_id,
+			       uint32_t seqno, uint32_t timestamp);
+extern void isis_notif_id_len_mismatch(const struct isis_circuit *circuit,
+				       uint8_t rcv_id_len, const char *raw_pdu);
+extern void isis_notif_version_skew(const struct isis_circuit *circuit,
+				    uint8_t version, const char *raw_pdu);
+extern void isis_notif_lsp_error(const struct isis_circuit *circuit,
+				 const char *lsp_id, const char *raw_pdu,
+				 uint32_t offset, uint8_t tlv_type);
+extern void isis_notif_seqno_skipped(const struct isis_circuit *circuit,
+				     const char *lsp_id);
+extern void isis_notif_own_lsp_purge(const struct isis_circuit *circuit,
+				     const char *lsp_id);
+
 /* Master of threads. */
 extern struct thread_master *master;
 
 #define DEBUG_ADJ_PACKETS                (1<<0)
-#define DEBUG_CHECKSUM_ERRORS            (1<<1)
-#define DEBUG_LOCAL_UPDATES              (1<<2)
-#define DEBUG_PROTOCOL_ERRORS            (1<<3)
-#define DEBUG_SNP_PACKETS                (1<<4)
-#define DEBUG_UPDATE_PACKETS             (1<<5)
-#define DEBUG_SPF_EVENTS                 (1<<6)
-#define DEBUG_SPF_STATS                  (1<<7)
-#define DEBUG_SPF_TRIGGERS               (1<<8)
-#define DEBUG_RTE_EVENTS                 (1<<9)
-#define DEBUG_EVENTS                     (1<<10)
-#define DEBUG_ZEBRA                      (1<<11)
-#define DEBUG_PACKET_DUMP                (1<<12)
-#define DEBUG_LSP_GEN                    (1<<13)
-#define DEBUG_LSP_SCHED                  (1<<14)
-#define DEBUG_FABRICD_FLOODING           (1<<15)
-#define DEBUG_BFD                        (1<<16)
+#define DEBUG_SNP_PACKETS                (1<<1)
+#define DEBUG_UPDATE_PACKETS             (1<<2)
+#define DEBUG_SPF_EVENTS                 (1<<3)
+#define DEBUG_RTE_EVENTS                 (1<<4)
+#define DEBUG_EVENTS                     (1<<5)
+#define DEBUG_PACKET_DUMP                (1<<6)
+#define DEBUG_LSP_GEN                    (1<<7)
+#define DEBUG_LSP_SCHED                  (1<<8)
+#define DEBUG_FLOODING                   (1<<9)
+#define DEBUG_BFD                        (1<<10)
+#define DEBUG_TX_QUEUE                   (1<<11)
 
 #define lsp_debug(...)                                                         \
 	do {                                                                   \
@@ -233,7 +293,7 @@ extern struct thread_master *master;
 			zlog_debug(__VA_ARGS__);                               \
 	} while (0)
 
-#define DEBUG_TE                         (1<<13)
+#define DEBUG_TE                         DEBUG_LSP_GEN
 
 #define IS_DEBUG_ISIS(x)                 (isis->debugs & x)
 

@@ -102,7 +102,7 @@ static void handle_route_entry(mib2_ipRouteEntry_t *routeEntry)
 	nh.gate.ipv4.s_addr = routeEntry->ipRouteNextHop;
 
 	rib_add(AFI_IP, SAFI_UNICAST, VRF_DEFAULT, ZEBRA_ROUTE_KERNEL, 0,
-		zebra_flags, &prefix, NULL, &nh, 0, 0, 0, 0, 0);
+		zebra_flags, &prefix, NULL, &nh, 0, 0, 0, 0, 0, 0);
 }
 
 void route_read(struct zebra_ns *zns)
@@ -261,11 +261,20 @@ void macfdb_read_for_bridge(struct zebra_ns *zns, struct interface *ifp,
 {
 }
 
+void macfdb_read_specific_mac(struct zebra_ns *zns, struct interface *br_if,
+			      struct ethaddr *mac, vlanid_t vid)
+{
+}
+
 void neigh_read(struct zebra_ns *zns)
 {
 }
 
 void neigh_read_for_vlan(struct zebra_ns *zns, struct interface *vlan_if)
+{
+}
+
+void neigh_read_specific_ip(struct ipaddr *ip, struct interface *vlan_if)
 {
 }
 

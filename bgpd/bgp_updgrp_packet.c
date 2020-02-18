@@ -56,6 +56,7 @@
 #include "bgpd/bgp_nht.h"
 #include "bgpd/bgp_mplsvpn.h"
 #include "bgpd/bgp_label.h"
+#include "bgpd/bgp_addpath.h"
 
 /********************
  * PRIVATE FUNCTIONS
@@ -64,12 +65,11 @@
 /********************
  * PUBLIC FUNCTIONS
  ********************/
-struct bpacket *bpacket_alloc()
+struct bpacket *bpacket_alloc(void)
 {
 	struct bpacket *pkt;
 
-	pkt = (struct bpacket *)XCALLOC(MTYPE_BGP_PACKET,
-					sizeof(struct bpacket));
+	pkt = XCALLOC(MTYPE_BGP_PACKET, sizeof(struct bpacket));
 
 	return pkt;
 }
@@ -391,6 +391,7 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 	struct peer *peer;
 	char buf[BUFSIZ];
 	char buf2[BUFSIZ];
+	struct bgp_filter *filter;
 
 	s = stream_dup(pkt->buffer);
 	peer = PAF_PEER(paf);
@@ -401,6 +402,8 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 		afi_t nhafi;
 		int route_map_sets_nh;
 		nhlen = stream_getc_from(s, vec->offset);
+		filter = &peer->filter[paf->afi][paf->safi];
+
 		if (peer_cap_enhe(peer, paf->afi, paf->safi))
 			nhafi = AFI_IP6;
 		else
@@ -439,25 +442,25 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 			mod_v4nh = &v4nh;
 
 			/*
-			 * If route-map has set the nexthop, that is always
-			 * used; if it is
-			 * specified as peer-address, the peering address is
-			 * picked up.
-			 * Otherwise, if NH is unavailable from attribute, the
-			 * peering addr
-			 * is picked up; the "NH unavailable" case also covers
-			 * next-hop-self
-			 * and some other scenarios -- see
-			 * subgroup_announce_check(). In
-			 * all other cases, use the nexthop carried in the
-			 * attribute unless
-			 * it is EBGP non-multiaccess and there is no
-			 * next-hop-unchanged setting.
+			 * If route-map has set the nexthop, that is normally
+			 * used; if it is specified as peer-address, the peering
+			 * address is picked up. Otherwise, if NH is unavailable
+			 * from attribute, the peering addr is picked up; the
+			 * "NH unavailable" case also covers next-hop-self and
+			 * some other scenarios - see subgroup_announce_check().
+			 * In all other cases, use the nexthop carried in the
+			 * attribute unless it is EBGP non-multiaccess and there
+			 * is no next-hop-unchanged setting or the peer is EBGP
+			 * and the route-map that changed the next-hop value
+			 * was applied inbound rather than outbound. Updates to
+			 * an EBGP peer should only modify the next-hop if it
+			 * was set in an outbound route-map to that peer.
 			 * Note: It is assumed route-map cannot set the nexthop
-			 * to an
-			 * invalid value.
+			 * to an invalid value.
 			 */
-			if (route_map_sets_nh) {
+			if (route_map_sets_nh
+			    && ((peer->sort != BGP_PEER_EBGP)
+				|| ROUTE_MAP_OUT(filter))) {
 				if (CHECK_FLAG(
 					    vec->flags,
 					    BPKT_ATTRVEC_FLAGS_RMAP_NH_PEER_ADDRESS)) {
@@ -543,7 +546,15 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 
 			stream_get_from(&v6nhglobal, s, offset_nhglobal,
 					IPV6_MAX_BYTELEN);
-			if (route_map_sets_nh) {
+
+			/*
+			 * Updates to an EBGP peer should only modify the
+			 * next-hop if it was set in an outbound route-map
+			 * to that peer.
+			 */
+			if (route_map_sets_nh
+			    && ((peer->sort != BGP_PEER_EBGP)
+				|| ROUTE_MAP_OUT(filter))) {
 				if (CHECK_FLAG(
 					    vec->flags,
 					    BPKT_ATTRVEC_FLAGS_RMAP_NH_PEER_ADDRESS)) {
@@ -554,9 +565,9 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 				mod_v6nhg = &peer->nexthop.v6_global;
 				gnh_modified = 1;
 			} else if (
-				peer->sort == BGP_PEER_EBGP
-				&& !CHECK_FLAG(
-					   vec->flags,
+				(peer->sort == BGP_PEER_EBGP)
+				&& (!bgp_multiaccess_check_v6(v6nhglobal, peer))
+				&& !CHECK_FLAG(vec->flags,
 					   BPKT_ATTRVEC_FLAGS_RMAP_NH_UNCHANGED)
 				&& !peer_af_flag_check(
 					   peer, nhafi, paf->safi,
@@ -664,11 +675,11 @@ int subgroup_packets_to_build(struct update_subgroup *subgrp)
 	if (!subgrp)
 		return 0;
 
-	adv = BGP_ADV_FIFO_HEAD(&subgrp->sync->withdraw);
+	adv = bgp_adv_fifo_first(&subgrp->sync->withdraw);
 	if (adv)
 		return 1;
 
-	adv = BGP_ADV_FIFO_HEAD(&subgrp->sync->update);
+	adv = bgp_adv_fifo_first(&subgrp->sync->update);
 	if (adv)
 		return 1;
 
@@ -725,7 +736,7 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 	addpath_encode = bgp_addpath_encode_tx(peer, afi, safi);
 	addpath_overhead = addpath_encode ? BGP_ADDPATH_ID_LEN : 0;
 
-	adv = BGP_ADV_FIFO_HEAD(&subgrp->sync->update);
+	adv = bgp_adv_fifo_first(&subgrp->sync->update);
 	while (adv) {
 		assert(adv->rn);
 		rn = adv->rn;
@@ -966,7 +977,7 @@ struct bpacket *subgroup_withdraw_packet(struct update_subgroup *subgrp)
 	addpath_encode = bgp_addpath_encode_tx(peer, afi, safi);
 	addpath_overhead = addpath_encode ? BGP_ADDPATH_ID_LEN : 0;
 
-	while ((adv = BGP_ADV_FIFO_HEAD(&subgrp->sync->withdraw)) != NULL) {
+	while ((adv = bgp_adv_fifo_first(&subgrp->sync->withdraw)) != NULL) {
 		assert(adv->rn);
 		adj = adv->adj;
 		rn = adv->rn;

@@ -715,7 +715,8 @@ static struct bgp_path_info *bgp4PathAttrLookup(struct variable *v, oid name[],
 		if (rn) {
 			bgp_unlock_node(rn);
 
-			for (path = rn->info; path; path = path->next)
+			for (path = bgp_node_get_bgp_path_info(rn); path;
+			     path = path->next)
 				if (sockunion_same(&path->peer->su, &su))
 					return path;
 		}
@@ -762,7 +763,8 @@ static struct bgp_path_info *bgp4PathAttrLookup(struct variable *v, oid name[],
 		do {
 			min = NULL;
 
-			for (path = rn->info; path; path = path->next) {
+			for (path = bgp_node_get_bgp_path_info(rn); path;
+			     path = path->next) {
 				if (path->peer->su.sin.sin_family == AF_INET
 				    && ntohl(paddr.s_addr)
 					       < ntohl(path->peer->su.sin
@@ -898,11 +900,10 @@ static int bgpTrapEstablished(struct peer *peer)
 
 	oid_copy_addr(index, &addr, IN_ADDR_SIZE);
 
-	smux_trap(bgp_variables, sizeof bgp_variables / sizeof(struct variable),
-		  bgp_trap_oid, sizeof bgp_trap_oid / sizeof(oid), bgp_oid,
+	smux_trap(bgp_variables, array_size(bgp_variables), bgp_trap_oid,
+		  array_size(bgp_trap_oid), bgp_oid,
 		  sizeof bgp_oid / sizeof(oid), index, IN_ADDR_SIZE,
-		  bgpTrapList, sizeof bgpTrapList / sizeof(struct trap_object),
-		  BGPESTABLISHED);
+		  bgpTrapList, array_size(bgpTrapList), BGPESTABLISHED);
 	return 0;
 }
 
@@ -918,11 +919,10 @@ static int bgpTrapBackwardTransition(struct peer *peer)
 
 	oid_copy_addr(index, &addr, IN_ADDR_SIZE);
 
-	smux_trap(bgp_variables, sizeof bgp_variables / sizeof(struct variable),
-		  bgp_trap_oid, sizeof bgp_trap_oid / sizeof(oid), bgp_oid,
+	smux_trap(bgp_variables, array_size(bgp_variables), bgp_trap_oid,
+		  array_size(bgp_trap_oid), bgp_oid,
 		  sizeof bgp_oid / sizeof(oid), index, IN_ADDR_SIZE,
-		  bgpTrapList, sizeof bgpTrapList / sizeof(struct trap_object),
-		  BGPBACKWARDTRANSITION);
+		  bgpTrapList, array_size(bgpTrapList), BGPBACKWARDTRANSITION);
 	return 0;
 }
 

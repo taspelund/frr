@@ -63,7 +63,7 @@ static char vrf_default_name[VRF_NAMSIZ] = VRF_DEFAULT_NAME_INTERNAL;
  * Turn on/off debug code
  * for vrf.
  */
-int debug_vrf = 0;
+static int debug_vrf = 0;
 
 /* Holding VRF hooks  */
 struct vrf_master {
@@ -330,6 +330,8 @@ vrf_id_t vrf_name_to_id(const char *name)
 	vrf_id_t vrf_id = VRF_DEFAULT; // Pending: need a way to return invalid
 				       // id/ routine not used.
 
+	if (!name)
+		return vrf_id;
 	vrf = vrf_lookup_by_name(name);
 	if (vrf)
 		vrf_id = vrf->vrf_id;
@@ -359,9 +361,9 @@ struct vrf_bit_set {
 	bool set;
 };
 
-static unsigned int vrf_hash_bitmap_key(void *data)
+static unsigned int vrf_hash_bitmap_key(const void *data)
 {
-	struct vrf_bit_set *bit = data;
+	const struct vrf_bit_set *bit = data;
 
 	return bit->vrf_id;
 }
@@ -469,7 +471,7 @@ static const struct cmd_variable_handler vrf_var_handlers[] = {
 
 /* Initialize VRF module. */
 void vrf_init(int (*create)(struct vrf *), int (*enable)(struct vrf *),
-	      int (*disable)(struct vrf *), int (*delete)(struct vrf *),
+	      int (*disable)(struct vrf *), int (*destroy)(struct vrf *),
 	      int ((*update)(struct vrf *)))
 {
 	struct vrf *default_vrf;
@@ -483,7 +485,7 @@ void vrf_init(int (*create)(struct vrf *), int (*enable)(struct vrf *),
 	vrf_master.vrf_new_hook = create;
 	vrf_master.vrf_enable_hook = enable;
 	vrf_master.vrf_disable_hook = disable;
-	vrf_master.vrf_delete_hook = delete;
+	vrf_master.vrf_delete_hook = destroy;
 	vrf_master.vrf_update_name_hook = update;
 
 	/* The default VRF always exists. */
@@ -539,38 +541,8 @@ void vrf_terminate(void)
 	}
 }
 
-static int vrf_default_accepts_vrf(int type)
-{
-	const char *fname = NULL;
-	char buf[32] = {0x0};
-	int ret = 0;
-	FILE *fd = NULL;
-
-	/*
-	 * TCP & UDP services running in the default VRF context (ie., not bound
-	 * to any VRF device) can work across all VRF domains by enabling the
-	 * tcp_l3mdev_accept and udp_l3mdev_accept sysctl options:
-	 * sysctl -w net.ipv4.tcp_l3mdev_accept=1
-	 * sysctl -w net.ipv4.udp_l3mdev_accept=1
-	 */
-	if (type == SOCK_STREAM)
-		fname = "/proc/sys/net/ipv4/tcp_l3mdev_accept";
-	else if (type == SOCK_DGRAM)
-		fname = "/proc/sys/net/ipv4/udp_l3mdev_accept";
-	else
-		return ret;
-	fd = fopen(fname, "r");
-	if (fd == NULL)
-		return ret;
-	fgets(buf, 32, fd);
-	ret = atoi(buf);
-	fclose(fd);
-	return ret;
-}
-
-/* Create a socket for the VRF. */
 int vrf_socket(int domain, int type, int protocol, vrf_id_t vrf_id,
-	       char *interfacename)
+	       const char *interfacename)
 {
 	int ret, save_errno, ret2;
 
@@ -578,13 +550,6 @@ int vrf_socket(int domain, int type, int protocol, vrf_id_t vrf_id,
 	if (ret < 0)
 		flog_err_sys(EC_LIB_SOCKET, "%s: Can't switch to VRF %u (%s)",
 			     __func__, vrf_id, safe_strerror(errno));
-
-	if (ret > 0 && interfacename && vrf_default_accepts_vrf(type)) {
-		zlog_err("VRF socket not used since net.ipv4.%s_l3mdev_accept != 0",
-			  (type == SOCK_STREAM ? "tcp" : "udp"));
-		errno = EEXIST; /* not sure if this is the best error... */
-		return -2;
-	}
 
 	ret = socket(domain, type, protocol);
 	save_errno = errno;
@@ -660,7 +625,7 @@ int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf, char *pathname,
 				"VRF %u is already configured with VRF %s\n",
 				vrf->vrf_id, vrf->name);
 		else
-			zlog_info("VRF %u is already configured with VRF %s\n",
+			zlog_info("VRF %u is already configured with VRF %s",
 				  vrf->vrf_id, vrf->name);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
@@ -712,13 +677,6 @@ int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf, char *pathname,
 	}
 
 	return CMD_SUCCESS;
-}
-
-int vrf_is_mapped_on_netns(struct vrf *vrf)
-{
-	if (!vrf || vrf->data.l.netns_name[0] == '\0')
-		return 0;
-	return 1;
 }
 
 /* vrf CLI commands */
@@ -894,23 +852,24 @@ void vrf_cmd_init(int (*writefunc)(struct vty *vty),
 	}
 }
 
-void vrf_set_default_name(const char *default_name)
+void vrf_set_default_name(const char *default_name, bool force)
 {
 	struct vrf *def_vrf;
-	struct vrf *vrf_with_default_name = NULL;
+	static bool def_vrf_forced;
 
 	def_vrf = vrf_lookup_by_id(VRF_DEFAULT);
 	assert(default_name);
-	vrf_with_default_name = vrf_lookup_by_name(default_name);
-	if (vrf_with_default_name && vrf_with_default_name != def_vrf) {
-		/* vrf name already used by an other VRF */
-		zlog_debug("VRF: %s, avoid changing name to %s, same name exists (%u)",
-			   vrf_with_default_name->name, default_name,
-			   vrf_with_default_name->vrf_id);
+	if (def_vrf && !force && def_vrf_forced) {
+		zlog_debug("VRF: %s, avoid changing name to %s, previously forced (%u)",
+			   def_vrf->name, default_name,
+			   def_vrf->vrf_id);
 		return;
 	}
+
 	snprintf(vrf_default_name, VRF_NAMSIZ, "%s", default_name);
 	if (def_vrf) {
+		if (force)
+			def_vrf_forced = true;
 		RB_REMOVE(vrf_name_head, &vrfs_by_name, def_vrf);
 		strlcpy(def_vrf->data.l.netns_name,
 			vrf_default_name, NS_NAMSIZ);
@@ -937,13 +896,13 @@ vrf_id_t vrf_get_default_id(void)
 		return VRF_DEFAULT_INTERNAL;
 }
 
-int vrf_bind(vrf_id_t vrf_id, int fd, char *name)
+int vrf_bind(vrf_id_t vrf_id, int fd, const char *name)
 {
 	int ret = 0;
 
 	if (fd < 0 || name == NULL)
 		return fd;
-	if (vrf_is_mapped_on_netns(vrf_lookup_by_id(vrf_id)))
+	if (vrf_is_backend_netns())
 		return fd;
 #ifdef SO_BINDTODEVICE
 	ret = setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, name, strlen(name)+1);
@@ -996,7 +955,7 @@ int vrf_ioctl(vrf_id_t vrf_id, int d, unsigned long request, char *params)
 }
 
 int vrf_sockunion_socket(const union sockunion *su, vrf_id_t vrf_id,
-			 char *interfacename)
+			 const char *interfacename)
 {
 	int ret, save_errno, ret2;
 
@@ -1021,4 +980,11 @@ int vrf_sockunion_socket(const union sockunion *su, vrf_id_t vrf_id,
 		ret = ret2;
 	}
 	return ret;
+}
+
+vrf_id_t vrf_generate_id(void)
+{
+	static int vrf_id_local;
+
+	return ++vrf_id_local;
 }

@@ -138,11 +138,11 @@ static void ospf6_area_stub_update(struct ospf6_area *area)
 
 	if (IS_AREA_STUB(area)) {
 		if (IS_OSPF6_DEBUG_ORIGINATE(ROUTER))
-			zlog_debug("Stubbing out area for if %s\n", area->name);
+			zlog_debug("Stubbing out area for if %s", area->name);
 		OSPF6_OPT_CLEAR(area->options, OSPF6_OPT_E);
 	} else if (IS_AREA_ENABLED(area)) {
 		if (IS_OSPF6_DEBUG_ORIGINATE(ROUTER))
-			zlog_debug("Normal area for if %s\n", area->name);
+			zlog_debug("Normal area for if %s", area->name);
 		OSPF6_OPT_SET(area->options, OSPF6_OPT_E);
 		ospf6_asbr_send_externals_to_area(area);
 	}
@@ -450,7 +450,7 @@ DEFUN (area_range,
 
 	range->path.u.cost_config = cost;
 
-	zlog_debug("%s: for prefix %s, flag = %x\n", __func__,
+	zlog_debug("%s: for prefix %s, flag = %x", __func__,
 		   argv[idx_ipv6_prefixlen]->arg, range->flag);
 	if (range->rnode == NULL) {
 		ospf6_route_add(range, oa->range_table);
@@ -567,9 +567,10 @@ void ospf6_area_config_write(struct vty *vty)
 
 DEFUN (area_filter_list,
        area_filter_list_cmd,
-       "area A.B.C.D filter-list prefix WORD <in|out>",
+       "area <A.B.C.D|(0-4294967295)> filter-list prefix WORD <in|out>",
        "OSPF6 area parameters\n"
        "OSPF6 area ID in IP address format\n"
+       "OSPF6 area ID as a decimal value\n"
        "Filter networks between OSPF6 areas\n"
        "Filter prefixes between OSPF6 areas\n"
        "Name of an IPv6 prefix-list\n"
@@ -605,10 +606,11 @@ DEFUN (area_filter_list,
 
 DEFUN (no_area_filter_list,
        no_area_filter_list_cmd,
-       "no area A.B.C.D filter-list prefix WORD <in|out>",
+       "no area <A.B.C.D|(0-4294967295)> filter-list prefix WORD <in|out>",
        NO_STR
        "OSPF6 area parameters\n"
        "OSPF6 area ID in IP address format\n"
+       "OSPF6 area ID as a decimal value\n"
        "Filter networks between OSPF6 areas\n"
        "Filter prefixes between OSPF6 areas\n"
        "Name of an IPv6 prefix-list\n"
@@ -662,9 +664,10 @@ void ospf6_area_plist_update(struct prefix_list *plist, int add)
 
 DEFUN (area_import_list,
        area_import_list_cmd,
-       "area A.B.C.D import-list NAME",
+       "area <A.B.C.D|(0-4294967295)> import-list NAME",
        "OSPF6 area parameters\n"
        "OSPF6 area ID in IP address format\n"
+       "OSPF6 area ID as a decimal value\n"
        "Set the filter for networks from other areas announced to the specified one\n"
        "Name of the acess-list\n")
 {
@@ -690,10 +693,11 @@ DEFUN (area_import_list,
 
 DEFUN (no_area_import_list,
        no_area_import_list_cmd,
-       "no area A.B.C.D import-list NAME",
+       "no area <A.B.C.D|(0-4294967295)> import-list NAME",
        NO_STR
        "OSPF6 area parameters\n"
        "OSPF6 area ID in IP address format\n"
+       "OSPF6 area ID as a decimal value\n"
        "Unset the filter for networks announced to other areas\n"
        "Name of the access-list\n")
 {
@@ -715,9 +719,10 @@ DEFUN (no_area_import_list,
 
 DEFUN (area_export_list,
        area_export_list_cmd,
-       "area A.B.C.D export-list NAME",
+       "area <A.B.C.D|(0-4294967295)> export-list NAME",
        "OSPF6 area parameters\n"
        "OSPF6 area ID in IP address format\n"
+       "OSPF6 area ID as a decimal value\n"
        "Set the filter for networks announced to other areas\n"
        "Name of the acess-list\n")
 {
@@ -743,10 +748,11 @@ DEFUN (area_export_list,
 
 DEFUN (no_area_export_list,
        no_area_export_list_cmd,
-       "no area A.B.C.D export-list NAME",
+       "no area <A.B.C.D|(0-4294967295)> export-list NAME",
        NO_STR
        "OSPF6 area parameters\n"
        "OSPF6 area ID in IP address format\n"
+       "OSPF6 area ID as a decimal value\n"
        "Unset the filter for networks announced to other areas\n"
        "Name of the access-list\n")
 {
@@ -772,7 +778,7 @@ DEFUN (show_ipv6_ospf6_spf_tree,
        SHOW_STR
        IP6_STR
        OSPF6_STR
-       "Shortest Path First caculation\n"
+       "Shortest Path First calculation\n"
        "Show SPF tree\n")
 {
 	struct listnode *node;
@@ -807,7 +813,7 @@ DEFUN (show_ipv6_ospf6_area_spf_tree,
        OSPF6_STR
        OSPF6_AREA_STR
        OSPF6_AREA_ID_STR
-       "Shortest Path First caculation\n"
+       "Shortest Path First calculation\n"
        "Show SPF tree\n")
 {
 	int idx_ipv4 = 4;

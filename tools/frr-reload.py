@@ -31,6 +31,7 @@ This program
 from __future__ import print_function, unicode_literals
 import argparse
 import copy
+import json
 import logging
 import os
 import random
@@ -300,13 +301,11 @@ class Config(object):
 
         '''
           More fixups in user specification and what running config shows.
-          "null0" in routes must be replaced by Null0, and "blackhole" must
-          be replaced by Null0 as well.
+          "null0" in routes must be replaced by Null0.
         '''
         if (key[0].startswith('ip route') or key[0].startswith('ipv6 route') and
-                'null0' in key[0] or 'blackhole' in key[0]):
+                'null0' in key[0]):
             key[0] = re.sub(r'\s+null0(\s*$)', ' Null0', key[0])
-            key[0] = re.sub(r'\s+blackhole(\s*$)', ' Null0', key[0])
 
         if lines:
             if tuple(key) not in self.contexts:
@@ -395,8 +394,10 @@ end
         # is not the main router bgp block, but enabling multi-instance
         oneline_ctx_keywords = ("access-list ",
                                 "agentx",
+                                "allow-external-route-update",
                                 "bgp ",
                                 "debug ",
+                                "domainname ",
                                 "dump ",
                                 "enable ",
                                 "frr ",
@@ -412,7 +413,8 @@ end
                                 "service ",
                                 "table ",
                                 "username ",
-                                "zebra ")
+                                "zebra ",
+                                "vrrp autoconfigure")
 
         for line in self.lines:
 
@@ -435,11 +437,22 @@ end
                 self.save_contexts(ctx_keys, current_context_lines)
                 new_ctx = True
 
-            elif line in ["end", "exit-vrf"]:
+            elif line == "end":
                 self.save_contexts(ctx_keys, current_context_lines)
                 log.debug('LINE %-50s: exiting old context, %-50s', line, ctx_keys)
 
                 # Start a new context
+                new_ctx = True
+                main_ctx_key = []
+                ctx_keys = []
+                current_context_lines = []
+
+            elif line == "exit-vrf":
+                self.save_contexts(ctx_keys, current_context_lines)
+                current_context_lines.append(line)
+                log.debug('LINE %-50s: append to current_context_lines, %-50s', line, ctx_keys)
+
+                #Start a new context
                 new_ctx = True
                 main_ctx_key = []
                 ctx_keys = []
@@ -733,6 +746,28 @@ def ignore_delete_re_add_lines(lines_to_add, lines_to_del):
                         lines_to_add_to_del.append((tmp_ctx_keys, swpx_peergroup))
 
                 '''
+                Changing the bfd timers on neighbors is allowed without doing
+                a delete/add process. Since doing a "no neighbor blah bfd ..."
+                will cause the peer to bounce unnecessarily, just skip the delete
+                and just do the add.
+                '''
+                re_nbr_bfd_timers = re.search(r'neighbor (\S+) bfd (\S+) (\S+) (\S+)', line)
+
+                if re_nbr_bfd_timers:
+                    nbr = re_nbr_bfd_timers.group(1)
+                    bfd_nbr = "neighbor %s" % nbr
+                    bfd_search_string =  bfd_nbr + r' bfd (\S+) (\S+) (\S+)'
+
+                    for (ctx_keys, add_line) in lines_to_add:
+                        re_add_nbr_bfd_timers = re.search(bfd_search_string, add_line)
+
+                        if re_add_nbr_bfd_timers:
+                            found_add_bfd_nbr = line_exist(lines_to_add, ctx_keys, bfd_nbr, False)
+
+                            if found_add_bfd_nbr:
+                                lines_to_del_to_del.append((ctx_keys, line))
+
+                '''
                 We changed how we display the neighbor interface command. Older
                 versions of frr would display the following:
                     neighbor swp1 interface
@@ -879,6 +914,16 @@ def ignore_delete_re_add_lines(lines_to_add, lines_to_del):
                     lines_to_del_to_del.append((ctx_keys, route_target_export_line))
                     lines_to_add_to_del.append((ctx_keys, route_target_both_line))
 
+        # Deleting static routes under a vrf can lead to time-outs if each is sent
+        # as separate vtysh -c commands. Change them from being in lines_to_del and
+        # put the "no" form in lines_to_add
+        if ctx_keys[0].startswith('vrf ') and line:
+            if (line.startswith('ip route') or
+                line.startswith('ipv6 route')):
+                add_cmd = ('no ' + line)
+                lines_to_add.append((ctx_keys, add_cmd))
+                lines_to_del_to_del.append((ctx_keys, line))
+
         if not deleted:
             found_add_line = line_exist(lines_to_add, ctx_keys, line)
 
@@ -959,6 +1004,7 @@ def compare_context_objects(newconf, running):
     lines_to_add = []
     lines_to_del = []
     delete_bgpd = False
+    restart_frr = False
 
     # Find contexts that are in newconf but not in running
     # Find contexts that are in running but not in newconf
@@ -972,10 +1018,12 @@ def compare_context_objects(newconf, running):
             # running but not in newconf.
             if "router bgp" in running_ctx_keys[0] and len(running_ctx_keys) == 1:
                 delete_bgpd = True
+                if "vrf" not in running_ctx_keys[0]:
+                    restart_frr = True
                 lines_to_del.append((running_ctx_keys, None))
 
-            # We cannot do 'no interface' in FRR, and so deal with it
-            elif running_ctx_keys[0].startswith('interface'):
+            # We cannot do 'no interface' or 'no vrf' in FRR, and so deal with it
+            elif running_ctx_keys[0].startswith('interface') or running_ctx_keys[0].startswith('vrf'):
                 for line in running_ctx.lines:
                     lines_to_del.append((running_ctx_keys, line))
 
@@ -998,6 +1046,19 @@ def compare_context_objects(newconf, running):
                 # delete each line individually again
                 for line in running_ctx.lines:
                     lines_to_del.append((running_ctx_keys, line))
+
+            # Some commands can happen at higher counts that make
+            # doing vtysh -c inefficient (and can time out.)  For
+            # these commands, instead of adding them to lines_to_del,
+            # add the "no " version to lines_to_add.
+            elif (running_ctx_keys[0].startswith('ip route') or
+                  running_ctx_keys[0].startswith('ipv6 route') or
+                  running_ctx_keys[0].startswith('access-list') or
+                  running_ctx_keys[0].startswith('ipv6 access-list') or
+                  running_ctx_keys[0].startswith('ip prefix-list') or
+                  running_ctx_keys[0].startswith('ipv6 prefix-list')):
+                add_cmd = ('no ' + running_ctx_keys[0],)
+                lines_to_add.append((add_cmd, None))
 
             # Non-global context
             elif running_ctx_keys and not any("address-family" in key for key in running_ctx_keys):
@@ -1037,9 +1098,31 @@ def compare_context_objects(newconf, running):
     (lines_to_add, lines_to_del) = ignore_delete_re_add_lines(lines_to_add, lines_to_del)
     (lines_to_add, lines_to_del) = ignore_unconfigurable_lines(lines_to_add, lines_to_del)
 
-    return (lines_to_add, lines_to_del)
+    return (lines_to_add, lines_to_del, restart_frr)
 
 
+def is_evpn_enabled():
+    """
+    Returns True if bgpd is currently running with EVPN enabled
+    """
+
+    evpn_enabled = False
+    cmd = ['/usr/bin/vtysh', '-c', 'show bgp l2vpn evpn vni json']
+    output = ''
+    DEVNULL = open(os.devnull, 'wb')
+
+    try:
+        output = subprocess.check_output(cmd, stderr=DEVNULL).strip()
+    except:
+        pass
+
+    if output:
+        output = json.loads(output)
+        adv_vnis = output.get('advertiseAllVnis', '')
+        if 'Enabled' in adv_vnis:
+            evpn_enabled = True
+
+    return evpn_enabled
 
 def vtysh_config_available():
     """
@@ -1155,7 +1238,7 @@ if __name__ == '__main__':
         else:
             running.load_from_show_running()
 
-        (lines_to_add, lines_to_del) = compare_context_objects(newconf, running)
+        (lines_to_add, lines_to_del, restart_frr) = compare_context_objects(newconf, running)
         lines_to_configure = []
 
         if lines_to_del:
@@ -1234,7 +1317,18 @@ if __name__ == '__main__':
             running.load_from_show_running()
             log.debug('Running Frr Config (Pass #%d)\n%s', x, running.get_lines())
 
-            (lines_to_add, lines_to_del) = compare_context_objects(newconf, running)
+            (lines_to_add, lines_to_del, restart_frr) = compare_context_objects(newconf, running)
+            if restart_frr and is_evpn_enabled():
+                # currently EVPN has heavy dependencies on the BGP default
+                # instance i.e. FRR cannot survive a BGP default instance
+                # delete. so as a workaround we "silently" restart FRR
+                # if the change in config requires a bgp delete (and if
+                # EVPN is enabled).
+                log.info('EVPN is enabled and default instance del needed')
+                log.info('Restarting FRR')
+                subprocess.call('systemctl reset-failed frr.service'.split())
+                subprocess.call('systemctl --no-block restart frr.service'.split())
+                sys.exit(0)
 
             if x == 0:
                 lines_to_add_first_pass = lines_to_add
@@ -1309,6 +1403,11 @@ if __name__ == '__main__':
                 for (ctx_keys, line) in lines_to_add:
 
                     if line == '!':
+                        continue
+
+                    # Don't run "no" commands twice since they can error
+                    # out the second time due to first deletion
+                    if x == 1 and ctx_keys[0].startswith('no '):
                         continue
 
                     cmd = line_for_vtysh_file(ctx_keys, line, False)

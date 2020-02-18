@@ -1,32 +1,22 @@
-etc/frr/
+etc/
 usr/bin/vtysh
-usr/bin/bgp_btoa
-usr/include/frr/
-usr/lib/
-tools/frr usr/lib/frr
-tools/frr-reload.py usr/lib/frr
-usr/share/doc/frr/
+usr/bin/mtracebis
+usr/lib/*/frr/libfrr.*
+usr/lib/*/frr/libfrrcares.*
+usr/lib/*/frr/libfrrospfapiclient.*
+usr/lib/*/frr/libfrr_pb.*
+usr/lib/*/frr/libfrrfpm_pb.*
+usr/lib/*/frr/libmlag_pb.*
+usr/lib/frr/*.sh
+usr/lib/frr/*d
+usr/lib/frr/watchfrr
+usr/lib/frr/zebra
+usr/lib/*/frr/modules/zebra_irdp.so
+usr/lib/*/frr/modules/zebra_fpm.so
+usr/share/doc/frr/examples
+usr/share/man/
+usr/share/yang/
+tools/frr-reload usr/lib/frr/
+tools/cumulus-limits-override.conf etc/frr
 tools/usr/share/cumulus/* usr/share/cumulus/
-usr/share/man/man1/vtysh.1
-usr/share/man/man1/frr.1
-usr/share/man/man8
-usr/share/man/man8/bgpd.8
-usr/share/man/man8/eigrpd.8
-usr/share/man/man8/isisd.8
-usr/share/man/man8/ldpd.8
-usr/share/man/man8/mtracebis.8
-usr/share/man/man8/nhrpd.8
-usr/share/man/man8/ospf6d.8
-usr/share/man/man8/ospfclient.8
-usr/share/man/man8/ospfd.8
-usr/share/man/man8/pbrd.8
-usr/share/man/man8/pimd.8
-usr/share/man/man8/ripd.8
-usr/share/man/man8/ripngd.8
-usr/share/man/man8/zebra.8
-usr/share/man/man8/isisd.8
-usr/share/man/man8/watchfrr.8
-usr/share/snmp/mibs/
-tools/etc/* etc/
-tools/*.service    lib/systemd/system
-debian/frr.conf  usr/lib/tmpfiles.d
+debian/frr.conf usr/lib/tmpfiles.d

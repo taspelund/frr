@@ -33,9 +33,12 @@
 #include "pim_static.h"
 #include "pim_ssmpingd.h"
 #include "pim_vty.h"
+#include "pim_mlag.h"
 
 static void pim_instance_terminate(struct pim_instance *pim)
 {
+	pim_vxlan_exit(pim);
+
 	if (pim->ssm_info) {
 		pim_ssm_terminate(pim->ssm_info);
 		pim->ssm_info = NULL;
@@ -43,6 +46,8 @@ static void pim_instance_terminate(struct pim_instance *pim)
 
 	if (pim->static_routes)
 		list_delete(&pim->static_routes);
+
+	pim_instance_mlag_terminate(pim);
 
 	pim_upstream_terminate(pim);
 
@@ -85,7 +90,8 @@ static struct pim_instance *pim_instance_init(struct vrf *vrf)
 	pim->spt.switchover = PIM_SPT_IMMEDIATE;
 	pim->spt.plist = NULL;
 
-	pim_msdp_init(pim, master);
+	pim_msdp_init(pim, router->master);
+	pim_vxlan_init(pim);
 
 	snprintf(hash_name, 64, "PIM %s RPF Hash", vrf->name);
 	pim->rpf_hash = hash_create_size(256, pim_rpf_hash_key, pim_rpf_equal,
@@ -101,14 +107,13 @@ static struct pim_instance *pim_instance_init(struct vrf *vrf)
 
 	pim->send_v6_secondary = 1;
 
-	if (vrf->vrf_id == VRF_DEFAULT)
-		pimg = pim;
-
 	pim_rp_init(pim);
 
 	pim_oil_init(pim);
 
 	pim_upstream_init(pim);
+
+	pim_instance_mlag_init(pim);
 
 	pim->last_route_change_time = -1;
 	return pim;
@@ -131,9 +136,6 @@ static int pim_vrf_new(struct vrf *vrf)
 	zlog_debug("VRF Created: %s(%u)", vrf->name, vrf->vrf_id);
 
 	vrf->info = (void *)pim;
-
-	if (vrf->vrf_id == VRF_DEFAULT)
-		pimg = pim;
 
 	pim_ssmpingd_init(pim);
 	return 0;
@@ -188,7 +190,7 @@ static int pim_vrf_config_write(struct vty *vty)
 		pim_global_config_write_worker(pim, vty);
 
 		if (vrf->vrf_id != VRF_DEFAULT)
-			vty_endframe(vty, "!\n");
+			vty_endframe(vty, " exit-vrf\n!\n");
 	}
 
 	return 0;

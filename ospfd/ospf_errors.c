@@ -39,7 +39,7 @@ static struct log_ref ferr_ospf_warn[] = {
 	},
 	{
 		.code = EC_OSPF_PACKET,
-		.title = "OSPF has detected packet information missmatch",
+		.title = "OSPF has detected packet information mismatch",
 		.description = "OSPF has detected that packet information received is incorrect",
 		.suggestion = "Ensure interface configuration is correct, gather log files from here and the peer and open an Issue",
 	},
@@ -168,6 +168,12 @@ static struct log_ref ferr_ospf_err[] = {
 		.title = "OSPF FSM invalid state detected",
 		.description = "OSPF has attempted to change states when it should not be able to",
 		.suggestion = "Gather log files and open an issue",
+	},
+	{
+		.code = EC_OSPF_LARGE_HELLO,
+		.title = "OSPF Encountered a Large Hello",
+		.description = "OSPF attempted to send a Hello larger than MTU but did not",
+		.suggestion = "Too many neighbors configured on a single interface. Suggestion is to decrease the number of neighbors on a single interface/subnet"
 	},
 	{
 		.code = END_FERR,

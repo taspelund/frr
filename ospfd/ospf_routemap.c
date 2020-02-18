@@ -89,7 +89,7 @@ static void ospf_route_map_update(const char *name)
 	}
 }
 
-static void ospf_route_map_event(route_map_event_t event, const char *name)
+static void ospf_route_map_event(const char *name)
 {
 	struct ospf *ospf;
 	int type;
@@ -201,6 +201,40 @@ struct route_map_rule_cmd route_match_ip_next_hop_prefix_list_cmd = {
 	"ip next-hop prefix-list", route_match_ip_next_hop_prefix_list,
 	route_match_ip_next_hop_prefix_list_compile,
 	route_match_ip_next_hop_prefix_list_free};
+
+/* `match ip next-hop type <blackhole>' */
+
+static route_map_result_t
+route_match_ip_next_hop_type(void *rule, const struct prefix *prefix,
+			     route_map_object_t type, void *object)
+{
+	struct external_info *ei = object;
+
+	if (type == RMAP_OSPF && prefix->family == AF_INET) {
+		ei = (struct external_info *)object;
+		if (!ei)
+			return RMAP_DENYMATCH;
+
+		if (ei->nexthop.s_addr == INADDR_ANY && !ei->ifindex)
+			return RMAP_MATCH;
+	}
+	return RMAP_NOMATCH;
+}
+
+static void *route_match_ip_next_hop_type_compile(const char *arg)
+{
+	return XSTRDUP(MTYPE_ROUTE_MAP_COMPILED, arg);
+}
+
+static void route_match_ip_next_hop_type_free(void *rule)
+{
+	XFREE(MTYPE_ROUTE_MAP_COMPILED, rule);
+}
+
+static struct route_map_rule_cmd route_match_ip_next_hop_type_cmd = {
+	"ip next-hop type", route_match_ip_next_hop_type,
+	route_match_ip_next_hop_type_compile,
+	route_match_ip_next_hop_type_free};
 
 /* `match ip address IP_ACCESS_LIST' */
 /* Match function should return 1 if match is success else return
@@ -366,15 +400,16 @@ static route_map_result_t route_set_metric(void *rule,
 		/* Set metric out value. */
 		if (!metric->used)
 			return RMAP_OKAY;
+
+		ei->route_map_set.metric = DEFAULT_DEFAULT_METRIC;
+
 		if (metric->type == metric_increment)
 			ei->route_map_set.metric += metric->metric;
-		if (metric->type == metric_decrement)
+		else if (metric->type == metric_decrement)
 			ei->route_map_set.metric -= metric->metric;
-		if (metric->type == metric_absolute)
+		else if (metric->type == metric_absolute)
 			ei->route_map_set.metric = metric->metric;
 
-		if ((signed int)ei->route_map_set.metric < 1)
-			ei->route_map_set.metric = -1;
 		if (ei->route_map_set.metric > OSPF_LS_INFINITY)
 			ei->route_map_set.metric = OSPF_LS_INFINITY;
 	}
@@ -557,6 +592,9 @@ void ospf_route_map_init(void)
 	route_map_match_ip_next_hop_prefix_list_hook(generic_match_add);
 	route_map_no_match_ip_next_hop_prefix_list_hook(generic_match_delete);
 
+	route_map_match_ip_next_hop_type_hook(generic_match_add);
+	route_map_no_match_ip_next_hop_type_hook(generic_match_delete);
+
 	route_map_match_tag_hook(generic_match_add);
 	route_map_no_match_tag_hook(generic_match_delete);
 
@@ -570,6 +608,7 @@ void ospf_route_map_init(void)
 	route_map_install_match(&route_match_ip_next_hop_prefix_list_cmd);
 	route_map_install_match(&route_match_ip_address_cmd);
 	route_map_install_match(&route_match_ip_address_prefix_list_cmd);
+	route_map_install_match(&route_match_ip_next_hop_type_cmd);
 	route_map_install_match(&route_match_interface_cmd);
 	route_map_install_match(&route_match_tag_cmd);
 

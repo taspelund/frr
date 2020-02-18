@@ -36,7 +36,7 @@
 #include "memory.h"
 #include "lib_errors.h"
 
-#include "zserv.h"
+#include "zebra_router.h"
 #include "zebra_memory.h"
 #endif /* defined(HAVE_NETLINK) */
 
@@ -121,7 +121,7 @@ static int zebra_ns_continue_read(struct zebra_netns_info *zns_info,
 		XFREE(MTYPE_NETNS_MISC, zns_info);
 		return 0;
 	}
-	thread_add_timer_msec(zebrad.master, zebra_ns_ready_read,
+	thread_add_timer_msec(zrouter.master, zebra_ns_ready_read,
 			      (void *)zns_info, ZEBRA_NS_POLLING_INTERVAL_MSEC,
 			      NULL);
 	return 0;
@@ -215,11 +215,17 @@ static int zebra_ns_ready_read(struct thread *t)
 	if (err < 0)
 		return zebra_ns_continue_read(zns_info, stop_retry);
 
+	/* check default name is not already set */
+	if (strmatch(VRF_DEFAULT_NAME, basename(netnspath))) {
+		zlog_warn("NS notify : NS %s is already default VRF."
+			  "Cancel VRF Creation", basename(netnspath));
+		return zebra_ns_continue_read(zns_info, 1);
+	}
 	if (zebra_ns_notify_is_default_netns(basename(netnspath))) {
 		zlog_warn(
 			  "NS notify : NS %s is default VRF."
 			  " Updating VRF Name", basename(netnspath));
-		vrf_set_default_name(basename(netnspath));
+		vrf_set_default_name(basename(netnspath), false);
 		return zebra_ns_continue_read(zns_info, 1);
 	}
 
@@ -236,7 +242,7 @@ static int zebra_ns_notify_read(struct thread *t)
 	ssize_t len;
 
 	zebra_netns_notify_current = thread_add_read(
-		zebrad.master, zebra_ns_notify_read, NULL, fd_monitor, NULL);
+		zrouter.master, zebra_ns_notify_read, NULL, fd_monitor, NULL);
 	len = read(fd_monitor, buf, sizeof(buf));
 	if (len < 0) {
 		flog_err_sys(EC_ZEBRA_NS_NOTIFY_READ,
@@ -252,8 +258,6 @@ static int zebra_ns_notify_read(struct thread *t)
 
 		if (!(event->mask & (IN_CREATE | IN_DELETE)))
 			continue;
-		if (event->mask & IN_DELETE)
-			return zebra_ns_delete(event->name);
 
 		if (offsetof(struct inotify_event, name) + event->len
 		    >= sizeof(buf)) {
@@ -268,6 +272,10 @@ static int zebra_ns_notify_read(struct thread *t)
 			break;
 		}
 
+		if (event->mask & IN_DELETE) {
+			zebra_ns_delete(event->name);
+			continue;
+		}
 		netnspath = ns_netns_pathname(NULL, event->name);
 		if (!netnspath)
 			continue;
@@ -276,7 +284,7 @@ static int zebra_ns_notify_read(struct thread *t)
 				    sizeof(struct zebra_netns_info));
 		netnsinfo->retries = ZEBRA_NS_POLLING_MAX_RETRIES;
 		netnsinfo->netnspath = netnspath;
-		thread_add_timer_msec(zebrad.master, zebra_ns_ready_read,
+		thread_add_timer_msec(zrouter.master, zebra_ns_ready_read,
 				      (void *)netnsinfo, 0, NULL);
 	}
 	return 0;
@@ -310,11 +318,17 @@ void zebra_ns_notify_parse(void)
 				   dent->d_name);
 			continue;
 		}
+		/* check default name is not already set */
+		if (strmatch(VRF_DEFAULT_NAME, basename(dent->d_name))) {
+			zlog_warn("NS notify : NS %s is already default VRF."
+				  "Cancel VRF Creation", dent->d_name);
+			continue;
+		}
 		if (zebra_ns_notify_is_default_netns(dent->d_name)) {
 			zlog_warn(
 				  "NS notify : NS %s is default VRF."
 				  " Updating VRF Name", dent->d_name);
-			vrf_set_default_name(dent->d_name);
+			vrf_set_default_name(dent->d_name, false);
 			continue;
 		}
 		zebra_ns_notify_create_context_from_entry_name(dent->d_name);
@@ -341,7 +355,7 @@ void zebra_ns_notify_init(void)
 			     safe_strerror(errno));
 	}
 	zebra_netns_notify_current = thread_add_read(
-		zebrad.master, zebra_ns_notify_read, NULL, fd_monitor, NULL);
+		zrouter.master, zebra_ns_notify_read, NULL, fd_monitor, NULL);
 }
 
 void zebra_ns_notify_close(void)
@@ -353,8 +367,11 @@ void zebra_ns_notify_close(void)
 
 	if (zebra_netns_notify_current->u.fd > 0)
 		fd = zebra_netns_notify_current->u.fd;
-	thread_cancel(zebra_netns_notify_current);
-	/* auto-removal of inotify items */
+
+	if (zebra_netns_notify_current->master != NULL)
+		thread_cancel(zebra_netns_notify_current);
+
+	/* auto-removal of notify items */
 	if (fd > 0)
 		close(fd);
 }

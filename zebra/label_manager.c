@@ -34,9 +34,11 @@
 #include "lib/zclient.h"
 #include "lib/libfrr.h"
 
-#include "zebra/zserv.h"
+//#include "zebra/zserv.h"
+#include "zebra/zebra_router.h"
 #include "zebra/label_manager.h"
 #include "zebra/zebra_errors.h"
+#include "zebra/debug.h"
 
 #define CONNECTION_DELAY 5
 
@@ -74,6 +76,10 @@ static int relay_response_back(void)
 	unsigned short instance;
 	struct zserv *zserv;
 
+	/* sanity */
+	if (!zclient || zclient->sock < 0)
+		return -1;
+
 	/* input buffer with msg from label manager */
 	src = zclient->ibuf;
 
@@ -82,10 +88,11 @@ static int relay_response_back(void)
 	/* parse header */
 	ret = zclient_read_header(src, zclient->sock, &size, &marker, &version,
 				  &vrf_id, &resp_cmd);
-	if (ret < 0 && errno != EAGAIN) {
-		flog_err(EC_ZEBRA_LM_RESPONSE,
-			 "Error reading Label Manager response: %s",
-			 strerror(errno));
+	if (ret < 0) {
+		if (errno != EAGAIN)
+			flog_err(EC_ZEBRA_LM_RESPONSE,
+				 "Error reading Label Manager response: %s",
+				 strerror(errno));
 		return -1;
 	}
 
@@ -155,11 +162,9 @@ static int lm_zclient_read(struct thread *t)
 	/* read response and send it back */
 	ret = relay_response_back();
 
-	/* on error, schedule another read */
-	if (ret == -1)
-		if (!zclient->t_read)
-			thread_add_read(zclient->master, lm_zclient_read, NULL,
-					zclient->sock, &zclient->t_read);
+	/* re-arm read */
+	thread_add_read(zclient->master, lm_zclient_read, NULL,
+			zclient->sock, &zclient->t_read);
 	return ret;
 }
 
@@ -294,7 +299,7 @@ static int lm_zclient_connect(struct thread *t)
 	if (zclient_socket_connect(zclient) < 0) {
 		flog_err(EC_ZEBRA_LM_CLIENT_CONNECTION_FAILED,
 			 "Error connecting synchronous zclient!");
-		thread_add_timer(zebrad.master, lm_zclient_connect, zclient,
+		thread_add_timer(zrouter.master, lm_zclient_connect, zclient,
 				 CONNECTION_DELAY, &zclient->t_connect);
 		return -1;
 	}
@@ -318,7 +323,7 @@ static void lm_zclient_init(char *lm_zserv_path)
 				 lm_zserv_path);
 
 	/* Set default values. */
-	zclient = zclient_new_notify(zebrad.master, &zclient_options_default);
+	zclient = zclient_new(zrouter.master, &zclient_options_default);
 	zclient->privs = &zserv_privs;
 	zclient->sock = -1;
 	zclient->t_connect = NULL;
@@ -344,6 +349,10 @@ int release_daemon_label_chunks(struct zserv *client)
 	int count = 0;
 	int ret;
 
+	if (IS_ZEBRA_DEBUG_PACKET)
+		zlog_debug("%s: Releasing chunks for client proto %s, instance %d",
+			   __func__, zebra_route_string(proto), instance);
+
 	for (ALL_LIST_ELEMENTS_RO(lbl_mgr.lc_list, node, lmc)) {
 		if (lmc->proto == proto && lmc->instance == instance
 		    && lmc->keep == 0) {
@@ -354,7 +363,8 @@ int release_daemon_label_chunks(struct zserv *client)
 		}
 	}
 
-	zlog_debug("%s: Released %d label chunks", __func__, count);
+	if (IS_ZEBRA_DEBUG_PACKET)
+		zlog_debug("%s: Released %d label chunks", __func__, count);
 
 	return count;
 }
@@ -454,7 +464,8 @@ int release_label_chunk(uint8_t proto, unsigned short instance, uint32_t start,
 	int ret = -1;
 
 	/* check that size matches */
-	zlog_debug("Releasing label chunk: %u - %u", start, end);
+	if (IS_ZEBRA_DEBUG_PACKET)
+		zlog_debug("Releasing label chunk: %u - %u", start, end);
 	/* find chunk and disown */
 	for (ALL_LIST_ELEMENTS_RO(lbl_mgr.lc_list, node, lmc)) {
 		if (lmc->start != start)
@@ -480,7 +491,7 @@ int release_label_chunk(uint8_t proto, unsigned short instance, uint32_t start,
 }
 
 
-void label_manager_close()
+void label_manager_close(void)
 {
 	list_delete(&lbl_mgr.lc_list);
 	stream_free(obuf);

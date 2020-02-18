@@ -32,6 +32,7 @@
 #include "prefix.h"
 
 #include "zebra/zserv.h"
+#include "zebra/zebra_router.h"
 #include "zebra/zebra_dplane.h"
 #include "zebra/zebra_ns.h"
 #include "zebra/zebra_vrf.h"
@@ -147,7 +148,7 @@ typedef struct netlink_route_info_t_ {
  * Add information about the given nexthop to the given route info
  * structure.
  *
- * Returns TRUE if a nexthop was added, FALSE otherwise.
+ * Returns true if a nexthop was added, false otherwise.
  */
 static int netlink_route_info_add_nh(netlink_route_info_t *ri,
 				     struct nexthop *nexthop)
@@ -158,7 +159,7 @@ static int netlink_route_info_add_nh(netlink_route_info_t *ri,
 	memset(&nhi, 0, sizeof(nhi));
 	src = NULL;
 
-	if (ri->num_nhs >= (int)ZEBRA_NUM_OF(ri->nhs))
+	if (ri->num_nhs >= (int)array_size(ri->nhs))
 		return 0;
 
 	nhi.recursive = nexthop->rparent ? 1 : 0;
@@ -217,7 +218,7 @@ static uint8_t netlink_proto_from_route_type(int type)
  *
  * Fill out the route information object from the given route.
  *
- * Returns TRUE on success and FALSE on failure.
+ * Returns true on success and false on failure.
  */
 static int netlink_route_info_fill(netlink_route_info_t *ri, int cmd,
 				   rib_dest_t *dest, struct route_entry *re)
@@ -250,8 +251,8 @@ static int netlink_route_info_fill(netlink_route_info_t *ri, int cmd,
 	ri->rtm_type = RTN_UNICAST;
 	ri->metric = &re->metric;
 
-	for (ALL_NEXTHOPS(re->ng, nexthop)) {
-		if (ri->num_nhs >= multipath_num)
+	for (ALL_NEXTHOPS_PTR(re->ng, nexthop)) {
+		if (ri->num_nhs >= zrouter.multipath_num)
 			break;
 
 		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_RECURSIVE))
@@ -270,13 +271,12 @@ static int netlink_route_info_fill(netlink_route_info_t *ri, int cmd,
 				ri->rtm_type = RTN_BLACKHOLE;
 				break;
 			}
-			return 1;
 		}
 
 		if ((cmd == RTM_NEWROUTE
 		     && CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ACTIVE))
 		    || (cmd == RTM_DELROUTE
-			&& CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB))) {
+			&& CHECK_FLAG(re->status, ROUTE_ENTRY_INSTALLED))) {
 			netlink_route_info_add_nh(ri, nexthop);
 		}
 	}

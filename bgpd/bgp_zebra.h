@@ -49,6 +49,7 @@ extern void bgp_zebra_terminate_radv(struct bgp *bgp, struct peer *peer);
 extern void bgp_zebra_instance_register(struct bgp *);
 extern void bgp_zebra_instance_deregister(struct bgp *);
 
+extern void bgp_redistribute_redo(struct bgp *bgp);
 extern struct bgp_redist *bgp_redist_lookup(struct bgp *, afi_t, uint8_t,
 					    unsigned short);
 extern struct bgp_redist *bgp_redist_add(struct bgp *, afi_t, uint8_t,
@@ -72,7 +73,10 @@ extern struct interface *if_lookup_by_ipv6_exact(struct in6_addr *, ifindex_t,
 extern int bgp_zebra_advertise_subnet(struct bgp *bgp, int advertise,
 				      vni_t vni);
 extern int bgp_zebra_advertise_gw_macip(struct bgp *, int, vni_t);
+extern int bgp_zebra_advertise_svi_macip(struct bgp *bgp, int advertise,
+					 vni_t vni);
 extern int bgp_zebra_advertise_all_vni(struct bgp *, int);
+extern int bgp_zebra_dup_addr_detection(struct bgp *bgp);
 extern int bgp_zebra_vxlan_flood_control(struct bgp *bgp,
 					 enum vxlan_flood_control flood_ctrl);
 

@@ -28,11 +28,7 @@
 #include "getopt.h"
 #include "module.h"
 #include "hook.h"
-
-#define FRR_CONFDIR SYSCONFDIR
-#define FRR_INTCONF "frr.conf"
-#define QUAGGA_CONFDIR "/etc/quagga"
-#define QUAGGA_INTCONF "Quagga.conf"
+#include "northbound.h"
 
 /* The following options disable specific command line options that
  * are not applicable for a particular daemon.
@@ -50,6 +46,11 @@
  */
 #define FRR_DETACH_LATER	(1 << 5)
 
+enum frr_cli_mode {
+	FRR_CLI_CLASSIC = 0,
+	FRR_CLI_TRANSACTIONAL,
+};
+
 struct frr_daemon_info {
 	unsigned flags;
 
@@ -65,11 +66,15 @@ struct frr_daemon_info {
 	bool dryrun;
 	bool daemon_mode;
 	bool terminal;
+	enum frr_cli_mode cli_mode;
 
 	struct thread *read_in;
 	const char *config_file;
 	const char *backup_config_file;
 	const char *pid_file;
+#ifdef HAVE_SQLITE3
+	const char *db_file;
+#endif
 	const char *vty_path;
 	const char *module_path;
 	const char *pathspace;
@@ -85,6 +90,9 @@ struct frr_daemon_info {
 	size_t n_signals;
 
 	struct zebra_privs_t *privs;
+
+	const struct frr_yang_module_info **yang_modules;
+	size_t n_yang_modules;
 };
 
 /* execname is the daemon's executable (and pidfile and configfile) name,
@@ -113,6 +121,8 @@ extern int frr_getopt(int argc, char *const argv[], int *longindex);
 extern void frr_help_exit(int status);
 
 extern struct thread_master *frr_init(void);
+extern const char *frr_get_progname(void);
+extern enum frr_cli_mode frr_get_cli_mode(void);
 
 DECLARE_HOOK(frr_late_init, (struct thread_master * tm), (tm))
 extern void frr_config_fork(void);
@@ -133,12 +143,9 @@ extern void frr_fini(void);
 
 extern char config_default[512];
 extern char frr_zclientpath[256];
-extern char config_default_int[512];
 extern const char frr_sysconfdir[];
 extern const char frr_vtydir[];
 extern const char frr_moduledir[];
-
-extern bool quagga_compat_mode;
 
 extern char frr_protoname[];
 extern char frr_protonameinst[];

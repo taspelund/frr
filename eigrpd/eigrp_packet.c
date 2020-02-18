@@ -1101,7 +1101,7 @@ struct eigrp_packet *eigrp_packet_duplicate(struct eigrp_packet *old,
 	return new;
 }
 
-static struct TLV_IPv4_Internal_type *eigrp_IPv4_InternalTLV_new()
+static struct TLV_IPv4_Internal_type *eigrp_IPv4_InternalTLV_new(void)
 {
 	struct TLV_IPv4_Internal_type *new;
 
@@ -1114,6 +1114,7 @@ static struct TLV_IPv4_Internal_type *eigrp_IPv4_InternalTLV_new()
 struct TLV_IPv4_Internal_type *eigrp_read_ipv4_tlv(struct stream *s)
 {
 	struct TLV_IPv4_Internal_type *tlv;
+	uint32_t destination_tmp;
 
 	tlv = eigrp_IPv4_InternalTLV_new();
 
@@ -1133,31 +1134,16 @@ struct TLV_IPv4_Internal_type *eigrp_read_ipv4_tlv(struct stream *s)
 
 	tlv->prefix_length = stream_getc(s);
 
-	if (tlv->prefix_length <= 8) {
-		tlv->destination_part[0] = stream_getc(s);
-		tlv->destination.s_addr = (tlv->destination_part[0]);
-	} else if (tlv->prefix_length > 8 && tlv->prefix_length <= 16) {
-		tlv->destination_part[0] = stream_getc(s);
-		tlv->destination_part[1] = stream_getc(s);
-		tlv->destination.s_addr = ((tlv->destination_part[1] << 8)
-					   + tlv->destination_part[0]);
-	} else if (tlv->prefix_length > 16 && tlv->prefix_length <= 24) {
-		tlv->destination_part[0] = stream_getc(s);
-		tlv->destination_part[1] = stream_getc(s);
-		tlv->destination_part[2] = stream_getc(s);
-		tlv->destination.s_addr = ((tlv->destination_part[2] << 16)
-					   + (tlv->destination_part[1] << 8)
-					   + tlv->destination_part[0]);
-	} else if (tlv->prefix_length > 24 && tlv->prefix_length <= 32) {
-		tlv->destination_part[0] = stream_getc(s);
-		tlv->destination_part[1] = stream_getc(s);
-		tlv->destination_part[2] = stream_getc(s);
-		tlv->destination_part[3] = stream_getc(s);
-		tlv->destination.s_addr = ((tlv->destination_part[3] << 24)
-					   + (tlv->destination_part[2] << 16)
-					   + (tlv->destination_part[1] << 8)
-					   + tlv->destination_part[0]);
-	}
+	destination_tmp = stream_getc(s) << 24;
+	if (tlv->prefix_length > 8)
+		destination_tmp |= stream_getc(s) << 16;
+	if (tlv->prefix_length > 16)
+		destination_tmp |= stream_getc(s) << 8;
+	if (tlv->prefix_length > 24)
+		destination_tmp |= stream_getc(s);
+
+	tlv->destination.s_addr = htonl(destination_tmp);
+
 	return tlv;
 }
 
@@ -1234,15 +1220,13 @@ uint16_t eigrp_add_internalTLV_to_stream(struct stream *s,
 
 	stream_putc(s, pe->destination->prefixlen);
 
-	stream_putc(s, pe->destination->u.prefix4.s_addr & 0xFF);
+	stream_putc(s, (ntohl(pe->destination->u.prefix4.s_addr) >> 24) & 0xFF);
 	if (pe->destination->prefixlen > 8)
-		stream_putc(s, (pe->destination->u.prefix4.s_addr >> 8) & 0xFF);
+		stream_putc(s, (ntohl(pe->destination->u.prefix4.s_addr) >> 16) & 0xFF);
 	if (pe->destination->prefixlen > 16)
-		stream_putc(s,
-			    (pe->destination->u.prefix4.s_addr >> 16) & 0xFF);
+		stream_putc(s, (ntohl(pe->destination->u.prefix4.s_addr) >> 8) & 0xFF);
 	if (pe->destination->prefixlen > 24)
-		stream_putc(s,
-			    (pe->destination->u.prefix4.s_addr >> 24) & 0xFF);
+		stream_putc(s, ntohl(pe->destination->u.prefix4.s_addr) & 0xFF);
 
 	return length;
 }
@@ -1327,7 +1311,7 @@ uint16_t eigrp_add_authTLV_SHA256_to_stream(struct stream *s,
 	return 0;
 }
 
-struct TLV_MD5_Authentication_Type *eigrp_authTLV_MD5_new()
+struct TLV_MD5_Authentication_Type *eigrp_authTLV_MD5_new(void)
 {
 	struct TLV_MD5_Authentication_Type *new;
 
@@ -1342,7 +1326,7 @@ void eigrp_authTLV_MD5_free(struct TLV_MD5_Authentication_Type *authTLV)
 	XFREE(MTYPE_EIGRP_AUTH_TLV, authTLV);
 }
 
-struct TLV_SHA256_Authentication_Type *eigrp_authTLV_SHA256_new()
+struct TLV_SHA256_Authentication_Type *eigrp_authTLV_SHA256_new(void)
 {
 	struct TLV_SHA256_Authentication_Type *new;
 
@@ -1363,7 +1347,7 @@ void eigrp_IPv4_InternalTLV_free(
 	XFREE(MTYPE_EIGRP_IPV4_INT_TLV, IPv4_InternalTLV);
 }
 
-struct TLV_Sequence_Type *eigrp_SequenceTLV_new()
+struct TLV_Sequence_Type *eigrp_SequenceTLV_new(void)
 {
 	struct TLV_Sequence_Type *new;
 

@@ -25,34 +25,6 @@
 #include "prefix.h"
 #include "vty.h"
 
-/* Nexthop structure. */
-struct rnh {
-	uint8_t flags;
-
-#define ZEBRA_NHT_CONNECTED  	0x1
-#define ZEBRA_NHT_DELETED       0x2
-#define ZEBRA_NHT_EXACT_MATCH   0x4
-
-	/* VRF identifier. */
-	vrf_id_t vrf_id;
-
-	struct route_entry *state;
-	struct prefix resolved_route;
-	struct list *client_list;
-
-	/* pseudowires dependent on this nh */
-	struct list *zebra_pseudowire_list;
-
-	struct route_node *node;
-
-	/*
-	 * if this has been filtered for the client
-	 */
-	int filtered[ZEBRA_ROUTE_MAX];
-};
-
-typedef enum { RNH_NEXTHOP_TYPE, RNH_IMPORT_CHECK_TYPE } rnh_type_t;
-
 extern int zebra_rnh_ip_default_route;
 extern int zebra_rnh_ipv6_default_route;
 
@@ -67,21 +39,32 @@ static inline int rnh_resolve_via_default(int family)
 		return 0;
 }
 
+static inline const char *rnh_type2str(rnh_type_t type)
+{
+	switch (type) {
+	case RNH_NEXTHOP_TYPE:
+		return "Nexthop";
+	case RNH_IMPORT_CHECK_TYPE:
+		return "Import";
+	}
+
+	return "ERROR";
+}
+
 extern struct rnh *zebra_add_rnh(struct prefix *p, vrf_id_t vrfid,
 				 rnh_type_t type, bool *exists);
 extern struct rnh *zebra_lookup_rnh(struct prefix *p, vrf_id_t vrfid,
 				    rnh_type_t type);
 extern void zebra_free_rnh(struct rnh *rnh);
-extern void zebra_delete_rnh(struct rnh *rnh, rnh_type_t type);
 extern void zebra_add_rnh_client(struct rnh *rnh, struct zserv *client,
 				 rnh_type_t type, vrf_id_t vrfid);
 extern void zebra_register_rnh_pseudowire(vrf_id_t, struct zebra_pw *);
 extern void zebra_deregister_rnh_pseudowire(vrf_id_t, struct zebra_pw *);
 extern void zebra_remove_rnh_client(struct rnh *rnh, struct zserv *client,
 				    rnh_type_t type);
-extern void zebra_evaluate_rnh(struct zebra_vrf *zvrf, int family, int force,
+extern void zebra_evaluate_rnh(struct zebra_vrf *zvrf, afi_t afi, int force,
 			       rnh_type_t type, struct prefix *p);
-extern void zebra_print_rnh_table(vrf_id_t vrfid, int family, struct vty *vty,
-				  rnh_type_t);
+extern void zebra_print_rnh_table(vrf_id_t vrfid, afi_t afi, struct vty *vty,
+				  rnh_type_t type, struct prefix *p);
 extern char *rnh_str(struct rnh *rnh, char *buf, int size);
 #endif /*_ZEBRA_RNH_H */

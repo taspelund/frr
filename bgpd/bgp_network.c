@@ -57,14 +57,32 @@ struct bgp_listener {
 	union sockunion su;
 	struct thread *thread;
 	struct bgp *bgp;
+	char *name;
 };
+
+void bgp_dump_listener_info(struct vty *vty)
+{
+	struct listnode *node;
+	struct bgp_listener *listener;
+
+	vty_out(vty, "Name             fd Address\n");
+	vty_out(vty, "---------------------------\n");
+	for (ALL_LIST_ELEMENTS_RO(bm->listen_sockets, node, listener)) {
+		char buf[128];
+
+		vty_out(vty, "%-16s %d %s\n",
+			listener->name ? listener->name : VRF_DEFAULT_NAME,
+			listener->fd,
+			sockunion2str(&listener->su, buf, sizeof(buf)));
+	}
+}
 
 /*
  * Set MD5 key for the socket, for the given IPv4 peer address.
  * If the password is NULL or zero-length, the option will be disabled.
  */
 static int bgp_md5_set_socket(int socket, union sockunion *su,
-			      const char *password)
+			      uint16_t prefixlen, const char *password)
 {
 	int ret = -1;
 	int en = ENOSYS;
@@ -81,27 +99,49 @@ static int bgp_md5_set_socket(int socket, union sockunion *su,
 		su2.sin.sin_port = 0;
 	else
 		su2.sin6.sin6_port = 0;
-	ret = sockopt_tcp_signature(socket, &su2, password);
+
+	/* For addresses, use the non-extended signature functionality */
+	if ((su2.sa.sa_family == AF_INET && prefixlen == IPV4_MAX_PREFIXLEN)
+	    || (su2.sa.sa_family == AF_INET6
+		&& prefixlen == IPV6_MAX_PREFIXLEN))
+		ret = sockopt_tcp_signature(socket, &su2, password);
+	else
+		ret = sockopt_tcp_signature_ext(socket, &su2, prefixlen,
+						password);
 	en = errno;
 #endif /* HAVE_TCP_MD5SIG */
 
-	if (ret < 0)
-		flog_warn(EC_BGP_NO_TCP_MD5,
-			  "can't set TCP_MD5SIG option on socket %d: %s",
-			  socket, safe_strerror(en));
+	if (ret < 0) {
+		char sabuf[SU_ADDRSTRLEN];
+		sockunion2str(su, sabuf, sizeof(sabuf));
+
+		switch (ret) {
+		case -2:
+			flog_warn(
+				EC_BGP_NO_TCP_MD5,
+				"Unable to set TCP MD5 option on socket for peer %s (sock=%d): This platform does not support MD5 auth for prefixes",
+				sabuf, socket);
+			break;
+		default:
+			flog_warn(
+				EC_BGP_NO_TCP_MD5,
+				"Unable to set TCP MD5 option on socket for peer %s (sock=%d): %s",
+				sabuf, socket, safe_strerror(en));
+		}
+	}
 
 	return ret;
 }
 
 /* Helper for bgp_connect */
 static int bgp_md5_set_connect(int socket, union sockunion *su,
-			       const char *password)
+			       uint16_t prefixlen, const char *password)
 {
 	int ret = -1;
 
 #if HAVE_DECL_TCP_MD5SIG
 	frr_elevate_privs(&bgpd_privs) {
-		ret = bgp_md5_set_socket(socket, su, password);
+		ret = bgp_md5_set_socket(socket, su, prefixlen, password);
 	}
 #endif /* HAVE_TCP_MD5SIG */
 
@@ -114,19 +154,55 @@ static int bgp_md5_set_password(struct peer *peer, const char *password)
 	int ret = 0;
 	struct bgp_listener *listener;
 
-	frr_elevate_privs(&bgpd_privs) {
-	/* Set or unset the password on the listen socket(s). Outbound
+	/*
+	 * Set or unset the password on the listen socket(s). Outbound
 	 * connections are taken care of in bgp_connect() below.
 	 */
+	frr_elevate_privs(&bgpd_privs)
+	{
 		for (ALL_LIST_ELEMENTS_RO(bm->listen_sockets, node, listener))
 			if (listener->su.sa.sa_family
 			    == peer->su.sa.sa_family) {
+				uint16_t prefixlen =
+					peer->su.sa.sa_family == AF_INET
+						? IPV4_MAX_PREFIXLEN
+						: IPV6_MAX_PREFIXLEN;
+
 				ret = bgp_md5_set_socket(listener->fd,
-							 &peer->su, password);
+							 &peer->su, prefixlen,
+							 password);
 				break;
 			}
 	}
 	return ret;
+}
+
+int bgp_md5_set_prefix(struct prefix *p, const char *password)
+{
+	int ret = 0;
+	union sockunion su;
+	struct listnode *node;
+	struct bgp_listener *listener;
+
+	/* Set or unset the password on the listen socket(s). */
+	frr_elevate_privs(&bgpd_privs)
+	{
+		for (ALL_LIST_ELEMENTS_RO(bm->listen_sockets, node, listener))
+			if (listener->su.sa.sa_family == p->family) {
+				prefix2sockunion(p, &su);
+				ret = bgp_md5_set_socket(listener->fd, &su,
+							 p->prefixlen,
+							 password);
+				break;
+			}
+	}
+
+	return ret;
+}
+
+int bgp_md5_unset_prefix(struct prefix *p)
+{
+	return bgp_md5_set_prefix(p, NULL);
 }
 
 int bgp_md5_set(struct peer *peer)
@@ -382,6 +458,17 @@ static int bgp_accept(struct thread *thread)
 		return -1;
 	}
 
+	/* Check whether max prefix restart timer is set for the peer */
+	if (peer1->t_pmax_restart) {
+		if (bgp_debug_neighbor_events(peer1))
+			zlog_debug(
+				"%s - incoming conn rejected - "
+				"peer max prefix timer is active",
+				peer1->host);
+		close(bgp_sock);
+		return -1;
+	}
+
 	if (bgp_debug_neighbor_events(peer1))
 		zlog_debug("[Event] BGP connection from host %s fd %d",
 			   inet_sutop(&su, buf), bgp_sock);
@@ -530,8 +617,6 @@ static int bgp_update_source(struct peer *peer)
 	return ret;
 }
 
-#define DATAPLANE_MARK 254	/* main table ID */
-
 /* BGP try to connect to the peer.  */
 int bgp_connect(struct peer *peer)
 {
@@ -561,10 +646,6 @@ int bgp_connect(struct peer *peer)
 
 	sockopt_reuseaddr(peer->fd);
 	sockopt_reuseport(peer->fd);
-	if (sockopt_mark_default(peer->fd, DATAPLANE_MARK, &bgpd_privs) < 0)
-		flog_warn(EC_BGP_NO_SOCKOPT_MARK,
-			  "Unable to set mark on FD for peer %s, err=%s",
-			  peer->host, safe_strerror(errno));
 
 #ifdef IPTOS_PREC_INTERNETCONTROL
 	frr_elevate_privs(&bgpd_privs) {
@@ -577,8 +658,14 @@ int bgp_connect(struct peer *peer)
 	}
 #endif
 
-	if (peer->password)
-		bgp_md5_set_connect(peer->fd, &peer->su, peer->password);
+	if (peer->password) {
+		uint16_t prefixlen = peer->su.sa.sa_family == AF_INET
+					     ? IPV4_MAX_PREFIXLEN
+					     : IPV6_MAX_PREFIXLEN;
+
+		bgp_md5_set_connect(peer->fd, &peer->su, prefixlen,
+				    peer->password);
+	}
 
 	/* Update source bind. */
 	if (bgp_update_source(peer) < 0) {
@@ -668,10 +755,10 @@ static int bgp_listener(int sock, struct sockaddr *sa, socklen_t salen,
 
 	listener = XCALLOC(MTYPE_BGP_LISTENER, sizeof(*listener));
 	listener->fd = sock;
+	listener->name = XSTRDUP(MTYPE_BGP_LISTENER, bgp->name);
 
 	/* this socket needs a change of ns. record bgp back pointer */
-	if (bgp->vrf_id != VRF_DEFAULT && vrf_is_mapped_on_netns(
-						vrf_lookup_by_id(bgp->vrf_id)))
+	if (bgp->vrf_id != VRF_DEFAULT)
 		listener->bgp = bgp;
 
 	memcpy(&listener->su, sa, salen);
@@ -708,7 +795,11 @@ int bgp_socket(struct bgp *bgp, unsigned short port, const char *address)
 			     gai_strerror(ret));
 		return -1;
 	}
-
+	if (bgp_option_check(BGP_OPT_NO_ZEBRA) &&
+	    bgp->vrf_id != VRF_DEFAULT) {
+		freeaddrinfo(ainfo_save);
+		return -1;
+	}
 	count = 0;
 	for (ainfo = ainfo_save; ainfo; ainfo = ainfo->ai_next) {
 		int sock;
@@ -774,6 +865,7 @@ void bgp_close_vrf_socket(struct bgp *bgp)
 			thread_cancel(listener->thread);
 			close(listener->fd);
 			listnode_delete(bm->listen_sockets, listener);
+			XFREE(MTYPE_BGP_LISTENER, listener->name);
 			XFREE(MTYPE_BGP_LISTENER, listener);
 		}
 	}
@@ -795,6 +887,7 @@ void bgp_close(void)
 		thread_cancel(listener->thread);
 		close(listener->fd);
 		listnode_delete(bm->listen_sockets, listener);
+		XFREE(MTYPE_BGP_LISTENER, listener->name);
 		XFREE(MTYPE_BGP_LISTENER, listener);
 	}
 }

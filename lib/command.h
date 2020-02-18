@@ -33,6 +33,17 @@
 DECLARE_MTYPE(HOST)
 DECLARE_MTYPE(COMPLETION)
 
+/*
+ * From RFC 1123 (Requirements for Internet Hosts), Section 2.1 on hostnames:
+ * One aspect of host name syntax is hereby changed: the restriction on
+ * the first character is relaxed to allow either a letter or a digit.
+ * Host software MUST support this more liberal syntax.
+ *
+ * Host software MUST handle host names of up to 63 characters and
+ * SHOULD handle host names of up to 255 characters.
+ */
+#define HOSTNAME_LEN   255
+
 /* Host configuration variable */
 struct host {
 	/* Host name of this router. */
@@ -77,7 +88,10 @@ enum node_type {
 	CONFIG_NODE,		 /* Config node. Default mode of config file. */
 	DEBUG_NODE,		 /* Debug node. */
 	VRF_DEBUG_NODE,		 /* Vrf Debug node. */
+	NORTHBOUND_DEBUG_NODE,	 /* Northbound Debug node. */
 	DEBUG_VNC_NODE,		 /* Debug VNC node. */
+	RMAP_DEBUG_NODE,         /* Route-map debug node */
+	RESOLVER_DEBUG_NODE,	 /* Resolver debug node */
 	AAA_NODE,		 /* AAA node. */
 	KEYCHAIN_NODE,		 /* Key-chain node. */
 	KEYCHAIN_KEY_NODE,       /* Key-chain key node. */
@@ -142,6 +156,7 @@ enum node_type {
 	BFD_NODE,		 /* BFD protocol mode. */
 	BFD_PEER_NODE,		 /* BFD peer configuration mode. */
 	OPENFABRIC_NODE,	/* OpenFabric router configuration node */
+	VRRP_NODE,		 /* VRRP node */
 	NODE_TYPE_MAX, /* maximum */
 };
 
@@ -313,6 +328,9 @@ struct cmd_node {
 
 #define DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr, attr)                   \
 	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr, attr)
+
+#define DEFPY_HIDDEN(funcname, cmdname, cmdstr, helpstr)                       \
+	DEFUN_HIDDEN(funcname, cmdname, cmdstr, helpstr)
 #endif /* VTYSH_EXTRACT_PL */
 
 /* Some macroes */
@@ -355,7 +373,7 @@ struct cmd_node {
 #define IN_STR  "Filter incoming routing updates\n"
 #define V4NOTATION_STR "specify by IPv4 address notation(e.g. 0.0.0.0)\n"
 #define OSPF6_NUMBER_STR "Specify by number\n"
-#define INTERFACE_STR "Interface infomation\n"
+#define INTERFACE_STR "Interface information\n"
 #define IFNAME_STR "Interface name(e.g. ep0)\n"
 #define IP6_STR "IPv6 Information\n"
 #define OSPF6_STR "Open Shortest Path First (OSPF) for IPv6\n"
@@ -376,7 +394,9 @@ struct cmd_node {
 #define SR_STR "Segment-Routing specific commands\n"
 #define WATCHFRR_STR "watchfrr information\n"
 #define ZEBRA_STR "Zebra information\n"
+#define FILTER_LOG_STR "Filter Logs\n"
 
+#define CMD_VNI_RANGE "(1-16777215)"
 #define CONF_BACKUP_EXT ".sav"
 
 /* Command warnings. */
@@ -388,6 +408,12 @@ struct cmd_node {
 #define NEIGHBOR_ADDR_STR  "Neighbor address\nIPv6 address\n"
 #define NEIGHBOR_ADDR_STR2 "Neighbor address\nNeighbor IPv6 address\nInterface name or neighbor tag\n"
 #define NEIGHBOR_ADDR_STR3 "Neighbor address\nIPv6 address\nInterface name\n"
+
+/* Dameons lists */
+#define DAEMONS_STR                                                            \
+	"For the zebra daemon\nFor the rip daemon\nFor the ripng daemon\nFor the ospf daemon\nFor the ospfv6 daemon\nFor the bgp daemon\nFor the isis daemon\nFor the pbr daemon\nFor the fabricd daemon\nFor the pim daemon\nFor the static daemon\nFor the sharpd daemon\nFor the vrrpd daemon\n"
+#define DAEMONS_LIST                                                           \
+	"<zebra|ripd|ripngd|ospfd|ospf6d|bgpd|isisd|pbrd|fabricd|pimd|staticd|sharpd|vrrpd>"
 
 /* Prototypes. */
 extern void install_node(struct cmd_node *, int (*)(struct vty *));

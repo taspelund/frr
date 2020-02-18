@@ -40,10 +40,7 @@
 #include "ripngd/ripngd.h"
 
 /* RIPngd options. */
-#if CONFDATE > 20190521
-	CPP_NOTICE("-r / --retain has reached deprecation EOL, remove")
-#endif
-struct option longopts[] = {{"retain", no_argument, NULL, 'r'}, {0}};
+struct option longopts[] = {{0}};
 
 /* ripngd privileges */
 zebra_capabilities_t _caps_p[] = {ZCAP_NET_RAW, ZCAP_BIND};
@@ -72,13 +69,9 @@ static struct frr_daemon_info ripngd_di;
 static void sighup(void)
 {
 	zlog_info("SIGHUP received");
-	ripng_clean();
-	ripng_reset();
 
 	/* Reload config file. */
-	vty_read_config(ripngd_di.config_file, config_default);
-
-	/* Try to return to normal operation. */
+	vty_read_config(NULL, ripngd_di.config_file, config_default);
 }
 
 /* SIGINT handler. */
@@ -118,6 +111,11 @@ struct quagga_signal_t ripng_signals[] = {
 	},
 };
 
+static const struct frr_yang_module_info *ripngd_yang_modules[] = {
+	&frr_interface_info,
+	&frr_ripngd_info,
+};
+
 FRR_DAEMON_INFO(ripngd, RIPNG, .vty_port = RIPNG_VTY_PORT,
 
 		.proghelp = "Implementation of the RIPng routing protocol.",
@@ -125,12 +123,12 @@ FRR_DAEMON_INFO(ripngd, RIPNG, .vty_port = RIPNG_VTY_PORT,
 		.signals = ripng_signals,
 		.n_signals = array_size(ripng_signals),
 
-		.privs = &ripngd_privs, )
+		.privs = &ripngd_privs,
 
-#if CONFDATE > 20190521
-CPP_NOTICE("-r / --retain has reached deprecation EOL, remove")
-#endif
-#define DEPRECATED_OPTIONS "r"
+		.yang_modules = ripngd_yang_modules,
+		.n_yang_modules = array_size(ripngd_yang_modules), )
+
+#define DEPRECATED_OPTIONS ""
 
 /* RIPngd main routine. */
 int main(int argc, char **argv)
@@ -170,6 +168,7 @@ int main(int argc, char **argv)
 
 	/* RIPngd inits. */
 	ripng_init();
+	ripng_cli_init();
 	zebra_init(master);
 	ripng_peer_init();
 

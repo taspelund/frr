@@ -136,6 +136,11 @@ struct option longopts[] =
     { 0 }
   };
 
+static const struct frr_yang_module_info *babeld_yang_modules[] =
+  {
+    &frr_interface_info,
+  };
+
 FRR_DAEMON_INFO(babeld, BABELD,
 		.vty_port = BABEL_VTY_PORT,
 		.proghelp = "Implementation of the BABEL routing protocol.",
@@ -144,6 +149,9 @@ FRR_DAEMON_INFO(babeld, BABELD,
 		.n_signals = array_size(babel_signals),
 
 		.privs = &babeld_privs,
+
+		.yang_modules = babeld_yang_modules,
+		.n_yang_modules = array_size(babeld_yang_modules),
 		)
 
 int
@@ -191,6 +199,8 @@ main(int argc, char **argv)
     babel_replace_by_null(STDIN_FILENO);
 
     /* init some quagga's dependencies, and babeld's commands */
+    if_zapi_callbacks(babel_ifp_create, babel_ifp_up,
+		      babel_ifp_down, babel_ifp_destroy);
     babeld_quagga_init();
     /* init zebra client's structure and it's commands */
     /* this replace kernel_setup && kernel_setup_socket */
@@ -385,7 +395,7 @@ show_babel_main_configuration (struct vty *vty)
     vty_out (vty,
             "state file              = %s\n"
             "configuration file      = %s\n"
-            "protocol informations:\n"
+            "protocol information:\n"
             "  multicast address     = %s\n"
             "  port                  = %d\n"
             "vty address             = %s\n"

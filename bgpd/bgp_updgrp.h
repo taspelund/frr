@@ -56,6 +56,7 @@
 
 #define PEER_UPDGRP_AF_FLAGS                                                   \
 	(PEER_FLAG_SEND_COMMUNITY | PEER_FLAG_SEND_EXT_COMMUNITY               \
+	 | PEER_FLAG_SEND_LARGE_COMMUNITY                                      \
 	 | PEER_FLAG_DEFAULT_ORIGINATE | PEER_FLAG_REFLECTOR_CLIENT            \
 	 | PEER_FLAG_RSERVER_CLIENT | PEER_FLAG_NEXTHOP_SELF                   \
 	 | PEER_FLAG_NEXTHOP_UNCHANGED | PEER_FLAG_FORCE_NEXTHOP_SELF          \
@@ -64,8 +65,7 @@
 	 | PEER_FLAG_REMOVE_PRIVATE_AS_ALL                                     \
 	 | PEER_FLAG_REMOVE_PRIVATE_AS_REPLACE                                 \
 	 | PEER_FLAG_REMOVE_PRIVATE_AS_ALL_REPLACE                             \
-	 | PEER_FLAG_ADDPATH_TX_ALL_PATHS                                      \
-	 | PEER_FLAG_ADDPATH_TX_BESTPATH_PER_AS | PEER_FLAG_AS_OVERRIDE)
+	 | PEER_FLAG_AS_OVERRIDE)
 
 #define PEER_UPDGRP_CAP_FLAGS (PEER_CAP_AS4_RCV)
 
@@ -469,8 +469,6 @@ extern int update_group_clear_update_dbg(struct update_group *updgrp,
 
 extern void update_bgp_group_free(struct bgp *bgp);
 extern int bgp_addpath_encode_tx(struct peer *peer, afi_t afi, safi_t safi);
-extern int bgp_addpath_tx_path(struct peer *peer, afi_t afi, safi_t safi,
-			       struct bgp_path_info *pi);
 
 /*
  * Inline functions
@@ -593,9 +591,9 @@ static inline void bgp_announce_peer(struct peer *peer)
  */
 static inline int advertise_list_is_empty(struct update_subgroup *subgrp)
 {
-	if (!BGP_ADV_FIFO_EMPTY(&subgrp->sync->update)
-	    || !BGP_ADV_FIFO_EMPTY(&subgrp->sync->withdraw)
-	    || !BGP_ADV_FIFO_EMPTY(&subgrp->sync->withdraw_low)) {
+	if (bgp_adv_fifo_count(&subgrp->sync->update)
+	    || bgp_adv_fifo_count(&subgrp->sync->withdraw)
+	    || bgp_adv_fifo_count(&subgrp->sync->withdraw_low)) {
 		return 0;
 	}
 

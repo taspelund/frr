@@ -1115,7 +1115,9 @@ really_send_update(struct interface *ifp,
     if(channels_len >= 0) {
         accumulate_byte(ifp, 2);
         accumulate_byte(ifp, channels_len);
-        accumulate_bytes(ifp, channels, channels_len);
+
+	if (channels && channels_len > 0)
+		accumulate_bytes(ifp, channels, channels_len);
     }
     end_message(ifp, MESSAGE_UPDATE, 10 + (real_plen + 7) / 8 - omit +
                 channels_size);
@@ -1430,7 +1432,7 @@ send_wildcard_retraction(struct interface *ifp)
 }
 
 void
-update_myseqno()
+update_myseqno(void)
 {
     myseqno = seqno_plus(myseqno, 1);
 }

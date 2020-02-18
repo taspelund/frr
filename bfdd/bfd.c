@@ -374,8 +374,6 @@ static struct bfd_session *bfd_session_new(int sd)
 	struct bfd_session *bs;
 
 	bs = XCALLOC(MTYPE_BFDD_CONFIG, sizeof(*bs));
-	if (bs == NULL)
-		return NULL;
 
 	QOBJ_REG(bs, bfd_session);
 
@@ -770,10 +768,10 @@ void integer2timestr(uint64_t time, char *buf, size_t buflen)
 	int rv;
 
 #define MINUTES (60)
-#define HOURS (24 * MINUTES)
-#define DAYS (30 * HOURS)
-#define MONTHS (12 * DAYS)
-#define YEARS (MONTHS)
+#define HOURS (60 * MINUTES)
+#define DAYS (24 * HOURS)
+#define MONTHS (30 * DAYS)
+#define YEARS (12 * MONTHS)
 	if (time >= YEARS) {
 		year = time / YEARS;
 		time -= year * YEARS;
@@ -860,26 +858,26 @@ static struct hash *bfd_mhop_hash;
 static struct hash *bfd_vrf_hash;
 static struct hash *bfd_iface_hash;
 
-static unsigned int bfd_id_hash_do(void *p);
-static unsigned int bfd_shop_hash_do(void *p);
-static unsigned int bfd_mhop_hash_do(void *p);
-static unsigned int bfd_vrf_hash_do(void *p);
-static unsigned int bfd_iface_hash_do(void *p);
+static unsigned int bfd_id_hash_do(const void *p);
+static unsigned int bfd_shop_hash_do(const void *p);
+static unsigned int bfd_mhop_hash_do(const void *p);
+static unsigned int bfd_vrf_hash_do(const void *p);
+static unsigned int bfd_iface_hash_do(const void *p);
 
 static void _shop_key(struct bfd_session *bs, const struct bfd_shop_key *shop);
 static void _shop_key2(struct bfd_session *bs, const struct bfd_shop_key *shop);
 static void _mhop_key(struct bfd_session *bs, const struct bfd_mhop_key *mhop);
 static int _iface_key(struct bfd_iface *iface, const char *ifname);
 
-static void _bfd_free(struct hash_backet *hb,
+static void _bfd_free(struct hash_bucket *hb,
 		      void *arg __attribute__((__unused__)));
 static void _vrf_free(void *arg);
 static void _iface_free(void *arg);
 
 /* BFD hash for our discriminator. */
-static unsigned int bfd_id_hash_do(void *p)
+static unsigned int bfd_id_hash_do(const void *p)
 {
-	struct bfd_session *bs = p;
+	const struct bfd_session *bs = p;
 
 	return jhash_1word(bs->discrs.my_discr, 0);
 }
@@ -892,9 +890,9 @@ static bool bfd_id_hash_cmp(const void *n1, const void *n2)
 }
 
 /* BFD hash for single hop. */
-static unsigned int bfd_shop_hash_do(void *p)
+static unsigned int bfd_shop_hash_do(const void *p)
 {
-	struct bfd_session *bs = p;
+	const struct bfd_session *bs = p;
 
 	return jhash(&bs->shop, sizeof(bs->shop), 0);
 }
@@ -907,9 +905,9 @@ static bool bfd_shop_hash_cmp(const void *n1, const void *n2)
 }
 
 /* BFD hash for multi hop. */
-static unsigned int bfd_mhop_hash_do(void *p)
+static unsigned int bfd_mhop_hash_do(const void *p)
 {
-	struct bfd_session *bs = p;
+	const struct bfd_session *bs = p;
 
 	return jhash(&bs->mhop, sizeof(bs->mhop), 0);
 }
@@ -922,9 +920,9 @@ static bool bfd_mhop_hash_cmp(const void *n1, const void *n2)
 }
 
 /* BFD hash for VRFs. */
-static unsigned int bfd_vrf_hash_do(void *p)
+static unsigned int bfd_vrf_hash_do(const void *p)
 {
-	struct bfd_vrf *vrf = p;
+	const struct bfd_vrf *vrf = p;
 
 	return jhash_1word(vrf->vrf_id, 0);
 }
@@ -937,9 +935,9 @@ static bool bfd_vrf_hash_cmp(const void *n1, const void *n2)
 }
 
 /* BFD hash for interfaces. */
-static unsigned int bfd_iface_hash_do(void *p)
+static unsigned int bfd_iface_hash_do(const void *p)
 {
-	struct bfd_iface *iface = p;
+	const struct bfd_iface *iface = p;
 
 	return string_hash_make(iface->ifname);
 }
@@ -1198,7 +1196,7 @@ void bfd_initialize(void)
 				     "BFD interface hash");
 }
 
-static void _bfd_free(struct hash_backet *hb,
+static void _bfd_free(struct hash_bucket *hb,
 		      void *arg __attribute__((__unused__)))
 {
 	struct bfd_session *bs = hb->data;

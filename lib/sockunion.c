@@ -163,7 +163,7 @@ int sockunion_accept(int sock, union sockunion *su)
 }
 
 /* Return sizeof union sockunion.  */
-static int sockunion_sizeof(const union sockunion *su)
+int sockunion_sizeof(const union sockunion *su)
 {
 	int ret;
 
@@ -356,7 +356,7 @@ int sockopt_ttl(int family, int sock, int ttl)
  * Which on linux is a no-op since it is enabled by
  * default and on BSD it uses TCP_NOPUSH to do
  * the same thing( which it was not configured to
- * use).  This cleanup of the api occured on 8/1/17
+ * use).  This cleanup of the api occurred on 8/1/17
  * I imagine if after more than 1 year of no-one
  * complaining, and a major upgrade release we
  * can deprecate and remove this function call
@@ -364,21 +364,6 @@ int sockopt_ttl(int family, int sock, int ttl)
 int sockopt_cork(int sock, int onoff)
 {
 	return 0;
-}
-
-int sockopt_mark_default(int sock, int mark, struct zebra_privs_t *cap)
-{
-#ifdef SO_MARK
-	int ret;
-
-	frr_elevate_privs(cap) {
-		ret = setsockopt(sock, SOL_SOCKET, SO_MARK, &mark,
-				 sizeof(mark));
-	}
-	return ret;
-#else
-	return 0;
-#endif
 }
 
 int sockopt_minttl(int family, int sock, int minttl)
@@ -472,7 +457,7 @@ unsigned int sockunion_hash(const union sockunion *su)
 		return jhash_1word(su->sin.sin_addr.s_addr, 0);
 	case AF_INET6:
 		return jhash2(su->sin6.sin6_addr.s6_addr32,
-			      ZEBRA_NUM_OF(su->sin6.sin6_addr.s6_addr32), 0);
+			      array_size(su->sin6.sin6_addr.s6_addr32), 0);
 	}
 	return 0;
 }

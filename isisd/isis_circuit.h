@@ -32,6 +32,8 @@
 #include "isis_constants.h"
 #include "isis_common.h"
 
+DECLARE_HOOK(isis_if_new_hook, (struct interface *ifp), (ifp));
+
 struct isis_lsp;
 
 struct password {
@@ -67,6 +69,11 @@ struct isis_p2p_info {
 
 struct bfd_info;
 
+struct isis_circuit_arg {
+	int level;
+	struct isis_circuit *circuit;
+};
+
 struct isis_circuit {
 	int state;
 	uint8_t circuit_id;	  /* l1/l2 bcast CircuitID */
@@ -81,8 +88,8 @@ struct isis_circuit {
 	struct thread *t_read;
 	struct thread *t_send_csnp[2];
 	struct thread *t_send_psnp[2];
-	struct thread *t_send_lsp;
 	struct isis_tx_queue *tx_queue;
+	struct isis_circuit_arg level_arg[2]; /* used as argument for threads */
 
 	/* there is no real point in two streams, just for programming kicker */
 	int (*rx)(struct isis_circuit *circuit, uint8_t *ssnpa);
@@ -179,12 +186,14 @@ void isis_circuit_af_set(struct isis_circuit *circuit, bool ip_router,
 			 bool ipv6_router);
 ferr_r isis_circuit_passive_set(struct isis_circuit *circuit, bool passive);
 void isis_circuit_is_type_set(struct isis_circuit *circuit, int is_type);
-ferr_r isis_circuit_circ_type_set(struct isis_circuit *circuit, int circ_type);
+void isis_circuit_circ_type_set(struct isis_circuit *circuit, int circ_type);
 
 ferr_r isis_circuit_metric_set(struct isis_circuit *circuit, int level,
 			       int metric);
 
 ferr_r isis_circuit_passwd_unset(struct isis_circuit *circuit);
+ferr_r isis_circuit_passwd_set(struct isis_circuit *circuit,
+			       uint8_t passwd_type, const char *passwd);
 ferr_r isis_circuit_passwd_cleartext_set(struct isis_circuit *circuit,
 					 const char *passwd);
 ferr_r isis_circuit_passwd_hmac_md5_set(struct isis_circuit *circuit,

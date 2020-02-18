@@ -50,15 +50,6 @@ struct ospf6_area {
 	/* Area type */
 	int no_summary;
 
-	/* Temporary fix to avoid the race condition
-	 * #8  0x000000000042348d in ospf6_abr_examin_summary (lsa=0x14cac10, oa=oa@entry=0x148d670) at ospf6_abr.c:936
-	 * #9  0x0000000000423531 in ospf6_abr_examin_brouter (router_id=67372036) at ospf6_abr.c:961
-	 * #10 0x000000000040f681 in ospf6_top_brouter_hook_add (route=0x14a9070) at ospf6_top.c:98
-	 * #11 0x0000000000419d87 in ospf6_route_add (route=route@entry=0x14a9070, table=table@entry=0x147ecb0) at ospf6_route.c:739
-	 * #12 0x000000000042348d in ospf6_abr_examin_summary (lsa=0x14b8ac0, oa=oa@entry=0x148d670) at ospf6_abr.c:936
-	 */
-	int running_ospf6_abr_examin_summary;
-
 	/* Brouter traversal protection */
 	int intra_brouter_calc;
 

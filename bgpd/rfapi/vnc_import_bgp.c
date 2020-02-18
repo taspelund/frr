@@ -356,7 +356,8 @@ static int process_unicast_route(struct bgp *bgp,		 /* in */
 	 * all of the possible returns above.
 	 */
 	memset(&hattr, 0, sizeof(struct attr));
-	bgp_attr_dup(&hattr, attr); /* hattr becomes a ghost attr */
+	/* hattr becomes a ghost attr */
+	hattr = *attr;
 
 	if (rmap) {
 		struct bgp_path_info info;
@@ -545,8 +546,8 @@ static void vnc_import_bgp_add_route_mode_resolve_nve_one_rd(
 		return;
 	}
 
-	/* Iterate over bgp_path_info items at this node */
-	for (bpi = bn->info; bpi; bpi = bpi->next) {
+	/* Iterate over bgp_info items at this node */
+	for (bpi = bgp_node_get_bgp_path_info(bn); bpi; bpi = bpi->next) {
 
 		vnc_import_bgp_add_route_mode_resolve_nve_one_bi(
 			bgp, afi, bpi, /* VPN bpi */
@@ -676,7 +677,7 @@ static void vnc_import_bgp_add_route_mode_resolve_nve(
 
 		struct bgp_table *table;
 
-		table = (struct bgp_table *)(bnp->info);
+		table = bgp_node_get_bgp_table_info(bnp);
 
 		if (!table)
 			continue;
@@ -808,7 +809,8 @@ static void vnc_import_bgp_add_route_mode_plain(struct bgp *bgp,
 	 * all of the possible returns above.
 	 */
 	memset(&hattr, 0, sizeof(struct attr));
-	bgp_attr_dup(&hattr, attr); /* hattr becomes a ghost attr */
+	/* hattr becomes a ghost attr */
+	hattr = *attr;
 
 	if (rmap) {
 		struct bgp_path_info info;
@@ -1010,7 +1012,8 @@ vnc_import_bgp_add_route_mode_nvegroup(struct bgp *bgp, struct prefix *prefix,
 	 * all of the possible returns above.
 	 */
 	memset(&hattr, 0, sizeof(struct attr));
-	bgp_attr_dup(&hattr, attr); /* hattr becomes a ghost attr */
+	/* hattr becomes a ghost attr */
+	hattr = *attr;
 
 	if (rmap) {
 		struct bgp_path_info path;
@@ -1305,8 +1308,8 @@ static void vnc_import_bgp_del_route_mode_resolve_nve_one_rd(
 		return;
 	}
 
-	/* Iterate over bgp_path_info items at this node */
-	for (bpi = bn->info; bpi; bpi = bpi->next) {
+	/* Iterate over bgp_info items at this node */
+	for (bpi = bgp_node_get_bgp_path_info(bn); bpi; bpi = bpi->next) {
 
 		vnc_import_bgp_del_route_mode_resolve_nve_one_bi(
 			bgp, afi, bpi, /* VPN bpi */
@@ -1377,7 +1380,7 @@ vnc_import_bgp_del_route_mode_resolve_nve(struct bgp *bgp, afi_t afi,
 
 		struct bgp_table *table;
 
-		table = (struct bgp_table *)(bnp->info);
+		table = bgp_node_get_bgp_table_info(bnp);
 
 		if (!table)
 			continue;
@@ -1797,7 +1800,7 @@ static void vnc_import_bgp_exterior_add_route_it(
 
 				/* use local_pref from unicast route */
 				memset(&new_attr, 0, sizeof(struct attr));
-				bgp_attr_dup(&new_attr, bpi_interior->attr);
+				new_attr = *bpi_interior->attr;
 				if (info->attr->flag
 				    & ATTR_FLAG_BIT(BGP_ATTR_LOCAL_PREF)) {
 					new_attr.local_pref =
@@ -2128,7 +2131,7 @@ void vnc_import_bgp_exterior_add_route_interior(
 
 			/* use local_pref from unicast route */
 			memset(&new_attr, 0, sizeof(struct attr));
-			bgp_attr_dup(&new_attr, bpi_interior->attr);
+			new_attr = *bpi_interior->attr;
 			if (bpi_exterior
 			    && (bpi_exterior->attr->flag
 				& ATTR_FLAG_BIT(BGP_ATTR_LOCAL_PREF))) {
@@ -2265,7 +2268,7 @@ void vnc_import_bgp_exterior_add_route_interior(
 
 				/* use local_pref from unicast route */
 				memset(&new_attr, 0, sizeof(struct attr));
-				bgp_attr_dup(&new_attr, bpi_interior->attr);
+				new_attr = *bpi_interior->attr;
 				if (bpi_exterior
 				    && (bpi_exterior->attr->flag
 					& ATTR_FLAG_BIT(BGP_ATTR_LOCAL_PREF))) {
@@ -2386,7 +2389,7 @@ void vnc_import_bgp_exterior_add_route_interior(
 
 			/* use local_pref from unicast route */
 			memset(&new_attr, 0, sizeof(struct attr));
-			bgp_attr_dup(&new_attr, bpi_interior->attr);
+			new_attr = *bpi_interior->attr;
 			if (bpi_exterior
 			    && (bpi_exterior->attr->flag
 				& ATTR_FLAG_BIT(BGP_ATTR_LOCAL_PREF))) {
@@ -2577,7 +2580,7 @@ void vnc_import_bgp_exterior_del_route_interior(
 
 				/* use local_pref from unicast route */
 				memset(&new_attr, 0, sizeof(struct attr));
-				bgp_attr_dup(&new_attr, bpi->attr);
+				new_attr = *bpi->attr;
 				if (bpi_exterior
 				    && (bpi_exterior->attr->flag
 					& ATTR_FLAG_BIT(BGP_ATTR_LOCAL_PREF))) {
@@ -2780,7 +2783,8 @@ void vnc_import_bgp_redist_enable(struct bgp *bgp, afi_t afi)
 
 		struct bgp_path_info *bpi;
 
-		for (bpi = rn->info; bpi; bpi = bpi->next) {
+		for (bpi = bgp_node_get_bgp_path_info(rn); bpi;
+		     bpi = bpi->next) {
 
 			if (CHECK_FLAG(bpi->flags, BGP_PATH_REMOVED))
 				continue;
@@ -2820,7 +2824,8 @@ void vnc_import_bgp_exterior_redist_enable(struct bgp *bgp, afi_t afi)
 
 		struct bgp_path_info *bpi;
 
-		for (bpi = rn->info; bpi; bpi = bpi->next) {
+		for (bpi = bgp_node_get_bgp_path_info(rn); bpi;
+		     bpi = bpi->next) {
 
 			if (CHECK_FLAG(bpi->flags, BGP_PATH_REMOVED))
 				continue;
@@ -2865,7 +2870,8 @@ void vnc_import_bgp_exterior_redist_enable_it(
 
 		struct bgp_path_info *bpi;
 
-		for (bpi = rn->info; bpi; bpi = bpi->next) {
+		for (bpi = bgp_node_get_bgp_path_info(rn); bpi;
+		     bpi = bpi->next) {
 
 			if (CHECK_FLAG(bpi->flags, BGP_PATH_REMOVED))
 				continue;
@@ -2902,14 +2908,17 @@ void vnc_import_bgp_redist_disable(struct bgp *bgp, afi_t afi)
 	for (rn1 = bgp_table_top(bgp->rib[afi][SAFI_MPLS_VPN]); rn1;
 	     rn1 = bgp_route_next(rn1)) {
 
-		if (rn1->info) {
-			for (rn2 = bgp_table_top(rn1->info); rn2;
-			     rn2 = bgp_route_next(rn2)) {
+		if (bgp_node_has_bgp_path_info_data(rn1)) {
+
+			for (rn2 = bgp_table_top(
+				     bgp_node_get_bgp_table_info(rn1));
+			     rn2; rn2 = bgp_route_next(rn2)) {
 
 				struct bgp_path_info *bpi;
 				struct bgp_path_info *nextbpi;
 
-				for (bpi = rn2->info; bpi; bpi = nextbpi) {
+				for (bpi = bgp_node_get_bgp_path_info(rn2); bpi;
+				     bpi = nextbpi) {
 
 					nextbpi = bpi->next;
 
@@ -2999,7 +3008,8 @@ void vnc_import_bgp_exterior_redist_disable(struct bgp *bgp, afi_t afi)
 
 			struct bgp_path_info *bpi;
 
-			for (bpi = rn->info; bpi; bpi = bpi->next) {
+			for (bpi = bgp_node_get_bgp_path_info(rn); bpi;
+			     bpi = bpi->next) {
 
 				if (CHECK_FLAG(bpi->flags, BGP_PATH_REMOVED))
 					continue;

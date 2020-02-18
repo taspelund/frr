@@ -187,6 +187,12 @@ int pim_pim_packet(struct interface *ifp, uint8_t *buf, size_t len)
 	header->checksum = 0;
 
 	if (header->type == PIM_MSG_TYPE_REGISTER) {
+		if (pim_msg_len < PIM_MSG_REGISTER_LEN) {
+			if (PIM_DEBUG_PIM_PACKETS)
+				zlog_debug("PIM Register Message size=%d shorther than min length %d",
+					   pim_msg_len, PIM_MSG_REGISTER_LEN);
+			return -1;
+		}
 		/* First 8 byte header checksum */
 		checksum = in_cksum(pim_msg, PIM_MSG_REGISTER_LEN);
 		if (checksum != pim_checksum) {
@@ -346,7 +352,7 @@ static int pim_sock_read(struct thread *t)
 		}
 
 		count++;
-		if (count % qpim_packet_process == 0)
+		if (count % router->packet_process == 0)
 			cont = 0;
 	}
 
@@ -376,8 +382,8 @@ static void pim_sock_read_on(struct interface *ifp)
 			   pim_ifp->pim_sock_fd);
 	}
 	pim_ifp->t_pim_sock_read = NULL;
-	thread_add_read(master, pim_sock_read, ifp, pim_ifp->pim_sock_fd,
-			&pim_ifp->t_pim_sock_read);
+	thread_add_read(router->master, pim_sock_read, ifp,
+			pim_ifp->pim_sock_fd, &pim_ifp->t_pim_sock_read);
 }
 
 static int pim_sock_open(struct interface *ifp)
@@ -566,6 +572,7 @@ int pim_msg_send(int fd, struct in_addr src, struct in_addr dst,
 	ip->ip_id = htons(++ip_id);
 	ip->ip_hl = 5;
 	ip->ip_v = 4;
+	ip->ip_tos = IPTOS_PREC_INTERNETCONTROL;
 	ip->ip_p = PIM_IP_PROTO_PIM;
 	ip->ip_src = src;
 	ip->ip_dst = dst;
@@ -683,7 +690,7 @@ static void hello_resched(struct interface *ifp)
 			   pim_ifp->pim_hello_period, ifp->name);
 	}
 	THREAD_OFF(pim_ifp->t_pim_hello_timer);
-	thread_add_timer(master, on_pim_hello_send, ifp,
+	thread_add_timer(router->master, on_pim_hello_send, ifp,
 			 pim_ifp->pim_hello_period,
 			 &pim_ifp->t_pim_hello_timer);
 }
@@ -796,8 +803,8 @@ void pim_hello_restart_triggered(struct interface *ifp)
 			   random_msec, ifp->name);
 	}
 
-	thread_add_timer_msec(master, on_pim_hello_send, ifp, random_msec,
-			      &pim_ifp->t_pim_hello_timer);
+	thread_add_timer_msec(router->master, on_pim_hello_send, ifp,
+			      random_msec, &pim_ifp->t_pim_hello_timer);
 }
 
 int pim_sock_add(struct interface *ifp)

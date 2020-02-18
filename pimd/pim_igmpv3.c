@@ -214,8 +214,8 @@ static void igmp_source_timer_on(struct igmp_group *group,
 			source_str, group->group_igmp_sock->interface->name);
 	}
 
-	thread_add_timer_msec(master, igmp_source_timer, source, interval_msec,
-			      &source->t_source_timer);
+	thread_add_timer_msec(router->master, igmp_source_timer, source,
+			      interval_msec, &source->t_source_timer);
 
 	/*
 	  RFC 3376: 6.3. IGMPv3 Source-Specific Forwarding Rules
@@ -997,7 +997,7 @@ static void group_retransmit_group(struct igmp_group *group)
 
 	char query_buf[query_buf_size];
 
-	lmqc = igmp->querier_robustness_variable;
+	lmqc = pim_ifp->igmp_last_member_query_count;
 	lmqi_msec = 100 * pim_ifp->igmp_specific_query_max_response_time_dsec;
 	lmqt_msec = lmqc * lmqi_msec;
 
@@ -1076,7 +1076,7 @@ static int group_retransmit_sources(struct igmp_group *group,
 	igmp = group->group_igmp_sock;
 	pim_ifp = igmp->interface->info;
 
-	lmqc = igmp->querier_robustness_variable;
+	lmqc = pim_ifp->igmp_last_member_query_count;
 	lmqi_msec = 100 * pim_ifp->igmp_specific_query_max_response_time_dsec;
 	lmqt_msec = lmqc * lmqi_msec;
 
@@ -1294,7 +1294,8 @@ static void group_retransmit_timer_on(struct igmp_group *group)
 			igmp->interface->name);
 	}
 
-	thread_add_timer_msec(master, igmp_group_retransmit, group, lmqi_msec,
+	thread_add_timer_msec(router->master, igmp_group_retransmit, group,
+			      lmqi_msec,
 			      &group->t_group_query_retransmit_timer);
 }
 
@@ -1313,9 +1314,13 @@ static long igmp_source_timer_remain_msec(struct igmp_source *source)
 */
 static void group_query_send(struct igmp_group *group)
 {
+	struct pim_interface *pim_ifp;
+	struct igmp_sock *igmp;
 	long lmqc; /* Last Member Query Count */
 
-	lmqc = group->group_igmp_sock->querier_robustness_variable;
+	igmp = group->group_igmp_sock;
+	pim_ifp = igmp->interface->info;
+	lmqc = pim_ifp->igmp_last_member_query_count;
 
 	/* lower group timer to lmqt */
 	igmp_group_timer_lower_to_lmqt(group);
@@ -1350,7 +1355,7 @@ static void source_query_send_by_flag(struct igmp_group *group,
 	igmp = group->group_igmp_sock;
 	pim_ifp = igmp->interface->info;
 
-	lmqc = igmp->querier_robustness_variable;
+	lmqc = pim_ifp->igmp_last_member_query_count;
 	lmqi_msec = 100 * pim_ifp->igmp_specific_query_max_response_time_dsec;
 	lmqt_msec = lmqc * lmqi_msec;
 
@@ -1508,7 +1513,7 @@ void igmp_group_timer_lower_to_lmqt(struct igmp_group *group)
 	ifname = ifp->name;
 
 	lmqi_dsec = pim_ifp->igmp_specific_query_max_response_time_dsec;
-	lmqc = igmp->querier_robustness_variable;
+	lmqc = pim_ifp->igmp_last_member_query_count;
 	lmqt_msec = PIM_IGMP_LMQT_MSEC(
 		lmqi_dsec, lmqc); /* lmqt_msec = (100 * lmqi_dsec) * lmqc */
 
@@ -1545,7 +1550,7 @@ void igmp_source_timer_lower_to_lmqt(struct igmp_source *source)
 	ifname = ifp->name;
 
 	lmqi_dsec = pim_ifp->igmp_specific_query_max_response_time_dsec;
-	lmqc = igmp->querier_robustness_variable;
+	lmqc = pim_ifp->igmp_last_member_query_count;
 	lmqt_msec = PIM_IGMP_LMQT_MSEC(
 		lmqi_dsec, lmqc); /* lmqt_msec = (100 * lmqi_dsec) * lmqc */
 
@@ -1921,7 +1926,7 @@ int igmp_v3_recv_report(struct igmp_sock *igmp, struct in_addr from,
 
 		if (PIM_DEBUG_IGMP_PACKETS) {
 			zlog_debug(
-				"Recv IGMP report v3 from %s on %s: record=%d type=%d auxdatalen=%d sources=%d group=%s",
+				"    Recv IGMP report v3 from %s on %s: record=%d type=%d auxdatalen=%d sources=%d group=%s",
 				from_str, ifp->name, i, rec_type,
 				rec_auxdatalen, rec_num_sources,
 				inet_ntoa(rec_group));
@@ -1948,7 +1953,7 @@ int igmp_v3_recv_report(struct igmp_sock *igmp, struct in_addr from,
 					sprintf(src_str, "<source?>");
 
 				zlog_debug(
-					"Recv IGMP report v3 from %s on %s: record=%d group=%s source=%s",
+					"        Recv IGMP report v3 from %s on %s: record=%d group=%s source=%s",
 					from_str, ifp->name, i,
 					inet_ntoa(rec_group), src_str);
 			}

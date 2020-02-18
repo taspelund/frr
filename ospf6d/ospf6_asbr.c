@@ -946,7 +946,7 @@ static void ospf6_asbr_routemap_update(const char *mapname)
 	}
 }
 
-static void ospf6_asbr_routemap_event(route_map_event_t event, const char *name)
+static void ospf6_asbr_routemap_event(const char *name)
 {
 	int type;
 
@@ -996,7 +996,7 @@ void ospf6_asbr_send_externals_to_area(struct ospf6_area *oa)
 
 	for (ALL_LSDB(oa->ospf6->lsdb, lsa)) {
 		if (ntohs(lsa->header->type) == OSPF6_LSTYPE_AS_EXTERNAL) {
-			zlog_debug("%s: Flooding AS-External LSA %s\n",
+			zlog_debug("%s: Flooding AS-External LSA %s",
 				   __func__, lsa->name);
 			ospf6_flood_area(NULL, lsa, oa);
 		}
@@ -1573,7 +1573,7 @@ static struct route_map_rule_cmd ospf6_routemap_rule_set_tag_cmd = {
 	route_map_rule_tag_free,
 };
 
-static int route_map_command_status(struct vty *vty, int ret)
+static int route_map_command_status(struct vty *vty, enum rmap_compile_rets ret)
 {
 	switch (ret) {
 	case RMAP_RULE_MISSING:
@@ -1585,6 +1585,7 @@ static int route_map_command_status(struct vty *vty, int ret)
 		return CMD_WARNING_CONFIG_FAILED;
 		break;
 	case RMAP_COMPILE_SUCCESS:
+	case RMAP_DUPLICATE_RULE:
 		break;
 	}
 
@@ -1602,8 +1603,10 @@ DEFUN (ospf6_routemap_set_metric_type,
 {
 	VTY_DECLVAR_CONTEXT(route_map_index, route_map_index);
 	int idx_external = 2;
-	int ret = route_map_add_set(route_map_index, "metric-type",
-				    argv[idx_external]->arg);
+	enum rmap_compile_rets ret = route_map_add_set(route_map_index,
+						       "metric-type",
+						       argv[idx_external]->arg);
+
 	return route_map_command_status(vty, ret);
 }
 
@@ -1619,7 +1622,9 @@ DEFUN (ospf6_routemap_no_set_metric_type,
 {
 	VTY_DECLVAR_CONTEXT(route_map_index, route_map_index);
 	char *ext = (argc == 4) ? argv[3]->text : NULL;
-	int ret = route_map_delete_set(route_map_index, "metric-type", ext);
+	enum rmap_compile_rets ret = route_map_delete_set(route_map_index,
+							  "metric-type", ext);
+
 	return route_map_command_status(vty, ret);
 }
 
@@ -1633,8 +1638,10 @@ DEFUN (ospf6_routemap_set_forwarding,
 {
 	VTY_DECLVAR_CONTEXT(route_map_index, route_map_index);
 	int idx_ipv6 = 2;
-	int ret = route_map_add_set(route_map_index, "forwarding-address",
-				    argv[idx_ipv6]->arg);
+	enum rmap_compile_rets ret = route_map_add_set(route_map_index,
+						       "forwarding-address",
+						       argv[idx_ipv6]->arg);
+
 	return route_map_command_status(vty, ret);
 }
 
@@ -1649,8 +1656,10 @@ DEFUN (ospf6_routemap_no_set_forwarding,
 {
 	VTY_DECLVAR_CONTEXT(route_map_index, route_map_index);
 	int idx_ipv6 = 3;
-	int ret = route_map_delete_set(route_map_index, "forwarding-address",
-				       argv[idx_ipv6]->arg);
+	enum rmap_compile_rets ret = route_map_delete_set(route_map_index,
+							  "forwarding-address",
+							  argv[idx_ipv6]->arg);
+
 	return route_map_command_status(vty, ret);
 }
 
@@ -1897,7 +1906,7 @@ int config_write_ospf6_debug_asbr(struct vty *vty)
 	return 0;
 }
 
-void install_element_ospf6_debug_asbr()
+void install_element_ospf6_debug_asbr(void)
 {
 	install_element(ENABLE_NODE, &debug_ospf6_asbr_cmd);
 	install_element(ENABLE_NODE, &no_debug_ospf6_asbr_cmd);

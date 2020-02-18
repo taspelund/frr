@@ -81,5 +81,20 @@ extern void bgp_cleanup_nexthops(struct bgp *bgp);
  */
 extern void path_nh_map(struct bgp_path_info *path,
 			struct bgp_nexthop_cache *bnc, bool make);
+/*
+ * When we actually have the connection to
+ * the zebra daemon, we need to reregister
+ * any nexthops we may have sitting around
+ */
+extern void bgp_nht_register_nexthops(struct bgp *bgp);
+
+/*
+ * When we have the the PEER_FLAG_CAPABILITY_ENHE flag
+ * set on a peer *after* it has been brought up we need
+ * to notice and setup the interface based RA,
+ * this code can walk the registered nexthops and
+ * register the important ones with zebra for RA.
+ */
+extern void bgp_nht_register_enhe_capability_interfaces(struct peer *peer);
 
 #endif /* _BGP_NHT_H */

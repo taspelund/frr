@@ -150,7 +150,7 @@ int ospf_lsa_checksum_valid(struct lsa_header *lsa)
 
 
 /* Create OSPF LSA. */
-struct ospf_lsa *ospf_lsa_new()
+struct ospf_lsa *ospf_lsa_new(void)
 {
 	struct ospf_lsa *new;
 
@@ -1499,12 +1499,6 @@ struct in_addr ospf_get_nssa_ip(struct ospf_area *area)
 	return fwd;
 }
 
-#define DEFAULT_DEFAULT_METRIC	             20
-#define DEFAULT_DEFAULT_ORIGINATE_METRIC     10
-#define DEFAULT_DEFAULT_ALWAYS_METRIC	      1
-
-#define DEFAULT_METRIC_TYPE		     EXTERNAL_METRIC_TYPE_2
-
 int metric_type(struct ospf *ospf, uint8_t src, unsigned short instance)
 {
 	struct ospf_redist *red;
@@ -2246,6 +2240,22 @@ void ospf_external_lsa_refresh_default(struct ospf *ospf)
 			ospf_refresher_unregister_lsa(ospf, lsa);
 			ospf_lsa_flush_as(ospf, lsa);
 		}
+	}
+}
+
+void ospf_default_originate_lsa_update(struct ospf *ospf)
+{
+	struct prefix_ipv4 p;
+	struct ospf_lsa *lsa;
+
+	p.family = AF_INET;
+	p.prefixlen = 0;
+	p.prefix.s_addr = 0;
+
+	lsa = ospf_external_info_find_lsa(ospf, &p);
+	if (lsa && IS_LSA_MAXAGE(lsa)) {
+		ospf_discard_from_db(ospf, lsa->lsdb, lsa);
+		ospf_lsdb_delete(lsa->lsdb, lsa);
 	}
 }
 
@@ -3232,45 +3242,6 @@ int ospf_lsa_different(struct ospf_lsa *l1, struct ospf_lsa *l2)
 	return 0;
 }
 
-#ifdef ORIGINAL_CODING
-void ospf_lsa_flush_self_originated(struct ospf_neighbor *nbr,
-				    struct ospf_lsa *self, struct ospf_lsa *new)
-{
-	uint32_t seqnum;
-
-	/* Adjust LS Sequence Number. */
-	seqnum = ntohl(new->data->ls_seqnum) + 1;
-	self->data->ls_seqnum = htonl(seqnum);
-
-	/* Recalculate LSA checksum. */
-	ospf_lsa_checksum(self->data);
-
-	/* Reflooding LSA. */
-	/*  RFC2328  Section 13.3
-		  On non-broadcast networks, separate	Link State Update
-		  packets must be sent, as unicasts, to each adjacent	neighbor
-		  (i.e., those in state Exchange or greater).	 The destination
-		  IP addresses for these packets are the neighbors' IP
-		  addresses.   */
-	if (nbr->oi->type == OSPF_IFTYPE_NBMA) {
-		struct route_node *rn;
-		struct ospf_neighbor *onbr;
-
-		for (rn = route_top(nbr->oi->nbrs); rn; rn = route_next(rn))
-			if ((onbr = rn->info) != NULL)
-				if (onbr != nbr->oi->nbr_self
-				    && onbr->status >= NSM_Exchange)
-					ospf_ls_upd_send_lsa(
-						onbr, self,
-						OSPF_SEND_PACKET_DIRECT);
-	} else
-		ospf_ls_upd_send_lsa(nbr, self, OSPF_SEND_PACKET_INDIRECT);
-
-	if (IS_DEBUG_OSPF(lsa, LSA_GENERATE))
-		zlog_debug("LSA[Type%d:%s]: Flush self-originated LSA",
-			   self->data->type, inet_ntoa(self->data->id));
-}
-#else  /* ORIGINAL_CODING */
 int ospf_lsa_flush_schedule(struct ospf *ospf, struct ospf_lsa *lsa)
 {
 	if (lsa == NULL || !IS_LSA_SELF(lsa))
@@ -3375,7 +3346,6 @@ void ospf_flush_self_originated_lsas_now(struct ospf *ospf)
 
 	return;
 }
-#endif /* ORIGINAL_CODING */
 
 /* If there is self-originated LSA, then return 1, otherwise return 0. */
 /* An interface-independent version of ospf_lsa_is_self_originated */
@@ -3636,8 +3606,8 @@ void ospf_refresher_unregister_lsa(struct ospf *ospf, struct ospf_lsa *lsa)
 			list_delete(&refresh_list);
 			ospf->lsa_refresh_queue.qs[lsa->refresh_list] = NULL;
 		}
-		ospf_lsa_unlock(&lsa); /* lsa_refresh_queue */
 		lsa->refresh_list = -1;
+		ospf_lsa_unlock(&lsa); /* lsa_refresh_queue */
 	}
 }
 

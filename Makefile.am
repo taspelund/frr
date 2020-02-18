@@ -4,20 +4,23 @@ AUTOMAKE_OPTIONS = subdir-objects 1.12
 ACLOCAL_AMFLAGS = -I m4
 
 AM_CFLAGS = \
+	$(LIBYANG_CFLAGS) \
+	$(SQLITE3_CFLAGS) \
 	$(UNWIND_CFLAGS) \
 	$(SAN_FLAGS) \
 	$(WERROR) \
 	# end
 AM_CPPFLAGS = \
 	-I$(top_srcdir) -I$(top_srcdir)/include -I$(top_srcdir)/lib \
-	-I$(top_builddir) -I$(top_builddir)/include -I$(top_builddir)/lib
+	-I$(top_builddir) -I$(top_builddir)/include -I$(top_builddir)/lib \
+	$(LUA_INCLUDE) \
+	# end
 AM_LDFLAGS = \
 	-export-dynamic \
 	$(AC_LDFLAGS) \
 	$(SAN_FLAGS) \
 	# end
 DEFS = @DEFS@ -DSYSCONFDIR=\"$(sysconfdir)/\" -DCONFDATE=$(CONFDATE)
-LIBCAP = @LIBCAP@
 
 AR_FLAGS = @AR_FLAGS@
 ARFLAGS = @ARFLAGS@
@@ -36,6 +39,12 @@ shvar-%:
 	@echo "$*=\"$($*)\"" >&$(VARFD)
 var-%:
 	@echo "$($*)" >&$(VARFD)
+
+if ONLY_CLIPPY
+.DEFAULT_GOAL := clippy-only
+endif
+clippy-only: Makefile lib/clippy config.h
+.PHONY: clippy-only
 
 # overwriting these vars breaks cross-compilation.  let's be helpful and warn.
 #
@@ -82,6 +91,7 @@ var-%:
 EXTRA_DIST =
 BUILT_SOURCES =
 CLEANFILES =
+DISTCLEANFILES =
 
 examplesdir = $(exampledir)
 
@@ -97,6 +107,7 @@ module_LTLIBRARIES =
 pkginclude_HEADERS =
 nodist_pkginclude_HEADERS =
 dist_examples_DATA =
+dist_yangmodels_DATA =
 man_MANS =
 vtysh_scan =
 
@@ -118,8 +129,9 @@ include zebra/subdir.am
 include watchfrr/subdir.am
 include qpb/subdir.am
 include fpm/subdir.am
+include mlag/subdir.am
+include grpc/subdir.am
 include tools/subdir.am
-include debianpkg/subdir.am
 include solaris/subdir.am
 
 include bgpd/subdir.am
@@ -140,9 +152,13 @@ include pimd/subdir.am
 include pbrd/subdir.am
 include staticd/subdir.am
 include bfdd/subdir.am
+include yang/subdir.am
+include yang/libyang_plugins/subdir.am
+include vrrpd/subdir.am
 
 include vtysh/subdir.am
 include tests/subdir.am
+include tests/topotests/subdir.am
 
 if PKGSRC
 rcdir=@pkgsrcrcdir@
@@ -161,6 +177,9 @@ EXTRA_DIST += \
 	README.md \
 	m4/README.txt \
 	m4/libtool-whole-archive.patch \
+	config.version \
+	changelog-auto \
+	changelog-auto.in \
 	\
 	python/clidef.py \
 	python/clippy/__init__.py \
@@ -181,7 +200,6 @@ EXTRA_DIST += \
 	snapcraft/defaults \
 	snapcraft/helpers \
 	snapcraft/snap \
-	\
 	babeld/Makefile \
 	bgpd/Makefile \
 	bgpd/rfp-example/librfp/Makefile \
@@ -192,9 +210,11 @@ EXTRA_DIST += \
 	doc/user/Makefile \
 	eigrpd/Makefile \
 	fpm/Makefile \
+	grpc/Makefile \
 	isisd/Makefile \
 	ldpd/Makefile \
 	lib/Makefile \
+	mlag/Makefile \
 	nhrpd/Makefile \
 	ospf6d/Makefile \
 	ospfclient/Makefile \
@@ -211,9 +231,19 @@ EXTRA_DIST += \
 	vtysh/Makefile \
 	watchfrr/Makefile \
 	zebra/Makefile \
+	vrrpd/Makefile \
 	# end
 
 noinst_HEADERS += defaults.h
+
+clean-local: clean-python
+.PHONY: clean-python
+clean-python:
+	find -name __pycache__ -o -name .pytest_cache | xargs rm -rf
+	find -name "*.pyc" -o -name "*_clippy.c" | xargs rm -f
+
+redistclean:
+	$(MAKE) distclean CONFIG_CLEAN_FILES="$(filter-out $(EXTRA_DIST), $(CONFIG_CLEAN_FILES))"
 
 indent:
 	tools/indent.py `find sharpd bgpd eigrpd include isisd lib nhrpd ospf6d ospfd pimd qpb ripd vtysh zebra -name '*.[ch]' | grep -v include/linux`

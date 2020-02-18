@@ -266,13 +266,13 @@ extern struct bgp_pbr_match *bgp_pbr_match_iptable_lookup(vrf_id_t vrf_id,
 extern void bgp_pbr_cleanup(struct bgp *bgp);
 extern void bgp_pbr_init(struct bgp *bgp);
 
-extern uint32_t bgp_pbr_action_hash_key(void *arg);
+extern uint32_t bgp_pbr_action_hash_key(const void *arg);
 extern bool bgp_pbr_action_hash_equal(const void *arg1,
 				     const void *arg2);
-extern uint32_t bgp_pbr_match_entry_hash_key(void *arg);
+extern uint32_t bgp_pbr_match_entry_hash_key(const void *arg);
 extern bool bgp_pbr_match_entry_hash_equal(const void *arg1,
 					  const void *arg2);
-extern uint32_t bgp_pbr_match_hash_key(void *arg);
+extern uint32_t bgp_pbr_match_hash_key(const void *arg);
 extern bool bgp_pbr_match_hash_equal(const void *arg1,
 				    const void *arg2);
 
@@ -290,4 +290,7 @@ extern void bgp_pbr_reset(struct bgp *bgp, afi_t afi);
 extern struct bgp_pbr_interface *bgp_pbr_interface_lookup(const char *name,
 				   struct bgp_pbr_interface_head *head);
 
+extern int bgp_pbr_build_and_validate_entry(struct prefix *p,
+					    struct bgp_path_info *path,
+					    struct bgp_pbr_entry_main *api);
 #endif /* __BGP_PBR_H__ */

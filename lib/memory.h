@@ -22,8 +22,6 @@
 #include <frratomic.h>
 #include "compiler.h"
 
-#define array_size(ar) (sizeof(ar) / sizeof(ar[0]))
-
 #if defined(HAVE_MALLOC_SIZE) && !defined(HAVE_MALLOC_USABLE_SIZE)
 #define malloc_usable_size(x) malloc_size(x)
 #define HAVE_MALLOC_USABLE_SIZE
@@ -137,7 +135,6 @@ struct memgroup {
 
 DECLARE_MGROUP(LIB)
 DECLARE_MTYPE(TMP)
-DECLARE_MTYPE(PREFIX_FLOWSPEC)
 
 
 extern void *qmalloc(struct memtype *mt, size_t size)

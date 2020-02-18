@@ -80,7 +80,7 @@ extern struct list *list_new(void);
  * data
  *    element to add
  */
-extern void listnode_add(struct list *list, void *data);
+extern struct listnode *listnode_add(struct list *list, void *data);
 
 /*
  * Add a new element to the beginning of a list.
@@ -176,7 +176,7 @@ extern void listnode_move_to_tail(struct list *list, struct listnode *node);
  * data
  *    data to insert into list
  */
-extern void listnode_delete(struct list *list, void *data);
+extern void listnode_delete(struct list *list, const void *data);
 
 /*
  * Find the listnode corresponding to an element in a list.
@@ -190,7 +190,7 @@ extern void listnode_delete(struct list *list, void *data);
  * Returns:
  *    pointer to listnode storing the given data if found, NULL otherwise
  */
-extern struct listnode *listnode_lookup(struct list *list, void *data);
+extern struct listnode *listnode_lookup(struct list *list, const void *data);
 
 /*
  * Retrieve the element at the head of a list.
@@ -234,6 +234,26 @@ extern struct list *list_dup(struct list *l);
  */
 extern void list_sort(struct list *list,
 		      int (*cmp)(const void **, const void **));
+
+/*
+ * Convert a list to an array of void pointers.
+ *
+ * Starts from the list head and ends either on the last node of the list or
+ * when the provided array cannot store any more elements.
+ *
+ * list
+ *    list to convert
+ *
+ * arr
+ *    Pre-allocated array of void *
+ *
+ * arrlen
+ *    Number of elements in arr
+ *
+ * Returns:
+ *    arr
+ */
+void **list_to_array(struct list *list, void **arr, size_t arrlen);
 
 /*
  * Delete a list and NULL its pointer.

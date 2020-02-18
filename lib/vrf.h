@@ -200,7 +200,7 @@ extern int vrf_bitmap_check(vrf_bitmap_t, vrf_id_t);
  *           the system ( 2 and 3 ) above.
  */
 extern void vrf_init(int (*create)(struct vrf *vrf), int (*enable)(struct vrf *vrf),
-		     int (*disable)(struct vrf *vrf), int (*delete)(struct vrf *vrf),
+		     int (*disable)(struct vrf *vrf), int (*destroy)(struct vrf *vrf),
 		     int (*update)(struct vrf *vrf));
 
 /*
@@ -213,14 +213,37 @@ extern void vrf_terminate(void);
  * or call network operations
  */
 
-/* Create a socket serving for the given VRF */
+/*
+ * Create a new socket associated with a VRF.
+ *
+ * This is a wrapper that ensures correct behavior when using namespace VRFs.
+ * In the namespace case, the socket is created within the namespace. In the
+ * non-namespace case, this is equivalent to socket().
+ *
+ * If name is provided, this is provided to vrf_bind() to bind the socket to
+ * the VRF. This is only relevant when using VRF-lite.
+ *
+ * Summary:
+ * - Namespace: pass vrf_id but not name
+ * - VRF-lite: pass vrf_id and name of VRF device to bind to
+ * - VRF-lite, no binding: pass vrf_id but not name, or just use socket()
+ */
 extern int vrf_socket(int domain, int type, int protocol, vrf_id_t vrf_id,
-		      char *name);
+		      const char *name);
 
 extern int vrf_sockunion_socket(const union sockunion *su, vrf_id_t vrf_id,
-				char *name);
+				const char *name);
 
-extern int vrf_bind(vrf_id_t vrf_id, int fd, char *name);
+/*
+ * Binds a socket to a VRF device.
+ *
+ * If name is null, the socket is not bound, irrespective of any other
+ * arguments.
+ *
+ * name should be the name of the VRF device. vrf_id should be the
+ * corresponding vrf_id (the ifindex of the device).
+ */
+extern int vrf_bind(vrf_id_t vrf_id, int fd, const char *name);
 
 /* VRF ioctl operations */
 extern int vrf_getaddrinfo(const char *node, const char *service,
@@ -236,12 +259,9 @@ extern vrf_id_t vrf_get_default_id(void);
 /* The default VRF ID */
 #define VRF_DEFAULT vrf_get_default_id()
 
-extern void vrf_set_default_name(const char *default_name);
+extern void vrf_set_default_name(const char *default_name, bool force);
 extern const char *vrf_get_default_name(void);
 #define VRF_DEFAULT_NAME    vrf_get_default_name()
-
-/* VRF is mapped on netns or not ? */
-int vrf_is_mapped_on_netns(struct vrf *vrf);
 
 /* VRF switch from NETNS */
 extern int vrf_switch_to_netns(vrf_id_t vrf_id);
@@ -293,5 +313,6 @@ extern int vrf_netns_handler_create(struct vty *vty, struct vrf *vrf,
 extern void vrf_disable(struct vrf *vrf);
 extern int vrf_enable(struct vrf *vrf);
 extern void vrf_delete(struct vrf *vrf);
+extern vrf_id_t vrf_generate_id(void);
 
 #endif /*_ZEBRA_VRF_H*/

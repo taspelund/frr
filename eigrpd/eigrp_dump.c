@@ -228,7 +228,7 @@ void show_ip_eigrp_interface_detail(struct vty *vty, struct eigrp *eigrp,
 		"Un/reliable mcasts: ", 0, "/", 0, "Un/reliable ucasts: ", 0,
 		"/", 0);
 	vty_out(vty, "%-2s %s %d %s %d %s %d \n", "", "Mcast exceptions: ", 0,
-		"  CR packets: ", 0, "  ACKs supressed: ", 0);
+		"  CR packets: ", 0, "  ACKs suppressed: ", 0);
 	vty_out(vty, "%-2s %s %d %s %d \n", "", "Retransmissions sent: ", 0,
 		"Out-of-sequence rcvd: ", 0);
 	vty_out(vty, "%-2s %s %s %s \n", "", "Authentication mode is ", "not",
@@ -276,11 +276,8 @@ void show_ip_eigrp_neighbor_sub(struct vty *vty, struct eigrp_neighbor *nbr,
  */
 void show_ip_eigrp_topology_header(struct vty *vty, struct eigrp *eigrp)
 {
-	struct in_addr router_id;
-	router_id.s_addr = eigrp->router_id;
-
 	vty_out(vty, "\nEIGRP Topology Table for AS(%d)/ID(%s)\n\n", eigrp->AS,
-		inet_ntoa(router_id));
+		inet_ntoa(eigrp->router_id));
 	vty_out(vty,
 		"Codes: P - Passive, A - Active, U - Update, Q - Query, "
 		"R - Reply\n       r - reply Status, s - sia Status\n\n");
@@ -608,7 +605,7 @@ static struct cmd_node eigrp_debug_node = {
 };
 
 /* Initialize debug commands. */
-void eigrp_debug_init()
+void eigrp_debug_init(void)
 {
 	install_node(&eigrp_debug_node, config_write_debug);
 

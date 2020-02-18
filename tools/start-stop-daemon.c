@@ -280,7 +280,7 @@ static void add_namespace(const char *path)
 #endif
 
 #ifdef HAVE_LXC
-static void set_namespaces()
+static void set_namespaces(void)
 {
 	struct namespace *namespace;
 	int fd;
@@ -294,7 +294,7 @@ static void set_namespaces()
 	}
 }
 #else
-static void set_namespaces()
+static void set_namespaces(void)
 {
 	if (!LIST_EMPTY(&namespace_head))
 		fatal("LCX namespaces not supported");
@@ -1013,7 +1013,7 @@ int main(int argc, char **argv)
 	if (background) { /* ok, we need to detach this process */
 		int i, fd;
 		if (quietmode < 0)
-			printf("Detatching to start %s...", startas);
+			printf("Detaching to start %s...", startas);
 		i = fork();
 		if (i < 0) {
 			fatal("Unable to fork.\n");

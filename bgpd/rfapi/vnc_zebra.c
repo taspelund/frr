@@ -312,7 +312,7 @@ static void vnc_redistribute_withdraw(struct bgp *bgp, afi_t afi, uint8_t type)
 		memcpy(prd.val, prn->p.u.val, 8);
 
 		/* This is the per-RD table of prefixes */
-		table = prn->info;
+		table = bgp_node_get_bgp_table_info(prn);
 		if (!table)
 			continue;
 
@@ -320,7 +320,8 @@ static void vnc_redistribute_withdraw(struct bgp *bgp, afi_t afi, uint8_t type)
 
 			struct bgp_path_info *ri;
 
-			for (ri = rn->info; ri; ri = ri->next) {
+			for (ri = bgp_node_get_bgp_path_info(rn); ri;
+			     ri = ri->next) {
 				if (ri->type
 				    == type) { /* has matching redist type */
 					break;
@@ -343,8 +344,7 @@ static void vnc_redistribute_withdraw(struct bgp *bgp, afi_t afi, uint8_t type)
  *
  * Assumes 1 nexthop
  */
-static int vnc_zebra_read_route(int command, struct zclient *zclient,
-				zebra_size_t length, vrf_id_t vrf_id)
+static int vnc_zebra_read_route(ZAPI_CALLBACK_ARGS)
 {
 	struct zapi_route api;
 	int add;
@@ -356,7 +356,7 @@ static int vnc_zebra_read_route(int command, struct zclient *zclient,
 	if (CHECK_FLAG(api.message, ZAPI_MESSAGE_SRCPFX))
 		return 0;
 
-	add = (command == ZEBRA_REDISTRIBUTE_ROUTE_ADD);
+	add = (cmd == ZEBRA_REDISTRIBUTE_ROUTE_ADD);
 	if (add)
 		vnc_redistribute_add(&api.prefix, api.metric, api.type);
 	else
@@ -607,10 +607,8 @@ static void vnc_zebra_add_del_prefix(struct bgp *bgp,
 					    add);
 	}
 
-	if (nhp_ary)
-		XFREE(MTYPE_TMP, nhp_ary);
-	if (nh_ary)
-		XFREE(MTYPE_TMP, nh_ary);
+	XFREE(MTYPE_TMP, nhp_ary);
+	XFREE(MTYPE_TMP, nh_ary);
 }
 
 void vnc_zebra_add_prefix(struct bgp *bgp,
@@ -788,10 +786,8 @@ static void vnc_zebra_add_del_group_afi(struct bgp *bgp,
 				}
 			}
 		}
-		if (nhp_ary)
-			XFREE(MTYPE_TMP, nhp_ary);
-		if (nh_ary)
-			XFREE(MTYPE_TMP, nh_ary);
+		XFREE(MTYPE_TMP, nhp_ary);
+		XFREE(MTYPE_TMP, nh_ary);
 	}
 }
 
@@ -913,7 +909,7 @@ extern struct zebra_privs_t bgpd_privs;
 void vnc_zebra_init(struct thread_master *master)
 {
 	/* Set default values. */
-	zclient_vnc = zclient_new_notify(master, &zclient_options_default);
+	zclient_vnc = zclient_new(master, &zclient_options_default);
 	zclient_init(zclient_vnc, ZEBRA_ROUTE_VNC, 0, &bgpd_privs);
 
 	zclient_vnc->redistribute_route_add = vnc_zebra_read_route;

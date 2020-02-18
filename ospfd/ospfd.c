@@ -171,7 +171,7 @@ void ospf_router_id_update(struct ospf *ospf)
 
 		/* Flush (inline) all external LSAs which now match the new
 		   router-id,
-		   need to adjust the OSPF_LSA_SELF flag, so the flush doesnt
+		   need to adjust the OSPF_LSA_SELF flag, so the flush doesn't
 		   hit
 		   asserts in ospf_refresher_unregister_lsa(). This step is
 		   needed
@@ -234,8 +234,12 @@ static struct ospf *ospf_new(unsigned short instance, const char *name)
 	new->instance = instance;
 	new->router_id.s_addr = htonl(0);
 	new->router_id_static.s_addr = htonl(0);
-	if (name && !strmatch(name, VRF_DEFAULT_NAME)) {
-		new->vrf_id = VRF_UNKNOWN;
+	if (name) {
+		vrf = vrf_lookup_by_name(name);
+		if (vrf)
+			new->vrf_id = vrf->vrf_id;
+		else
+			new->vrf_id = VRF_UNKNOWN;
 		/* Freed in ospf_finish_final */
 		new->name = XSTRDUP(MTYPE_OSPF_TOP, name);
 		if (IS_DEBUG_OSPF_EVENT)
@@ -624,8 +628,10 @@ static void ospf_finish_final(struct ospf *ospf)
 		if (!red_list)
 			continue;
 
-		for (ALL_LIST_ELEMENTS(red_list, node, nnode, red))
+		for (ALL_LIST_ELEMENTS(red_list, node, nnode, red)) {
 			ospf_redistribute_unset(ospf, i, red->instance);
+			ospf_redist_del(ospf, i, red->instance);
+		}
 	}
 	ospf_redistribute_default_unset(ospf);
 
@@ -650,6 +656,7 @@ static void ospf_finish_final(struct ospf *ospf)
 	for (ALL_LIST_ELEMENTS(ospf->oiflist, node, nnode, oi))
 		ospf_if_free(oi);
 	list_delete(&ospf->oiflist);
+	ospf->oi_running = 0;
 
 	/* De-Register VRF */
 	ospf_zebra_vrf_deregister(ospf);
@@ -693,6 +700,8 @@ static void ospf_finish_final(struct ospf *ospf)
 	}
 
 	/* Cancel all timers. */
+	OSPF_TIMER_OFF(ospf->t_read);
+	OSPF_TIMER_OFF(ospf->t_write);
 	OSPF_TIMER_OFF(ospf->t_external_lsa);
 	OSPF_TIMER_OFF(ospf->t_spf_calc);
 	OSPF_TIMER_OFF(ospf->t_ase_calc);
@@ -702,13 +711,8 @@ static void ospf_finish_final(struct ospf *ospf)
 	OSPF_TIMER_OFF(ospf->t_asbr_check);
 	OSPF_TIMER_OFF(ospf->t_distribute_update);
 	OSPF_TIMER_OFF(ospf->t_lsa_refresher);
-	OSPF_TIMER_OFF(ospf->t_read);
-	OSPF_TIMER_OFF(ospf->t_write);
 	OSPF_TIMER_OFF(ospf->t_opaque_lsa_self);
 	OSPF_TIMER_OFF(ospf->t_sr_update);
-
-	close(ospf->fd);
-	stream_free(ospf->ibuf);
 
 	LSDB_LOOP (OPAQUE_AS_LSDB(ospf), rn, lsa)
 		ospf_discard_from_db(ospf, ospf->lsdb, lsa);
@@ -749,9 +753,6 @@ static void ospf_finish_final(struct ospf *ospf)
 		ospf_ase_external_lsas_finish(ospf->external_lsas);
 	}
 
-	list_delete(&ospf->areas);
-	list_delete(&ospf->oi_write_q);
-
 	for (i = ZEBRA_ROUTE_SYSTEM; i <= ZEBRA_ROUTE_MAX; i++) {
 		struct list *ext_list;
 		struct ospf_external *ext;
@@ -760,7 +761,7 @@ static void ospf_finish_final(struct ospf *ospf)
 		if (!ext_list)
 			continue;
 
-		for (ALL_LIST_ELEMENTS_RO(ext_list, node, ext)) {
+		for (ALL_LIST_ELEMENTS(ext_list, node, nnode, ext)) {
 			if (ext->external_info)
 				for (rn = route_top(ext->external_info); rn;
 				     rn = route_next(rn)) {
@@ -772,6 +773,8 @@ static void ospf_finish_final(struct ospf *ospf)
 					rn->info = NULL;
 					route_unlock_node(rn);
 				}
+
+			ospf_external_del(ospf, i, ext->instance);
 		}
 	}
 
@@ -781,6 +784,12 @@ static void ospf_finish_final(struct ospf *ospf)
 	if (!CHECK_FLAG(om->options, OSPF_MASTER_SHUTDOWN))
 		instance = ospf->instance;
 
+	list_delete(&ospf->areas);
+	list_delete(&ospf->oi_write_q);
+
+	close(ospf->fd);
+	stream_free(ospf->ibuf);
+	ospf->fd = -1;
 	ospf_delete(ospf);
 
 	if (ospf->name) {
@@ -890,6 +899,7 @@ void ospf_area_check_free(struct ospf *ospf, struct in_addr area_id)
 
 	area = ospf_area_lookup_by_area_id(ospf, area_id);
 	if (area && listcount(area->oiflist) == 0 && area->ranges->top == NULL
+	    && !ospf_vl_count(ospf, area)
 	    && area->shortcut_configured == OSPF_SHORTCUT_DEFAULT
 	    && area->external_routing == OSPF_AREA_DEFAULT
 	    && area->no_summary == 0 && area->default_cost == 1
@@ -1148,6 +1158,32 @@ void ospf_interface_area_unset(struct ospf *ospf, struct interface *ifp)
 	update_redistributed(ospf, 0); /* interfaces possibly removed */
 }
 
+bool ospf_interface_area_is_already_set(struct ospf *ospf,
+					struct interface *ifp)
+{
+	struct route_node *rn_oi;
+
+	if (!ospf)
+		return false; /* Ospf not ready yet */
+
+	/* Find interfaces that may need to be removed. */
+	for (rn_oi = route_top(IF_OIFS(ifp)); rn_oi;
+	     rn_oi = route_next(rn_oi)) {
+		struct ospf_interface *oi = rn_oi->info;
+
+		if (oi == NULL)
+			continue;
+
+		if (oi->type == OSPF_IFTYPE_VIRTUALLINK)
+			continue;
+		/* at least one route covered by interface
+		 * that implies already done
+		 */
+		return true;
+	}
+	return false;
+}
+
 /* Check whether interface matches given network
  * returns: 1, true. 0, false
  */
@@ -1329,6 +1365,7 @@ void ospf_if_update(struct ospf *ospf, struct interface *ifp)
 
 	/* Update connected redistribute. */
 	update_redistributed(ospf, 1);
+
 }
 
 void ospf_remove_vls_through_area(struct ospf *ospf, struct ospf_area *area)
@@ -2161,4 +2198,12 @@ const char *ospf_vrf_id_to_name(vrf_id_t vrf_id)
 	struct vrf *vrf = vrf_lookup_by_id(vrf_id);
 
 	return vrf ? vrf->name : "NIL";
+}
+
+const char *ospf_get_name(const struct ospf *ospf)
+{
+	if (ospf->name)
+		return ospf->name;
+	else
+		return VRF_DEFAULT_NAME;
 }

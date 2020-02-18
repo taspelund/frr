@@ -96,6 +96,21 @@ static int bgp_holdtime_timer(struct thread *);
 /* BGP FSM functions. */
 static int bgp_start(struct peer *);
 
+/* Register peer with NHT */
+static int bgp_peer_reg_with_nht(struct peer *peer)
+{
+	int connected = 0;
+
+	if (peer->sort == BGP_PEER_EBGP && peer->ttl == 1
+	    && !CHECK_FLAG(peer->flags, PEER_FLAG_DISABLE_CONNECTED_CHECK)
+	    && !bgp_flag_check(peer->bgp, BGP_FLAG_DISABLE_NH_CONNECTED_CHK))
+		connected = 1;
+
+	return bgp_find_or_add_nexthop(
+		peer->bgp, peer->bgp, family2afi(peer->su.sa.sa_family),
+		NULL, peer, connected);
+}
+
 static void peer_xfer_stats(struct peer *peer_dst, struct peer *peer_src)
 {
 	/* Copy stats over. These are only the pre-established state stats */
@@ -184,9 +199,11 @@ static struct peer *peer_xfer_conn(struct peer *from_peer)
 				EC_BGP_PKT_PROCESS,
 				"[%s] Dropping pending packet on connection transfer:",
 				peer->host);
-			uint16_t type = stream_getc_from(peer->curr,
-							 BGP_MARKER_SIZE + 2);
-			bgp_dump_packet(peer, type, peer->curr);
+			/* there used to be a bgp_packet_dump call here, but
+			 * that's extremely confusing since there's no way to
+			 * identify the packet in MRT dumps or BMP as dropped
+			 * due to connection transfer.
+			 */
 			stream_free(peer->curr);
 			peer->curr = NULL;
 		}
@@ -291,6 +308,11 @@ static struct peer *peer_xfer_conn(struct peer *from_peer)
 	if (from_peer)
 		peer_xfer_stats(peer, from_peer);
 
+	/* Register peer for NHT. This is to allow RAs to be enabled when
+	 * needed, even on a passive connection.
+	 */
+	bgp_peer_reg_with_nht(peer);
+
 	bgp_reads_on(peer);
 	bgp_writes_on(peer);
 	thread_add_timer_msec(bm->master, bgp_process_packet, peer, 0,
@@ -310,7 +332,8 @@ void bgp_timer_set(struct peer *peer)
 		   status start timer is on unless peer is shutdown or peer is
 		   inactive.  All other timer must be turned off */
 		if (BGP_PEER_START_SUPPRESSED(peer) || !peer_active(peer)
-		    || peer->bgp->vrf_id == VRF_UNKNOWN) {
+		    || (peer->bgp->inst_type != BGP_INSTANCE_TYPE_VIEW &&
+			peer->bgp->vrf_id == VRF_UNKNOWN)) {
 			BGP_TIMER_OFF(peer->t_start);
 		} else {
 			BGP_TIMER_ON(peer->t_start, bgp_start_timer,
@@ -931,12 +954,38 @@ static void bgp_update_delay_process_status_change(struct peer *peer)
 	}
 }
 
-/* Called after event occured, this function change status and reset
+/* Called after event occurred, this function change status and reset
    read/write and timer thread. */
 void bgp_fsm_change_status(struct peer *peer, int status)
 {
+	struct bgp *bgp;
+	uint32_t peer_count;
 
 	bgp_dump_state(peer, peer->status, status);
+
+	bgp = peer->bgp;
+	peer_count = bgp->established_peers;
+
+	if (status == Established)
+		bgp->established_peers++;
+	else if ((peer->status == Established) && (status != Established))
+		bgp->established_peers--;
+
+	if (bgp_debug_neighbor_events(peer)) {
+		struct vrf *vrf = vrf_lookup_by_id(bgp->vrf_id);
+
+		zlog_debug("%s : vrf %s(%u), Status: %s established_peers %u", __func__,
+			   vrf ? vrf->name : "Unknown", bgp->vrf_id,
+			   lookup_msg(bgp_status_msg, status, NULL),
+			   bgp->established_peers);
+	}
+
+	/* Set to router ID to the value provided by RIB if there are no peers
+	 * in the established state and peer count did not change
+	 */
+	if ((peer_count != bgp->established_peers) &&
+	    (bgp->established_peers == 0))
+		bgp_router_id_zebra_bump(bgp->vrf_id, NULL);
 
 	/* Transition into Clearing or Deleted must /always/ clear all routes..
 	 * (and must do so before actually changing into Deleted..
@@ -1355,7 +1404,6 @@ static int bgp_connect_fail(struct peer *peer)
 int bgp_start(struct peer *peer)
 {
 	int status;
-	int connected = 0;
 
 	bgp_peer_conf_if_to_su_update(peer);
 
@@ -1402,7 +1450,8 @@ int bgp_start(struct peer *peer)
 		return 0;
 	}
 
-	if (peer->bgp->vrf_id == VRF_UNKNOWN) {
+	if (peer->bgp->inst_type != BGP_INSTANCE_TYPE_VIEW &&
+	    peer->bgp->vrf_id == VRF_UNKNOWN) {
 		if (bgp_debug_neighbor_events(peer))
 			flog_err(
 				EC_BGP_FSM,
@@ -1411,17 +1460,10 @@ int bgp_start(struct peer *peer)
 		return -1;
 	}
 
-	/* Register to be notified on peer up */
-	if (peer->sort == BGP_PEER_EBGP && peer->ttl == 1
-	    && !CHECK_FLAG(peer->flags, PEER_FLAG_DISABLE_CONNECTED_CHECK)
-	    && !bgp_flag_check(peer->bgp, BGP_FLAG_DISABLE_NH_CONNECTED_CHK))
-		connected = 1;
-	else
-		connected = 0;
-
-	if (!bgp_find_or_add_nexthop(peer->bgp, peer->bgp,
-				     family2afi(peer->su.sa.sa_family), NULL,
-				     peer, connected)) {
+	/* Register peer for NHT. If next hop is already resolved, proceed
+	 * with connection setup, else wait.
+	 */
+	if (!bgp_peer_reg_with_nht(peer)) {
 		if (bgp_zebra_num_connects()) {
 			if (bgp_debug_neighbor_events(peer))
 				zlog_debug("%s [FSM] Waiting for NHT",
@@ -1732,7 +1774,7 @@ static int bgp_fsm_exeption(struct peer *peer)
 	return (bgp_stop(peer));
 }
 
-void bgp_fsm_nht_update(struct peer *peer, int valid)
+void bgp_fsm_event_update(struct peer *peer, int valid)
 {
 	if (!peer)
 		return;
@@ -1765,7 +1807,6 @@ void bgp_fsm_nht_update(struct peer *peer, int valid)
 		break;
 	}
 }
-
 
 /* Finite State Machine structure */
 static const struct {

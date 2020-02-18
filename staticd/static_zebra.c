@@ -43,70 +43,38 @@
 #include "static_nht.h"
 #include "static_vty.h"
 
+bool debug;
+
 /* Zebra structure to hold current status. */
 struct zclient *zclient;
 static struct hash *static_nht_hash;
 
-static struct interface *zebra_interface_if_lookup(struct stream *s)
-{
-	char ifname_tmp[INTERFACE_NAMSIZ];
-
-	/* Read interface name. */
-	stream_get(ifname_tmp, s, INTERFACE_NAMSIZ);
-
-	/* And look it up. */
-	return if_lookup_by_name(ifname_tmp, VRF_DEFAULT);
-}
-
 /* Inteface addition message from zebra. */
-static int interface_add(int command, struct zclient *zclient,
-			       zebra_size_t length, vrf_id_t vrf_id)
+static int static_ifp_create(struct interface *ifp)
 {
-	struct interface *ifp;
-
-	ifp = zebra_interface_add_read(zclient->ibuf, vrf_id);
-
-	if (!ifp)
-		return 0;
-
 	static_ifindex_update(ifp, true);
+
 	return 0;
 }
 
-static int interface_delete(int command, struct zclient *zclient,
-			    zebra_size_t length, vrf_id_t vrf_id)
+static int static_ifp_destroy(struct interface *ifp)
 {
-	struct interface *ifp;
-	struct stream *s;
-
-	s = zclient->ibuf;
-	/* zebra_interface_state_read () updates interface structure in iflist
-	 */
-	ifp = zebra_interface_state_read(s, vrf_id);
-
-	if (ifp == NULL)
-		return 0;
-
-	if_set_index(ifp, IFINDEX_INTERNAL);
-
 	static_ifindex_update(ifp, false);
 	return 0;
 }
 
-static int interface_address_add(int command, struct zclient *zclient,
-				 zebra_size_t length, vrf_id_t vrf_id)
+static int interface_address_add(ZAPI_CALLBACK_ARGS)
 {
-	zebra_interface_address_read(command, zclient->ibuf, vrf_id);
+	zebra_interface_address_read(cmd, zclient->ibuf, vrf_id);
 
 	return 0;
 }
 
-static int interface_address_delete(int command, struct zclient *zclient,
-				    zebra_size_t length, vrf_id_t vrf_id)
+static int interface_address_delete(ZAPI_CALLBACK_ARGS)
 {
 	struct connected *c;
 
-	c = zebra_interface_address_read(command, zclient->ibuf, vrf_id);
+	c = zebra_interface_address_read(cmd, zclient->ibuf, vrf_id);
 
 	if (!c)
 		return 0;
@@ -115,58 +83,60 @@ static int interface_address_delete(int command, struct zclient *zclient,
 	return 0;
 }
 
-static int interface_state_up(int command, struct zclient *zclient,
-			      zebra_size_t length, vrf_id_t vrf_id)
+static int static_ifp_up(struct interface *ifp)
 {
-	struct interface *ifp;
-
-	ifp = zebra_interface_if_lookup(zclient->ibuf);
-
-	if (ifp && if_is_vrf(ifp)) {
-		struct static_vrf *svrf = static_vrf_lookup_by_id(vrf_id);
+	if (if_is_vrf(ifp)) {
+		struct static_vrf *svrf = static_vrf_lookup_by_id(ifp->vrf_id);
 
 		static_fixup_vrf_ids(svrf);
 		static_config_install_delayed_routes(svrf);
 	}
 
+	/* Install any static reliant on this interface coming up */
+	static_install_intf_nh(ifp);
+	static_ifindex_update(ifp, true);
+
 	return 0;
 }
 
-static int interface_state_down(int command, struct zclient *zclient,
-				zebra_size_t length, vrf_id_t vrf_id)
+static int static_ifp_down(struct interface *ifp)
 {
-	zebra_interface_state_read(zclient->ibuf, vrf_id);
+	static_ifindex_update(ifp, false);
 
 	return 0;
 }
 
-static int route_notify_owner(int command, struct zclient *zclient,
-			      zebra_size_t length, vrf_id_t vrf_id)
+static int route_notify_owner(ZAPI_CALLBACK_ARGS)
 {
 	struct prefix p;
 	enum zapi_route_notify_owner note;
 	uint32_t table_id;
 	char buf[PREFIX_STRLEN];
 
-	prefix2str(&p, buf, sizeof(buf));
-
 	if (!zapi_route_notify_decode(zclient->ibuf, &p, &table_id, &note))
 		return -1;
 
+	prefix2str(&p, buf, sizeof(buf));
+
 	switch (note) {
 	case ZAPI_ROUTE_FAIL_INSTALL:
+		static_nht_mark_state(&p, vrf_id, STATIC_NOT_INSTALLED);
 		zlog_warn("%s: Route %s failed to install for table: %u",
 			  __PRETTY_FUNCTION__, buf, table_id);
 		break;
 	case ZAPI_ROUTE_BETTER_ADMIN_WON:
+		static_nht_mark_state(&p, vrf_id, STATIC_NOT_INSTALLED);
 		zlog_warn("%s: Route %s over-ridden by better route for table: %u",
 			  __PRETTY_FUNCTION__, buf, table_id);
 		break;
 	case ZAPI_ROUTE_INSTALLED:
+		static_nht_mark_state(&p, vrf_id, STATIC_INSTALLED);
 		break;
 	case ZAPI_ROUTE_REMOVED:
+		static_nht_mark_state(&p, vrf_id, STATIC_NOT_INSTALLED);
 		break;
 	case ZAPI_ROUTE_REMOVE_FAIL:
+		static_nht_mark_state(&p, vrf_id, STATIC_INSTALLED);
 		zlog_warn("%s: Route %s failure to remove for table: %u",
 			  __PRETTY_FUNCTION__, buf, table_id);
 		break;
@@ -188,8 +158,7 @@ struct static_nht_data {
 	uint8_t nh_num;
 };
 
-static int static_zebra_nexthop_update(int command, struct zclient *zclient,
-				       zebra_size_t length, vrf_id_t vrf_id)
+static int static_zebra_nexthop_update(ZAPI_CALLBACK_ARGS)
 {
 	struct static_nht_data *nhtd, lookup;
 	struct zapi_route nhr;
@@ -212,7 +181,8 @@ static int static_zebra_nexthop_update(int command, struct zclient *zclient,
 	if (nhtd) {
 		nhtd->nh_num = nhr.nexthop_num;
 
-		static_nht_update(&nhr.prefix, nhr.nexthop_num, afi,
+		static_nht_reset_start(&nhr.prefix, afi, nhtd->nh_vrf_id);
+		static_nht_update(NULL, &nhr.prefix, nhr.nexthop_num, afi,
 				  nhtd->nh_vrf_id);
 	} else
 		zlog_err("No nhtd?");
@@ -225,9 +195,9 @@ static void static_zebra_capabilities(struct zclient_capabilities *cap)
 	mpls_enabled = cap->mpls_enabled;
 }
 
-static unsigned int static_nht_hash_key(void *data)
+static unsigned int static_nht_hash_key(const void *data)
 {
-	struct static_nht_data *nhtd = data;
+	const struct static_nht_data *nhtd = data;
 	unsigned int key = 0;
 
 	key = prefix_hash_key(nhtd->nh);
@@ -269,7 +239,8 @@ static void static_nht_hash_free(void *data)
 	XFREE(MTYPE_TMP, nhtd);
 }
 
-void static_zebra_nht_register(struct static_route *si, bool reg)
+void static_zebra_nht_register(struct route_node *rn,
+			       struct static_route *si, bool reg)
 {
 	struct static_nht_data *nhtd, lookup;
 	uint32_t cmd;
@@ -317,8 +288,11 @@ void static_zebra_nht_register(struct static_route *si, bool reg)
 				static_nht_hash_alloc);
 		nhtd->refcount++;
 
-		if (nhtd->refcount > 1) {
-			static_nht_update(nhtd->nh, nhtd->nh_num,
+		if (debug)
+			zlog_debug("Registered nexthop(%pFX) for %pRN %d", &p,
+				   rn, nhtd->nh_num);
+		if (nhtd->refcount > 1 && nhtd->nh_num) {
+			static_nht_update(&rn->p, nhtd->nh, nhtd->nh_num,
 					  afi, si->nh_vrf_id);
 			return;
 		}
@@ -364,8 +338,6 @@ extern void static_zebra_route_add(struct route_node *rn,
 		memcpy(&api.src_prefix, src_pp, sizeof(api.src_prefix));
 	}
 	SET_FLAG(api.flags, ZEBRA_FLAG_RR_USE_DISTANCE);
-	if (si_changed->onlink)
-		SET_FLAG(api.flags, ZEBRA_FLAG_ONLINK);
 	SET_FLAG(api.message, ZAPI_MESSAGE_NEXTHOP);
 	if (si_changed->distance) {
 		SET_FLAG(api.message, ZAPI_MESSAGE_DISTANCE);
@@ -391,6 +363,10 @@ extern void static_zebra_route_add(struct route_node *rn,
 			continue;
 
 		api_nh->vrf_id = si->nh_vrf_id;
+		api_nh->onlink = si->onlink;
+
+		si->state = STATIC_SENT_TO_ZEBRA;
+
 		switch (si->type) {
 		case STATIC_IFNAME:
 			if (si->ifindex == IFINDEX_INTERNAL)
@@ -461,19 +437,19 @@ extern void static_zebra_route_add(struct route_node *rn,
 			   ZEBRA_ROUTE_ADD : ZEBRA_ROUTE_DELETE,
 			   zclient, &api);
 }
+
 void static_zebra_init(void)
 {
 	struct zclient_options opt = { .receive_notify = true };
 
-	zclient = zclient_new_notify(master, &opt);
+	if_zapi_callbacks(static_ifp_create, static_ifp_up,
+			  static_ifp_down, static_ifp_destroy);
+
+	zclient = zclient_new(master, &opt);
 
 	zclient_init(zclient, ZEBRA_ROUTE_STATIC, 0, &static_privs);
 	zclient->zebra_capabilities = static_zebra_capabilities;
 	zclient->zebra_connected = zebra_connected;
-	zclient->interface_add = interface_add;
-	zclient->interface_delete = interface_delete;
-	zclient->interface_up = interface_state_up;
-	zclient->interface_down = interface_state_down;
 	zclient->interface_address_add = interface_address_add;
 	zclient->interface_address_delete = interface_address_delete;
 	zclient->route_notify_owner = route_notify_owner;

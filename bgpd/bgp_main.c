@@ -70,10 +70,6 @@
 static const struct option longopts[] = {
 	{"bgp_port", required_argument, NULL, 'p'},
 	{"listenon", required_argument, NULL, 'l'},
-#if CONFDATE > 20190521
-	CPP_NOTICE("-r / --retain has reached deprecation EOL, remove")
-#endif
-	{"retain", no_argument, NULL, 'r'},
 	{"no_kernel", no_argument, NULL, 'n'},
 	{"skip_runas", no_argument, NULL, 'S'},
 	{"ecmp", required_argument, NULL, 'e'},
@@ -137,7 +133,7 @@ void sighup(void)
 	zlog_info("bgpd restarting!");
 
 	/* Reload config file. */
-	vty_read_config(bgpd_di.config_file, config_default);
+	vty_read_config(NULL, bgpd_di.config_file, config_default);
 
 	/* Try to return to normal operation. */
 }
@@ -171,7 +167,7 @@ void sigusr1(void)
 */
 static __attribute__((__noreturn__)) void bgp_exit(int status)
 {
-	struct bgp *bgp, *bgp_default;
+	struct bgp *bgp, *bgp_default, *bgp_evpn;
 	struct listnode *node, *nnode;
 
 	/* it only makes sense for this to be called on a clean exit */
@@ -184,13 +180,16 @@ static __attribute__((__noreturn__)) void bgp_exit(int status)
 	bgp_close();
 
 	bgp_default = bgp_get_default();
+	bgp_evpn = bgp_get_evpn();
 
 	/* reverse bgp_master_init */
 	for (ALL_LIST_ELEMENTS(bm->bgp, node, nnode, bgp)) {
-		if (bgp_default == bgp)
+		if (bgp_default == bgp || bgp_evpn == bgp)
 			continue;
 		bgp_delete(bgp);
 	}
+	if (bgp_evpn && bgp_evpn != bgp_default)
+		bgp_delete(bgp_evpn);
 	if (bgp_default)
 		bgp_delete(bgp_default);
 
@@ -235,6 +234,9 @@ static __attribute__((__noreturn__)) void bgp_exit(int status)
 
 	bf_free(bm->rd_idspace);
 	list_delete(&bm->bgp);
+
+	bgp_lp_finish();
+
 	memset(bm, 0, sizeof(*bm));
 
 	frr_fini();
@@ -278,9 +280,9 @@ static int bgp_vrf_enable(struct vrf *vrf)
 		bgp_vrf_link(bgp, vrf);
 
 		bgp_handle_socket(bgp, vrf, old_vrf_id, true);
-		/* Update any redistribute vrf bitmaps if the vrf_id changed */
+		/* Update any redistribution if vrf_id changed */
 		if (old_vrf_id != bgp->vrf_id)
-			bgp_update_redist_vrf_bitmaps(bgp, old_vrf_id);
+			bgp_redistribute_redo(bgp);
 		bgp_instance_up(bgp);
 		vpn_leak_zebra_vrf_label_update(bgp, AFI_IP);
 		vpn_leak_zebra_vrf_label_update(bgp, AFI_IP6);
@@ -327,9 +329,9 @@ static int bgp_vrf_disable(struct vrf *vrf)
 		/* We have instance configured, unlink from VRF and make it
 		 * "down". */
 		bgp_vrf_unlink(bgp, vrf);
-		/* Update any redistribute vrf bitmaps if the vrf_id changed */
+		/* Delete any redistribute vrf bitmaps if the vrf_id changed */
 		if (old_vrf_id != bgp->vrf_id)
-			bgp_update_redist_vrf_bitmaps(bgp, old_vrf_id);
+			bgp_unset_redist_vrf_bitmaps(bgp, old_vrf_id);
 		bgp_instance_down(bgp);
 	}
 
@@ -348,18 +350,19 @@ static void bgp_vrf_terminate(void)
 	vrf_terminate();
 }
 
+static const struct frr_yang_module_info *bgpd_yang_modules[] = {
+};
+
 FRR_DAEMON_INFO(bgpd, BGP, .vty_port = BGP_VTY_PORT,
 
 		.proghelp = "Implementation of the BGP routing protocol.",
 
 		.signals = bgp_signals, .n_signals = array_size(bgp_signals),
 
-		.privs = &bgpd_privs, )
+		.privs = &bgpd_privs, .yang_modules = bgpd_yang_modules,
+		.n_yang_modules = array_size(bgpd_yang_modules), )
 
-#if CONFDATE > 20190521
-CPP_NOTICE("-r / --retain has reached deprecation EOL, remove")
-#endif
-#define DEPRECATED_OPTIONS "r"
+#define DEPRECATED_OPTIONS ""
 
 /* Main routine of bgpd. Treatment of argument and start bgp finite
    state machine is handled at here. */
@@ -371,6 +374,7 @@ int main(int argc, char **argv)
 	int bgp_port = BGP_PORT_DEFAULT;
 	char *bgp_address = NULL;
 	int no_fib_flag = 0;
+	int no_zebra_flag = 0;
 	int skip_runas = 0;
 	int instance = 0;
 
@@ -380,6 +384,7 @@ int main(int argc, char **argv)
 		"  -p, --bgp_port     Set BGP listen port number (0 means do not listen).\n"
 		"  -l, --listenon     Listen on specified address (implies -n)\n"
 		"  -n, --no_kernel    Do not install route to kernel.\n"
+		"  -Z, --no_zebra     Do not communicate with Zebra.\n"
 		"  -S, --skip_runas   Skip capabilities checks, and changing user and group IDs.\n"
 		"  -e, --ecmp         Specify ECMP to use.\n"
 		"  -I, --int_num      Set instance number (label-manager)\n");
@@ -426,6 +431,9 @@ int main(int argc, char **argv)
 		case 'n':
 			no_fib_flag = 1;
 			break;
+		case 'Z':
+			no_zebra_flag = 1;
+			break;
 		case 'S':
 			skip_runas = 1;
 			break;
@@ -449,9 +457,10 @@ int main(int argc, char **argv)
 	if (bgp_port == 0)
 		bgp_option_set(BGP_OPT_NO_LISTEN);
 	bm->address = bgp_address;
-	if (no_fib_flag)
+	if (no_fib_flag || no_zebra_flag)
 		bgp_option_set(BGP_OPT_NO_FIB);
-
+	if (no_zebra_flag)
+		bgp_option_set(BGP_OPT_NO_ZEBRA);
 	bgp_error_init();
 	/* Initializations. */
 	bgp_vrf_init();

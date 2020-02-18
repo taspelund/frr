@@ -123,7 +123,7 @@ void rfapiDebugBacktrace(void)
  * Count remote routes and compare with actively-maintained values.
  * Abort if they disagree.
  */
-void rfapiCheckRouteCount()
+void rfapiCheckRouteCount(void)
 {
 	struct bgp *bgp = bgp_get_default();
 	struct rfapi *h;
@@ -375,41 +375,14 @@ int rfapiGetVncLifetime(struct attr *attr, uint32_t *lifetime)
 }
 
 /*
- * Extract the tunnel type from the extended community
- */
-int rfapiGetTunnelType(struct attr *attr, bgp_encap_types *type)
-{
-	*type = BGP_ENCAP_TYPE_MPLS; /* default to MPLS */
-	if (attr && attr->ecommunity) {
-		struct ecommunity *ecom = attr->ecommunity;
-		int i;
-
-		for (i = 0; i < (ecom->size * ECOMMUNITY_SIZE);
-		     i += ECOMMUNITY_SIZE) {
-			uint8_t *ep;
-
-			ep = ecom->val + i;
-			if (ep[0] == ECOMMUNITY_ENCODE_OPAQUE
-			    && ep[1] == ECOMMUNITY_OPAQUE_SUBTYPE_ENCAP) {
-				*type = (ep[6] << 8) + ep[7];
-				return 0;
-			}
-		}
-	}
-
-	return ENOENT;
-}
-
-
-/*
  * Look for UN address in Encap attribute
  */
 int rfapiGetVncTunnelUnAddr(struct attr *attr, struct prefix *p)
 {
 	struct bgp_attr_encap_subtlv *pEncap;
-	bgp_encap_types tun_type;
+	bgp_encap_types tun_type = BGP_ENCAP_TYPE_MPLS;/*Default tunnel type*/
 
-	rfapiGetTunnelType(attr, &tun_type);
+	bgp_attr_extcom_tunnel_type(attr, &tun_type);
 	if (tun_type == BGP_ENCAP_TYPE_MPLS) {
 		if (!p)
 			return 0;
@@ -509,13 +482,11 @@ static struct bgp_path_info *rfapiBgpInfoCreate(struct attr *attr,
 {
 	struct bgp_path_info *new;
 
-	new = bgp_path_info_new();
-	assert(new);
+	new = info_make(type, sub_type, 0, peer, attr, NULL);
 
-	if (attr) {
-		if (!new->attr)
-			new->attr = bgp_attr_intern(attr);
-	}
+	if (attr)
+		new->attr = bgp_attr_intern(attr);
+
 	bgp_path_info_extra_get(new);
 	if (prd) {
 		new->extra->vnc.import.rd = *prd;
@@ -523,9 +494,7 @@ static struct bgp_path_info *rfapiBgpInfoCreate(struct attr *attr,
 	}
 	if (label)
 		encode_label(*label, &new->extra->label[0]);
-	new->type = type;
-	new->sub_type = sub_type;
-	new->peer = peer;
+
 	peer_lock(peer);
 
 	return new;
@@ -550,11 +519,8 @@ static void rfapiBgpInfoFree(struct bgp_path_info *goner)
 	if (goner->attr) {
 		bgp_attr_unintern(&goner->attr);
 	}
-	if (goner->extra) {
-		assert(!goner->extra->damp_info); /* Not used in import tbls */
-		XFREE(MTYPE_BGP_ROUTE_EXTRA, goner->extra);
-		goner->extra = NULL;
-	}
+	if (goner->extra)
+		bgp_path_info_extra_free(&goner->extra);
 	XFREE(MTYPE_BGP_ROUTE, goner);
 }
 
@@ -1177,6 +1143,9 @@ static int rfapiVpnBiSamePtUn(struct bgp_path_info *bpi1,
 		break;
 	}
 
+	memset(&pfx_un1, 0, sizeof(pfx_un1));
+	memset(&pfx_un2, 0, sizeof(pfx_un2));
+
 	/*
 	 * UN address comparisons
 	 */
@@ -1218,7 +1187,7 @@ static int rfapiVpnBiSamePtUn(struct bgp_path_info *bpi1,
 		}
 	}
 
-	if (!pfx_un1.family || !pfx_un2.family)
+	if (pfx_un1.family == 0 || pfx_un2.family == 0)
 		return 0;
 
 	if (pfx_un1.family != pfx_un2.family)
@@ -1357,7 +1326,7 @@ rfapiRouteInfo2NextHopEntry(struct rfapi_ip_prefix *rprefix,
 	}
 
 	if (bpi->attr) {
-		bgp_encap_types tun_type;
+		bgp_encap_types tun_type = BGP_ENCAP_TYPE_MPLS; /*Default*/
 		new->prefix.cost = rfapiRfpCost(bpi->attr);
 
 		struct bgp_attr_encap_subtlv *pEncap;
@@ -1397,7 +1366,7 @@ rfapiRouteInfo2NextHopEntry(struct rfapi_ip_prefix *rprefix,
 			}
 		}
 
-		rfapiGetTunnelType(bpi->attr, &tun_type);
+		bgp_attr_extcom_tunnel_type(bpi->attr, &tun_type);
 		if (tun_type == BGP_ENCAP_TYPE_MPLS) {
 			struct prefix p;
 			/* MPLS carries UN address in next hop */
@@ -2018,11 +1987,14 @@ static void rfapiBgpInfoAttachSorted(struct agg_node *rn,
 
 	for (prev = NULL, next = rn->info; next;
 	     prev = next, next = next->next) {
+		enum bgp_path_selection_reason reason;
+
 		if (!bgp
 		    || (!CHECK_FLAG(info_new->flags, BGP_PATH_REMOVED)
 			&& CHECK_FLAG(next->flags, BGP_PATH_REMOVED))
 		    || bgp_path_info_cmp_compatible(bgp, info_new, next,
-						    pfx_buf, afi, safi)
+						    pfx_buf, afi, safi,
+						    &reason)
 			       == -1) { /* -1 if 1st is better */
 			break;
 		}
@@ -2193,7 +2165,7 @@ static void rfapiItBiIndexDump(struct agg_node *rn)
 			prefix2str(&k->extra->vnc.import.aux_prefix,
 				   buf_aux_pfx, sizeof(buf_aux_pfx));
 		} else
-			strncpy(buf_aux_pfx, "(none)", PREFIX_STRLEN);
+			strlcpy(buf_aux_pfx, "(none)", sizeof(buf_aux_pfx));
 
 		vnc_zlog_debug_verbose("bpi %p, peer %p, rd %s, aux_prefix %s",
 				       k, k->peer, buf, buf_aux_pfx);
@@ -2224,7 +2196,7 @@ static struct bgp_path_info *rfapiItBiIndexSearch(
 			prefix2str(aux_prefix, buf_aux_pfx,
 				   sizeof(buf_aux_pfx));
 		} else
-			strncpy(buf_aux_pfx, "(nil)", sizeof(buf_aux_pfx));
+			strlcpy(buf_aux_pfx, "(nil)", sizeof(buf_aux_pfx));
 
 		vnc_zlog_debug_verbose("%s want prd=%s, peer=%p, aux_prefix=%s",
 				       __func__,
@@ -2430,6 +2402,18 @@ static int rfapiWithdrawTimerVPN(struct thread *t)
 	struct rfapi_monitor_vpn *moved;
 	afi_t afi;
 
+	if (bgp == NULL) {
+		vnc_zlog_debug_verbose(
+                   "%s: NULL BGP pointer, assume shutdown race condition!!!",
+                   __func__);
+		return 0;
+	}
+	if (bgp_flag_check(bgp, BGP_FLAG_DELETE_IN_PROGRESS)) {
+		vnc_zlog_debug_verbose(
+                   "%s: BGP delete in progress, assume shutdown race condition!!!",
+                   __func__);
+		return 0;
+	}
 	assert(wcb->node);
 	assert(bpi);
 	assert(wcb->import_table);
@@ -4142,6 +4126,9 @@ static void rfapiProcessPeerDownRt(struct peer *peer,
 		timer_service_func = rfapiWithdrawTimerEncap;
 		break;
 	default:
+		/* Suppress uninitialized variable warning */
+		rt = NULL;
+		timer_service_func = NULL;
 		assert(0);
 	}
 
@@ -4244,13 +4231,15 @@ static void rfapiBgpTableFilteredImport(struct bgp *bgp,
 	for (rn1 = bgp_table_top(bgp->rib[afi][safi]); rn1;
 	     rn1 = bgp_route_next(rn1)) {
 
-		if (rn1->info) {
-			for (rn2 = bgp_table_top(rn1->info); rn2;
+		if (bgp_node_has_bgp_path_info_data(rn1)) {
+
+			for (rn2 = bgp_table_top(bgp_node_get_bgp_table_info(rn1)); rn2;
 			     rn2 = bgp_route_next(rn2)) {
 
 				struct bgp_path_info *bpi;
 
-				for (bpi = rn2->info; bpi; bpi = bpi->next) {
+				for (bpi = bgp_node_get_bgp_path_info(rn2);
+				     bpi; bpi = bpi->next) {
 					uint32_t label = 0;
 
 					if (CHECK_FLAG(bpi->flags,
@@ -4286,7 +4275,7 @@ struct rfapi *bgp_rfapi_new(struct bgp *bgp)
 
 	assert(bgp->rfapi_cfg == NULL);
 
-	h = (struct rfapi *)XCALLOC(MTYPE_RFAPI, sizeof(struct rfapi));
+	h = XCALLOC(MTYPE_RFAPI, sizeof(struct rfapi));
 
 	for (afi = AFI_IP; afi < AFI_MAX; afi++) {
 		h->un[afi] = agg_table_init();

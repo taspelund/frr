@@ -21,9 +21,13 @@
 #ifndef _QUAGGA_BGP_ROUTE_H
 #define _QUAGGA_BGP_ROUTE_H
 
+#include <stdbool.h>
+
+#include "hook.h"
 #include "queue.h"
 #include "nexthop.h"
 #include "bgp_table.h"
+#include "bgp_addpath_types.h"
 
 struct bgp_nexthop_cache;
 struct bgp_route_evpn;
@@ -44,7 +48,9 @@ enum bgp_show_type {
 	bgp_show_type_community_list_exact,
 	bgp_show_type_lcommunity_all,
 	bgp_show_type_lcommunity,
+	bgp_show_type_lcommunity_exact,
 	bgp_show_type_lcommunity_list,
+	bgp_show_type_lcommunity_list_exact,
 	bgp_show_type_flap_statistics,
 	bgp_show_type_flap_neighbor,
 	bgp_show_type_dampend_paths,
@@ -72,6 +78,24 @@ enum bgp_show_adj_route_type {
  */
 #define BGP_MAX_LABELS 2
 
+/* Error codes for handling NLRI */
+#define BGP_NLRI_PARSE_OK 0
+#define BGP_NLRI_PARSE_ERROR_PREFIX_OVERFLOW -1
+#define BGP_NLRI_PARSE_ERROR_PACKET_OVERFLOW -2
+#define BGP_NLRI_PARSE_ERROR_PREFIX_LENGTH -3
+#define BGP_NLRI_PARSE_ERROR_PACKET_LENGTH -4
+#define BGP_NLRI_PARSE_ERROR_LABEL_LENGTH -5
+#define BGP_NLRI_PARSE_ERROR_EVPN_MISSING_TYPE -6
+#define BGP_NLRI_PARSE_ERROR_EVPN_TYPE2_SIZE -7
+#define BGP_NLRI_PARSE_ERROR_EVPN_TYPE3_SIZE -8
+#define BGP_NLRI_PARSE_ERROR_EVPN_TYPE4_SIZE -9
+#define BGP_NLRI_PARSE_ERROR_EVPN_TYPE5_SIZE -10
+#define BGP_NLRI_PARSE_ERROR_FLOWSPEC_IPV6_NOT_SUPPORTED -11
+#define BGP_NLRI_PARSE_ERROR_FLOWSPEC_NLRI_SIZELIMIT -12
+#define BGP_NLRI_PARSE_ERROR_FLOWSPEC_BAD_FORMAT -13
+#define BGP_NLRI_PARSE_ERROR_ADDRESS_FAMILY -14
+#define BGP_NLRI_PARSE_ERROR -32
+
 /* Ancillary information to struct bgp_path_info,
  * used for uncommonly used data (aggregation, MPLS, etc.)
  * and lazily allocated to save memory.
@@ -89,6 +113,10 @@ struct bgp_path_info_extra {
 	/* MPLS label(s) - VNI(s) for EVPN-VxLAN  */
 	mpls_label_t label[BGP_MAX_LABELS];
 	uint32_t num_labels;
+
+	/* af specific flags */
+	uint16_t af_flags;
+#define BGP_EVPN_MACIP_TYPE_SVI_IP (1 << 0)
 
 #if ENABLE_BGP_VNC
 	union {
@@ -220,7 +248,7 @@ struct bgp_path_info {
 
 	/* Addpath identifiers */
 	uint32_t addpath_rx_id;
-	uint32_t addpath_tx_id;
+	struct bgp_addpath_info_data tx_addpath;
 };
 
 /* Structure used in BGP path selection */
@@ -276,7 +304,10 @@ struct bgp_static {
 
 #define BGP_ATTR_NEXTHOP_AFI_IP6(attr)                                         \
 	(!CHECK_FLAG(attr->flag, ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP))             \
-	 && ((attr)->mp_nexthop_len == 16 || (attr)->mp_nexthop_len == 32))
+	 && ((attr)->mp_nexthop_len == BGP_ATTR_NHLEN_IPV6_GLOBAL              \
+	     || (attr)->mp_nexthop_len == BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL    \
+	     || (attr)->mp_nexthop_len == BGP_ATTR_NHLEN_VPNV6_GLOBAL          \
+	     || (attr)->mp_nexthop_len == BGP_ATTR_NHLEN_VPNV6_GLOBAL_AND_LL))
 #define BGP_PATH_COUNTABLE(BI)                                                 \
 	(!CHECK_FLAG((BI)->flags, BGP_PATH_HISTORY)                            \
 	 && !CHECK_FLAG((BI)->flags, BGP_PATH_REMOVED))
@@ -338,6 +369,30 @@ static inline int bgp_fibupd_safi(safi_t safi)
 	return 0;
 }
 
+/* Flag if the route path's family matches params. */
+static inline bool is_pi_family_matching(struct bgp_path_info *pi,
+					 afi_t afi, safi_t safi)
+{
+	struct bgp_table *table;
+	struct bgp_node *rn;
+
+	rn = pi->net;
+	if (!rn)
+		return false;
+	table = bgp_node_table(rn);
+	if (table &&
+	    table->afi == afi &&
+	    table->safi == safi)
+		return true;
+	return false;
+}
+
+/* called before bgp_process() */
+DECLARE_HOOK(bgp_process,
+		(struct bgp *bgp, afi_t afi, safi_t safi,
+			struct bgp_node *bn, struct peer *peer, bool withdraw),
+		(bgp, afi, safi, bn, peer, withdraw))
+
 /* Prototypes. */
 extern void bgp_rib_remove(struct bgp_node *rn, struct bgp_path_info *pi,
 			   struct peer *peer, afi_t afi, safi_t safi);
@@ -361,6 +416,7 @@ extern struct bgp_node *bgp_afi_node_get(struct bgp_table *table, afi_t afi,
 extern struct bgp_path_info *bgp_path_info_lock(struct bgp_path_info *path);
 extern struct bgp_path_info *bgp_path_info_unlock(struct bgp_path_info *path);
 extern void bgp_path_info_add(struct bgp_node *rn, struct bgp_path_info *pi);
+extern void bgp_path_info_extra_free(struct bgp_path_info_extra **extra);
 extern void bgp_path_info_reap(struct bgp_node *rn, struct bgp_path_info *pi);
 extern void bgp_path_info_delete(struct bgp_node *rn, struct bgp_path_info *pi);
 extern struct bgp_path_info_extra *
@@ -472,14 +528,14 @@ extern void bgp_process_queues_drain_immediate(void);
 extern struct bgp_node *bgp_afi_node_lookup(struct bgp_table *table, afi_t afi,
 					    safi_t safi, struct prefix *p,
 					    struct prefix_rd *prd);
-extern struct bgp_path_info *bgp_path_info_new(void);
 extern void bgp_path_info_restore(struct bgp_node *rn,
 				  struct bgp_path_info *path);
 
 extern int bgp_path_info_cmp_compatible(struct bgp *bgp,
 					struct bgp_path_info *new,
 					struct bgp_path_info *exist,
-					char *pfx_buf, afi_t afi, safi_t safi);
+					char *pfx_buf, afi_t afi, safi_t safi,
+					enum bgp_path_selection_reason *reason);
 extern void bgp_attr_add_gshut_community(struct attr *attr);
 
 extern void bgp_best_selection(struct bgp *bgp, struct bgp_node *rn,
@@ -495,7 +551,8 @@ extern void route_vty_out_detail_header(struct vty *vty, struct bgp *bgp,
 					struct prefix_rd *prd, afi_t afi,
 					safi_t safi, json_object *json);
 extern void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
-				 struct prefix *p, struct bgp_path_info *path,
+				 struct bgp_node *bn,
+				 struct bgp_path_info *path,
 				 afi_t afi, safi_t safi,
 				 json_object *json_paths);
 extern int bgp_show_table_rd(struct vty *vty, struct bgp *bgp, safi_t safi,

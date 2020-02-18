@@ -46,6 +46,7 @@
 #include "jhash.h"
 #include "hook.h"
 #include "lib_errors.h"
+#include "northbound_cli.h"
 
 DEFINE_MTYPE(LIB, HOST, "Host config")
 DEFINE_MTYPE(LIB, COMPLETION, "Completion item")
@@ -81,7 +82,10 @@ const char *node_names[] = {
 	"config",		    // CONFIG_NODE,
 	"debug",		    // DEBUG_NODE,
 	"vrf debug",		    // VRF_DEBUG_NODE,
+	"northbound debug",	    // NORTHBOUND_DEBUG_NODE,
 	"vnc debug",		    // DEBUG_VNC_NODE,
+	"route-map debug",	    /* RMAP_DEBUG_NODE */
+	"resolver debug",	    /* RESOLVER_DEBUG_NODE */
 	"aaa",			    // AAA_NODE,
 	"keychain",		    // KEYCHAIN_NODE,
 	"keychain key",		    // KEYCHAIN_KEY_NODE,
@@ -147,6 +151,7 @@ const char *node_names[] = {
 	"bfd",			 /* BFD_NODE */
 	"bfd peer",		 /* BFD_PEER_NODE */
 	"openfabric",		    // OPENFABRIC_NODE
+	"vrrp",			    /* VRRP_NODE */
 };
 /* clang-format on */
 
@@ -330,7 +335,7 @@ int argv_find(struct cmd_token **argv, int argc, const char *text, int *index)
 	return found;
 }
 
-static unsigned int cmd_hash_key(void *p)
+static unsigned int cmd_hash_key(const void *p)
 {
 	int size = sizeof(p);
 
@@ -718,11 +723,14 @@ vector cmd_describe_command(vector vline, struct vty *vty, int *status)
 
 	if (cmd_try_do_shortcut(vty->node, vector_slot(vline, 0))) {
 		enum node_type onode;
+		int orig_xpath_index;
 		vector shifted_vline;
 		unsigned int index;
 
 		onode = vty->node;
+		orig_xpath_index = vty->xpath_index;
 		vty->node = ENABLE_NODE;
+		vty->xpath_index = 0;
 		/* We can try it on enable node, cos' the vty is authenticated
 		 */
 
@@ -737,6 +745,7 @@ vector cmd_describe_command(vector vline, struct vty *vty, int *status)
 
 		vector_free(shifted_vline);
 		vty->node = onode;
+		vty->xpath_index = orig_xpath_index;
 		return ret;
 	}
 
@@ -1045,8 +1054,20 @@ static int cmd_execute_command_real(vector vline, enum filter_type filter,
 	int ret;
 	if (matched_element->daemon)
 		ret = CMD_SUCCESS_DAEMON;
-	else
+	else {
+		if (vty->config) {
+			/* Clear array of enqueued configuration changes. */
+			vty->num_cfg_changes = 0;
+			memset(&vty->cfg_changes, 0, sizeof(vty->cfg_changes));
+
+			/* Regenerate candidate configuration. */
+			if (frr_get_cli_mode() == FRR_CLI_CLASSIC)
+				nb_config_replace(vty->candidate_config,
+						  running_config, true);
+		}
+
 		ret = matched_element->func(matched_element, vty, argc, argv);
+	}
 
 	// delete list and cmd_token's in it
 	list_delete(&argv_list);
@@ -1075,14 +1096,17 @@ int cmd_execute_command(vector vline, struct vty *vty,
 {
 	int ret, saved_ret = 0;
 	enum node_type onode, try_node;
+	int orig_xpath_index;
 
 	onode = try_node = vty->node;
+	orig_xpath_index = vty->xpath_index;
 
 	if (cmd_try_do_shortcut(vty->node, vector_slot(vline, 0))) {
 		vector shifted_vline;
 		unsigned int index;
 
 		vty->node = ENABLE_NODE;
+		vty->xpath_index = 0;
 		/* We can try it on enable node, cos' the vty is authenticated
 		 */
 
@@ -1097,6 +1121,7 @@ int cmd_execute_command(vector vline, struct vty *vty,
 
 		vector_free(shifted_vline);
 		vty->node = onode;
+		vty->xpath_index = orig_xpath_index;
 		return ret;
 	}
 
@@ -1113,6 +1138,8 @@ int cmd_execute_command(vector vline, struct vty *vty,
 		while (vty->node > CONFIG_NODE) {
 			try_node = node_parent(try_node);
 			vty->node = try_node;
+			if (vty->xpath_index > 0)
+				vty->xpath_index--;
 			ret = cmd_execute_command_real(vline, FILTER_RELAXED,
 						       vty, cmd);
 			if (ret == CMD_SUCCESS || ret == CMD_WARNING
@@ -1122,6 +1149,7 @@ int cmd_execute_command(vector vline, struct vty *vty,
 		}
 		/* no command succeeded, reset the vty to the original node */
 		vty->node = onode;
+		vty->xpath_index = orig_xpath_index;
 	}
 
 	/* return command status for original node */
@@ -1259,8 +1287,7 @@ int cmd_execute(struct vty *vty, const char *cmd,
 
 	hook_call(cmd_execute_done, vty, cmd_exec);
 
-	if (cmd_out)
-		XFREE(MTYPE_TMP, cmd_out);
+	XFREE(MTYPE_TMP, cmd_out);
 
 	return ret;
 }
@@ -1285,7 +1312,6 @@ int command_config_read_one_line(struct vty *vty,
 				 uint32_t line_num, int use_daemon)
 {
 	vector vline;
-	int saved_node;
 	int ret;
 
 	vline = cmd_make_strvec(vty->buf);
@@ -1303,14 +1329,16 @@ int command_config_read_one_line(struct vty *vty,
 	    && ret != CMD_SUCCESS && ret != CMD_WARNING
 	    && ret != CMD_NOT_MY_INSTANCE && ret != CMD_WARNING_CONFIG_FAILED
 	    && vty->node != CONFIG_NODE) {
-
-		saved_node = vty->node;
+		int saved_node = vty->node;
+		int saved_xpath_index = vty->xpath_index;
 
 		while (!(use_daemon && ret == CMD_SUCCESS_DAEMON)
 		       && !(!use_daemon && ret == CMD_ERR_NOTHING_TODO)
 		       && ret != CMD_SUCCESS && ret != CMD_WARNING
 		       && vty->node > CONFIG_NODE) {
 			vty->node = node_parent(vty->node);
+			if (vty->xpath_index > 0)
+				vty->xpath_index--;
 			ret = cmd_execute_command_strict(vline, vty, cmd);
 		}
 
@@ -1320,10 +1348,13 @@ int command_config_read_one_line(struct vty *vty,
 		    && !(!use_daemon && ret == CMD_ERR_NOTHING_TODO)
 		    && ret != CMD_SUCCESS && ret != CMD_WARNING) {
 			vty->node = saved_node;
+			vty->xpath_index = saved_xpath_index;
 		}
 	}
 
-	if (ret != CMD_SUCCESS && ret != CMD_WARNING) {
+	if (ret != CMD_SUCCESS &&
+	    ret != CMD_WARNING &&
+	    ret != CMD_SUCCESS_DAEMON) {
 		struct vty_error *ve = XCALLOC(MTYPE_TMP, sizeof(*ve));
 
 		memcpy(ve->error_buf, vty->buf, VTY_BUFSIZ);
@@ -1365,17 +1396,11 @@ int config_from_file(struct vty *vty, FILE *fp, unsigned int *line_num)
 /* Configuration from terminal */
 DEFUN (config_terminal,
        config_terminal_cmd,
-       "configure terminal",
+       "configure [terminal]",
        "Configuration from vty interface\n"
        "Configuration terminal\n")
 {
-	if (vty_config_lock(vty))
-		vty->node = CONFIG_NODE;
-	else {
-		vty_out(vty, "VTY configuration is locked by other VTY\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-	return CMD_SUCCESS;
+	return vty_config_enter(vty, false, false);
 }
 
 /* Enable command */
@@ -1427,7 +1452,7 @@ void cmd_exit(struct vty *vty)
 		break;
 	case CONFIG_NODE:
 		vty->node = ENABLE_NODE;
-		vty_config_unlock(vty);
+		vty_config_exit(vty);
 		break;
 	case INTERFACE_NODE:
 	case PW_NODE:
@@ -1498,6 +1523,9 @@ void cmd_exit(struct vty *vty)
 	default:
 		break;
 	}
+
+	if (vty->xpath_index > 0)
+		vty->xpath_index--;
 }
 
 /* ALIAS_FIXME */
@@ -1516,64 +1544,11 @@ DEFUN (config_end,
        "end",
        "End current mode and change to enable mode.\n")
 {
-	switch (vty->node) {
-	case VIEW_NODE:
-	case ENABLE_NODE:
-		/* Nothing to do. */
-		break;
-	case CONFIG_NODE:
-	case INTERFACE_NODE:
-	case PW_NODE:
-	case LOGICALROUTER_NODE:
-	case VRF_NODE:
-	case NH_GROUP_NODE:
-	case ZEBRA_NODE:
-	case RIP_NODE:
-	case RIPNG_NODE:
-	case EIGRP_NODE:
-	case BABEL_NODE:
-	case BGP_NODE:
-	case BGP_VRF_POLICY_NODE:
-	case BGP_VNC_DEFAULTS_NODE:
-	case BGP_VNC_NVE_GROUP_NODE:
-	case BGP_VNC_L2_GROUP_NODE:
-	case BGP_VPNV4_NODE:
-	case BGP_VPNV6_NODE:
-	case BGP_FLOWSPECV4_NODE:
-	case BGP_FLOWSPECV6_NODE:
-	case BGP_IPV4_NODE:
-	case BGP_IPV4M_NODE:
-	case BGP_IPV4L_NODE:
-	case BGP_IPV6_NODE:
-	case BGP_IPV6M_NODE:
-	case BGP_EVPN_NODE:
-	case BGP_EVPN_VNI_NODE:
-	case BGP_IPV6L_NODE:
-	case RMAP_NODE:
-	case PBRMAP_NODE:
-	case OSPF_NODE:
-	case OSPF6_NODE:
-	case LDP_NODE:
-	case LDP_IPV4_NODE:
-	case LDP_IPV6_NODE:
-	case LDP_IPV4_IFACE_NODE:
-	case LDP_IPV6_IFACE_NODE:
-	case LDP_L2VPN_NODE:
-	case LDP_PSEUDOWIRE_NODE:
-	case ISIS_NODE:
-	case OPENFABRIC_NODE:
-	case KEYCHAIN_NODE:
-	case KEYCHAIN_KEY_NODE:
-	case VTY_NODE:
-	case LINK_PARAMS_NODE:
-	case BFD_NODE:
-	case BFD_PEER_NODE:
-		vty_config_unlock(vty);
+	if (vty->config) {
+		vty_config_exit(vty);
 		vty->node = ENABLE_NODE;
-		break;
-	default:
-		break;
 	}
+
 	return CMD_SUCCESS;
 }
 
@@ -1740,12 +1715,16 @@ static int vty_write_config(struct vty *vty)
 	vty_out(vty, "frr defaults %s\n", DFLT_NAME);
 	vty_out(vty, "!\n");
 
-	for (i = 0; i < vector_active(cmdvec); i++)
-		if ((node = vector_slot(cmdvec, i)) && node->func
-		    && (node->vtysh || vty->type != VTY_SHELL)) {
-			if ((*node->func)(vty))
-				vty_out(vty, "!\n");
-		}
+	pthread_rwlock_rdlock(&running_config->lock);
+	{
+		for (i = 0; i < vector_active(cmdvec); i++)
+			if ((node = vector_slot(cmdvec, i)) && node->func
+			    && (node->vtysh || vty->type != VTY_SHELL)) {
+				if ((*node->func)(vty))
+					vty_out(vty, "!\n");
+			}
+	}
+	pthread_rwlock_unlock(&running_config->lock);
 
 	if (vty->type == VTY_TERM) {
 		vty_out(vty, "end\n");
@@ -1790,10 +1769,10 @@ static int file_write_config(struct vty *vty)
 		dirfd = open(".", O_DIRECTORY | O_RDONLY);
 	/* if dirfd is invalid, directory sync fails, but we're still OK */
 
-	config_file_sav = XMALLOC(
-		MTYPE_TMP, strlen(config_file) + strlen(CONF_BACKUP_EXT) + 1);
-	strcpy(config_file_sav, config_file);
-	strcat(config_file_sav, CONF_BACKUP_EXT);
+	size_t config_file_sav_sz = strlen(config_file) + strlen(CONF_BACKUP_EXT) + 1;
+	config_file_sav = XMALLOC(MTYPE_TMP, config_file_sav_sz);
+	strlcpy(config_file_sav, config_file, config_file_sav_sz);
+	strlcat(config_file_sav, CONF_BACKUP_EXT, config_file_sav_sz);
 
 
 	config_file_tmp = XMALLOC(MTYPE_TMP, strlen(config_file) + 8);
@@ -1992,7 +1971,15 @@ DEFUN (config_hostname,
 	struct cmd_token *word = argv[1];
 
 	if (!isalnum((int)word->arg[0])) {
-		vty_out(vty, "Please specify string starting with alphabet\n");
+		vty_out(vty,
+		    "Please specify string starting with alphabet or number\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	/* With reference to RFC 1123 Section 2.1 */
+	if (strlen(word->arg) > HOSTNAME_LEN) {
+		vty_out(vty, "Hostname length should be less than %d chars\n",
+			HOSTNAME_LEN);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
@@ -2442,8 +2429,7 @@ static int set_log_file(struct vty *vty, const char *fname, int loglevel)
 
 	ret = zlog_set_file(fullpath, loglevel);
 
-	if (p)
-		XFREE(MTYPE_TMP, p);
+	XFREE(MTYPE_TMP, p);
 
 	if (!ret) {
 		if (vty)
@@ -2451,8 +2437,7 @@ static int set_log_file(struct vty *vty, const char *fname, int loglevel)
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	if (host.logfile)
-		XFREE(MTYPE_HOST, host.logfile);
+	XFREE(MTYPE_HOST, host.logfile);
 
 	host.logfile = XSTRDUP(MTYPE_HOST, fname);
 
@@ -2521,8 +2506,7 @@ static void disable_log_file(void)
 {
 	zlog_reset_file();
 
-	if (host.logfile)
-		XFREE(MTYPE_HOST, host.logfile);
+	XFREE(MTYPE_HOST, host.logfile);
 
 	host.logfile = NULL;
 }
@@ -2673,8 +2657,7 @@ int cmd_banner_motd_file(const char *file)
 		return CMD_ERR_NO_FILE;
 	in = strstr(rpath, SYSCONFDIR);
 	if (in == rpath) {
-		if (host.motdfile)
-			XFREE(MTYPE_HOST, host.motdfile);
+		XFREE(MTYPE_HOST, host.motdfile);
 		host.motdfile = XSTRDUP(MTYPE_HOST, file);
 	} else
 		success = CMD_WARNING_CONFIG_FAILED;
@@ -2759,8 +2742,7 @@ DEFUN(find,
 /* Set config filename.  Called from vty.c */
 void host_config_set(const char *filename)
 {
-	if (host.config)
-		XFREE(MTYPE_HOST, host.config);
+	XFREE(MTYPE_HOST, host.config);
 	host.config = XSTRDUP(MTYPE_HOST, filename);
 }
 
@@ -2783,6 +2765,8 @@ void install_default(enum node_type node)
 	install_element(node, &show_running_config_cmd);
 
 	install_element(node, &autocomplete_cmd);
+
+	nb_cli_install_default(node);
 }
 
 /* Initialize command interface. Install basic nodes and commands.
@@ -2838,9 +2822,10 @@ void cmd_init(int terminal)
 	/* Each node's basic commands. */
 	install_element(VIEW_NODE, &show_version_cmd);
 	install_element(ENABLE_NODE, &show_startup_config_cmd);
-	install_element(ENABLE_NODE, &debug_memstats_cmd);
 
 	if (terminal) {
+		install_element(ENABLE_NODE, &debug_memstats_cmd);
+
 		install_element(VIEW_NODE, &config_list_cmd);
 		install_element(VIEW_NODE, &config_exit_cmd);
 		install_element(VIEW_NODE, &config_quit_cmd);
@@ -2874,9 +2859,10 @@ void cmd_init(int terminal)
 	install_element(CONFIG_NODE, &domainname_cmd);
 	install_element(CONFIG_NODE, &no_domainname_cmd);
 	install_element(CONFIG_NODE, &frr_version_defaults_cmd);
-	install_element(CONFIG_NODE, &debug_memstats_cmd);
 
 	if (terminal > 0) {
+		install_element(CONFIG_NODE, &debug_memstats_cmd);
+
 		install_element(CONFIG_NODE, &password_cmd);
 		install_element(CONFIG_NODE, &no_password_cmd);
 		install_element(CONFIG_NODE, &enable_password_cmd);
@@ -2915,7 +2901,7 @@ void cmd_init(int terminal)
 #endif
 }
 
-void cmd_terminate()
+void cmd_terminate(void)
 {
 	struct cmd_node *cmd_node;
 
@@ -2938,24 +2924,15 @@ void cmd_terminate()
 		cmdvec = NULL;
 	}
 
-	if (host.name)
-		XFREE(MTYPE_HOST, host.name);
-	if (host.domainname)
-		XFREE(MTYPE_HOST, host.domainname);
-	if (host.password)
-		XFREE(MTYPE_HOST, host.password);
-	if (host.password_encrypt)
-		XFREE(MTYPE_HOST, host.password_encrypt);
-	if (host.enable)
-		XFREE(MTYPE_HOST, host.enable);
-	if (host.enable_encrypt)
-		XFREE(MTYPE_HOST, host.enable_encrypt);
-	if (host.logfile)
-		XFREE(MTYPE_HOST, host.logfile);
-	if (host.motdfile)
-		XFREE(MTYPE_HOST, host.motdfile);
-	if (host.config)
-		XFREE(MTYPE_HOST, host.config);
+	XFREE(MTYPE_HOST, host.name);
+	XFREE(MTYPE_HOST, host.domainname);
+	XFREE(MTYPE_HOST, host.password);
+	XFREE(MTYPE_HOST, host.password_encrypt);
+	XFREE(MTYPE_HOST, host.enable);
+	XFREE(MTYPE_HOST, host.enable_encrypt);
+	XFREE(MTYPE_HOST, host.logfile);
+	XFREE(MTYPE_HOST, host.motdfile);
+	XFREE(MTYPE_HOST, host.config);
 
 	list_delete(&varhandlers);
 	qobj_finish();

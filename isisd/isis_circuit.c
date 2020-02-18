@@ -38,8 +38,8 @@
 #include "prefix.h"
 #include "stream.h"
 #include "qobj.h"
+#include "lib/northbound_cli.h"
 
-#include "isisd/dict.h"
 #include "isisd/isis_constants.h"
 #include "isisd/isis_common.h"
 #include "isisd/isis_flags.h"
@@ -61,6 +61,8 @@
 
 DEFINE_QOBJ_TYPE(isis_circuit)
 
+DEFINE_HOOK(isis_if_new_hook, (struct interface *ifp), (ifp))
+
 /*
  * Prototypes.
  */
@@ -68,7 +70,7 @@ int isis_interface_config_write(struct vty *);
 int isis_if_new_hook(struct interface *);
 int isis_if_delete_hook(struct interface *);
 
-struct isis_circuit *isis_circuit_new()
+struct isis_circuit *isis_circuit_new(void)
 {
 	struct isis_circuit *circuit;
 	int i;
@@ -78,6 +80,47 @@ struct isis_circuit *isis_circuit_new()
 	/*
 	 * Default values
 	 */
+#ifndef FABRICD
+	circuit->is_type = yang_get_default_enum(
+		"/frr-interface:lib/interface/frr-isisd:isis/circuit-type");
+	circuit->flags = 0;
+
+	circuit->pad_hellos = yang_get_default_bool(
+		"/frr-interface:lib/interface/frr-isisd:isis/hello/padding");
+	circuit->hello_interval[0] = yang_get_default_uint32(
+		"/frr-interface:lib/interface/frr-isisd:isis/hello/interval/level-1");
+	circuit->hello_interval[1] = yang_get_default_uint32(
+		"/frr-interface:lib/interface/frr-isisd:isis/hello/interval/level-2");
+	circuit->hello_multiplier[0] = yang_get_default_uint32(
+		"/frr-interface:lib/interface/frr-isisd:isis/hello/multiplier/level-1");
+	circuit->hello_multiplier[1] = yang_get_default_uint32(
+		"/frr-interface:lib/interface/frr-isisd:isis/hello/multiplier/level-2");
+	circuit->csnp_interval[0] = yang_get_default_uint16(
+		"/frr-interface:lib/interface/frr-isisd:isis/csnp-interval/level-1");
+	circuit->csnp_interval[1] = yang_get_default_uint16(
+		"/frr-interface:lib/interface/frr-isisd:isis/csnp-interval/level-2");
+	circuit->psnp_interval[0] = yang_get_default_uint16(
+		"/frr-interface:lib/interface/frr-isisd:isis/psnp-interval/level-1");
+	circuit->psnp_interval[1] = yang_get_default_uint16(
+		"/frr-interface:lib/interface/frr-isisd:isis/psnp-interval/level-2");
+	circuit->priority[0] = yang_get_default_uint8(
+		"/frr-interface:lib/interface/frr-isisd:isis/priority/level-1");
+	circuit->priority[1] = yang_get_default_uint8(
+		"/frr-interface:lib/interface/frr-isisd:isis/priority/level-2");
+	circuit->metric[0] = yang_get_default_uint32(
+		"/frr-interface:lib/interface/frr-isisd:isis/metric/level-1");
+	circuit->metric[1] = yang_get_default_uint32(
+		"/frr-interface:lib/interface/frr-isisd:isis/metric/level-2");
+	circuit->te_metric[0] = yang_get_default_uint32(
+		"/frr-interface:lib/interface/frr-isisd:isis/metric/level-1");
+	circuit->te_metric[1] = yang_get_default_uint32(
+		"/frr-interface:lib/interface/frr-isisd:isis/metric/level-2");
+
+	for (i = 0; i < 2; i++) {
+		circuit->level_arg[i].level = i + 1;
+		circuit->level_arg[i].circuit = circuit;
+	}
+#else
 	circuit->is_type = IS_LEVEL_1_AND_2;
 	circuit->flags = 0;
 	circuit->pad_hellos = 1;
@@ -89,7 +132,10 @@ struct isis_circuit *isis_circuit_new()
 		circuit->priority[i] = DEFAULT_PRIORITY;
 		circuit->metric[i] = DEFAULT_CIRCUIT_METRIC;
 		circuit->te_metric[i] = DEFAULT_CIRCUIT_METRIC;
+		circuit->level_arg[i].level = i + 1;
+		circuit->level_arg[i].circuit = circuit;
 	}
+#endif /* ifndef FABRICD */
 
 	circuit->mtc = mpls_te_circuit_new();
 
@@ -495,7 +541,6 @@ static void isis_circuit_update_all_srmflags(struct isis_circuit *circuit,
 {
 	struct isis_area *area;
 	struct isis_lsp *lsp;
-	dnode_t *dnode;
 	int level;
 
 	assert(circuit);
@@ -505,14 +550,10 @@ static void isis_circuit_update_all_srmflags(struct isis_circuit *circuit,
 		if (!(level & circuit->is_type))
 			continue;
 
-		if (!area->lspdb[level - 1]
-		    || !dict_count(area->lspdb[level - 1]))
+		if (!lspdb_count(&area->lspdb[level - 1]))
 			continue;
 
-		for (dnode = dict_first(area->lspdb[level - 1]);
-		     dnode != NULL;
-		     dnode = dict_next(area->lspdb[level - 1], dnode)) {
-			lsp = dnode_get(dnode);
+		frr_each (lspdb, &area->lspdb[level - 1], lsp) {
 			if (is_set) {
 				isis_tx_queue_add(circuit->tx_queue, lsp,
 						  TX_LSP_NORMAL);
@@ -613,37 +654,27 @@ int isis_circuit_up(struct isis_circuit *circuit)
 
 		/* 8.4.1 a) commence sending of IIH PDUs */
 
-		if (circuit->is_type & IS_LEVEL_1) {
-			thread_add_event(master, send_lan_l1_hello, circuit, 0,
-					 NULL);
-			circuit->u.bc.lan_neighs[0] = list_new();
-		}
+		for (int level = ISIS_LEVEL1; level <= ISIS_LEVEL2; level++) {
+			if (!(circuit->is_type & level))
+				continue;
 
-		if (circuit->is_type & IS_LEVEL_2) {
-			thread_add_event(master, send_lan_l2_hello, circuit, 0,
-					 NULL);
-			circuit->u.bc.lan_neighs[1] = list_new();
+			send_hello_sched(circuit, level, TRIGGERED_IIH_DELAY);
+			circuit->u.bc.lan_neighs[level - 1] = list_new();
+
+			thread_add_timer(master, isis_run_dr,
+					 &circuit->level_arg[level - 1],
+					 2 * circuit->hello_interval[level - 1],
+					 &circuit->u.bc.t_run_dr[level - 1]);
 		}
 
 		/* 8.4.1 b) FIXME: solicit ES - 8.4.6 */
 		/* 8.4.1 c) FIXME: listen for ESH PDUs */
-
-		/* 8.4.1 d) */
-		/* dr election will commence in... */
-		if (circuit->is_type & IS_LEVEL_1)
-			thread_add_timer(master, isis_run_dr_l1, circuit,
-					 2 * circuit->hello_interval[0],
-					 &circuit->u.bc.t_run_dr[0]);
-		if (circuit->is_type & IS_LEVEL_2)
-			thread_add_timer(master, isis_run_dr_l2, circuit,
-					 2 * circuit->hello_interval[1],
-					 &circuit->u.bc.t_run_dr[1]);
 	} else if (circuit->circ_type == CIRCUIT_T_P2P) {
 		/* initializing the hello send threads
 		 * for a ptp IF
 		 */
 		circuit->u.p2p.neighbor = NULL;
-		thread_add_event(master, send_p2p_hello, circuit, 0, NULL);
+		send_hello_sched(circuit, 0, TRIGGERED_IIH_DELAY);
 	}
 
 	/* initializing PSNP timers */
@@ -674,11 +705,21 @@ int isis_circuit_up(struct isis_circuit *circuit)
 
 	circuit->tx_queue = isis_tx_queue_new(circuit, send_lsp);
 
+#ifndef FABRICD
+	/* send northbound notification */
+	isis_notif_if_state_change(circuit, false);
+#endif /* ifndef FABRICD */
+
 	return ISIS_OK;
 }
 
 void isis_circuit_down(struct isis_circuit *circuit)
 {
+#ifndef FABRICD
+	/* send northbound notification */
+	isis_notif_if_state_change(circuit, true);
+#endif /* ifndef FABRICD */
+
 	/* Clear the flags for all the lsps of the circuit. */
 	isis_circuit_update_all_srmflags(circuit, 0);
 
@@ -737,7 +778,6 @@ void isis_circuit_down(struct isis_circuit *circuit)
 	THREAD_TIMER_OFF(circuit->t_send_csnp[1]);
 	THREAD_TIMER_OFF(circuit->t_send_psnp[0]);
 	THREAD_TIMER_OFF(circuit->t_send_psnp[1]);
-	THREAD_OFF(circuit->t_send_lsp);
 	THREAD_OFF(circuit->t_read);
 
 	if (circuit->tx_queue) {
@@ -928,6 +968,7 @@ DEFINE_HOOK(isis_circuit_config_write,
 	    (struct isis_circuit *circuit, struct vty *vty),
 	    (circuit, vty))
 
+#ifdef FABRICD
 int isis_interface_config_write(struct vty *vty)
 {
 	struct vrf *vrf = vrf_lookup_by_id(VRF_DEFAULT);
@@ -1150,6 +1191,33 @@ int isis_interface_config_write(struct vty *vty)
 
 	return write;
 }
+#else
+int isis_interface_config_write(struct vty *vty)
+{
+	struct vrf *vrf = vrf_lookup_by_id(VRF_DEFAULT);
+	int write = 0;
+	struct interface *ifp;
+	struct isis_circuit *circuit;
+	struct lyd_node *dnode;
+
+	FOR_ALL_INTERFACES (vrf, ifp) {
+		dnode = yang_dnode_get(
+			running_config->dnode,
+			"/frr-interface:lib/interface[name='%s'][vrf='%s']",
+			ifp->name, vrf->name);
+		if (dnode == NULL)
+			continue;
+
+		write++;
+		nb_cli_show_dnode_cmds(vty, dnode, false);
+		circuit = circuit_scan_by_ifp(ifp);
+		if (circuit)
+			write += hook_call(isis_circuit_config_write, circuit,
+					   vty);
+	}
+	return write;
+}
+#endif /* ifdef FABRICD */
 
 struct isis_circuit *isis_circuit_create(struct isis_area *area,
 					 struct interface *ifp)
@@ -1233,8 +1301,8 @@ ferr_r isis_circuit_passwd_unset(struct isis_circuit *circuit)
 	return ferr_ok();
 }
 
-static int isis_circuit_passwd_set(struct isis_circuit *circuit,
-				   uint8_t passwd_type, const char *passwd)
+ferr_r isis_circuit_passwd_set(struct isis_circuit *circuit,
+			       uint8_t passwd_type, const char *passwd)
 {
 	int len;
 
@@ -1247,7 +1315,8 @@ static int isis_circuit_passwd_set(struct isis_circuit *circuit,
 			"circuit password too long (max 254 chars)");
 
 	circuit->passwd.len = len;
-	strncpy((char *)circuit->passwd.passwd, passwd, 255);
+	strlcpy((char *)circuit->passwd.passwd, passwd,
+		sizeof(circuit->passwd.passwd));
 	circuit->passwd.type = passwd_type;
 	return ferr_ok();
 }
@@ -1270,35 +1339,22 @@ struct cmd_node interface_node = {
 	INTERFACE_NODE, "%s(config-if)# ", 1,
 };
 
-ferr_r isis_circuit_circ_type_set(struct isis_circuit *circuit, int circ_type)
+void isis_circuit_circ_type_set(struct isis_circuit *circuit, int circ_type)
 {
 	if (circuit->circ_type == circ_type)
-		return ferr_ok();
-
-	/* Changing the network type to/of loopback or unknown interfaces
-	 * is not supported. */
-	if (circ_type == CIRCUIT_T_UNKNOWN || circ_type == CIRCUIT_T_LOOPBACK
-	    || circuit->circ_type == CIRCUIT_T_LOOPBACK) {
-		return ferr_cfg_invalid(
-			"cannot change network type on unknown interface");
-	}
+		return;
 
 	if (circuit->state != C_STATE_UP) {
 		circuit->circ_type = circ_type;
 		circuit->circ_type_config = circ_type;
 	} else {
 		struct isis_area *area = circuit->area;
-		if (circ_type == CIRCUIT_T_BROADCAST
-		    && !if_is_broadcast(circuit->interface))
-			return ferr_cfg_reality(
-				"cannot configure non-broadcast interface for broadcast operation");
 
 		isis_csm_state_change(ISIS_DISABLE, circuit, area);
 		circuit->circ_type = circ_type;
 		circuit->circ_type_config = circ_type;
 		isis_csm_state_change(ISIS_ENABLE, circuit, area);
 	}
-	return ferr_ok();
 }
 
 int isis_circuit_mt_enabled_set(struct isis_circuit *circuit, uint16_t mtid,
@@ -1334,7 +1390,52 @@ int isis_if_delete_hook(struct interface *ifp)
 	return 0;
 }
 
-void isis_circuit_init()
+static int isis_ifp_create(struct interface *ifp)
+{
+	if (if_is_operative(ifp))
+		isis_csm_state_change(IF_UP_FROM_Z, circuit_scan_by_ifp(ifp),
+				      ifp);
+
+	hook_call(isis_if_new_hook, ifp);
+
+	return 0;
+}
+
+static int isis_ifp_up(struct interface *ifp)
+{
+	isis_csm_state_change(IF_UP_FROM_Z, circuit_scan_by_ifp(ifp), ifp);
+
+	return 0;
+}
+
+static int isis_ifp_down(struct interface *ifp)
+{
+	struct isis_circuit *circuit;
+
+	circuit = isis_csm_state_change(IF_DOWN_FROM_Z,
+					circuit_scan_by_ifp(ifp), ifp);
+	if (circuit)
+		SET_FLAG(circuit->flags, ISIS_CIRCUIT_FLAPPED_AFTER_SPF);
+
+	return 0;
+}
+
+static int isis_ifp_destroy(struct interface *ifp)
+{
+	if (if_is_operative(ifp))
+		zlog_warn("Zebra: got delete of %s, but interface is still up",
+			  ifp->name);
+
+	isis_csm_state_change(IF_DOWN_FROM_Z, circuit_scan_by_ifp(ifp), ifp);
+
+	/* Cannot call if_delete because we should retain the pseudo interface
+	   in case there is configuration info attached to it. */
+	if_delete_retain(ifp);
+
+	return 0;
+}
+
+void isis_circuit_init(void)
 {
 	/* Initialize Zebra interface data structure */
 	hook_register_prio(if_add, 0, isis_if_new_hook);
@@ -1343,4 +1444,6 @@ void isis_circuit_init()
 	/* Install interface node */
 	install_node(&interface_node, isis_interface_config_write);
 	if_cmd_init();
+	if_zapi_callbacks(isis_ifp_create, isis_ifp_up,
+			  isis_ifp_down, isis_ifp_destroy);
 }

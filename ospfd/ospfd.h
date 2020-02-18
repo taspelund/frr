@@ -561,6 +561,8 @@ extern void ospf_area_del_if(struct ospf_area *, struct ospf_interface *);
 
 extern void ospf_interface_area_set(struct ospf *, struct interface *);
 extern void ospf_interface_area_unset(struct ospf *, struct interface *);
+extern bool ospf_interface_area_is_already_set(struct ospf *ospf,
+					       struct interface *ifp);
 
 extern void ospf_route_map_init(void);
 
@@ -572,4 +574,5 @@ extern void ospf_vrf_unlink(struct ospf *ospf, struct vrf *vrf);
 const char *ospf_vrf_id_to_name(vrf_id_t vrf_id);
 int ospf_area_nssa_no_summary_set(struct ospf *, struct in_addr);
 
+const char *ospf_get_name(const struct ospf *ospf);
 #endif /* _ZEBRA_OSPFD_H */

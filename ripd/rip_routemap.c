@@ -40,22 +40,6 @@ struct rip_metric_modifier {
 	uint8_t metric;
 };
 
-/* Hook function for updating route_map assignment. */
-/* ARGSUSED */
-static void rip_route_map_update(const char *notused)
-{
-	int i;
-
-	if (rip) {
-		for (i = 0; i < ZEBRA_ROUTE_MAX; i++) {
-			if (rip->route_map[i].name)
-				rip->route_map[i].map =
-					route_map_lookup_by_name(
-						rip->route_map[i].name);
-		}
-	}
-}
-
 /* `match metric METRIC' */
 /* Match function return 1 if match is success else return zero. */
 static route_map_result_t route_match_metric(void *rule,
@@ -246,6 +230,40 @@ static struct route_map_rule_cmd route_match_ip_next_hop_prefix_list_cmd = {
 	"ip next-hop prefix-list", route_match_ip_next_hop_prefix_list,
 	route_match_ip_next_hop_prefix_list_compile,
 	route_match_ip_next_hop_prefix_list_free};
+
+/* `match ip next-hop type <blackhole>' */
+
+static route_map_result_t
+route_match_ip_next_hop_type(void *rule, const struct prefix *prefix,
+			     route_map_object_t type, void *object)
+{
+	struct rip_info *rinfo;
+
+	if (type == RMAP_RIP && prefix->family == AF_INET) {
+		rinfo = (struct rip_info *)object;
+		if (!rinfo)
+			return RMAP_DENYMATCH;
+
+		if (rinfo->nh.type == NEXTHOP_TYPE_BLACKHOLE)
+			return RMAP_MATCH;
+	}
+	return RMAP_NOMATCH;
+}
+
+static void *route_match_ip_next_hop_type_compile(const char *arg)
+{
+	return XSTRDUP(MTYPE_ROUTE_MAP_COMPILED, arg);
+}
+
+static void route_match_ip_next_hop_type_free(void *rule)
+{
+	XFREE(MTYPE_ROUTE_MAP_COMPILED, rule);
+}
+
+static struct route_map_rule_cmd route_match_ip_next_hop_type_cmd = {
+	"ip next-hop type", route_match_ip_next_hop_type,
+	route_match_ip_next_hop_type_compile,
+	route_match_ip_next_hop_type_free};
 
 /* `match ip address IP_ACCESS_LIST' */
 
@@ -533,18 +551,10 @@ static struct route_map_rule_cmd route_set_tag_cmd = {
 #define MATCH_STR "Match values from routing table\n"
 #define SET_STR "Set values in destination routing protocol\n"
 
-void rip_route_map_reset()
-{
-	;
-}
-
 /* Route-map init */
-void rip_route_map_init()
+void rip_route_map_init(void)
 {
 	route_map_init();
-
-	route_map_add_hook(rip_route_map_update);
-	route_map_delete_hook(rip_route_map_update);
 
 	route_map_match_interface_hook(generic_match_add);
 	route_map_no_match_interface_hook(generic_match_delete);
@@ -560,6 +570,9 @@ void rip_route_map_init()
 
 	route_map_match_ip_next_hop_prefix_list_hook(generic_match_add);
 	route_map_no_match_ip_next_hop_prefix_list_hook(generic_match_delete);
+
+	route_map_match_ip_next_hop_type_hook(generic_match_add);
+	route_map_no_match_ip_next_hop_type_hook(generic_match_delete);
 
 	route_map_match_metric_hook(generic_match_add);
 	route_map_no_match_metric_hook(generic_match_delete);
@@ -580,6 +593,7 @@ void rip_route_map_init()
 	route_map_install_match(&route_match_interface_cmd);
 	route_map_install_match(&route_match_ip_next_hop_cmd);
 	route_map_install_match(&route_match_ip_next_hop_prefix_list_cmd);
+	route_map_install_match(&route_match_ip_next_hop_type_cmd);
 	route_map_install_match(&route_match_ip_address_cmd);
 	route_map_install_match(&route_match_ip_address_prefix_list_cmd);
 	route_map_install_match(&route_match_tag_cmd);

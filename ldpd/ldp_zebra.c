@@ -38,22 +38,11 @@ static void	 ifp2kif(struct interface *, struct kif *);
 static void	 ifc2kaddr(struct interface *, struct connected *,
 		    struct kaddr *);
 static int	 zebra_send_mpls_labels(int, struct kroute *);
-static int	 ldp_router_id_update(int, struct zclient *, zebra_size_t,
-		    vrf_id_t);
-static int	 ldp_interface_add(int, struct zclient *, zebra_size_t,
-		    vrf_id_t);
-static int	 ldp_interface_delete(int, struct zclient *, zebra_size_t,
-		    vrf_id_t);
-static int	 ldp_interface_status_change(int command, struct zclient *,
-		    zebra_size_t, vrf_id_t);
-static int	 ldp_interface_address_add(int, struct zclient *, zebra_size_t,
-		    vrf_id_t);
-static int	 ldp_interface_address_delete(int, struct zclient *,
-		    zebra_size_t, vrf_id_t);
-static int	 ldp_zebra_read_route(int, struct zclient *, zebra_size_t,
-		    vrf_id_t);
-static int	 ldp_zebra_read_pw_status_update(int, struct zclient *,
-		    zebra_size_t, vrf_id_t);
+static int	 ldp_router_id_update(ZAPI_CALLBACK_ARGS);
+static int	 ldp_interface_address_add(ZAPI_CALLBACK_ARGS);
+static int	 ldp_interface_address_delete(ZAPI_CALLBACK_ARGS);
+static int	 ldp_zebra_read_route(ZAPI_CALLBACK_ARGS);
+static int	 ldp_zebra_read_pw_status_update(ZAPI_CALLBACK_ARGS);
 static void	 ldp_zebra_connected(struct zclient *);
 
 static struct zclient	*zclient;
@@ -235,8 +224,7 @@ kif_redistribute(const char *ifname)
 }
 
 static int
-ldp_router_id_update(int command, struct zclient *zclient, zebra_size_t length,
-    vrf_id_t vrf_id)
+ldp_router_id_update(ZAPI_CALLBACK_ARGS)
 {
 	struct prefix	 router_id;
 
@@ -255,40 +243,26 @@ ldp_router_id_update(int command, struct zclient *zclient, zebra_size_t length,
 }
 
 static int
-ldp_interface_add(int command, struct zclient *zclient, zebra_size_t length,
-    vrf_id_t vrf_id)
+ldp_ifp_create(struct interface *ifp)
 {
-	struct interface	*ifp;
 	struct kif		 kif;
 
-	ifp = zebra_interface_add_read(zclient->ibuf, vrf_id);
 	debug_zebra_in("interface add %s index %d mtu %d", ifp->name,
 	    ifp->ifindex, ifp->mtu);
 
 	ifp2kif(ifp, &kif);
 	main_imsg_compose_both(IMSG_IFSTATUS, &kif, sizeof(kif));
 
-	return (0);
+	return 0;
 }
 
 static int
-ldp_interface_delete(int command, struct zclient *zclient, zebra_size_t length,
-    vrf_id_t vrf_id)
+ldp_ifp_destroy(struct interface *ifp)
 {
-	struct interface	*ifp;
 	struct kif		 kif;
-
-	/* zebra_interface_state_read() updates interface structure in iflist */
-	ifp = zebra_interface_state_read(zclient->ibuf, vrf_id);
-	if (ifp == NULL)
-		return (0);
 
 	debug_zebra_in("interface delete %s index %d mtu %d", ifp->name,
 	    ifp->ifindex, ifp->mtu);
-
-	/* To support pseudo interface do not free interface structure.  */
-	/* if_delete(ifp); */
-	if_set_index(ifp, IFINDEX_INTERNAL);
 
 	ifp2kif(ifp, &kif);
 	main_imsg_compose_both(IMSG_IFSTATUS, &kif, sizeof(kif));
@@ -297,22 +271,12 @@ ldp_interface_delete(int command, struct zclient *zclient, zebra_size_t length,
 }
 
 static int
-ldp_interface_status_change(int command, struct zclient *zclient,
-    zebra_size_t length, vrf_id_t vrf_id)
+ldp_interface_status_change_helper(struct interface *ifp)
 {
-	struct interface	*ifp;
 	struct listnode		*node;
 	struct connected	*ifc;
 	struct kif		 kif;
 	struct kaddr		 ka;
-
-	/*
-	 * zebra_interface_state_read() updates interface structure in
-	 * iflist.
-	 */
-	ifp = zebra_interface_state_read(zclient->ibuf, vrf_id);
-	if (ifp == NULL)
-		return (0);
 
 	debug_zebra_in("interface %s state update", ifp->name);
 
@@ -336,15 +300,24 @@ ldp_interface_status_change(int command, struct zclient *zclient,
 	return (0);
 }
 
+static int ldp_ifp_up(struct interface *ifp)
+{
+	return ldp_interface_status_change_helper(ifp);
+}
+
+static int ldp_ifp_down(struct interface *ifp)
+{
+	return ldp_interface_status_change_helper(ifp);
+}
+
 static int
-ldp_interface_address_add(int command, struct zclient *zclient,
-    zebra_size_t length, vrf_id_t vrf_id)
+ldp_interface_address_add(ZAPI_CALLBACK_ARGS)
 {
 	struct connected	*ifc;
 	struct interface	*ifp;
 	struct kaddr		 ka;
 
-	ifc = zebra_interface_address_read(command, zclient->ibuf, vrf_id);
+	ifc = zebra_interface_address_read(cmd, zclient->ibuf, vrf_id);
 	if (ifc == NULL)
 		return (0);
 
@@ -365,14 +338,13 @@ ldp_interface_address_add(int command, struct zclient *zclient,
 }
 
 static int
-ldp_interface_address_delete(int command, struct zclient *zclient,
-    zebra_size_t length, vrf_id_t vrf_id)
+ldp_interface_address_delete(ZAPI_CALLBACK_ARGS)
 {
 	struct connected	*ifc;
 	struct interface	*ifp;
 	struct kaddr		 ka;
 
-	ifc = zebra_interface_address_read(command, zclient->ibuf, vrf_id);
+	ifc = zebra_interface_address_read(cmd, zclient->ibuf, vrf_id);
 	if (ifc == NULL)
 		return (0);
 
@@ -394,8 +366,7 @@ ldp_interface_address_delete(int command, struct zclient *zclient,
 }
 
 static int
-ldp_zebra_read_route(int command, struct zclient *zclient, zebra_size_t length,
-    vrf_id_t vrf_id)
+ldp_zebra_read_route(ZAPI_CALLBACK_ARGS)
 {
 	struct zapi_route	 api;
 	struct zapi_nexthop	*api_nh;
@@ -439,7 +410,7 @@ ldp_zebra_read_route(int command, struct zclient *zclient, zebra_size_t length,
 	    (kr.af == AF_INET6 && IN6_IS_SCOPE_EMBED(&kr.prefix.v6)))
 		return (0);
 
-	if (command == ZEBRA_REDISTRIBUTE_ROUTE_ADD)
+	if (cmd == ZEBRA_REDISTRIBUTE_ROUTE_ADD)
 		add = 1;
 
 	if (api.nexthop_num == 0)
@@ -502,12 +473,11 @@ ldp_zebra_read_route(int command, struct zclient *zclient, zebra_size_t length,
  * Receive PW status update from Zebra and send it to LDE process.
  */
 static int
-ldp_zebra_read_pw_status_update(int command, struct zclient *zclient,
-    zebra_size_t length, vrf_id_t vrf_id)
+ldp_zebra_read_pw_status_update(ZAPI_CALLBACK_ARGS)
 {
 	struct zapi_pw_status	 zpw;
 
-	zebra_read_pw_status_update(command, zclient, length, vrf_id, &zpw);
+	zebra_read_pw_status_update(cmd, zclient, length, vrf_id, &zpw);
 
 	debug_zebra_in("pseudowire %s status %s", zpw.ifname,
 	    (zpw.status == PW_STATUS_UP) ? "up" : "down");
@@ -532,17 +502,16 @@ extern struct zebra_privs_t ldpd_privs;
 void
 ldp_zebra_init(struct thread_master *master)
 {
+	if_zapi_callbacks(ldp_ifp_create, ldp_ifp_up,
+			  ldp_ifp_down, ldp_ifp_destroy);
+
 	/* Set default values. */
-	zclient = zclient_new_notify(master, &zclient_options_default);
+	zclient = zclient_new(master, &zclient_options_default);
 	zclient_init(zclient, ZEBRA_ROUTE_LDP, 0, &ldpd_privs);
 
 	/* set callbacks */
 	zclient->zebra_connected = ldp_zebra_connected;
 	zclient->router_id_update = ldp_router_id_update;
-	zclient->interface_add = ldp_interface_add;
-	zclient->interface_delete = ldp_interface_delete;
-	zclient->interface_up = ldp_interface_status_change;
-	zclient->interface_down = ldp_interface_status_change;
 	zclient->interface_address_add = ldp_interface_address_add;
 	zclient->interface_address_delete = ldp_interface_address_delete;
 	zclient->redistribute_route_add = ldp_zebra_read_route;

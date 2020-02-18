@@ -25,7 +25,6 @@
 #include "log.h"
 #include "vty.h"
 #include "command.h"
-#include "libfrr.h"
 
 #include "watchfrr.h"
 
@@ -105,8 +104,7 @@ DEFUN(config_write_integrated,
 
 	/* don't allow the user to pass parameters, we're root here!
 	 * should probably harden vtysh at some point too... */
-	const char *flags = (quagga_compat_mode) ? "-wq" : "-w";
-	execl(VTYSH_BIN_PATH, "vtysh", flags, NULL);
+	execl(VTYSH_BIN_PATH, "vtysh", "-w", NULL);
 
 	/* unbuffered write; we just messed with stdout... */
 	char msg[512];
@@ -123,6 +121,33 @@ DEFUN_NOSH (show_debugging_watchfrr,
             DEBUG_STR
             WATCHFRR_STR)
 {
+	return CMD_SUCCESS;
+}
+
+DEFUN (show_watchfrr,
+       show_watchfrr_cmd,
+       "show watchfrr",
+       SHOW_STR
+       WATCHFRR_STR)
+{
+	watchfrr_status(vty);
+	return CMD_SUCCESS;
+}
+
+#ifndef VTYSH_EXTRACT_PL
+#include "watchfrr/watchfrr_vty_clippy.c"
+#endif
+
+DEFPY (watchfrr_ignore_daemon,
+       watchfrr_ignore_daemon_cmd,
+       "[no] watchfrr ignore DAEMON$dname",
+       NO_STR
+       "Watchfrr Specific sub-command\n"
+       "Ignore a specified daemon when it does not respond to echo request\n"
+       "The daemon to ignore\n")
+{
+	watchfrr_set_ignore_daemon(vty, dname, no ? false : true );
+
 	return CMD_SUCCESS;
 }
 
@@ -160,5 +185,9 @@ void watchfrr_vty_init(void)
 	integrated_write_pid = -1;
 	install_element(ENABLE_NODE, &config_write_integrated_cmd);
 	install_element(ENABLE_NODE, &show_debugging_watchfrr_cmd);
+
+	install_element(ENABLE_NODE, &watchfrr_ignore_daemon_cmd);
+
 	install_element(CONFIG_NODE, &show_debugging_watchfrr_cmd);
+	install_element(VIEW_NODE, &show_watchfrr_cmd);
 }

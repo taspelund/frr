@@ -130,7 +130,7 @@ void pim_ifchannel_prune(struct interface *ifp, struct in_addr upstream,
 			 struct prefix_sg *sg, uint8_t source_flags,
 			 uint16_t holdtime);
 int pim_ifchannel_local_membership_add(struct interface *ifp,
-				       struct prefix_sg *sg);
+		struct prefix_sg *sg, bool is_vxlan);
 void pim_ifchannel_local_membership_del(struct interface *ifp,
 					struct prefix_sg *sg);
 
@@ -155,5 +155,5 @@ void pim_ifchannel_set_star_g_join_state(struct pim_ifchannel *ch, int eom,
 int pim_ifchannel_compare(const struct pim_ifchannel *ch1,
 			  const struct pim_ifchannel *ch2);
 
-unsigned int pim_ifchannel_hash_key(void *arg);
+unsigned int pim_ifchannel_hash_key(const void *arg);
 #endif /* PIM_IFCHANNEL_H */

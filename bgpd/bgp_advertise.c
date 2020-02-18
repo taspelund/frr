@@ -45,8 +45,8 @@
    peer.  */
 struct bgp_advertise_attr *baa_new(void)
 {
-	return (struct bgp_advertise_attr *)XCALLOC(
-		MTYPE_BGP_ADVERTISE_ATTR, sizeof(struct bgp_advertise_attr));
+	return XCALLOC(MTYPE_BGP_ADVERTISE_ATTR,
+		       sizeof(struct bgp_advertise_attr));
 }
 
 static void baa_free(struct bgp_advertise_attr *baa)
@@ -64,9 +64,9 @@ static void *baa_hash_alloc(void *p)
 	return baa;
 }
 
-unsigned int baa_hash_key(void *p)
+unsigned int baa_hash_key(const void *p)
 {
-	struct bgp_advertise_attr *baa = (struct bgp_advertise_attr *)p;
+	const struct bgp_advertise_attr *baa = p;
 
 	return attrhash_key_make(baa->attr);
 }
@@ -84,8 +84,7 @@ bool baa_hash_cmp(const void *p1, const void *p2)
    information.  */
 struct bgp_advertise *bgp_advertise_new(void)
 {
-	return (struct bgp_advertise *)XCALLOC(MTYPE_BGP_ADVERTISE,
-					       sizeof(struct bgp_advertise));
+	return XCALLOC(MTYPE_BGP_ADVERTISE, sizeof(struct bgp_advertise));
 }
 
 void bgp_advertise_free(struct bgp_advertise *adv)
@@ -154,7 +153,7 @@ int bgp_adj_out_lookup(struct peer *peer, struct bgp_node *rn,
 	safi_t safi;
 	int addpath_capable;
 
-	for (adj = rn->adj_out; adj; adj = adj->next)
+	RB_FOREACH (adj, bgp_adj_out_rb, &rn->adj_out)
 		SUBGRP_FOREACH_PEER (adj->subgroup, paf)
 			if (paf->peer == peer) {
 				afi = SUBGRP_AFI(adj->subgroup);
@@ -242,9 +241,9 @@ void bgp_sync_init(struct peer *peer)
 	FOREACH_AFI_SAFI (afi, safi) {
 		sync = XCALLOC(MTYPE_BGP_SYNCHRONISE,
 			       sizeof(struct bgp_synchronize));
-		BGP_ADV_FIFO_INIT(&sync->update);
-		BGP_ADV_FIFO_INIT(&sync->withdraw);
-		BGP_ADV_FIFO_INIT(&sync->withdraw_low);
+		bgp_adv_fifo_init(&sync->update);
+		bgp_adv_fifo_init(&sync->withdraw);
+		bgp_adv_fifo_init(&sync->withdraw_low);
 		peer->sync[afi][safi] = sync;
 	}
 }
@@ -255,8 +254,7 @@ void bgp_sync_delete(struct peer *peer)
 	safi_t safi;
 
 	FOREACH_AFI_SAFI (afi, safi) {
-		if (peer->sync[afi][safi])
-			XFREE(MTYPE_BGP_SYNCHRONISE, peer->sync[afi][safi]);
+		XFREE(MTYPE_BGP_SYNCHRONISE, peer->sync[afi][safi]);
 		peer->sync[afi][safi] = NULL;
 	}
 }

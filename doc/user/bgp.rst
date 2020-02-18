@@ -511,8 +511,8 @@ cause may lead to routing instability or oscillation across multiple speakers
 in iBGP topologies. This can occur with full-mesh iBGP, but is particularly
 problematic in non-full-mesh iBGP topologies that further reduce the routing
 information known to each speaker. This has primarily been documented with iBGP
-route-reflection topologies. However, any route-hiding technologies potentially
-could also exacerbate oscillation with MED.
+:ref:`route-reflection <bgp-route-reflector>` topologies. However, any
+route-hiding technologies potentially could also exacerbate oscillation with MED.
 
 This second issue occurs where speakers each have only a subset of routes, and
 there are cycles in the preferences between different combinations of routes -
@@ -688,6 +688,11 @@ Networks
 Route Aggregation
 -----------------
 
+.. _bgp-route-aggregation-ipv4:
+
+Route Aggregation-IPv4 Address Family
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 .. index:: aggregate-address A.B.C.D/M
 .. clicmd:: aggregate-address A.B.C.D/M
 
@@ -707,6 +712,62 @@ Route Aggregation
 
 .. index:: no aggregate-address A.B.C.D/M
 .. clicmd:: no aggregate-address A.B.C.D/M
+   
+   This command removes an aggregate address.
+
+
+   This configuration example setup the aggregate-address under 
+   ipv4 address-family.
+
+   .. code-block:: frr
+
+      router bgp 1
+       address-family ipv4 unicast
+        aggregate-address 10.0.0.0/8
+        aggregate-address 20.0.0.0/8 as-set
+        aggregate-address 40.0.0.0/8 summary-only
+       exit-address-family
+
+
+.. _bgp-route-aggregation-ipv6:
+
+Route Aggregation-IPv6 Address Family
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: aggregate-address X:X::X:X/M
+.. clicmd:: aggregate-address X:X::X:X/M
+
+   This command specifies an aggregate address.
+
+.. index:: aggregate-address X:X::X:X/M as-set
+.. clicmd:: aggregate-address X:X::X:X/M as-set
+
+   This command specifies an aggregate address. Resulting routes include
+   AS set.
+
+.. index:: aggregate-address X:X::X:X/M summary-only
+.. clicmd:: aggregate-address X:X::X:X/M summary-only
+
+   This command specifies an aggregate address. Aggregated routes will
+   not be announce.
+
+.. index:: no aggregate-address X:X::X:X/M
+.. clicmd:: no aggregate-address X:X::X:X/M
+
+   This command removes an aggregate address.
+
+
+   This configuration example setup the aggregate-address under 
+   ipv4 address-family.
+
+   .. code-block:: frr
+
+      router bgp 1
+       address-family ipv6 unicast
+        aggregate-address 10::0/64
+	aggregate-address 20::0/64 as-set
+	aggregate-address 40::0/64 summary-only
+       exit-address-family
 
 .. _bgp-redistribute-to-bgp:
 
@@ -1015,8 +1076,8 @@ and will share updates.
 
    This command defines a new peer group.
 
-.. index:: neighbor PEER peer-group WORD
-.. clicmd:: neighbor PEER peer-group WORD
+.. index:: neighbor PEER peer-group PGNAME
+.. clicmd:: neighbor PEER peer-group PGNAME
 
    This command bind specific peer to peer group WORD.
 
@@ -1701,13 +1762,15 @@ Two types of large community lists are supported, namely `standard` and
 Large Communities in Route Map
 """"""""""""""""""""""""""""""
 
-.. index:: match large-community LINE
-.. clicmd:: match large-community LINE
+.. index:: match large-community LINE [exact-match]
+.. clicmd:: match large-community LINE [exact-match]
 
    Where `line` can be a simple string to match, or a regular expression. It
    is very important to note that this match occurs on the entire
    large-community string as a whole, where each large-community is ordered
-   from lowest to highest.
+   from lowest to highest. When `exact-match` keyword is specified, match
+   happen only when BGP updates have completely same large communities value
+   specified in the large community list.
 
 .. index:: set large-community LARGE-COMMUNITY
 .. clicmd:: set large-community LARGE-COMMUNITY
@@ -2063,20 +2126,40 @@ Dumping Messages and Routing Tables
 Other BGP Commands
 ------------------
 
+.. index:: clear bgp \*
+.. clicmd:: clear bgp \*
+
+   Clear all peers.
+
 .. index:: clear bgp ipv4|ipv6 \*
 .. clicmd:: clear bgp ipv4|ipv6 \*
 
-   Clear all address family peers.
+   Clear all peers with this address-family activated.
+
+.. index:: clear bgp ipv4|ipv6 unicast \*
+.. clicmd:: clear bgp ipv4|ipv6 unicast \*
+
+   Clear all peers with this address-family and sub-address-family activated.
 
 .. index:: clear bgp ipv4|ipv6 PEER
 .. clicmd:: clear bgp ipv4|ipv6 PEER
 
-   Clear peers which have addresses of X.X.X.X
+   Clear peers with address of X.X.X.X and this address-family activated.
 
-.. index:: clear bgp ipv4|ipv6 PEER soft in
-.. clicmd:: clear bgp ipv4|ipv6 PEER soft in
+.. index:: clear bgp ipv4|ipv6 unicast PEER
+.. clicmd:: clear bgp ipv4|ipv6 unicast PEER
 
-   Clear peer using soft reconfiguration.
+   Clear peer with address of X.X.X.X and this address-family and sub-address-family activated.
+
+.. index:: clear bgp ipv4|ipv6 PEER soft|in|out
+.. clicmd:: clear bgp ipv4|ipv6 PEER soft|in|out
+
+   Clear peer using soft reconfiguration in this address-family.
+
+.. index:: clear bgp ipv4|ipv6 unicast PEER soft|in|out
+.. clicmd:: clear bgp ipv4|ipv6 unicast PEER soft|in|out
+
+   Clear peer using soft reconfiguration in this address-family and sub-address-family.
 
 
 .. _bgp-displaying-bgp-information:
@@ -2200,7 +2283,48 @@ attribute.
    match the specified community list. When `exact-match` is specified, it
    displays only routes that have an exact match.
 
+.. _bgp-display-routes-by-lcommunity:
+
+Displaying Routes by Large Community Attribute
+----------------------------------------------
+
+The following commands allow displaying routes based on their 
+large community attribute.
+
+.. index:: show [ip] bgp <ipv4|ipv6> large-community
+.. clicmd:: show [ip] bgp <ipv4|ipv6> large-community
+
+.. index:: show [ip] bgp <ipv4|ipv6> large-community LARGE-COMMUNITY
+.. clicmd:: show [ip] bgp <ipv4|ipv6> large-community LARGE-COMMUNITY
+
+.. index:: show [ip] bgp <ipv4|ipv6> large-community LARGE-COMMUNITY exact-match
+.. clicmd:: show [ip] bgp <ipv4|ipv6> large-community LARGE-COMMUNITY exact-match
+
+.. index:: show [ip] bgp <ipv4|ipv6> large-community LARGE-COMMUNITY json
+.. clicmd:: show [ip] bgp <ipv4|ipv6> large-community LARGE-COMMUNITY json
+
+   These commands display BGP routes which have the large community attribute.
+   attribute. When ``LARGE-COMMUNITY`` is specified, BGP routes that match that
+   large community are displayed. When `exact-match` is specified, it display 
+   only routes that have an exact match. When `json` is specified, it display 
+   routes in json format.
+
+.. index:: show [ip] bgp <ipv4|ipv6> large-community-list WORD
+.. clicmd:: show [ip] bgp <ipv4|ipv6> large-community-list WORD
+
+.. index:: show [ip] bgp <ipv4|ipv6> large-community-list WORD exact-match
+.. clicmd:: show [ip] bgp <ipv4|ipv6> large-community-list WORD exact-match
+
+.. index:: show [ip] bgp <ipv4|ipv6> large-community-list WORD json
+.. clicmd:: show [ip] bgp <ipv4|ipv6> large-community-list WORD json
+
+   These commands display BGP routes for the address family specified that
+   match the specified large community list. When `exact-match` is specified, 
+   it displays only routes that have an exact match. When `json` is specified, 
+   it display routes in json format.
+
 .. _bgp-display-routes-by-as-path:
+
 
 Displaying Routes by AS Path
 ----------------------------
@@ -2233,10 +2357,15 @@ Displaying Routes by AS Path
 Route Reflector
 ===============
 
-.. note:: This documentation is woefully incomplete.
+BGP routers connected inside the same AS through BGP belong to an internal
+BGP session, or IBGP. In order to prevent routing table loops, IBGP does not
+advertise IBGP-learned routes to other routers in the same session. As such,
+IBGP requires a full mesh of all peers. For large networks, this quickly becomes
+unscalable. Introducing route reflectors removes the need for the full-mesh.
 
-.. index:: bgp cluster-id A.B.C.D
-.. clicmd:: bgp cluster-id A.B.C.D
+When route reflectors are configured, these will reflect the routes announced
+by the peers configured as clients. A route reflector client is configured
+with:
 
 .. index:: neighbor PEER route-reflector-client
 .. clicmd:: neighbor PEER route-reflector-client
@@ -2244,6 +2373,13 @@ Route Reflector
 .. index:: no neighbor PEER route-reflector-client
 .. clicmd:: no neighbor PEER route-reflector-client
 
+To avoid single points of failure, multiple route reflectors can be configured.
+
+A cluster is a collection of route reflectors and their clients, and is used
+by route reflectors to avoid looping.
+
+.. index:: bgp cluster-id A.B.C.D
+.. clicmd:: bgp cluster-id A.B.C.D
 
 .. _routing-policy:
 

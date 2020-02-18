@@ -28,8 +28,10 @@
 #include "log.h"
 #include "jhash.h"
 #include "lib_errors.h"
+#include "printfrr.h"
 
 DEFINE_MTYPE_STATIC(LIB, PREFIX, "Prefix")
+DEFINE_MTYPE_STATIC(LIB, PREFIX_FLOWSPEC, "Prefix Flowspec")
 
 /* Maskbit. */
 static const uint8_t maskbit[] = {0x00, 0x80, 0xc0, 0xe0, 0xf0,
@@ -451,7 +453,7 @@ int is_zero_mac(struct ethaddr *mac)
 	return 1;
 }
 
-unsigned int prefix_bit(const uint8_t *prefix, const uint8_t prefixlen)
+unsigned int prefix_bit(const uint8_t *prefix, const uint16_t prefixlen)
 {
 	unsigned int offset = prefixlen / 8;
 	unsigned int shift = 7 - (prefixlen % 8);
@@ -459,7 +461,7 @@ unsigned int prefix_bit(const uint8_t *prefix, const uint8_t prefixlen)
 	return (prefix[offset] >> shift) & 1;
 }
 
-unsigned int prefix6_bit(const struct in6_addr *prefix, const uint8_t prefixlen)
+unsigned int prefix6_bit(const struct in6_addr *prefix, const uint16_t prefixlen)
 {
 	return prefix_bit((const uint8_t *)&prefix->s6_addr, prefixlen);
 }
@@ -626,8 +628,15 @@ int prefix_match_network_statement(const struct prefix *n,
 	return 1;
 }
 
-void prefix_copy(struct prefix *dest, const struct prefix *src)
+#ifdef __clang_analyzer__
+#undef prefix_copy	/* cf. prefix.h */
+#endif
+
+void prefix_copy(union prefixptr udest, union prefixconstptr usrc)
 {
+	struct prefix *dest = udest.p;
+	const struct prefix *src = usrc.p;
+
 	dest->family = src->family;
 	dest->prefixlen = src->prefixlen;
 
@@ -672,8 +681,11 @@ void prefix_copy(struct prefix *dest, const struct prefix *src)
  * the same.  Note that this routine has the same return value sense
  * as '==' (which is different from prefix_cmp).
  */
-int prefix_same(const struct prefix *p1, const struct prefix *p2)
+int prefix_same(union prefixconstptr up1, union prefixconstptr up2)
 {
+	const struct prefix *p1 = up1.p;
+	const struct prefix *p2 = up2.p;
+
 	if ((p1 && !p2) || (!p1 && p2))
 		return 0;
 
@@ -710,57 +722,59 @@ int prefix_same(const struct prefix *p1, const struct prefix *p2)
 }
 
 /*
- * Return 0 if the network prefixes represented by the struct prefix
- * arguments are the same prefix, and 1 otherwise.  Network prefixes
- * are considered the same if the prefix lengths are equal and the
- * network parts are the same.  Host bits (which are considered masked
+ * Return -1/0/1 comparing the prefixes in a way that gives a full/linear
+ * order.
+ *
+ * Network prefixes are considered the same if the prefix lengths are equal
+ * and the network parts are the same.  Host bits (which are considered masked
  * by the prefix length) are not significant.  Thus, 10.0.0.1/8 and
  * 10.0.0.2/8 are considered equivalent by this routine.  Note that
  * this routine has the same return sense as strcmp (which is different
  * from prefix_same).
  */
-int prefix_cmp(const struct prefix *p1, const struct prefix *p2)
+int prefix_cmp(union prefixconstptr up1, union prefixconstptr up2)
 {
+	const struct prefix *p1 = up1.p;
+	const struct prefix *p2 = up2.p;
 	int offset;
 	int shift;
+	int i;
 
 	/* Set both prefix's head pointer. */
 	const uint8_t *pp1;
 	const uint8_t *pp2;
 
 	if (p1->family != p2->family)
-		return 1;
+		return numcmp(p1->family, p2->family);
 	if (p1->family == AF_FLOWSPEC) {
 		pp1 = (const uint8_t *)p1->u.prefix_flowspec.ptr;
 		pp2 = (const uint8_t *)p2->u.prefix_flowspec.ptr;
 
 		if (p1->u.prefix_flowspec.prefixlen !=
 		    p2->u.prefix_flowspec.prefixlen)
-			return 1;
+			return numcmp(p1->u.prefix_flowspec.prefixlen,
+				      p2->u.prefix_flowspec.prefixlen);
 
 		offset = p1->u.prefix_flowspec.prefixlen;
 		while (offset--)
 			if (pp1[offset] != pp2[offset])
-				return 1;
+				return numcmp(pp1[offset], pp2[offset]);
 		return 0;
 	}
 	pp1 = p1->u.val;
 	pp2 = p2->u.val;
 
 	if (p1->prefixlen != p2->prefixlen)
-		return 1;
+		return numcmp(p1->prefixlen, p2->prefixlen);
 	offset = p1->prefixlen / PNBBY;
 	shift = p1->prefixlen % PNBBY;
 
-	if (shift)
-		if (maskbit[shift] & (pp1[offset] ^ pp2[offset]))
-			return 1;
+	i = memcmp(pp1, pp2, offset);
+	if (i)
+		return i;
 
-	while (offset--)
-		if (pp1[offset] != pp2[offset])
-			return 1;
-
-	return 0;
+	return numcmp(pp1[offset] & maskbit[shift],
+		      pp2[offset] & maskbit[shift]);
 }
 
 /*
@@ -820,7 +834,7 @@ const char *prefix_family_str(const struct prefix *p)
 }
 
 /* Allocate new prefix_ipv4 structure. */
-struct prefix_ipv4 *prefix_ipv4_new()
+struct prefix_ipv4 *prefix_ipv4_new(void)
 {
 	struct prefix_ipv4 *p;
 
@@ -853,7 +867,7 @@ int str2prefix_ipv4(const char *str, struct prefix_ipv4 *p)
 	/* String doesn't contail slash. */
 	if (pnt == NULL) {
 		/* Convert string to prefix. */
-		ret = inet_aton(str, &p->prefix);
+		ret = inet_pton(AF_INET, str, &p->prefix);
 		if (ret == 0)
 			return 0;
 
@@ -865,7 +879,7 @@ int str2prefix_ipv4(const char *str, struct prefix_ipv4 *p)
 		return ret;
 	} else {
 		cp = XMALLOC(MTYPE_TMP, (pnt - str) + 1);
-		strncpy(cp, str, pnt - str);
+		memcpy(cp, str, pnt - str);
 		*(cp + (pnt - str)) = '\0';
 		ret = inet_aton(cp, &p->prefix);
 		XFREE(MTYPE_TMP, cp);
@@ -912,7 +926,7 @@ int str2prefix_eth(const char *str, struct prefix_eth *p)
 		}
 
 		cp = XMALLOC(MTYPE_TMP, (pnt - str) + 1);
-		strncpy(cp, str, pnt - str);
+		memcpy(cp, str, pnt - str);
 		*(cp + (pnt - str)) = '\0';
 
 		str_addr = cp;
@@ -943,8 +957,7 @@ int str2prefix_eth(const char *str, struct prefix_eth *p)
 	ret = 1;
 
 done:
-	if (cp)
-		XFREE(MTYPE_TMP, cp);
+	XFREE(MTYPE_TMP, cp);
 
 	return ret;
 }
@@ -966,18 +979,16 @@ void masklen2ip(const int masklen, struct in_addr *netmask)
 }
 
 /* Convert IP address's netmask into integer. We assume netmask is
-   sequential one. Argument netmask should be network byte order. */
+ * sequential one. Argument netmask should be network byte order. */
 uint8_t ip_masklen(struct in_addr netmask)
 {
 	uint32_t tmp = ~ntohl(netmask.s_addr);
-	if (tmp)
-		/* clz: count leading zeroes. sadly, the behaviour of this
-		 * builtin
-		 * is undefined for a 0 argument, even though most CPUs give 32
-		 */
-		return __builtin_clz(tmp);
-	else
-		return 32;
+
+	/*
+	 * clz: count leading zeroes. sadly, the behaviour of this builtin is
+	 * undefined for a 0 argument, even though most CPUs give 32
+	 */
+	return tmp ? __builtin_clz(tmp) : 32;
 }
 
 /* Apply mask to IPv4 prefix (network byte order). */
@@ -1031,7 +1042,7 @@ int str2prefix_ipv6(const char *str, struct prefix_ipv6 *p)
 		int plen;
 
 		cp = XMALLOC(MTYPE_TMP, (pnt - str) + 1);
-		strncpy(cp, str, pnt - str);
+		memcpy(cp, str, pnt - str);
 		*(cp + (pnt - str)) = '\0';
 		ret = inet_pton(AF_INET6, cp, &p->prefix);
 		XFREE(MTYPE_TMP, cp);
@@ -1330,13 +1341,29 @@ const char *prefix2str(union prefixconstptr pu, char *str, int size)
 {
 	const struct prefix *p = pu.p;
 	char buf[PREFIX2STR_BUFFER];
+	int byte, tmp, a, b;
+	bool z = false;
+	size_t l;
 
 	switch (p->family) {
 	case AF_INET:
 	case AF_INET6:
-		snprintf(str, size, "%s/%d", inet_ntop(p->family, &p->u.prefix,
-						       buf, PREFIX2STR_BUFFER),
-			 p->prefixlen);
+		inet_ntop(p->family, &p->u.prefix, buf, sizeof(buf));
+		l = strlen(buf);
+		buf[l++] = '/';
+		byte = p->prefixlen;
+		if ((tmp = p->prefixlen - 100) >= 0) {
+			buf[l++] = '1';
+			z = true;
+			byte = tmp;
+		}
+		b = byte % 10;
+		a = byte / 10;
+		if (a || z)
+			buf[l++] = '0' + a;
+		buf[l++] = '0' + b;
+		buf[l] = '\0';
+		strlcpy(str, buf, size);
 		break;
 
 	case AF_ETHERNET:
@@ -1350,18 +1377,47 @@ const char *prefix2str(union prefixconstptr pu, char *str, int size)
 		break;
 
 	case AF_FLOWSPEC:
-		sprintf(str, "FS prefix");
+		strlcpy(str, "FS prefix", size);
 		break;
 
 	default:
-		sprintf(str, "UNK prefix");
+		strlcpy(str, "UNK prefix", size);
 		break;
 	}
 
 	return str;
 }
 
-struct prefix *prefix_new()
+void prefix_mcast_inet4_dump(const char *onfail, struct in_addr addr,
+		char *buf, int buf_size)
+{
+	int save_errno = errno;
+
+	if (addr.s_addr == INADDR_ANY)
+		strlcpy(buf, "*", buf_size);
+	else {
+		if (!inet_ntop(AF_INET, &addr, buf, buf_size)) {
+			if (onfail)
+				snprintf(buf, buf_size, "%s", onfail);
+		}
+	}
+
+	errno = save_errno;
+}
+
+const char *prefix_sg2str(const struct prefix_sg *sg, char *sg_str)
+{
+	char src_str[INET_ADDRSTRLEN];
+	char grp_str[INET_ADDRSTRLEN];
+
+	prefix_mcast_inet4_dump("<src?>", sg->src, src_str, sizeof(src_str));
+	prefix_mcast_inet4_dump("<grp?>", sg->grp, grp_str, sizeof(grp_str));
+	snprintf(sg_str, PREFIX_SG_STR_LEN, "(%s,%s)", src_str, grp_str);
+
+	return sg_str;
+}
+
+struct prefix *prefix_new(void)
 {
 	struct prefix *p;
 
@@ -1504,8 +1560,7 @@ char *prefix_mac2str(const struct ethaddr *mac, char *buf, int size)
 	if (!mac)
 		return NULL;
 	if (!buf)
-		ptr = (char *)XMALLOC(MTYPE_TMP,
-				      ETHER_ADDR_STRLEN * sizeof(char));
+		ptr = XMALLOC(MTYPE_TMP, ETHER_ADDR_STRLEN * sizeof(char));
 	else {
 		assert(size >= ETHER_ADDR_STRLEN);
 		ptr = buf;
@@ -1517,7 +1572,7 @@ char *prefix_mac2str(const struct ethaddr *mac, char *buf, int size)
 	return ptr;
 }
 
-unsigned prefix_hash_key(void *pp)
+unsigned prefix_hash_key(const void *pp)
 {
 	struct prefix copy;
 
@@ -1586,8 +1641,7 @@ char *esi_to_str(const esi_t *esi, char *buf, int size)
 	if (!esi)
 		return NULL;
 	if (!buf)
-		ptr = (char *)XMALLOC(MTYPE_TMP,
-				      ESI_STR_LEN * sizeof(char));
+		ptr = XMALLOC(MTYPE_TMP, ESI_STR_LEN * sizeof(char));
 	else {
 		assert(size >= ESI_STR_LEN);
 		ptr = buf;
@@ -1600,4 +1654,49 @@ char *esi_to_str(const esi_t *esi, char *buf, int size)
 		 esi->val[6], esi->val[7], esi->val[8],
 		 esi->val[9]);
 	return ptr;
+}
+
+printfrr_ext_autoreg_p("I4", printfrr_i4)
+static ssize_t printfrr_i4(char *buf, size_t bsz, const char *fmt,
+			   int prec, const void *ptr)
+{
+	inet_ntop(AF_INET, ptr, buf, bsz);
+	return 2;
+}
+
+printfrr_ext_autoreg_p("I6", printfrr_i6)
+static ssize_t printfrr_i6(char *buf, size_t bsz, const char *fmt,
+			   int prec, const void *ptr)
+{
+	inet_ntop(AF_INET6, ptr, buf, bsz);
+	return 2;
+}
+
+printfrr_ext_autoreg_p("FX", printfrr_pfx)
+static ssize_t printfrr_pfx(char *buf, size_t bsz, const char *fmt,
+			    int prec, const void *ptr)
+{
+	prefix2str(ptr, buf, bsz);
+	return 2;
+}
+
+printfrr_ext_autoreg_p("SG4", printfrr_psg)
+static ssize_t printfrr_psg(char *buf, size_t bsz, const char *fmt,
+			    int prec, const void *ptr)
+{
+	const struct prefix_sg *sg = ptr;
+	struct fbuf fb = { .buf = buf, .pos = buf, .len = bsz - 1 };
+
+	if (sg->src.s_addr == INADDR_ANY)
+		bprintfrr(&fb, "(*,");
+	else
+		bprintfrr(&fb, "(%pI4,", &sg->src);
+
+	if (sg->grp.s_addr == INADDR_ANY)
+		bprintfrr(&fb, "*)");
+	else
+		bprintfrr(&fb, "%pI4)", &sg->grp);
+
+	fb.pos[0] = '\0';
+	return 3;
 }

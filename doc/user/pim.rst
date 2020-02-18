@@ -150,6 +150,12 @@ Certain signals have special meanings to *pimd*.
    urib-only
       Lookup in the Unicast Rib only.
 
+.. index:: ip igmp generate-query-once [version (2-3)]
+.. clicmd:: ip igmp generate-query-once [version (2-3)]
+
+   Generate IGMP query (v2/v3) on user requirement. This will not depend on
+   the existing IGMP general query timer.If no version is provided in the cli,
+   it will be considered as default v2 query.This is a hidden command.
 
 .. _pim-interface-configuration:
 
@@ -216,6 +222,19 @@ is in a vrf, enter the interface command with the vrf keyword at the end.
    Set a pim multicast boundary, based upon the WORD prefix-list. If a pim join
    or IGMP report is received on this interface and the Group is denied by the
    prefix-list, PIM will ignore the join or report.
+
+.. index:: ip igmp last-member-query-count (1-7)
+.. clicmd:: ip igmp last-member-query-count (1-7)
+
+   Set the IGMP last member query count. The default value is 2. 'no' form of
+   this command is used to to configure back to the default value.
+
+.. index:: ip igmp last-member-query-interval (1-255)
+.. clicmd:: ip igmp last-member-query-interval (1-255)
+
+   Set the IGMP last member query interval in deciseconds. The default value is
+   10 deciseconds. 'no' form of this command is used to to configure back to the
+   default value.
 
 .. _pim-multicast-rib-insertion:
 
@@ -302,6 +321,12 @@ cause great confusion.
 
    Display information about installed into the kernel S,G mroutes and in
    addition display data about packet flow for the mroutes.
+
+.. index:: show ip mroute summary
+.. clicmd:: show ip mroute summary
+
+   Display total number of S,G mroutes and number of S,G mroutes installed
+   into the kernel.
 
 .. index:: show ip pim assert
 .. clicmd:: show ip pim assert

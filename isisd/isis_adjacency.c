@@ -32,7 +32,6 @@
 #include "if.h"
 #include "stream.h"
 
-#include "isisd/dict.h"
 #include "isisd/isis_constants.h"
 #include "isisd/isis_common.h"
 #include "isisd/isis_flags.h"
@@ -140,12 +139,9 @@ void isis_delete_adj(void *arg)
 	/* remove from SPF trees */
 	spftree_area_adj_del(adj->circuit->area, adj);
 
-	if (adj->area_addresses)
-		XFREE(MTYPE_ISIS_ADJACENCY_INFO, adj->area_addresses);
-	if (adj->ipv4_addresses)
-		XFREE(MTYPE_ISIS_ADJACENCY_INFO, adj->ipv4_addresses);
-	if (adj->ipv6_addresses)
-		XFREE(MTYPE_ISIS_ADJACENCY_INFO, adj->ipv6_addresses);
+	XFREE(MTYPE_ISIS_ADJACENCY_INFO, adj->area_addresses);
+	XFREE(MTYPE_ISIS_ADJACENCY_INFO, adj->ipv4_addresses);
+	XFREE(MTYPE_ISIS_ADJACENCY_INFO, adj->ipv6_addresses);
 
 	adj_mt_finish(adj);
 
@@ -215,21 +211,24 @@ void isis_adj_process_threeway(struct isis_adjacency *adj,
 		}
 	}
 
+	if (adj->threeway_state != next_tw_state) {
+		send_hello_sched(adj->circuit, 0, TRIGGERED_IIH_DELAY);
+	}
+
 	adj->threeway_state = next_tw_state;
 }
 
 void isis_adj_state_change(struct isis_adjacency *adj,
 			   enum isis_adj_state new_state, const char *reason)
 {
-	int old_state;
-	int level;
-	struct isis_circuit *circuit;
+	enum isis_adj_state old_state = adj->adj_state;
+	struct isis_circuit *circuit = adj->circuit;
 	bool del;
 
-	old_state = adj->adj_state;
 	adj->adj_state = new_state;
-
-	circuit = adj->circuit;
+	if (new_state != old_state) {
+		send_hello_sched(circuit, adj->level, TRIGGERED_IIH_DELAY);
+	}
 
 	if (isis->debugs & DEBUG_ADJ_PACKETS) {
 		zlog_debug("ISIS-Adj (%s): Adjacency state change %d->%d: %s",
@@ -255,9 +254,14 @@ void isis_adj_state_change(struct isis_adjacency *adj,
 			reason ? reason : "unspecified");
 	}
 
+#ifndef FABRICD
+	/* send northbound notification */
+	isis_notif_adj_state_change(adj, new_state, reason);
+#endif /* ifndef FABRICD */
+
 	if (circuit->circ_type == CIRCUIT_T_BROADCAST) {
 		del = false;
-		for (level = IS_LEVEL_1; level <= IS_LEVEL_2; level++) {
+		for (int level = IS_LEVEL_1; level <= IS_LEVEL_2; level++) {
 			if ((adj->level & level) == 0)
 				continue;
 			if (new_state == ISIS_ADJ_UP) {
@@ -298,15 +302,12 @@ void isis_adj_state_change(struct isis_adjacency *adj,
 
 	} else if (circuit->circ_type == CIRCUIT_T_P2P) {
 		del = false;
-		for (level = IS_LEVEL_1; level <= IS_LEVEL_2; level++) {
+		for (int level = IS_LEVEL_1; level <= IS_LEVEL_2; level++) {
 			if ((adj->level & level) == 0)
 				continue;
 			if (new_state == ISIS_ADJ_UP) {
 				circuit->upadjcount[level - 1]++;
 				hook_call(isis_adj_state_change_hook, adj);
-
-				if (adj->sys_type == ISIS_SYSTYPE_UNKNOWN)
-					send_hello(circuit, level);
 
 				/* update counter & timers for debugging
 				 * purposes */
@@ -337,8 +338,6 @@ void isis_adj_state_change(struct isis_adjacency *adj,
 		if (del)
 			isis_delete_adj(adj);
 	}
-
-	return;
 }
 
 

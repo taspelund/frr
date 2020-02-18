@@ -3,10 +3,11 @@
 #
 lib_LTLIBRARIES += lib/libfrr.la
 lib_libfrr_la_LDFLAGS = -version-info 0:0:0 -Xlinker -e_libfrr_version
-lib_libfrr_la_LIBADD = @LIBCAP@ $(UNWIND_LIBS)
+lib_libfrr_la_LIBADD = $(LIBCAP) $(UNWIND_LIBS) $(LIBYANG_LIBS) $(LUA_LIB)
 
 lib_libfrr_la_SOURCES = \
 	lib/agg_table.c \
+	lib/atomlist.c \
 	lib/bfd.c \
 	lib/buffer.c \
 	lib/checksum.c \
@@ -18,9 +19,9 @@ lib_libfrr_la_SOURCES = \
 	lib/csv.c \
 	lib/debug.c \
 	lib/distribute.c \
-	lib/event_counter.c \
 	lib/ferr.c \
 	lib/filter.c \
+	lib/frrlua.c \
 	lib/frr_pthread.c \
 	lib/frrstr.c \
 	lib/getopt.c \
@@ -29,6 +30,7 @@ lib_libfrr_la_SOURCES = \
 	lib/graph.c \
 	lib/hash.c \
 	lib/hook.c \
+	lib/id_alloc.c \
 	lib/if.c \
 	lib/if_rmap.c \
 	lib/imsg-buffer.c \
@@ -40,9 +42,11 @@ lib_libfrr_la_SOURCES = \
 	lib/libfrr.c \
 	lib/linklist.c \
 	lib/log.c \
+	lib/log_vty.c \
 	lib/md5.c \
 	lib/memory.c \
 	lib/memory_vty.c \
+	lib/mlag.c \
 	lib/module.c \
 	lib/mpls.c \
 	lib/network.c \
@@ -50,6 +54,10 @@ lib_libfrr_la_SOURCES = \
 	lib/netns_linux.c \
 	lib/netns_other.c \
 	lib/nexthop_group.c \
+	lib/northbound.c \
+	lib/northbound_cli.c \
+	lib/northbound_db.c \
+	lib/ntop.c \
 	lib/openbsd-tree.c \
 	lib/pid_output.c \
 	lib/plist.c \
@@ -61,6 +69,7 @@ lib_libfrr_la_SOURCES = \
 	lib/ringbuf.c \
 	lib/routemap.c \
 	lib/sbuf.c \
+	lib/seqlock.c \
 	lib/sha256.c \
 	lib/sigevent.c \
 	lib/skiplist.c \
@@ -75,14 +84,27 @@ lib_libfrr_la_SOURCES = \
 	lib/table.c \
 	lib/termtable.c \
 	lib/thread.c \
+	lib/typerb.c \
+	lib/typesafe.c \
 	lib/vector.c \
 	lib/vrf.c \
 	lib/vty.c \
 	lib/wheel.c \
 	lib/workqueue.c \
+	lib/yang.c \
+	lib/yang_translator.c \
+	lib/yang_wrappers.c \
 	lib/zclient.c \
 	lib/logicalrouter.c \
-	lib/lua.c \
+	lib/printf/printf-pos.c \
+	lib/printf/vfprintf.c \
+	lib/printf/glue.c \
+	# end
+
+nodist_lib_libfrr_la_SOURCES = \
+	yang/frr-interface.yang.c \
+	yang/frr-route-types.yang.c \
+	yang/frr-module-translator.yang.c \
 	# end
 
 vtysh_scan += \
@@ -101,29 +123,42 @@ vtysh_scan += \
 # can be loaded as DSO - always include for vtysh
 vtysh_scan += $(top_srcdir)/lib/agentx.c
 
+if SQLITE3
+lib_libfrr_la_LIBADD += $(SQLITE3_LIBS)
+lib_libfrr_la_SOURCES += lib/db.c
+endif
+
+lib/if_clippy.c: $(CLIPPY_DEPS)
+lib/if.lo: lib/if_clippy.c
 lib/plist_clippy.c: $(CLIPPY_DEPS)
 lib/plist.lo: lib/plist_clippy.c
 lib/nexthop_group_clippy.c: $(CLIPPY_DEPS)
 lib/nexthop_group.lo: lib/nexthop_group_clippy.c
+lib/northbound_cli_clippy.c: $(CLIPPY_DEPS)
+lib/northbound_cli.lo: lib/northbound_cli_clippy.c
+lib/log_vty_clippy.c: $(CLIPPY_DEPS)
+lib/log_vty.lo: lib/log_vty_clippy.c
 
 pkginclude_HEADERS += \
 	lib/agg_table.h \
+	lib/atomlist.h \
 	lib/bfd.h \
 	lib/bitfield.h \
 	lib/buffer.h \
 	lib/checksum.h \
+	lib/mlag.h \
 	lib/command.h \
 	lib/command_graph.h \
 	lib/command_match.h \
 	lib/compiler.h \
 	lib/csv.h \
+	lib/db.h \
 	lib/debug.h \
 	lib/distribute.h \
-	lib/event_counter.h \
 	lib/ferr.h \
-	lib/fifo.h \
 	lib/filter.h \
 	lib/freebsd-queue.h \
+	lib/frrlua.h \
 	lib/frr_pthread.h \
 	lib/frratomic.h \
 	lib/frrstr.h \
@@ -131,6 +166,8 @@ pkginclude_HEADERS += \
 	lib/graph.h \
 	lib/hash.h \
 	lib/hook.h \
+	lib/iana_afi.h \
+	lib/id_alloc.h \
 	lib/if.h \
 	lib/if_rmap.h \
 	lib/imsg.h \
@@ -143,6 +180,7 @@ pkginclude_HEADERS += \
 	lib/libospf.h \
 	lib/linklist.h \
 	lib/log.h \
+	lib/log_vty.h \
 	lib/md5.h \
 	lib/memory.h \
 	lib/memory_vty.h \
@@ -152,12 +190,17 @@ pkginclude_HEADERS += \
 	lib/network.h \
 	lib/nexthop.h \
 	lib/nexthop_group.h \
+	lib/nexthop_group_private.h \
+	lib/northbound.h \
+	lib/northbound_cli.h \
+	lib/northbound_db.h \
 	lib/ns.h \
 	lib/openbsd-queue.h \
 	lib/openbsd-tree.h \
 	lib/plist.h \
 	lib/pqueue.h \
 	lib/prefix.h \
+	lib/printfrr.h \
 	lib/privs.h \
 	lib/ptm_lib.h \
 	lib/pw.h \
@@ -166,6 +209,7 @@ pkginclude_HEADERS += \
 	lib/ringbuf.h \
 	lib/routemap.h \
 	lib/sbuf.h \
+	lib/seqlock.h \
 	lib/sha256.h \
 	lib/sigevent.h \
 	lib/skiplist.h \
@@ -179,6 +223,8 @@ pkginclude_HEADERS += \
 	lib/table.h \
 	lib/termtable.h \
 	lib/thread.h \
+	lib/typerb.h \
+	lib/typesafe.h \
 	lib/vector.h \
 	lib/vlan.h \
 	lib/vrf.h \
@@ -187,11 +233,13 @@ pkginclude_HEADERS += \
 	lib/vxlan.h \
 	lib/wheel.h \
 	lib/workqueue.h \
+	lib/yang.h \
+	lib/yang_translator.h \
+	lib/yang_wrappers.h \
 	lib/zassert.h \
 	lib/zclient.h \
 	lib/zebra.h \
 	lib/logicalrouter.h \
-	lib/lua.h \
 	lib/pbr.h \
 	# end
 
@@ -205,6 +253,8 @@ noinst_HEADERS += \
 	lib/clippy.h \
 	lib/log_int.h \
 	lib/plist_int.h \
+	lib/printf/printfcommon.h \
+	lib/printf/printflocal.h \
 	#end
 
 # General note about module and module helper library (libfrrsnmp, libfrrzmq)
@@ -234,6 +284,21 @@ lib_libfrrsnmp_la_SOURCES = \
 	# end
 
 #
+# c-ares support
+#
+if CARES
+lib_LTLIBRARIES += lib/libfrrcares.la
+pkginclude_HEADERS += lib/resolver.h
+endif
+
+lib_libfrrcares_la_CFLAGS = $(WERROR) $(CARES_CFLAGS)
+lib_libfrrcares_la_LDFLAGS = -version-info 0:0:0
+lib_libfrrcares_la_LIBADD = $(CARES_LIBS)
+lib_libfrrcares_la_SOURCES = \
+	lib/resolver.c \
+	#end
+
+#
 # ZeroMQ support
 #
 if ZEROMQ
@@ -249,6 +314,42 @@ lib_libfrrzmq_la_SOURCES = \
 	#end
 
 #
+# Tail-f's ConfD support
+#
+if CONFD
+module_LTLIBRARIES += lib/confd.la
+endif
+
+lib_confd_la_CFLAGS = $(WERROR) $(CONFD_CFLAGS)
+lib_confd_la_LDFLAGS = -avoid-version -module -shared -export-dynamic
+lib_confd_la_LIBADD = lib/libfrr.la $(CONFD_LIBS)
+lib_confd_la_SOURCES = lib/northbound_confd.c
+
+#
+# Sysrepo support
+#
+if SYSREPO
+module_LTLIBRARIES += lib/sysrepo.la
+endif
+
+lib_sysrepo_la_CFLAGS = $(WERROR) $(SYSREPO_CFLAGS)
+lib_sysrepo_la_LDFLAGS = -avoid-version -module -shared -export-dynamic
+lib_sysrepo_la_LIBADD = lib/libfrr.la $(SYSREPO_LIBS)
+lib_sysrepo_la_SOURCES = lib/northbound_sysrepo.c
+
+#
+# gRPC northbound plugin
+#
+if GRPC
+module_LTLIBRARIES += lib/grpc.la
+endif
+
+lib_grpc_la_CXXFLAGS = $(WERROR) $(GRPC_CFLAGS)
+lib_grpc_la_LDFLAGS = -avoid-version -module -shared -export-dynamic
+lib_grpc_la_LIBADD = lib/libfrr.la grpc/libfrrgrpc_pb.la $(GRPC_LIBS)
+lib_grpc_la_SOURCES = lib/northbound_grpc.cpp
+
+#
 # CLI utilities
 #
 noinst_PROGRAMS += \
@@ -258,8 +359,10 @@ noinst_PROGRAMS += \
 if BUILD_CLIPPY
 noinst_PROGRAMS += lib/clippy
 else
-$(HOSTTOOLS)lib/clippy:
-	@$(MAKE) -C $(top_builddir)/$(HOSTTOOLS) lib/route_types.h lib/clippy
+if HOSTTOOLS_CLIPPY
+$(CLIPPY):
+	@$(MAKE) -C $(top_builddir)/hosttools lib/route_types.h lib/clippy
+endif
 endif
 
 lib_grammar_sandbox_SOURCES = \
@@ -290,13 +393,11 @@ am__v_CLIPPY_ = $(am__v_CLIPPY_$(AM_DEFAULT_VERBOSITY))
 am__v_CLIPPY_0 = @echo "  CLIPPY  " $@;
 am__v_CLIPPY_1 =
 
-CLIPPY_DEPS = $(HOSTTOOLS)lib/clippy $(top_srcdir)/python/clidef.py
+CLIPPY_DEPS = $(CLIPPY) $(top_srcdir)/python/clidef.py
 
-SUFFIXES = _clippy.c .proto .pb-c.c .pb-c.h .pb.h
+SUFFIXES = _clippy.c .proto .pb-c.c .pb-c.h .pb.h .pb.cc .grpc.pb.cc
 .c_clippy.c:
-	@{ test -x $(top_builddir)/$(HOSTTOOLS)lib/clippy || \
-		$(MAKE) -C $(top_builddir)/$(HOSTTOOLS) lib/clippy; }
-	$(AM_V_CLIPPY) $(top_builddir)/$(HOSTTOOLS)lib/clippy $(top_srcdir)/python/clidef.py -o $@ $<
+	$(AM_V_CLIPPY) $(CLIPPY) $(top_srcdir)/python/clidef.py -o $@ $<
 
 ## automake's "ylwrap" is a great piece of GNU software... not.
 .l.c:
@@ -331,11 +432,14 @@ lib/command_lex.h: lib/command_lex.c
 	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) "lib/command_lex.c"; else :; fi
 lib/command_lex.lo: lib/command_parse.h
 lib/command_parse.lo: lib/command_lex.h
+lib/clippy-command_lex.$(OBJEXT): lib/command_parse.h
+lib/clippy-command_parse.$(OBJEXT): lib/command_lex.h
 lib/lib_clippy-command_lex.$(OBJEXT): lib/command_parse.h
 lib/lib_clippy-command_parse.$(OBJEXT): lib/command_lex.h
 
 lib/route_types.h: $(top_srcdir)/lib/route_types.txt $(top_srcdir)/lib/route_types.pl
-	@PERL@ $(top_srcdir)/lib/route_types.pl < $(top_srcdir)/lib/route_types.txt > $@
+	$(PERL) $(top_srcdir)/lib/route_types.pl < $(top_srcdir)/lib/route_types.txt > $@
+DISTCLEANFILES += lib/route_types.h
 
 if GIT_VERSION
 # bit of a trick here to always have up-to-date git stamps without triggering
@@ -348,7 +452,7 @@ PHONY_GITVERSION=lib/gitversion.h.tmp
 .SILENT: lib/gitversion.h lib/gitversion.h.tmp
 GITH=lib/gitversion.h
 lib/gitversion.h.tmp: $(top_srcdir)/.git
-	@PERL@ $(top_srcdir)/lib/gitversion.pl $(top_srcdir) > ${GITH}.tmp
+	$(PERL) $(top_srcdir)/lib/gitversion.pl $(top_srcdir) > ${GITH}.tmp
 lib/gitversion.h: lib/gitversion.h.tmp
 	{ test -f ${GITH} && diff -s -q ${GITH}.tmp ${GITH}; } || cp ${GITH}.tmp ${GITH}
 

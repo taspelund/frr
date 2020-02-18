@@ -122,12 +122,6 @@ static struct log_ref ferr_bgp_warn[] = {
 		.suggestion = "Please collect log files and open Issue",
 	},
 	{
-		.code = EC_BGP_NO_SOCKOPT_MARK,
-		.title = "Unable to set socket MARK option",
-		.description = "BGP attempted to set the SO_MARK option for a socket and was unable to do so",
-		.suggestion = "Please collect log files and open Issue",
-	},
-	{
 		.code = EC_BGP_EVPN_PMSI_PRESENT,
 		.title = "BGP Received a EVPN NLRI with PMSI included",
 		.description = "BGP has received a type-3 NLRI with PMSI information.  At this time FRR is not capable of properly handling this NLRI type",
@@ -171,7 +165,7 @@ static struct log_ref ferr_bgp_warn[] = {
 	},
 	{
 		.code = EC_BGP_CAPABILITY_VENDOR,
-		.title = "BGP has recieved capability data specific to a particular vendor",
+		.title = "BGP has received capability data specific to a particular vendor",
 		.description = "BGP has received a capability that is vendor specific and as such we have no knowledge of how to use this capability in FRR",
 		.suggestion = "On peer turn off this feature"
 	},
@@ -197,43 +191,43 @@ static struct log_ref ferr_bgp_err[] = {
 		.code = EC_BGP_ATTR_FLAG,
 		.title = "BGP attribute flag is incorrect",
 		.description = "BGP attribute flag is set to the wrong value (Optional/Transitive/Partial)",
-		.suggestion = "Determine the soure of the attribute and determine why the attribute flag has been set incorrectly"
+		.suggestion = "Determine the source of the attribute and determine why the attribute flag has been set incorrectly"
 	},
 	{
 		.code = EC_BGP_ATTR_LEN,
 		.title = "BGP attribute length is incorrect",
 		.description = "BGP attribute length is incorrect",
-		.suggestion = "Determine the soure of the attribute and determine why the attribute length has been set incorrectly"
+		.suggestion = "Determine the source of the attribute and determine why the attribute length has been set incorrectly"
 	},
 	{
 		.code = EC_BGP_ATTR_ORIGIN,
 		.title = "BGP attribute origin value invalid",
 		.description = "BGP attribute origin value is invalid",
-		.suggestion = "Determine the soure of the attribute and determine why the origin attribute has been set incorrectly"
+		.suggestion = "Determine the source of the attribute and determine why the origin attribute has been set incorrectly"
 	},
 	{
 		.code = EC_BGP_ATTR_MAL_AS_PATH,
 		.title = "BGP as path is invalid",
 		.description = "BGP as path has been malformed",
-		.suggestion = "Determine the soure of the update and determine why the as path has been set incorrectly"
+		.suggestion = "Determine the source of the update and determine why the as path has been set incorrectly"
 	},
 	{
 		.code = EC_BGP_ATTR_FIRST_AS,
 		.title = "BGP as path first as is invalid",
 		.description = "BGP update has invalid first as in as path",
-		.suggestion = "Determine the soure of the update and determine why the as path first as value has been set incorrectly"
+		.suggestion = "Determine the source of the update and determine why the as path first as value has been set incorrectly"
 	},
 	{
 		.code = EC_BGP_ATTR_PMSI_TYPE,
 		.title = "BGP PMSI tunnel attribute type is invalid",
 		.description = "BGP update has invalid type for PMSI tunnel",
-		.suggestion = "Determine the soure of the update and determine why the PMSI tunnel attribute type has been set incorrectly"
+		.suggestion = "Determine the source of the update and determine why the PMSI tunnel attribute type has been set incorrectly"
 	},
 	{
 		.code = EC_BGP_ATTR_PMSI_LEN,
 		.title = "BGP PMSI tunnel attribute length is invalid",
 		.description = "BGP update has invalid length for PMSI tunnel",
-		.suggestion = "Determine the soure of the update and determine why the PMSI tunnel attribute length has been set incorrectly"
+		.suggestion = "Determine the source of the update and determine why the PMSI tunnel attribute length has been set incorrectly"
 	},
 	{
 		.code = EC_BGP_PEER_GROUP,
@@ -269,7 +263,7 @@ static struct log_ref ferr_bgp_err[] = {
 		.code = EC_BGP_JSON_MEM_ERROR,
 		.title = "BGP unable to allocate memory for JSON output",
 		.description = "BGP attempted to generate JSON output and was unable to allocate the memory required",
-		.suggestion = "Ensure that the device has adequate memory to suport the required functions"
+		.suggestion = "Ensure that the device has adequate memory to support the required functions"
 	},
 	{
 		.code = EC_BGP_UPDGRP_ATTR_LEN,
@@ -431,12 +425,6 @@ static struct log_ref ferr_bgp_err[] = {
 		.title = "BGP EVPN ES entry create error",
 		.description = "BGP attempted to create an EVPN ES entry and failed",
 		.suggestion = "Most likely a bug. If the problem persists, report the problem for troubleshooting"
-	},
-	{
-		.code = EC_BGP_MULTI_INSTANCE,
-		.title = "BGP config multi-instance issue",
-		.description = "BGP configuration attempting multiple instances without enabling the feature",
-		.suggestion = "Correct the configuration so that bgp multiple-instance is enabled if desired"
 	},
 	{
 		.code = EC_BGP_EVPN_AS_MISMATCH,

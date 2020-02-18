@@ -39,6 +39,7 @@
 #include "routemap.h"
 #include "frr_pthread.h"
 
+#include "zebra/zebra_router.h"
 #include "zebra/zebra_errors.h"
 #include "zebra/rib.h"
 #include "zebra/zserv.h"
@@ -54,18 +55,13 @@
 #include "zebra/zebra_netns_notify.h"
 #include "zebra/zebra_rnh.h"
 #include "zebra/zebra_pbr.h"
+#include "zebra/zebra_vxlan.h"
 
 #if defined(HANDLE_NETLINK_FUZZING)
 #include "zebra/kernel_netlink.h"
 #endif /* HANDLE_NETLINK_FUZZING */
 
 #define ZEBRA_PTM_SUPPORT
-
-/* Zebra instance */
-struct zebra_t zebrad = {
-	.rtm_table_default = 0,
-	.packets_to_process = ZEBRA_ZAPI_PACKETS_TO_PROCESS,
-};
 
 /* process id. */
 pid_t pid;
@@ -79,10 +75,9 @@ int retain_mode = 0;
 /* Allow non-quagga entities to delete quagga routes */
 int allow_delete = 0;
 
-/* Don't delete kernel route. */
-int keep_kernel_mode = 0;
+int graceful_restart;
 
-bool v6_rr_semantics = false;
+bool v6_rr_semantics = true;
 
 #ifdef HAVE_NETLINK
 /* Receive buffer size for netlink socket */
@@ -100,6 +95,7 @@ struct option longopts[] = {
 	{"label_socket", no_argument, NULL, 'l'},
 	{"retain", no_argument, NULL, 'r'},
 	{"vrfdefaultname", required_argument, NULL, 'o'},
+	{"graceful_restart", required_argument, NULL, 'K'},
 #ifdef HAVE_NETLINK
 	{"vrfwnetns", no_argument, NULL, 'n'},
 	{"nl-bufsize", required_argument, NULL, 's'},
@@ -124,8 +120,6 @@ struct zebra_privs_t zserv_privs = {
 	.cap_num_p = array_size(_caps_p),
 	.cap_num_i = 0};
 
-unsigned int multipath_num = MULTIPATH_NUM;
-
 /* SIGHUP handler. */
 static void sighup(void)
 {
@@ -142,15 +136,31 @@ static void sigint(void)
 	struct zebra_vrf *zvrf;
 	struct listnode *ln, *nn;
 	struct zserv *client;
+	static bool sigint_done;
+
+	if (sigint_done)
+		return;
+
+	sigint_done = true;
 
 	zlog_notice("Terminating on signal");
 
+	atomic_store_explicit(&zrouter.in_shutdown, true,
+			      memory_order_relaxed);
+
+	/* send RA lifetime of 0 before stopping. rfc4861/6.2.5 */
+	rtadv_stop_ra_all();
+
 	frr_early_fini();
 
-	for (ALL_LIST_ELEMENTS(zebrad.client_list, ln, nn, client))
+	zebra_dplane_pre_finish();
+
+	for (ALL_LIST_ELEMENTS(zrouter.client_list, ln, nn, client))
 		zserv_close_client(client);
 
-	list_delete_all_node(zebrad.client_list);
+	zserv_close();
+	list_delete_all_node(zrouter.client_list);
+
 	zebra_ptm_finish();
 
 	if (retain_mode)
@@ -159,20 +169,42 @@ static void sigint(void)
 			if (zvrf)
 				SET_FLAG(zvrf->flags, ZEBRA_VRF_RETAIN);
 		}
-	if (zebrad.lsp_process_q)
-		work_queue_free_and_null(&zebrad.lsp_process_q);
+	if (zrouter.lsp_process_q)
+		work_queue_free_and_null(&zrouter.lsp_process_q);
+
 	vrf_terminate();
 
-	ns_walk_func(zebra_ns_disabled);
+	ns_walk_func(zebra_ns_early_shutdown);
 	zebra_ns_notify_close();
 
 	access_list_reset();
 	prefix_list_reset();
 	route_map_finish();
 
-	list_delete(&zebrad.client_list);
-	work_queue_free_and_null(&zebrad.ribq);
-	meta_queue_free(zebrad.mq);
+	list_delete(&zrouter.client_list);
+
+	/* Indicate that all new dplane work has been enqueued. When that
+	 * work is complete, the dataplane will enqueue an event
+	 * with the 'finalize' function.
+	 */
+	zebra_dplane_finish();
+}
+
+/*
+ * Final shutdown step for the zebra main thread. This is run after all
+ * async update processing has completed.
+ */
+int zebra_finalize(struct thread *dummy)
+{
+	zlog_info("Zebra final shutdown");
+
+	/* Final shutdown of ns resources */
+	ns_walk_func(zebra_ns_final_shutdown);
+
+	/* Stop dplane thread and finish any cleanup */
+	zebra_dplane_shutdown();
+
+	zebra_router_terminate();
 
 	frr_fini();
 	exit(0);
@@ -203,6 +235,10 @@ struct quagga_signal_t zebra_signals[] = {
 	},
 };
 
+static const struct frr_yang_module_info *zebra_yang_modules[] = {
+	&frr_interface_info,
+};
+
 FRR_DAEMON_INFO(
 	zebra, ZEBRA, .vty_port = ZEBRA_VTY_PORT, .flags = FRR_NO_ZCLIENT,
 
@@ -212,13 +248,17 @@ FRR_DAEMON_INFO(
 
 	.signals = zebra_signals, .n_signals = array_size(zebra_signals),
 
-	.privs = &zserv_privs, )
+	.privs = &zserv_privs,
+
+	.yang_modules = zebra_yang_modules,
+	.n_yang_modules = array_size(zebra_yang_modules), )
 
 /* Main startup routine. */
 int main(int argc, char **argv)
 {
 	// int batch_mode = 0;
 	char *zserv_path = NULL;
+	char *vrf_default_name_configured = NULL;
 	/* Socket to external label manager */
 	char *lblmgr_path = NULL;
 	struct sockaddr_storage dummy;
@@ -230,13 +270,14 @@ int main(int argc, char **argv)
 	char *netlink_fuzzing = NULL;
 #endif /* HANDLE_NETLINK_FUZZING */
 
+	graceful_restart = 0;
 	vrf_configure_backend(VRF_BACKEND_VRF_LITE);
 	logicalrouter_configure_backend(LOGICALROUTER_BACKEND_NETNS);
 
 	frr_preinit(&zebra_di, argc, argv);
 
 	frr_opt_add(
-		"bakz:e:l:o:r"
+		"baz:e:l:o:rK:"
 #ifdef HAVE_NETLINK
 		"s:n"
 #endif
@@ -248,24 +289,24 @@ int main(int argc, char **argv)
 #endif /* HANDLE_NETLINK_FUZZING */
 		,
 		longopts,
-		"  -b, --batch           Runs in batch mode\n"
-		"  -a, --allow_delete    Allow other processes to delete zebra routes\n"
-		"  -z, --socket          Set path of zebra socket\n"
-		"  -e, --ecmp            Specify ECMP to use.\n"
-		"  -l, --label_socket    Socket to external label manager\n"
-		"  -k, --keep_kernel     Don't delete old routes which were installed by zebra.\n"
-		"  -r, --retain          When program terminates, retain added route by zebra.\n"
-		"  -o, --vrfdefaultname  Set default VRF name.\n"
+		"  -b, --batch              Runs in batch mode\n"
+		"  -a, --allow_delete       Allow other processes to delete zebra routes\n"
+		"  -z, --socket             Set path of zebra socket\n"
+		"  -e, --ecmp               Specify ECMP to use.\n"
+		"  -l, --label_socket       Socket to external label manager\n"
+		"  -r, --retain             When program terminates, retain added route by zebra.\n"
+		"  -o, --vrfdefaultname     Set default VRF name.\n"
+		"  -K, --graceful_restart   Graceful restart at the kernel level, timer in seconds for expiration\n"
 #ifdef HAVE_NETLINK
-		"  -n, --vrfwnetns       Use NetNS as VRF backend\n"
-		"  -s, --nl-bufsize      Set netlink receive buffer size\n"
-		"      --v6-rr-semantics Use v6 RR semantics\n"
+		"  -n, --vrfwnetns          Use NetNS as VRF backend\n"
+		"  -s, --nl-bufsize         Set netlink receive buffer size\n"
+		"      --v6-rr-semantics    Use v6 RR semantics\n"
 #endif /* HAVE_NETLINK */
 #if defined(HANDLE_ZAPI_FUZZING)
-		"  -c <file>             Bypass normal startup and use this file for testing of zapi\n"
+		"  -c <file>                Bypass normal startup and use this file for testing of zapi\n"
 #endif /* HANDLE_ZAPI_FUZZING */
 #if defined(HANDLE_NETLINK_FUZZING)
-		"  -w <file>             Bypass normal startup and use this file for testing of netlink input\n"
+		"  -w <file>                Bypass normal startup and use this file for testing of netlink input\n"
 #endif /* HANDLE_NETLINK_FUZZING */
 	);
 
@@ -284,13 +325,10 @@ int main(int argc, char **argv)
 		case 'a':
 			allow_delete = 1;
 			break;
-		case 'k':
-			keep_kernel_mode = 1;
-			break;
 		case 'e':
-			multipath_num = atoi(optarg);
-			if (multipath_num > MULTIPATH_NUM
-			    || multipath_num <= 0) {
+			zrouter.multipath_num = atoi(optarg);
+			if (zrouter.multipath_num > MULTIPATH_NUM
+			    || zrouter.multipath_num <= 0) {
 				flog_err(
 					EC_ZEBRA_BAD_MULTIPATH_NUM,
 					"Multipath Number specified must be less than %d and greater than 0",
@@ -299,7 +337,7 @@ int main(int argc, char **argv)
 			}
 			break;
 		case 'o':
-			vrf_set_default_name(optarg);
+			vrf_default_name_configured = optarg;
 			break;
 		case 'z':
 			zserv_path = optarg;
@@ -315,6 +353,9 @@ int main(int argc, char **argv)
 			break;
 		case 'r':
 			retain_mode = 1;
+			break;
+		case 'K':
+			graceful_restart = atoi(optarg);
 			break;
 #ifdef HAVE_NETLINK
 		case 's':
@@ -350,10 +391,13 @@ int main(int argc, char **argv)
 		}
 	}
 
-	vty_config_lockless();
-	zebrad.master = frr_init();
+	zrouter.master = frr_init();
+
+	/* Initialize pthread library */
+	frr_pthread_init();
 
 	/* Zebra related initialize. */
+	zebra_router_init();
 	zserv_init();
 	rib_init();
 	zebra_if_init();
@@ -363,8 +407,7 @@ int main(int argc, char **argv)
 	/*
 	 * Initialize NS( and implicitly the VRF module), and make kernel
 	 * routing socket. */
-	zebra_ns_init();
-
+	zebra_ns_init((const char *)vrf_default_name_configured);
 	zebra_vty_init();
 	access_list_init();
 	prefix_list_init();
@@ -401,14 +444,15 @@ int main(int argc, char **argv)
 	*  will be equal to the current getpid(). To know about such routes,
 	* we have to have route_read() called before.
 	*/
-	if (!keep_kernel_mode)
-		rib_sweep_route();
+	zrouter.startup_time = monotime(NULL);
+	thread_add_timer(zrouter.master, rib_sweep_route,
+			 NULL, graceful_restart, NULL);
 
 	/* Needed for BSD routing socket. */
 	pid = getpid();
 
-	/* Intialize pthread library */
-	frr_pthread_init();
+	/* Start dataplane system */
+	zebra_dplane_start();
 
 	/* Start Zebra API server */
 	zserv_start(zserv_path);
@@ -418,7 +462,10 @@ int main(int argc, char **argv)
 
 	/* RNH init */
 	zebra_rnh_init();
-	
+
+	/* Config handler Init */
+	zebra_evpn_init();
+
 	/* Error init */
 	zebra_error_init();
 
@@ -436,7 +483,7 @@ int main(int argc, char **argv)
 #endif /* HANDLE_NETLINK_FUZZING */
 
 
-	frr_run(zebrad.master);
+	frr_run(zrouter.master);
 
 	/* Not reached... */
 	return 0;

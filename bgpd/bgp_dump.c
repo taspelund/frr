@@ -37,6 +37,7 @@
 #include "bgpd/bgp_attr.h"
 #include "bgpd/bgp_dump.h"
 #include "bgpd/bgp_errors.h"
+#include "bgpd/bgp_packet.h"
 
 enum bgp_dump_type {
 	BGP_DUMP_ALL,
@@ -233,9 +234,9 @@ static void bgp_dump_routes_index_table(struct bgp *bgp)
 	stream_put_in_addr(obuf, &bgp->router_id);
 
 	/* View name */
-	if (bgp->name) {
-		stream_putw(obuf, strlen(bgp->name));
-		stream_put(obuf, bgp->name, strlen(bgp->name));
+	if (bgp->name_pretty) {
+		stream_putw(obuf, strlen(bgp->name_pretty));
+		stream_put(obuf, bgp->name_pretty, strlen(bgp->name_pretty));
 	} else {
 		stream_putw(obuf, 0);
 	}
@@ -410,7 +411,7 @@ static unsigned int bgp_dump_routes_func(int afi, int first_run,
 	table = bgp->rib[afi][SAFI_UNICAST];
 
 	for (rn = bgp_table_top(table); rn; rn = bgp_route_next(rn)) {
-		path = rn->info;
+		path = bgp_node_get_bgp_path_info(rn);
 		while (path) {
 			path = bgp_dump_route_node_record(afi, rn, path, seq);
 			seq++;
@@ -555,7 +556,8 @@ static void bgp_dump_packet_func(struct bgp_dump *bgp_dump, struct peer *peer,
 }
 
 /* Called from bgp_packet.c when BGP packet is received. */
-void bgp_dump_packet(struct peer *peer, int type, struct stream *packet)
+static int bgp_dump_packet(struct peer *peer, uint8_t type, bgp_size_t size,
+		struct stream *packet)
 {
 	/* bgp_dump_all. */
 	bgp_dump_packet_func(&bgp_dump_all, peer, packet);
@@ -563,6 +565,7 @@ void bgp_dump_packet(struct peer *peer, int type, struct stream *packet)
 	/* bgp_dump_updates. */
 	if (type == BGP_MSG_UPDATE)
 		bgp_dump_packet_func(&bgp_dump_updates, peer, packet);
+	return 0;
 }
 
 static unsigned int bgp_dump_parse_time(const char *str)
@@ -862,6 +865,8 @@ void bgp_dump_init(void)
 
 	install_element(CONFIG_NODE, &dump_bgp_all_cmd);
 	install_element(CONFIG_NODE, &no_dump_bgp_all_cmd);
+
+	hook_register(bgp_packet_dump, bgp_dump_packet);
 }
 
 void bgp_dump_finish(void)
@@ -872,4 +877,5 @@ void bgp_dump_finish(void)
 
 	stream_free(bgp_dump_obuf);
 	bgp_dump_obuf = NULL;
+	hook_unregister(bgp_packet_dump, bgp_dump_packet);
 }

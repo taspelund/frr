@@ -1020,7 +1020,7 @@ static int rfapiPrintRemoteRegBi(struct bgp *bgp, void *stream,
 	struct prefix pfx_vn;
 	uint8_t cost;
 	uint32_t lifetime;
-	bgp_encap_types tun_type;
+	bgp_encap_types tun_type = BGP_ENCAP_TYPE_MPLS;/*Default tunnel type*/
 
 	char buf_pfx[BUFSIZ];
 	char buf_ntop[BUFSIZ];
@@ -1055,7 +1055,7 @@ static int rfapiPrintRemoteRegBi(struct bgp *bgp, void *stream,
 				   BUFSIZ));
 	}
 
-	rfapiGetTunnelType(bpi->attr, &tun_type);
+	bgp_attr_extcom_tunnel_type(bpi->attr, &tun_type);
 	/*
 	 * VN addr
 	 */
@@ -1570,7 +1570,7 @@ void rfapiPrintAdvertisedInfo(struct vty *vty, struct rfapi_descriptor *rfd,
 
 	vty_out(vty, "  bn=%p%s", bn, HVTYNL);
 
-	for (bpi = bn->info; bpi; bpi = bpi->next) {
+	for (bpi = bgp_node_get_bgp_path_info(bn); bpi; bpi = bpi->next) {
 		if (bpi->peer == rfd->peer && bpi->type == type
 		    && bpi->sub_type == BGP_ROUTE_RFP && bpi->extra
 		    && bpi->extra->vnc.export.rfapi_handle == (void *)rfd) {
@@ -4964,7 +4964,7 @@ DEFUN (clear_vrf_all,
 	return vnc_clear_vrf(vty, NULL, arg_vrf, NULL, NULL);
 }
 
-void rfapi_vty_init()
+void rfapi_vty_init(void)
 {
 	install_element(ENABLE_NODE, &add_vnc_prefix_cost_life_lnh_cmd);
 	install_element(ENABLE_NODE, &add_vnc_prefix_life_cost_lnh_cmd);

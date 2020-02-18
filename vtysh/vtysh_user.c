@@ -62,35 +62,20 @@ static int vtysh_pam(const char *user)
 
 	/* Start PAM. */
 	ret = pam_start(FRR_PAM_NAME, user, &conv, &pamh);
-	/* printf ("ret %d\n", ret); */
 
 	/* Is user really user? */
 	if (ret == PAM_SUCCESS)
 		ret = pam_authenticate(pamh, 0);
-/* printf ("ret %d\n", ret); */
 
-#if 0
-  /* Permitted access? */
-  if (ret == PAM_SUCCESS)
-    ret = pam_acct_mgmt (pamh, 0);
-  printf ("ret %d\n", ret);
-
-  if (ret == PAM_AUTHINFO_UNAVAIL)
-    ret = PAM_SUCCESS;
-#endif /* 0 */
-
-/* This is where we have been authorized or not. */
-#ifdef DEBUG
-	if (ret == PAM_SUCCESS)
-		printf("Authenticated\n");
-	else
-		printf("Not Authenticated\n");
-#endif /* DEBUG */
+	if (ret != PAM_SUCCESS)
+		fprintf(stderr, "vtysh_pam: Failure to initialize pam: %s(%d)",
+			pam_strerror(pamh, ret), ret);
 
 	/* close Linux-PAM */
 	if (pam_end(pamh, ret) != PAM_SUCCESS) {
 		pamh = NULL;
-		fprintf(stderr, "vtysh_pam: failed to release authenticator\n");
+		fprintf(stderr, "vtysh_pam: failed to release authenticator: %s(%d)\n",
+			pam_strerror(pamh, ret), ret);
 		exit(1);
 	}
 
@@ -122,7 +107,7 @@ static struct vtysh_user *user_lookup(const char *name)
 	return NULL;
 }
 
-void user_config_write()
+void user_config_write(void)
 {
 	struct listnode *node, *nnode;
 	struct vtysh_user *user;
@@ -204,7 +189,7 @@ char *vtysh_get_home(void)
 	struct passwd *passwd;
 	char *homedir;
 
-	if ((homedir = getenv("HOME")) != 0)
+	if ((homedir = getenv("HOME")) != NULL)
 		return homedir;
 
 	/* Fallback if HOME is undefined */
