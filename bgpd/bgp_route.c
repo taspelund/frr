@@ -1439,7 +1439,7 @@ void bgp_attr_add_gshut_community(struct attr *attr)
 }
 
 
-static bool subgroup_announce_reset_nhop(uint8_t family, struct attr *attr)
+static void subgroup_announce_reset_nhop(uint8_t family, struct attr *attr)
 {
 	if (family == AF_INET) {
 		attr->nexthop.s_addr = 0;
@@ -1449,7 +1449,6 @@ static bool subgroup_announce_reset_nhop(uint8_t family, struct attr *attr)
 		memset(&attr->mp_nexthop_global, 0, IPV6_MAX_BYTELEN);
 	if (family == AF_EVPN)
 		memset(&attr->mp_nexthop_global_in, 0, BGP_ATTR_NHLEN_IPV4);
-	return true;
 }
 
 int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
