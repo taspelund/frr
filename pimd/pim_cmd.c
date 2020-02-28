@@ -5575,15 +5575,15 @@ DEFPY (show_ip_mroute,
 	return CMD_SUCCESS;
 }
 
-DEFUN (show_ip_mroute_vrf_all,
-       show_ip_mroute_vrf_all_cmd,
-       "show ip mroute vrf all [fill] [json]",
-       SHOW_STR
-       IP_STR
-       MROUTE_STR
-       VRF_CMD_HELP_STR
-       "Fill in Assumed data\n"
-       JSON_STR)
+DEFUN_HIDDEN (show_ip_mroute_vrf_all,
+	      show_ip_mroute_vrf_all_cmd,
+	      "show ip mroute vrf all [fill] [json]",
+	      SHOW_STR
+	      IP_STR
+	      MROUTE_STR
+	      VRF_CMD_HELP_STR
+	      "Fill in Assumed data\n"
+	      JSON_STR)
 {
 	struct prefix_sg sg = {0};
 	bool uj = use_json(argc, argv);
@@ -5613,14 +5613,14 @@ DEFUN (show_ip_mroute_vrf_all,
 	return CMD_SUCCESS;
 }
 
-DEFUN (clear_ip_mroute_count,
-       clear_ip_mroute_count_cmd,
-       "clear ip mroute [vrf NAME] count",
-       CLEAR_STR
-       IP_STR
-       MROUTE_STR
-       VRF_CMD_HELP_STR
-       "Route and packet count data\n")
+DEFUN_HIDDEN (clear_ip_mroute_count,
+	      clear_ip_mroute_count_cmd,
+	      "clear ip mroute [vrf NAME] count",
+	      CLEAR_STR
+	      IP_STR
+	      MROUTE_STR
+	      VRF_CMD_HELP_STR
+	      "Route and packet count data\n")
 {
 	int idx = 2;
 	struct listnode *node;
