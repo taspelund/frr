@@ -4578,16 +4578,32 @@ void bgp_evpn_advertise_type5_routes(struct bgp *bgp_vrf, afi_t afi,
 				/* apply the route-map */
 				if (bgp_vrf->adv_cmd_rmap[afi][safi].map) {
 					int ret = 0;
+					struct bgp_path_info tmp_pi;
+					struct bgp_path_info_extra tmp_pie;
+					struct attr tmp_attr;
+
+					tmp_attr = *pi->attr;
+
+					/* Fill temp path_info */
+					prep_for_rmap_apply(
+						&tmp_pi, &tmp_pie, pi,
+						pi->peer, &tmp_attr);
+
+					RESET_FLAG(tmp_attr.rmap_change_flags);
 
 					ret = route_map_apply(
 						bgp_vrf->adv_cmd_rmap[afi][safi]
 							.map,
-						&rn->p, RMAP_BGP, pi);
+						&rn->p, RMAP_BGP, &tmp_pi);
 					if (ret == RMAP_DENYMATCH)
 						continue;
-				}
-				bgp_evpn_advertise_type5_route(
-					bgp_vrf, &rn->p, pi->attr, afi, safi);
+					bgp_evpn_advertise_type5_route(
+						bgp_vrf, &rn->p, &tmp_attr,
+						afi, safi);
+				} else
+					bgp_evpn_advertise_type5_route(
+						bgp_vrf, &rn->p, pi->attr,
+						afi, safi);
 				break;
 			}
 		}
