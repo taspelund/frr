@@ -2381,7 +2381,7 @@ DEFUN (no_bgp_bestpath_med,
 /* "bgp bestpath bandwidth" configuration. */
 DEFPY (bgp_bestpath_bw,
        bgp_bestpath_bw_cmd,
-       "[no$no] bgp bestpath bandwidth <ignore|skip-missing|default-weight-for-missing>$bw_cfg",
+       "[no$no] bgp bestpath bandwidth [<ignore|skip-missing|default-weight-for-missing>$bw_cfg]",
        NO_STR
        "BGP specific commands\n"
        "Change the default bestpath selection\n"
@@ -2397,6 +2397,10 @@ DEFPY (bgp_bestpath_bw,
 	if (no) {
 		bgp->lb_handling = BGP_LINK_BW_ECMP;
 	} else {
+		if (!bw_cfg) {
+			vty_out(vty, "%% Bandwidth configuration must be specified\n");
+			return CMD_ERR_INCOMPLETE;
+		}
 		if (!strcmp(bw_cfg, "ignore"))
 			bgp->lb_handling = BGP_LINK_BW_IGNORE_BW;
 		else if (!strcmp(bw_cfg, "skip-missing"))
