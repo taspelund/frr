@@ -3980,13 +3980,13 @@ DEFUN (show_ip_pim_assert_winner_metric,
 
 DEFUN (show_ip_pim_interface,
        show_ip_pim_interface_cmd,
-       "show ip pim [mlag] [vrf NAME] interface [detail|WORD] [json]",
+       "show ip pim [vrf NAME] interface [mlag] [detail|WORD] [json]",
        SHOW_STR
        IP_STR
        PIM_STR
-       "MLAG\n"
        VRF_CMD_HELP_STR
        "PIM interface information\n"
+       "MLAG\n"
        "Detailed output\n"
        "interface name\n"
        JSON_STR)
@@ -4002,6 +4002,7 @@ DEFUN (show_ip_pim_interface,
 	if (argv_find(argv, argc, "mlag", &idx))
 		mlag = true;
 
+	idx = 2;
 	if (argv_find(argv, argc, "WORD", &idx)
 	    || argv_find(argv, argc, "detail", &idx))
 		pim_show_interfaces_single(vrf->info, vty, argv[idx]->arg, mlag,
