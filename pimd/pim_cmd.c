@@ -5575,15 +5575,15 @@ DEFPY (show_ip_mroute,
 	return CMD_SUCCESS;
 }
 
-DEFUN_HIDDEN (show_ip_mroute_vrf_all,
-	      show_ip_mroute_vrf_all_cmd,
-	      "show ip mroute vrf all [fill] [json]",
-	      SHOW_STR
-	      IP_STR
-	      MROUTE_STR
-	      VRF_CMD_HELP_STR
-	      "Fill in Assumed data\n"
-	      JSON_STR)
+DEFUN (show_ip_mroute_vrf_all,
+       show_ip_mroute_vrf_all_cmd,
+       "show ip mroute vrf all [fill] [json]",
+       SHOW_STR
+       IP_STR
+       MROUTE_STR
+       VRF_CMD_HELP_STR
+       "Fill in Assumed data\n"
+       JSON_STR)
 {
 	struct prefix_sg sg = {0};
 	bool uj = use_json(argc, argv);
