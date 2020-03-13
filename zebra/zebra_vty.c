@@ -380,6 +380,9 @@ static void vty_show_ip_route_detail(struct vty *vty, struct route_node *rn,
 						sizeof buf, 1));
 			}
 
+			if (nexthop->weight)
+				vty_out(vty, ", weight %u", nexthop->weight);
+
 			vty_out(vty, "\n");
 		}
 		vty_out(vty, "\n");
@@ -630,6 +633,10 @@ static void vty_show_ip_route(struct vty *vty, struct route_node *rn,
 				json_object_object_add(json_nexthop, "labels",
 						       json_labels);
 			}
+
+			if (nexthop->weight)
+				json_object_int_add(json_nexthop, "weight",
+						    nexthop->weight);
 
 			json_object_array_add(json_nexthops, json_nexthop);
 		}
@@ -1190,6 +1197,9 @@ static void show_nexthop_group_out(struct vty *vty, struct nhg_hash_entry *nhe)
 					       nexthop->nh_label->label, buf,
 					       sizeof(buf), 1));
 		}
+
+		if (nexthop->weight)
+			vty_out(vty, ", weight %u", nexthop->weight);
 
 		vty_out(vty, "\n");
 	}

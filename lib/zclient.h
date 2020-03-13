@@ -350,6 +350,8 @@ struct zapi_nexthop {
 	mpls_label_t labels[MPLS_MAX_LABELS];
 
 	struct ethaddr rmac;
+
+	uint32_t weight;
 };
 
 /*

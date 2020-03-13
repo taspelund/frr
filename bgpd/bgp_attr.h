@@ -206,6 +206,9 @@ struct attr {
 
 	/* EVPN local router-mac */
 	struct ethaddr rmac;
+
+	/* Link bandwidth value, if any. */
+	uint32_t link_bw;
 };
 
 /* rmap_change_flags definition */
@@ -216,6 +219,7 @@ struct attr {
 #define BATTR_RMAP_IPV6_GLOBAL_NHOP_CHANGED (1 << 4)
 #define BATTR_RMAP_IPV6_LL_NHOP_CHANGED (1 << 5)
 #define BATTR_RMAP_IPV6_PREFER_GLOBAL_CHANGED (1 << 6)
+#define BATTR_RMAP_LINK_BW_SET (1 << 7)
 
 /* Router Reflector related structure. */
 struct cluster_list {
@@ -366,6 +370,11 @@ static inline int bgp_rmap_nhop_changed(uint32_t out_rmap_flags,
 static inline uint32_t mac_mobility_seqnum(struct attr *attr)
 {
 	return (attr) ? attr->mm_seqnum : 0;
+}
+
+static inline uint32_t link_bandwidth(struct attr *attr)
+{
+	return (attr) ? attr->link_bw : 0;
 }
 
 #endif /* _QUAGGA_BGP_ATTR_H */

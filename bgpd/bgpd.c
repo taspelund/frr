@@ -302,8 +302,10 @@ void bgp_router_id_zebra_bump(vrf_id_t vrf_id, const struct prefix *router_id)
 				 */
 				if (bgp->established_peers == 0) {
 					if (BGP_DEBUG(zebra, ZEBRA))
-						zlog_debug("RID change : vrf %u, RTR ID %s",
-					bgp->vrf_id, inet_ntoa(*addr));
+						zlog_debug("RID change : vrf %s(%u), RTR ID %s",
+							   bgp->name_pretty,
+							   bgp->vrf_id,
+							   inet_ntoa(*addr));
 					bgp_router_id_set(bgp, addr);
 				}
 			}
@@ -322,8 +324,10 @@ void bgp_router_id_zebra_bump(vrf_id_t vrf_id, const struct prefix *router_id)
 				 */
 				if (bgp->established_peers == 0) {
 					if (BGP_DEBUG(zebra, ZEBRA))
-						zlog_debug("RID change : vrf %u, RTR ID %s",
-					bgp->vrf_id, inet_ntoa(*addr));
+						zlog_debug("RID change : vrf %s(%u), RTR ID %s",
+							   bgp->name_pretty,
+							   bgp->vrf_id,
+							   inet_ntoa(*addr));
 					bgp_router_id_set(bgp, addr);
 				}
 			}
@@ -2943,6 +2947,8 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 	bgp->stalepath_time = BGP_DEFAULT_STALEPATH_TIME;
 	bgp->dynamic_neighbors_limit = BGP_DYNAMIC_NEIGHBORS_LIMIT_DEFAULT;
 	bgp->dynamic_neighbors_count = 0;
+	bgp->lb_ref_bw = BGP_LINK_BW_REF_BW;
+	bgp->lb_handling = BGP_LINK_BW_ECMP;
 #if DFLT_BGP_IMPORT_CHECK
 	bgp_flag_set(bgp, BGP_FLAG_IMPORT_CHECK);
 #endif
@@ -7682,6 +7688,14 @@ int bgp_config_write(struct vty *vty)
 				vty_out(vty, " missing-as-worst");
 			vty_out(vty, "\n");
 		}
+
+		/* Link bandwidth handling. */
+		if (bgp->lb_handling == BGP_LINK_BW_IGNORE_BW)
+			vty_out(vty, " bgp bestpath bandwidth ignore\n");
+		else if (bgp->lb_handling == BGP_LINK_BW_SKIP_MISSING)
+			vty_out(vty, " bgp bestpath bandwidth skip-missing\n");
+		else if (bgp->lb_handling == BGP_LINK_BW_DEFWT_4_MISSING)
+			vty_out(vty, " bgp bestpath bandwidth default-weight-for-missing\n");
 
 		/* BGP network import check. */
 		if (!!bgp_flag_check(bgp, BGP_FLAG_IMPORT_CHECK)

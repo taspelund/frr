@@ -1468,6 +1468,8 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 	afi_t afi;
 	safi_t safi;
 	int samepeer_safe = 0; /* for synthetic mplsvpns routes */
+	bool nh_reset = false;
+	uint64_t cum_bw;
 
 	if (DISABLE_BGP_ANNOUNCE)
 		return 0;
@@ -1779,16 +1781,9 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 		struct bgp_path_info_extra dummy_rmap_path_extra;
 		struct attr dummy_attr;
 
-		memset(&rmap_path, 0, sizeof(struct bgp_path_info));
-		rmap_path.peer = peer;
-		rmap_path.attr = attr;
-
-		if (pi->extra) {
-			memcpy(&dummy_rmap_path_extra, pi->extra,
-			       sizeof(struct bgp_path_info_extra));
-			rmap_path.extra = &dummy_rmap_path_extra;
-		}
-
+		/* Fill temp path_info */
+		prep_for_rmap_apply(&rmap_path, &dummy_rmap_path_extra,
+				    pi, peer, attr);
 		/* don't confuse inbound and outbound setting */
 		RESET_FLAG(attr->rmap_change_flags);
 
@@ -1865,12 +1860,14 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 				  PEER_FLAG_FORCE_NEXTHOP_SELF)) {
 			if (!reflect
 			    || CHECK_FLAG(peer->af_flags[afi][safi],
-					  PEER_FLAG_FORCE_NEXTHOP_SELF))
+					  PEER_FLAG_FORCE_NEXTHOP_SELF)) {
 				subgroup_announce_reset_nhop(
 					(peer_cap_enhe(peer, afi, safi)
 						 ? AF_INET6
 						 : p->family),
 					attr);
+				nh_reset = true;
+			}
 		} else if (peer->sort == BGP_PEER_EBGP) {
 			/* Can also reset the nexthop if announcing to EBGP, but
 			 * only if
@@ -1881,22 +1878,26 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 			if ((p->family == AF_INET) &&
 				(!bgp_subgrp_multiaccess_check_v4(
 					piattr->nexthop,
-					subgrp)))
+					subgrp))) {
 				subgroup_announce_reset_nhop(
 					(peer_cap_enhe(peer, afi, safi)
 						 ? AF_INET6
 						 : p->family),
 						attr);
+				nh_reset = true;
+			}
 
 			if ((p->family == AF_INET6) &&
 				(!bgp_subgrp_multiaccess_check_v6(
 					piattr->mp_nexthop_global,
-					subgrp)))
+					subgrp))) {
 				subgroup_announce_reset_nhop(
 					(peer_cap_enhe(peer, afi, safi)
 						? AF_INET6
 						: p->family),
 						attr);
+				nh_reset = true;
+			}
 
 
 
@@ -1914,6 +1915,7 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 					"%s: BGP_PATH_ANNC_NH_SELF, family=%s",
 					__func__, family2str(family));
 			subgroup_announce_reset_nhop(family, attr);
+			nh_reset = true;
 		}
 
 		/* If IPv6/MP and nexthop does not have any override and happens
@@ -1925,10 +1927,25 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 		 * the same interface.
 		 */
 		if (p->family == AF_INET6 || peer_cap_enhe(peer, afi, safi)) {
-			if (IN6_IS_ADDR_LINKLOCAL(&attr->mp_nexthop_global))
+			if (IN6_IS_ADDR_LINKLOCAL(&attr->mp_nexthop_global)) {
 				subgroup_announce_reset_nhop(AF_INET6, attr);
+				nh_reset = true;
+			}
 		}
 	}
+
+	/*
+	 * When the next hop is set to ourselves, if all multipaths have
+	 * link-bandwidth announce the cumulative bandwidth as that makes
+	 * the most sense. However, don't modify if the link-bandwidth has
+	 * been explicitly set by user policy.
+	 */
+	if (nh_reset &&
+	    bgp_path_info_mpath_chkwtd(bgp, pi) &&
+	    (cum_bw = bgp_path_info_mpath_cumbw(pi)) != 0 &&
+	    !CHECK_FLAG(attr->rmap_change_flags, BATTR_RMAP_LINK_BW_SET))
+		attr->ecommunity = ecommunity_replace_linkbw(
+					bgp->as, attr->ecommunity, cum_bw);
 
 	return 1;
 }
@@ -2247,7 +2264,8 @@ int bgp_zebra_has_route_changed(struct bgp_node *rn,
 	 * when the best path has an attribute change anyway.
 	 */
 	if (CHECK_FLAG(selected->flags, BGP_PATH_IGP_CHANGED)
-	    || CHECK_FLAG(selected->flags, BGP_PATH_MULTIPATH_CHG))
+	    || CHECK_FLAG(selected->flags, BGP_PATH_MULTIPATH_CHG)
+	    || CHECK_FLAG(selected->flags, BGP_PATH_LINK_BW_CHG))
 		return 1;
 
 	/*
@@ -2422,12 +2440,11 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 				}
 			}
 		}
-		UNSET_FLAG(old_select->flags, BGP_PATH_MULTIPATH_CHG);
-		bgp_zebra_clear_route_change_flags(rn);
 
 		/* If there is a change of interest to peers, reannounce the
 		 * route. */
 		if (CHECK_FLAG(old_select->flags, BGP_PATH_ATTR_CHANGED)
+		    || CHECK_FLAG(old_select->flags, BGP_PATH_LINK_BW_CHG)
 		    || CHECK_FLAG(rn->flags, BGP_NODE_LABEL_CHANGED)) {
 			group_announce_route(bgp, afi, safi, rn, new_select);
 
@@ -2442,6 +2459,9 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 			UNSET_FLAG(rn->flags, BGP_NODE_LABEL_CHANGED);
 		}
 
+		UNSET_FLAG(old_select->flags, BGP_PATH_MULTIPATH_CHG);
+		UNSET_FLAG(old_select->flags, BGP_PATH_LINK_BW_CHG);
+		bgp_zebra_clear_route_change_flags(rn);
 		UNSET_FLAG(rn->flags, BGP_NODE_PROCESS_SCHEDULED);
 		return;
 	}
@@ -2472,6 +2492,7 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 		bgp_path_info_set_flag(rn, new_select, BGP_PATH_SELECTED);
 		bgp_path_info_unset_flag(rn, new_select, BGP_PATH_ATTR_CHANGED);
 		UNSET_FLAG(new_select->flags, BGP_PATH_MULTIPATH_CHG);
+		UNSET_FLAG(new_select->flags, BGP_PATH_LINK_BW_CHG);
 	}
 
 #if ENABLE_BGP_VNC
@@ -2536,17 +2557,31 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 			/* apply the route-map */
 			if (bgp->adv_cmd_rmap[afi][safi].map) {
 				int ret = 0;
+				struct bgp_path_info rmap_path;
+				struct bgp_path_info_extra rmap_path_extra;
+				struct attr dummy_attr;
+
+				dummy_attr = *new_select->attr;
+
+				/* Fill temp path_info */
+				prep_for_rmap_apply(
+					&rmap_path, &rmap_path_extra,
+					new_select, new_select->peer,
+					&dummy_attr);
+
+				RESET_FLAG(dummy_attr.rmap_change_flags);
 
 				ret = route_map_apply(
 					bgp->adv_cmd_rmap[afi][safi].map,
-					&rn->p, RMAP_BGP, new_select);
-				if (ret == RMAP_MATCH)
-					bgp_evpn_advertise_type5_route(
-						bgp, &rn->p, new_select->attr,
-						afi, safi);
-				else
+					&rn->p, RMAP_BGP, &rmap_path);
+
+				if (ret == RMAP_DENYMATCH)
 					bgp_evpn_withdraw_type5_route(
 						bgp, &rn->p, afi, safi);
+				else
+					bgp_evpn_advertise_type5_route(
+						bgp, &rn->p, &dummy_attr,
+						afi, safi);
 			} else {
 				bgp_evpn_advertise_type5_route(bgp,
 							       &rn->p,
@@ -8189,8 +8224,13 @@ void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
 			} else {
 				if (nexthop_vrfid == VRF_UNKNOWN)
 					vty_out(vty, " vrf ?");
-				else
-					vty_out(vty, " vrf %u", nexthop_vrfid);
+				else {
+					struct vrf *vrf;
+
+					vrf = vrf_lookup_by_id(nexthop_vrfid);
+					vty_out(vty, " vrf %s(%u)",
+						VRF_LOGNAME(vrf), nexthop_vrfid);
+				}
 			}
 		}
 
