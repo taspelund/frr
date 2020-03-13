@@ -62,10 +62,19 @@
 #define BGP_PREFIX_SID_LABEL_INDEX     1
 #define BGP_PREFIX_SID_IPV6            2
 #define BGP_PREFIX_SID_ORIGINATOR_SRGB 3
+#define BGP_PREFIX_SID_VPN_SID 4
+#define BGP_PREFIX_SID_SRV6_L3_SERVICE 5
+#define BGP_PREFIX_SID_SRV6_L2_SERVICE 6
 
 #define BGP_PREFIX_SID_LABEL_INDEX_LENGTH      7
 #define BGP_PREFIX_SID_IPV6_LENGTH            19
 #define BGP_PREFIX_SID_ORIGINATOR_SRGB_LENGTH  6
+#define BGP_PREFIX_SID_VPN_SID_LENGTH         19
+#define BGP_PREFIX_SID_SRV6_L3_SERVICE_LENGTH 21
+
+#define BGP_ATTR_NH_AFI(afi, attr) \
+	((afi != AFI_L2VPN) ? afi : \
+	((attr->mp_nexthop_len == BGP_ATTR_NHLEN_IPV4) ? AFI_IP : AFI_IP6))
 
 /* PMSI tunnel types (RFC 6514) */
 
@@ -103,6 +112,29 @@ enum pta_type {
 	PMSI_TNLTYPE_INGR_REPL,
 	PMSI_TNLTYPE_MLDP_MP2MP,
 	PMSI_TNLTYPE_MAX = PMSI_TNLTYPE_MLDP_MP2MP
+};
+
+/*
+ * Prefix-SID type-4
+ * SRv6-VPN-SID-TLV
+ * draft-dawra-idr-srv6-vpn-04
+ */
+struct bgp_attr_srv6_vpn {
+	unsigned long refcnt;
+	uint8_t sid_flags;
+	struct in6_addr sid;
+};
+
+/*
+ * Prefix-SID type-5
+ * SRv6-L3VPN-Service-TLV
+ * draft-dawra-idr-srv6-vpn-05
+ */
+struct bgp_attr_srv6_l3vpn {
+	unsigned long refcnt;
+	uint8_t sid_flags;
+	uint16_t endpoint_behavior;
+	struct in6_addr sid;
 };
 
 /* BGP core attribute structure. */
@@ -192,6 +224,12 @@ struct attr {
 	/* MPLS label */
 	mpls_label_t label;
 
+	/* SRv6 VPN SID */
+	struct bgp_attr_srv6_vpn *srv6_vpn;
+
+	/* SRv6 L3VPN SID */
+	struct bgp_attr_srv6_l3vpn *srv6_l3vpn;
+
 	uint16_t encap_tunneltype;		     /* grr */
 	struct bgp_attr_encap_subtlv *encap_subtlvs; /* rfc5512 */
 
@@ -209,6 +247,12 @@ struct attr {
 
 	/* Link bandwidth value, if any. */
 	uint32_t link_bw;
+
+	/* Distance as applied by Route map */
+	uint8_t distance;
+
+	/* rmap set table */
+	uint32_t rmap_table_id;
 };
 
 /* rmap_change_flags definition */
@@ -275,8 +319,9 @@ extern struct attr *bgp_attr_aggregate_intern(struct bgp *bgp, uint8_t origin,
 					      struct community *community,
 					      struct ecommunity *ecommunity,
 					      struct lcommunity *lcommunity,
-					      int as_set,
-					      uint8_t atomic_aggregate);
+					      struct bgp_aggregate *aggregate,
+					      uint8_t atomic_aggregate,
+					      struct prefix *p);
 extern bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *,
 				       struct stream *, struct attr *,
 				       struct bpacket_attr_vec_arr *vecarr,
@@ -310,7 +355,7 @@ extern int bgp_mp_reach_parse(struct bgp_attr_parser_args *args,
 extern int bgp_mp_unreach_parse(struct bgp_attr_parser_args *args,
 				struct bgp_nlri *);
 extern bgp_attr_parse_ret_t
-bgp_attr_prefix_sid(int32_t tlength, struct bgp_attr_parser_args *args,
+bgp_attr_prefix_sid(struct bgp_attr_parser_args *args,
 		    struct bgp_nlri *mp_update);
 
 extern struct bgp_attr_encap_subtlv *

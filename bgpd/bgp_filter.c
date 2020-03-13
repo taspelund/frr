@@ -168,10 +168,7 @@ static struct as_list *as_list_new(void)
 
 static void as_list_free(struct as_list *aslist)
 {
-	if (aslist->name) {
-		XFREE(MTYPE_AS_STR, aslist->name);
-		aslist->name = NULL;
-	}
+	XFREE(MTYPE_AS_STR, aslist->name);
 	XFREE(MTYPE_AS_LIST, aslist);
 }
 
@@ -193,7 +190,7 @@ static struct as_list *as_list_insert(const char *name)
 	/* If name is made by all digit character.  We treat it as
 	   number. */
 	for (number = 0, i = 0; i < strlen(name); i++) {
-		if (isdigit((int)name[i]))
+		if (isdigit((unsigned char)name[i]))
 			number = (number * 10) + (name[i] - '0');
 		else
 			break;
@@ -391,7 +388,7 @@ static int as_list_dup_check(struct as_list *aslist, struct as_filter *new)
 
 int config_bgp_aspath_validate(const char *regstr)
 {
-	char valid_chars[] = "1234567890_^|[,{}() ]$*+.?-";
+	char valid_chars[] = "1234567890_^|[,{}() ]$*+.?-\\";
 
 	if (strspn(regstr, valid_chars) == strlen(regstr))
 		return 1;
@@ -407,7 +404,7 @@ DEFUN(as_path, bgp_as_path_cmd,
       "Regular expression access list name\n"
       "Specify packets to reject\n"
       "Specify packets to forward\n"
-      "A regular-expression (1234567890_(^|[,{}() ]|$)) to match the BGP AS paths\n")
+      "A regular-expression (1234567890_^|[,{}() ]$*+.?-\\) to match the BGP AS paths\n")
 {
 	int idx = 0;
 	enum as_filter_type type;
@@ -415,13 +412,6 @@ DEFUN(as_path, bgp_as_path_cmd,
 	struct as_list *aslist;
 	regex_t *regex;
 	char *regstr;
-
-	if (argv_find(argv, argc, "ip", &idx)) {
-		vty_out(vty, "This config option is deprecated and is scheduled for removal.\n");
-		vty_out(vty, "if you are using this please migrate to the below command\n");
-		vty_out(vty, "'bgp as-path access-list WORD <deny|permit> LINE'\n");
-		zlog_warn("Deprecated option: 'ip as-path access-list WORD <deny|permit> LINE' being used");
-	}
 
 	/* Retrieve access list name */
 	argv_find(argv, argc, "WORD", &idx);
@@ -464,19 +454,6 @@ DEFUN(as_path, bgp_as_path_cmd,
 	return CMD_SUCCESS;
 }
 
-#if CONFDATE > 20191005
-CPP_NOTICE("bgpd: remove deprecated 'ip as-path access-list WORD <deny|permit> LINE' command")
-#endif
-ALIAS(as_path, ip_as_path_cmd,
-      "ip as-path access-list WORD <deny|permit> LINE...",
-      IP_STR
-      "BGP autonomous system path filter\n"
-      "Specify an access list name\n"
-      "Regular expression access list name\n"
-      "Specify packets to reject\n"
-      "Specify packets to forward\n"
-      "A regular-expression (1234567890_(^|[,{}() ]|$)) to match the BGP AS paths\n")
-
 DEFUN(no_as_path, no_bgp_as_path_cmd,
       "no bgp as-path access-list WORD <deny|permit> LINE...",
       NO_STR
@@ -486,7 +463,7 @@ DEFUN(no_as_path, no_bgp_as_path_cmd,
       "Regular expression access list name\n"
       "Specify packets to reject\n"
       "Specify packets to forward\n"
-      "A regular-expression (1234567890_(^|[,{}() ]|$)) to match the BGP AS paths\n")
+      "A regular-expression (1234567890_^|[,{}() ]$*+.?-\\) to match the BGP AS paths\n")
 {
 	int idx = 0;
 	enum as_filter_type type;
@@ -495,12 +472,6 @@ DEFUN(no_as_path, no_bgp_as_path_cmd,
 	char *regstr;
 	regex_t *regex;
 
-	if (argv_find(argv, argc, "ip", &idx)) {
-		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
-		vty_out(vty, "if you are using this please migrate to the below command\n");
-		vty_out(vty, "'no bgp as-path access-list WORD <deny|permit> LINE'\n");
-		zlog_warn("Deprecated option: 'no ip as-path access-list WORD <deny|permit> LINE' being used");
-	}
 	char *aslistname =
 		argv_find(argv, argc, "WORD", &idx) ? argv[idx]->arg : NULL;
 
@@ -555,16 +526,6 @@ DEFUN(no_as_path, no_bgp_as_path_cmd,
 	return CMD_SUCCESS;
 }
 
-ALIAS(no_as_path, no_ip_as_path_cmd,
-      "no ip as-path access-list WORD <deny|permit> LINE...",
-      NO_STR IP_STR
-      "BGP autonomous system path filter\n"
-      "Specify an access list name\n"
-      "Regular expression access list name\n"
-      "Specify packets to reject\n"
-      "Specify packets to forward\n"
-      "A regular-expression (1234567890_(^|[,{}() ]|$)) to match the BGP AS paths\n")
-
 DEFUN (no_as_path_all,
        no_bgp_as_path_all_cmd,
        "no bgp as-path access-list WORD",
@@ -576,14 +537,6 @@ DEFUN (no_as_path_all,
 {
 	int idx_word = 4;
 	struct as_list *aslist;
-	int idx = 0;
-
-	if (argv_find(argv, argc, "ip", &idx)) {
-		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
-		vty_out(vty, "if you are using this please migrate to the below command\n");
-		vty_out(vty, "'no bgp as-path access-list WORD'\n");
-		zlog_warn("Deprecated option: `no ip as-path access-list WORD` being used");
-	}
 
 	aslist = as_list_lookup(argv[idx_word]->arg);
 	if (aslist == NULL) {
@@ -660,14 +613,7 @@ DEFUN (show_as_path_access_list,
 {
 	int idx_word = 3;
 	struct as_list *aslist;
-	int idx = 0;
 
-	if (argv_find(argv, argc, "ip", &idx)) {
-		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
-		vty_out(vty, "if you are using this please migrate to the below command\n");
-		vty_out(vty, "'show bgp as-path-access-list WORD'\n");
-		zlog_warn("Deprecated option: 'show ip as-path-access-list WORD' being used");
-	}
 	aslist = as_list_lookup(argv[idx_word]->arg);
 	if (aslist)
 		as_list_show(vty, aslist);
@@ -690,14 +636,6 @@ DEFUN (show_as_path_access_list_all,
        BGP_STR
        "List AS path access lists\n")
 {
-	int idx = 0;
-
-	if (argv_find(argv, argc, "ip", &idx)) {
-		vty_out(vty, "This config option is deprecated, and is scheduled for removal.\n");
-		vty_out(vty, "if you are using this please migrate to the below command\n");
-		vty_out(vty, "'show bgp as-path-access-list'\n");
-		zlog_warn("Deprecated option: 'show ip as-path-access-list' being used");
-	}
 	as_list_show_all(vty);
 	return CMD_SUCCESS;
 }
@@ -743,9 +681,7 @@ void bgp_filter_init(void)
 	install_node(&as_list_node, config_write_as_list);
 
 	install_element(CONFIG_NODE, &bgp_as_path_cmd);
-	install_element(CONFIG_NODE, &ip_as_path_cmd);
 	install_element(CONFIG_NODE, &no_bgp_as_path_cmd);
-	install_element(CONFIG_NODE, &no_ip_as_path_cmd);
 	install_element(CONFIG_NODE, &no_bgp_as_path_all_cmd);
 	install_element(CONFIG_NODE, &no_ip_as_path_all_cmd);
 

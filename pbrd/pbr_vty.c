@@ -150,10 +150,8 @@ DEFPY(pbr_map_match_src, pbr_map_match_src_cmd,
 
 		pbrms->src = prefix_new();
 		prefix_copy(pbrms->src, prefix);
-	} else {
-		prefix_free(pbrms->src);
-		pbrms->src = 0;
-	}
+	} else
+		prefix_free(&pbrms->src);
 
 	pbr_map_check(pbrms);
 
@@ -184,10 +182,41 @@ DEFPY(pbr_map_match_dst, pbr_map_match_dst_cmd,
 
 		pbrms->dst = prefix_new();
 		prefix_copy(pbrms->dst, prefix);
-	} else {
-		prefix_free(pbrms->dst);
-		pbrms->dst = NULL;
-	}
+	} else
+		prefix_free(&pbrms->dst);
+
+	pbr_map_check(pbrms);
+
+	return CMD_SUCCESS;
+}
+
+DEFPY(pbr_map_match_mark, pbr_map_match_mark_cmd,
+	"[no] match mark (1-4294967295)$mark",
+	NO_STR
+	"Match the rest of the command\n"
+	"Choose the mark value to use\n"
+	"mark\n")
+{
+	struct pbr_map_sequence *pbrms = VTY_GET_CONTEXT(pbr_map_sequence);
+
+#ifndef GNU_LINUX
+	vty_out(vty, "pbr marks are not supported on this platform");
+	return CMD_WARNING_CONFIG_FAILED;
+#endif
+
+	if (!no) {
+		if (pbrms->mark) {
+			if (pbrms->mark == (uint32_t)mark)
+				return CMD_SUCCESS;
+
+			vty_out(vty,
+				"A `match mark XX` command already exists, please remove that first\n");
+			return CMD_WARNING_CONFIG_FAILED;
+		}
+
+		pbrms->mark = (uint32_t)mark;
+	} else
+		pbrms->mark = 0;
 
 	pbr_map_check(pbrms);
 
@@ -258,7 +287,7 @@ DEFPY(pbr_map_nexthop, pbr_map_nexthop_cmd,
 	  <A.B.C.D|X:X::X:X>$addr [INTERFACE$intf]\
 	  |INTERFACE$intf\
 	>\
-        [nexthop-vrf NAME$name]",
+        [nexthop-vrf NAME$vrf_name]",
       NO_STR
       "Set for the PBR-MAP\n"
       "Specify one of the nexthops in this map\n"
@@ -285,13 +314,13 @@ DEFPY(pbr_map_nexthop, pbr_map_nexthop_cmd,
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	if (name)
-		vrf = vrf_lookup_by_name(name);
+	if (vrf_name)
+		vrf = vrf_lookup_by_name(vrf_name);
 	else
 		vrf = vrf_lookup_by_id(VRF_DEFAULT);
 
 	if (!vrf) {
-		vty_out(vty, "Specified: %s is non-existent\n", name);
+		vty_out(vty, "Specified: %s is non-existent\n", vrf_name);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
@@ -533,6 +562,8 @@ static void vty_show_pbrms(struct vty *vty,
 	if (pbrms->dst)
 		vty_out(vty, "        DST Match: %s\n",
 			prefix2str(pbrms->dst, buf, sizeof(buf)));
+	if (pbrms->mark)
+		vty_out(vty, "        MARK Match: %u\n", pbrms->mark);
 
 	if (pbrms->nhgrp_name) {
 		vty_out(vty, "        Nexthop-Group: %s\n", pbrms->nhgrp_name);
@@ -757,6 +788,9 @@ static int pbr_vty_map_config_write_sequence(struct vty *vty,
 		vty_out(vty, " match dst-ip %s\n",
 			prefix2str(pbrms->dst, buff, sizeof(buff)));
 
+	if (pbrms->mark)
+		vty_out(vty, " match mark %u\n", pbrms->mark);
+
 	if (pbrms->vrf_unchanged)
 		vty_out(vty, " set vrf unchanged\n");
 
@@ -836,6 +870,7 @@ void pbr_vty_init(void)
 	install_element(INTERFACE_NODE, &pbr_policy_cmd);
 	install_element(PBRMAP_NODE, &pbr_map_match_src_cmd);
 	install_element(PBRMAP_NODE, &pbr_map_match_dst_cmd);
+	install_element(PBRMAP_NODE, &pbr_map_match_mark_cmd);
 	install_element(PBRMAP_NODE, &pbr_map_nexthop_group_cmd);
 	install_element(PBRMAP_NODE, &pbr_map_nexthop_cmd);
 	install_element(PBRMAP_NODE, &pbr_map_vrf_cmd);

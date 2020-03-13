@@ -28,6 +28,7 @@
 #include "network.h"
 #include "prefix.h"
 #include "log.h"
+#include "frr_pthread.h"
 #include "lib_errors.h"
 
 DEFINE_MTYPE_STATIC(LIB, STREAM, "Stream")
@@ -184,14 +185,6 @@ size_t stream_resize_inplace(struct stream **sptr, size_t newsize)
 
 	*sptr = orig;
 	return orig->size;
-}
-
-size_t __attribute__((deprecated))stream_resize_orig(struct stream *s,
-						     size_t newsize)
-{
-	assert("stream_resize: Switch code to use stream_resize_inplace" == NULL);
-
-	return stream_resize_inplace(&s, newsize);
 }
 
 size_t stream_get_getp(struct stream *s)
@@ -819,7 +812,7 @@ int stream_put_ipv4(struct stream *s, uint32_t l)
 }
 
 /* Put long word to the stream. */
-int stream_put_in_addr(struct stream *s, struct in_addr *addr)
+int stream_put_in_addr(struct stream *s, const struct in_addr *addr)
 {
 	STREAM_VERIFY_SANE(s);
 
@@ -835,7 +828,8 @@ int stream_put_in_addr(struct stream *s, struct in_addr *addr)
 }
 
 /* Put in_addr at location in the stream. */
-int stream_put_in_addr_at(struct stream *s, size_t putp, struct in_addr *addr)
+int stream_put_in_addr_at(struct stream *s, size_t putp,
+			  const struct in_addr *addr)
 {
 	STREAM_VERIFY_SANE(s);
 
@@ -849,7 +843,8 @@ int stream_put_in_addr_at(struct stream *s, size_t putp, struct in_addr *addr)
 }
 
 /* Put in6_addr at location in the stream. */
-int stream_put_in6_addr_at(struct stream *s, size_t putp, struct in6_addr *addr)
+int stream_put_in6_addr_at(struct stream *s, size_t putp,
+			   const struct in6_addr *addr)
 {
 	STREAM_VERIFY_SANE(s);
 
@@ -863,7 +858,7 @@ int stream_put_in6_addr_at(struct stream *s, size_t putp, struct in6_addr *addr)
 }
 
 /* Put prefix by nlri type format. */
-int stream_put_prefix_addpath(struct stream *s, struct prefix *p,
+int stream_put_prefix_addpath(struct stream *s, const struct prefix *p,
 			      int addpath_encode, uint32_t addpath_tx_id)
 {
 	size_t psize;
@@ -897,7 +892,7 @@ int stream_put_prefix_addpath(struct stream *s, struct prefix *p,
 	return psize;
 }
 
-int stream_put_prefix(struct stream *s, struct prefix *p)
+int stream_put_prefix(struct stream *s, const struct prefix *p)
 {
 	return stream_put_prefix_addpath(s, p, 0, 0);
 }
@@ -1144,11 +1139,9 @@ void stream_fifo_push(struct stream_fifo *fifo, struct stream *s)
 
 void stream_fifo_push_safe(struct stream_fifo *fifo, struct stream *s)
 {
-	pthread_mutex_lock(&fifo->mtx);
-	{
+	frr_with_mutex(&fifo->mtx) {
 		stream_fifo_push(fifo, s);
 	}
-	pthread_mutex_unlock(&fifo->mtx);
 }
 
 /* Delete first stream from fifo. */
@@ -1178,11 +1171,9 @@ struct stream *stream_fifo_pop_safe(struct stream_fifo *fifo)
 {
 	struct stream *ret;
 
-	pthread_mutex_lock(&fifo->mtx);
-	{
+	frr_with_mutex(&fifo->mtx) {
 		ret = stream_fifo_pop(fifo);
 	}
-	pthread_mutex_unlock(&fifo->mtx);
 
 	return ret;
 }
@@ -1196,11 +1187,9 @@ struct stream *stream_fifo_head_safe(struct stream_fifo *fifo)
 {
 	struct stream *ret;
 
-	pthread_mutex_lock(&fifo->mtx);
-	{
+	frr_with_mutex(&fifo->mtx) {
 		ret = stream_fifo_head(fifo);
 	}
-	pthread_mutex_unlock(&fifo->mtx);
 
 	return ret;
 }
@@ -1220,11 +1209,9 @@ void stream_fifo_clean(struct stream_fifo *fifo)
 
 void stream_fifo_clean_safe(struct stream_fifo *fifo)
 {
-	pthread_mutex_lock(&fifo->mtx);
-	{
+	frr_with_mutex(&fifo->mtx) {
 		stream_fifo_clean(fifo);
 	}
-	pthread_mutex_unlock(&fifo->mtx);
 }
 
 size_t stream_fifo_count_safe(struct stream_fifo *fifo)

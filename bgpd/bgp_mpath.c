@@ -280,7 +280,6 @@ void bgp_path_info_mpath_free(struct bgp_path_info_mpath **mpath)
 		if ((*mpath)->mp_attr)
 			bgp_attr_unintern(&(*mpath)->mp_attr);
 		XFREE(MTYPE_BGP_MPATH_INFO, *mpath);
-		*mpath = NULL;
 	}
 }
 
@@ -696,8 +695,6 @@ void bgp_path_info_mpath_update(struct bgp_node *rn,
 			if ((mpath_count < maxpaths) && (new_mpath != new_best)
 			    && bgp_path_info_nexthop_cmp(prev_mpath,
 							 new_mpath)) {
-				if (new_mpath == next_mpath)
-					bgp_path_info_mpath_next(new_mpath);
 				bgp_path_info_mpath_dequeue(new_mpath);
 
 				bgp_path_info_mpath_enqueue(prev_mpath,
@@ -826,8 +823,9 @@ void bgp_path_info_mpath_aggregate_update(struct bgp_path_info *new_best,
 
 	attr = *new_best->attr;
 
-	if (new_best->peer && bgp_flag_check(new_best->peer->bgp,
-					     BGP_FLAG_MULTIPATH_RELAX_AS_SET)) {
+	if (new_best->peer
+	    && CHECK_FLAG(new_best->peer->bgp->flags,
+			  BGP_FLAG_MULTIPATH_RELAX_AS_SET)) {
 
 		/* aggregate attribute from multipath constituents */
 		aspath = aspath_dup(attr.aspath);
@@ -902,7 +900,7 @@ void bgp_path_info_mpath_aggregate_update(struct bgp_path_info *new_best,
 		}
 
 		/* Zap multipath attr nexthop so we set nexthop to self */
-		attr.nexthop.s_addr = 0;
+		attr.nexthop.s_addr = INADDR_ANY;
 		memset(&attr.mp_nexthop_global, 0, sizeof(struct in6_addr));
 
 		/* TODO: should we set ATOMIC_AGGREGATE and AGGREGATOR? */

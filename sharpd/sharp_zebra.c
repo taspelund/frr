@@ -73,7 +73,7 @@ static int interface_address_delete(ZAPI_CALLBACK_ARGS)
 	if (!c)
 		return 0;
 
-	connected_free(c);
+	connected_free(&c);
 	return 0;
 }
 
@@ -174,8 +174,8 @@ static int route_notify_owner(ZAPI_CALLBACK_ARGS)
 		if (sg.r.total_routes == sg.r.installed_routes) {
 			monotime(&sg.r.t_end);
 			timersub(&sg.r.t_end, &sg.r.t_start, &r);
-			zlog_debug("Installed All Items %ld.%ld", r.tv_sec,
-				   r.tv_usec);
+			zlog_debug("Installed All Items %jd.%ld",
+				   (intmax_t)r.tv_sec, (long)r.tv_usec);
 			handle_repeated(true);
 		}
 		break;
@@ -190,8 +190,8 @@ static int route_notify_owner(ZAPI_CALLBACK_ARGS)
 		if (sg.r.total_routes == sg.r.removed_routes) {
 			monotime(&sg.r.t_end);
 			timersub(&sg.r.t_end, &sg.r.t_start, &r);
-			zlog_debug("Removed all Items %ld.%ld", r.tv_sec,
-				   r.tv_usec);
+			zlog_debug("Removed all Items %jd.%ld",
+				   (intmax_t)r.tv_sec, (long)r.tv_usec);
 			handle_repeated(false);
 		}
 		break;
@@ -267,6 +267,17 @@ void route_add(struct prefix *p, vrf_id_t vrf_id,
 			api_nh->bh_type = nh->bh_type;
 			break;
 		}
+
+		if (nh->nh_label && nh->nh_label->num_labels > 0) {
+			int j;
+
+			SET_FLAG(api_nh->flags, ZAPI_NEXTHOP_FLAG_LABEL);
+
+			api_nh->label_num = nh->nh_label->num_labels;
+			for (j = 0; j < nh->nh_label->num_labels; j++)
+				api_nh->labels[j] = nh->nh_label->label[j];
+		}
+
 		i++;
 	}
 	api.nexthop_num = i;
@@ -307,8 +318,7 @@ void sharp_zebra_nexthop_watch(struct prefix *p, vrf_id_t vrf_id, bool import,
 	}
 
 	if (zclient_send_rnh(zclient, command, p, connected, vrf_id) < 0)
-		zlog_warn("%s: Failure to send nexthop to zebra",
-			  __PRETTY_FUNCTION__);
+		zlog_warn("%s: Failure to send nexthop to zebra", __func__);
 }
 
 static int sharp_debug_nexthops(struct zapi_route *api)
@@ -356,7 +366,7 @@ static int sharp_nexthop_update(ZAPI_CALLBACK_ARGS)
 	struct zapi_route nhr;
 
 	if (!zapi_nexthop_update_decode(zclient->ibuf, &nhr)) {
-		zlog_warn("%s: Decode of update failed", __PRETTY_FUNCTION__);
+		zlog_warn("%s: Decode of update failed", __func__);
 
 		return 0;
 	}
@@ -377,8 +387,7 @@ static int sharp_redistribute_route(ZAPI_CALLBACK_ARGS)
 	struct zapi_route api;
 
 	if (zapi_route_decode(zclient->ibuf, &api) < 0)
-		zlog_warn("%s: Decode of redistribute failed: %d",
-			  __PRETTY_FUNCTION__,
+		zlog_warn("%s: Decode of redistribute failed: %d", __func__,
 			  ZEBRA_REDISTRIBUTE_ROUTE_ADD);
 
 	zlog_debug("%s: %pFX (%s)", zserv_command_string(cmd),

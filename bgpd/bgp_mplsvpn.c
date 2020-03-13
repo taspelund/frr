@@ -109,7 +109,7 @@ int bgp_nlri_parse_vpn(struct peer *peer, struct attr *attr,
 	uint16_t type;
 	struct rd_as rd_as;
 	struct rd_ip rd_ip;
-	struct prefix_rd prd;
+	struct prefix_rd prd = {0};
 	mpls_label_t label = {0};
 	afi_t afi;
 	safi_t safi;
@@ -788,12 +788,12 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,	    /* to */
 			static_attr.nexthop.s_addr = nexthop->u.prefix4.s_addr;
 
 			static_attr.mp_nexthop_global_in = nexthop->u.prefix4;
-			static_attr.mp_nexthop_len = 4;
+			static_attr.mp_nexthop_len = BGP_ATTR_NHLEN_IPV4;
 			break;
 
 		case AF_INET6:
 			static_attr.mp_nexthop_global = nexthop->u.prefix6;
-			static_attr.mp_nexthop_len = 16;
+			static_attr.mp_nexthop_len = BGP_ATTR_NHLEN_IPV6_GLOBAL;
 			break;
 
 		default:
@@ -809,7 +809,8 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,	    /* to */
 				 */
 				static_attr.mp_nexthop_global_in =
 					static_attr.nexthop;
-				static_attr.mp_nexthop_len = 4;
+				static_attr.mp_nexthop_len =
+					BGP_ATTR_NHLEN_IPV4;
 				/*
 				 * XXX Leave static_attr.nexthop
 				 * intact for NHT
@@ -828,7 +829,8 @@ void vpn_leak_from_vrf_update(struct bgp *bgp_vpn,	    /* to */
 			    && !BGP_ATTR_NEXTHOP_AFI_IP6(path_vrf->attr)) {
 				static_attr.mp_nexthop_global_in.s_addr =
 					static_attr.nexthop.s_addr;
-				static_attr.mp_nexthop_len = 4;
+				static_attr.mp_nexthop_len =
+					BGP_ATTR_NHLEN_IPV4;
 				static_attr.flag |=
 					ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP);
 			}
@@ -1510,7 +1512,8 @@ static void vpn_policy_routemap_update(struct bgp *bgp, const char *rmap_name)
 /* This API is used during router-id change, reflect VPNs
  * auto RD and RT values and readvertise routes to VPN table.
  */
-void vpn_handle_router_id_update(struct bgp *bgp, bool withdraw)
+void vpn_handle_router_id_update(struct bgp *bgp, bool withdraw,
+				 bool is_config)
 {
 	afi_t afi;
 	int debug;
@@ -1561,6 +1564,20 @@ void vpn_handle_router_id_update(struct bgp *bgp, bool withdraw)
 
 			}
 		} else {
+			/*
+			 * Router-id changes that are not explicit config
+			 * changes should not replace configured RD/RT.
+			 */
+			if (!is_config) {
+				if (CHECK_FLAG(bgp->vpn_policy[afi].flags,
+					       BGP_VPN_POLICY_TOVPN_RD_SET)) {
+					if (debug)
+						zlog_debug("%s: auto router-id change skipped",
+							   __func__);
+					goto postchange;
+				}
+			}
+
 			/* New router-id derive auto RD and RT and export
 			 * to VPN
 			 */
@@ -1593,6 +1610,8 @@ void vpn_handle_router_id_update(struct bgp *bgp, bool withdraw)
 						= ecommunity_dup(ecom);
 
 			}
+
+postchange:
 			/* Update routes to VPN */
 			vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN,
 					    afi, bgp_get_default(),

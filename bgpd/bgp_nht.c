@@ -43,6 +43,7 @@
 #include "bgpd/bgp_fsm.h"
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_flowspec_util.h"
+#include "bgpd/bgp_evpn.h"
 
 extern struct zclient *zclient;
 
@@ -63,27 +64,6 @@ static int bgp_isvalid_labeled_nexthop(struct bgp_nexthop_cache *bnc)
 {
 	return (bgp_zebra_num_connects() == 0
 		|| (bnc && CHECK_FLAG(bnc->flags, BGP_NEXTHOP_LABELED_VALID)));
-}
-
-int bgp_find_nexthop(struct bgp_path_info *path, int connected)
-{
-	struct bgp_nexthop_cache *bnc = path->nexthop;
-
-	if (!bnc)
-		return 0;
-
-	/*
-	 * We are cheating here.  Views have no associated underlying
-	 * ability to detect nexthops.  So when we have a view
-	 * just tell everyone the nexthop is valid
-	 */
-	if (path->peer && path->peer->bgp->inst_type == BGP_INSTANCE_TYPE_VIEW)
-		return 1;
-
-	if (connected && !(CHECK_FLAG(bnc->flags, BGP_NEXTHOP_CONNECTED)))
-		return 0;
-
-	return (bgp_isvalid_nexthop(bnc));
 }
 
 static void bgp_unlink_nexthop_check(struct bgp_nexthop_cache *bnc)
@@ -173,7 +153,7 @@ int bgp_find_or_add_nexthop(struct bgp *bgp_route, struct bgp *bgp_nexthop,
 			if (BGP_DEBUG(nht, NHT)) {
 				zlog_debug(
 					"%s: Attempting to register with unknown AFI %d (not %d or %d)",
-					__FUNCTION__, afi, AFI_IP, AFI_IP6);
+					__func__, afi, AFI_IP, AFI_IP6);
 			}
 			return 0;
 		}
@@ -206,12 +186,13 @@ int bgp_find_or_add_nexthop(struct bgp *bgp_route, struct bgp *bgp_nexthop,
 		SET_FLAG(bnc->flags, BGP_STATIC_ROUTE);
 
 		/* If we're toggling the type, re-register */
-		if ((bgp_flag_check(bgp_route, BGP_FLAG_IMPORT_CHECK))
+		if ((CHECK_FLAG(bgp_route->flags, BGP_FLAG_IMPORT_CHECK))
 		    && !CHECK_FLAG(bnc->flags, BGP_STATIC_ROUTE_EXACT_MATCH)) {
 			SET_FLAG(bnc->flags, BGP_STATIC_ROUTE_EXACT_MATCH);
 			UNSET_FLAG(bnc->flags, BGP_NEXTHOP_REGISTERED);
 			UNSET_FLAG(bnc->flags, BGP_NEXTHOP_VALID);
-		} else if ((!bgp_flag_check(bgp_route, BGP_FLAG_IMPORT_CHECK))
+		} else if ((!CHECK_FLAG(bgp_route->flags,
+					BGP_FLAG_IMPORT_CHECK))
 			   && CHECK_FLAG(bnc->flags,
 					 BGP_STATIC_ROUTE_EXACT_MATCH)) {
 			UNSET_FLAG(bnc->flags, BGP_STATIC_ROUTE_EXACT_MATCH);
@@ -357,7 +338,7 @@ void bgp_parse_nexthop_update(int command, vrf_id_t vrf_id)
 	if (!zapi_nexthop_update_decode(zclient->ibuf, &nhr)) {
 		if (BGP_DEBUG(nht, NHT))
 			zlog_debug("%s[%s]: Failure to decode nexthop update",
-				   __PRETTY_FUNCTION__, bgp->name_pretty);
+				   __func__, bgp->name_pretty);
 		return;
 	}
 
@@ -447,9 +428,11 @@ void bgp_parse_nexthop_update(int command, vrf_id_t vrf_id)
 
 				ifp = if_lookup_by_index(nexthop->ifindex,
 							 nexthop->vrf_id);
-				zclient_send_interface_radv_req(
-					zclient, nexthop->vrf_id, ifp, true,
-					BGP_UNNUM_DEFAULT_RA_INTERVAL);
+				if (ifp)
+					zclient_send_interface_radv_req(
+						zclient, nexthop->vrf_id, ifp,
+						true,
+						BGP_UNNUM_DEFAULT_RA_INTERVAL);
 			}
 			/* There is at least one label-switched path */
 			if (nexthop->nh_label &&
@@ -580,7 +563,7 @@ static int make_prefix(int afi, struct bgp_path_info *pi, struct prefix *p)
 		if (BGP_DEBUG(nht, NHT)) {
 			zlog_debug(
 				"%s: Attempting to make prefix with unknown AFI %d (not %d or %d)",
-				__FUNCTION__, afi, AFI_IP, AFI_IP6);
+				__func__, afi, AFI_IP, AFI_IP6);
 		}
 		break;
 	}
@@ -608,15 +591,17 @@ static void sendmsg_zebra_rnh(struct bgp_nexthop_cache *bnc, int command)
 	/* Don't try to register if Zebra doesn't know of this instance. */
 	if (!IS_BGP_INST_KNOWN_TO_ZEBRA(bnc->bgp)) {
 		if (BGP_DEBUG(zebra, ZEBRA))
-			zlog_debug("%s: No zebra instance to talk to, not installing NHT entry",
-				   __PRETTY_FUNCTION__);
+			zlog_debug(
+				"%s: No zebra instance to talk to, not installing NHT entry",
+				__func__);
 		return;
 	}
 
 	if (!bgp_zebra_num_connects()) {
 		if (BGP_DEBUG(zebra, ZEBRA))
-			zlog_debug("%s: We have not connected yet, cannot send nexthops",
-				   __PRETTY_FUNCTION__);
+			zlog_debug(
+				"%s: We have not connected yet, cannot send nexthops",
+				__func__);
 	}
 	p = &(bnc->node->p);
 	if ((command == ZEBRA_NEXTHOP_REGISTER
@@ -795,16 +780,36 @@ static void evaluate_paths(struct bgp_nexthop_cache *bnc)
 		    || CHECK_FLAG(bnc->change_flags, BGP_NEXTHOP_CHANGED))
 			SET_FLAG(path->flags, BGP_PATH_IGP_CHANGED);
 
+		if (safi == SAFI_EVPN &&
+		    bgp_evpn_is_prefix_nht_supported(&rn->p)) {
+			if (CHECK_FLAG(path->flags, BGP_PATH_VALID))
+				bgp_evpn_import_route(bgp_path, afi, safi,
+						      &rn->p, path);
+			else
+				bgp_evpn_unimport_route(bgp_path, afi, safi,
+							&rn->p, path);
+		}
+
 		bgp_process(bgp_path, rn, afi, safi);
 	}
 
-	if (peer && !CHECK_FLAG(bnc->flags, BGP_NEXTHOP_PEER_NOTIFIED)) {
-		if (BGP_DEBUG(nht, NHT))
-			zlog_debug("%s: Updating peer (%s(%s)) status with NHT",
-				   __FUNCTION__, peer->host,
-				   peer->bgp->name_pretty);
-		bgp_fsm_event_update(peer, bgp_isvalid_nexthop(bnc));
-		SET_FLAG(bnc->flags, BGP_NEXTHOP_PEER_NOTIFIED);
+	if (peer) {
+		int valid_nexthops = bgp_isvalid_nexthop(bnc);
+
+		if (valid_nexthops)
+			peer->last_reset = PEER_DOWN_WAITING_OPEN;
+		else
+			peer->last_reset = PEER_DOWN_WAITING_NHT;
+
+		if (!CHECK_FLAG(bnc->flags, BGP_NEXTHOP_PEER_NOTIFIED)) {
+			if (BGP_DEBUG(nht, NHT))
+				zlog_debug(
+					"%s: Updating peer (%s(%s)) status with NHT",
+					__func__, peer->host,
+					peer->bgp->name_pretty);
+			bgp_fsm_event_update(peer, valid_nexthops);
+			SET_FLAG(bnc->flags, BGP_NEXTHOP_PEER_NOTIFIED);
+		}
 	}
 
 	RESET_FLAG(bnc->change_flags);
@@ -880,7 +885,7 @@ void bgp_nht_register_enhe_capability_interfaces(struct peer *peer)
 	if (!sockunion2hostprefix(&peer->su, &p)) {
 		if (BGP_DEBUG(nht, NHT))
 			zlog_debug("%s: Unable to convert prefix to sockunion",
-				   __PRETTY_FUNCTION__);
+				   __func__);
 		return;
 	}
 
@@ -898,8 +903,11 @@ void bgp_nht_register_enhe_capability_interfaces(struct peer *peer)
 		return;
 
 	for (nhop = bnc->nexthop; nhop; nhop = nhop->next) {
-		ifp = if_lookup_by_index(nhop->ifindex,
-					 nhop->vrf_id);
+		ifp = if_lookup_by_index(nhop->ifindex, nhop->vrf_id);
+
+		if (!ifp)
+			continue;
+
 		zclient_send_interface_radv_req(zclient,
 						nhop->vrf_id,
 						ifp, true,

@@ -94,12 +94,12 @@ void pim_register_stop_send(struct interface *ifp, struct prefix_sg *sg,
 	b1length += length;
 
 	pim_msg_build_header(buffer, b1length + PIM_MSG_REGISTER_STOP_LEN,
-			     PIM_MSG_TYPE_REG_STOP);
+			     PIM_MSG_TYPE_REG_STOP, false);
 
 	pinfo = (struct pim_interface *)ifp->info;
 	if (!pinfo) {
 		if (PIM_DEBUG_PIM_TRACE)
-			zlog_debug("%s: No pinfo!", __PRETTY_FUNCTION__);
+			zlog_debug("%s: No pinfo!", __func__);
 		return;
 	}
 	if (pim_msg_send(pinfo->pim_sock_fd, src, originator, buffer,
@@ -107,7 +107,7 @@ void pim_register_stop_send(struct interface *ifp, struct prefix_sg *sg,
 		if (PIM_DEBUG_PIM_TRACE) {
 			zlog_debug(
 				"%s: could not send PIM register stop message on interface %s",
-				__PRETTY_FUNCTION__, ifp->name);
+				__func__, ifp->name);
 		}
 	}
 	++pinfo->pim_ifstat_reg_stop_send;
@@ -121,6 +121,8 @@ int pim_register_stop_recv(struct interface *ifp, uint8_t *buf, int buf_size)
 	struct prefix source;
 	struct prefix_sg sg;
 	int l;
+
+	++pim_ifp->pim_ifstat_reg_stop_recv;
 
 	memset(&sg, 0, sizeof(struct prefix_sg));
 	l = pim_parse_addr_group(&sg, buf, buf_size);
@@ -141,7 +143,6 @@ int pim_register_stop_recv(struct interface *ifp, uint8_t *buf, int buf_size)
 	case PIM_REG_NOINFO:
 	case PIM_REG_PRUNE:
 		return 0;
-		break;
 	case PIM_REG_JOIN:
 		upstream->reg_state = PIM_REG_PRUNE;
 		pim_channel_del_oif(upstream->channel_oil, pim->regiface,
@@ -154,7 +155,6 @@ int pim_register_stop_recv(struct interface *ifp, uint8_t *buf, int buf_size)
 		upstream->reg_state = PIM_REG_PRUNE;
 		pim_upstream_start_register_stop_timer(upstream, 0);
 		return 0;
-		break;
 	}
 
 	return 0;
@@ -179,7 +179,7 @@ void pim_register_send(const uint8_t *buf, int buf_size, struct in_addr src,
 	if (!ifp) {
 		if (PIM_DEBUG_PIM_REG)
 			zlog_debug("%s: No interface to transmit register on",
-				   __PRETTY_FUNCTION__);
+				   __func__);
 		return;
 	}
 	pinfo = (struct pim_interface *)ifp->info;
@@ -187,7 +187,7 @@ void pim_register_send(const uint8_t *buf, int buf_size, struct in_addr src,
 		if (PIM_DEBUG_PIM_REG)
 			zlog_debug(
 				"%s: Interface: %s not configured for pim to trasmit on!\n",
-				__PRETTY_FUNCTION__, ifp->name);
+				__func__, ifp->name);
 		return;
 	}
 
@@ -196,8 +196,8 @@ void pim_register_send(const uint8_t *buf, int buf_size, struct in_addr src,
 		strlcpy(rp_str, inet_ntoa(rpg->rpf_addr.u.prefix4),
 			sizeof(rp_str));
 		zlog_debug("%s: Sending %s %sRegister Packet to %s on %s",
-			   __PRETTY_FUNCTION__, up->sg_str,
-			   null_register ? "NULL " : "", rp_str, ifp->name);
+			   __func__, up->sg_str, null_register ? "NULL " : "",
+			   rp_str, ifp->name);
 	}
 
 	memset(buffer, 0, 10000);
@@ -208,7 +208,7 @@ void pim_register_send(const uint8_t *buf, int buf_size, struct in_addr src,
 	memcpy(b1, (const unsigned char *)buf, buf_size);
 
 	pim_msg_build_header(buffer, buf_size + PIM_MSG_REGISTER_LEN,
-			     PIM_MSG_TYPE_REGISTER);
+			     PIM_MSG_TYPE_REGISTER, false);
 
 	++pinfo->pim_ifstat_reg_send;
 
@@ -217,7 +217,7 @@ void pim_register_send(const uint8_t *buf, int buf_size, struct in_addr src,
 		if (PIM_DEBUG_PIM_TRACE) {
 			zlog_debug(
 				"%s: could not send PIM register message on interface %s",
-				__PRETTY_FUNCTION__, ifp->name);
+				__func__, ifp->name);
 		}
 		return;
 	}
@@ -235,7 +235,7 @@ void pim_null_register_send(struct pim_upstream *up)
 		if (PIM_DEBUG_PIM_TRACE)
 			zlog_debug(
 				"%s: Cannot send null-register for %s no valid iif",
-				__PRETTY_FUNCTION__, up->sg_str);
+				__func__, up->sg_str);
 		return;
 	}
 
@@ -244,7 +244,7 @@ void pim_null_register_send(struct pim_upstream *up)
 		if (PIM_DEBUG_PIM_TRACE)
 			zlog_debug(
 				"%s: Cannot send null-register for %s no RPF to the RP",
-				__PRETTY_FUNCTION__, up->sg_str);
+				__func__, up->sg_str);
 		return;
 	}
 
@@ -263,7 +263,7 @@ void pim_null_register_send(struct pim_upstream *up)
 			if (PIM_DEBUG_PIM_TRACE)
 				zlog_debug(
 					"%s: Cannot send null-register for %s vxlan-aa PIP unavailable",
-					__PRETTY_FUNCTION__, up->sg_str);
+					__func__, up->sg_str);
 			return;
 		}
 	}
@@ -419,8 +419,8 @@ int pim_register_recv(struct interface *ifp, struct in_addr dest_addr,
 		if (!upstream) {
 			upstream = pim_upstream_add(
 				pim_ifp->pim, &sg, ifp,
-				PIM_UPSTREAM_FLAG_MASK_SRC_STREAM,
-				__PRETTY_FUNCTION__, NULL);
+				PIM_UPSTREAM_FLAG_MASK_SRC_STREAM, __func__,
+				NULL);
 			if (!upstream) {
 				zlog_warn("Failure to create upstream state");
 				return 1;

@@ -1,7 +1,10 @@
 [Unit]
 Description=FRRouting
 Documentation=https://frrouting.readthedocs.io/en/latest/setup.html
-After=networking.service
+Wants=network.target
+After=network-pre.target systemd-sysctl.service
+Before=network.target
+OnFailure=heartbeat-failed@%n.service
 
 [Service]
 Nice=-5
@@ -23,4 +26,4 @@ ExecStopPost=/usr/lib/cumulus/on-failure-run-support %N
 ExecReload=/usr/lib/frr/frrinit.sh reload
 
 [Install]
-WantedBy=network-online.target
+WantedBy=multi-user.target

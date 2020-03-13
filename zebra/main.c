@@ -27,17 +27,14 @@
 #include "filter.h"
 #include "memory.h"
 #include "zebra_memory.h"
-#include "memory_vty.h"
 #include "prefix.h"
 #include "log.h"
 #include "plist.h"
 #include "privs.h"
 #include "sigevent.h"
 #include "vrf.h"
-#include "logicalrouter.h"
 #include "libfrr.h"
 #include "routemap.h"
-#include "frr_pthread.h"
 
 #include "zebra/zebra_router.h"
 #include "zebra/zebra_errors.h"
@@ -86,13 +83,12 @@ uint32_t nl_rcvbufsize = 4194304;
 
 #define OPTION_V6_RR_SEMANTICS 2000
 /* Command line options. */
-struct option longopts[] = {
+const struct option longopts[] = {
 	{"batch", no_argument, NULL, 'b'},
 	{"allow_delete", no_argument, NULL, 'a'},
 	{"keep_kernel", no_argument, NULL, 'k'},
 	{"socket", required_argument, NULL, 'z'},
 	{"ecmp", required_argument, NULL, 'e'},
-	{"label_socket", no_argument, NULL, 'l'},
 	{"retain", no_argument, NULL, 'r'},
 	{"vrfdefaultname", required_argument, NULL, 'o'},
 	{"graceful_restart", required_argument, NULL, 'K'},
@@ -154,6 +150,10 @@ static void sigint(void)
 	frr_early_fini();
 
 	zebra_dplane_pre_finish();
+
+	/* Clean up GR related info. */
+	zebra_gr_stale_client_cleanup(zrouter.stale_client_list);
+	list_delete_all_node(zrouter.stale_client_list);
 
 	for (ALL_LIST_ELEMENTS(zrouter.client_list, ln, nn, client))
 		zserv_close_client(client);
@@ -235,8 +235,9 @@ struct quagga_signal_t zebra_signals[] = {
 	},
 };
 
-static const struct frr_yang_module_info *zebra_yang_modules[] = {
+static const struct frr_yang_module_info *const zebra_yang_modules[] = {
 	&frr_interface_info,
+	&frr_route_map_info,
 };
 
 FRR_DAEMON_INFO(
@@ -259,8 +260,6 @@ int main(int argc, char **argv)
 	// int batch_mode = 0;
 	char *zserv_path = NULL;
 	char *vrf_default_name_configured = NULL;
-	/* Socket to external label manager */
-	char *lblmgr_path = NULL;
 	struct sockaddr_storage dummy;
 	socklen_t dummylen;
 #if defined(HANDLE_ZAPI_FUZZING)
@@ -272,12 +271,11 @@ int main(int argc, char **argv)
 
 	graceful_restart = 0;
 	vrf_configure_backend(VRF_BACKEND_VRF_LITE);
-	logicalrouter_configure_backend(LOGICALROUTER_BACKEND_NETNS);
 
 	frr_preinit(&zebra_di, argc, argv);
 
 	frr_opt_add(
-		"baz:e:l:o:rK:"
+		"baz:e:o:rK:"
 #ifdef HAVE_NETLINK
 		"s:n"
 #endif
@@ -293,7 +291,6 @@ int main(int argc, char **argv)
 		"  -a, --allow_delete       Allow other processes to delete zebra routes\n"
 		"  -z, --socket             Set path of zebra socket\n"
 		"  -e, --ecmp               Specify ECMP to use.\n"
-		"  -l, --label_socket       Socket to external label manager\n"
 		"  -r, --retain             When program terminates, retain added route by zebra.\n"
 		"  -o, --vrfdefaultname     Set default VRF name.\n"
 		"  -K, --graceful_restart   Graceful restart at the kernel level, timer in seconds for expiration\n"
@@ -348,9 +345,6 @@ int main(int argc, char **argv)
 				exit(1);
 			}
 			break;
-		case 'l':
-			lblmgr_path = optarg;
-			break;
 		case 'r':
 			retain_mode = 1;
 			break;
@@ -363,8 +357,6 @@ int main(int argc, char **argv)
 			break;
 		case 'n':
 			vrf_configure_backend(VRF_BACKEND_NETNS);
-			logicalrouter_configure_backend(
-				LOGICALROUTER_BACKEND_OFF);
 			break;
 		case OPTION_V6_RR_SEMANTICS:
 			v6_rr_semantics = true;
@@ -392,9 +384,6 @@ int main(int argc, char **argv)
 	}
 
 	zrouter.master = frr_init();
-
-	/* Initialize pthread library */
-	frr_pthread_init();
 
 	/* Zebra related initialize. */
 	zebra_router_init();
@@ -458,7 +447,7 @@ int main(int argc, char **argv)
 	zserv_start(zserv_path);
 
 	/* Init label manager */
-	label_manager_init(lblmgr_path);
+	label_manager_init();
 
 	/* RNH init */
 	zebra_rnh_init();

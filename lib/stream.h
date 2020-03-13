@@ -28,6 +28,10 @@
 #include "mpls.h"
 #include "prefix.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * A stream is an arbitrary buffer, whose contents generally are assumed to
  * be in network order.
@@ -106,7 +110,7 @@ struct stream {
 	size_t getp;	       /* next get position */
 	size_t endp;	       /* last valid data position */
 	size_t size;	       /* size of data segment */
-	unsigned char data[0]; /* data pointer */
+	unsigned char data[];  /* data pointer */
 };
 
 /* First in first out queue structure. */
@@ -115,9 +119,9 @@ struct stream_fifo {
 	pthread_mutex_t mtx;
 
 	/* number of streams in this fifo */
-	_Atomic size_t count;
+	atomic_size_t count;
 #if defined DEV_BUILD
-	_Atomic size_t max_count;
+	atomic_size_t max_count;
 #endif
 
 	struct stream *head;
@@ -149,11 +153,6 @@ extern void stream_free(struct stream *);
 extern struct stream *stream_copy(struct stream *, struct stream *src);
 extern struct stream *stream_dup(struct stream *);
 
-#if CONFDATE > 20190821
-CPP_NOTICE("lib: time to remove stream_resize_orig")
-#endif
-extern size_t stream_resize_orig(struct stream *s, size_t newsize);
-#define stream_resize stream_resize_orig
 extern size_t stream_resize_inplace(struct stream **sptr, size_t newsize);
 
 extern size_t stream_get_getp(struct stream *);
@@ -187,13 +186,16 @@ extern int stream_putl_at(struct stream *, size_t, uint32_t);
 extern int stream_putq(struct stream *, uint64_t);
 extern int stream_putq_at(struct stream *, size_t, uint64_t);
 extern int stream_put_ipv4(struct stream *, uint32_t);
-extern int stream_put_in_addr(struct stream *, struct in_addr *);
-extern int stream_put_in_addr_at(struct stream *, size_t, struct in_addr *);
-extern int stream_put_in6_addr_at(struct stream *, size_t, struct in6_addr *);
-extern int stream_put_prefix_addpath(struct stream *, struct prefix *,
+extern int stream_put_in_addr(struct stream *s, const struct in_addr *addr);
+extern int stream_put_in_addr_at(struct stream *s, size_t putp,
+				 const struct in_addr *addr);
+extern int stream_put_in6_addr_at(struct stream *s, size_t putp,
+				  const struct in6_addr *addr);
+extern int stream_put_prefix_addpath(struct stream *s,
+				     const struct prefix *p,
 				     int addpath_encode,
 				     uint32_t addpath_tx_id);
-extern int stream_put_prefix(struct stream *, struct prefix *);
+extern int stream_put_prefix(struct stream *s, const struct prefix *p);
 extern int stream_put_labeled_prefix(struct stream *, struct prefix *,
 				     mpls_label_t *, int addpath_encode,
 				     uint32_t addpath_tx_id);
@@ -404,5 +406,9 @@ static inline uint8_t *ptr_get_be32(uint8_t *ptr, uint32_t *out)
 		if (!stream_get2((P), (STR), (SIZE)))                          \
 			goto stream_failure;                                   \
 	} while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _ZEBRA_STREAM_H */

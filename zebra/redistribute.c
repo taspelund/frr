@@ -75,6 +75,10 @@ static void zebra_redistribute_default(struct zserv *client, vrf_id_t vrf_id)
 	struct route_entry *newre;
 
 	for (afi = AFI_IP; afi <= AFI_IP6; afi++) {
+
+		if (!vrf_bitmap_check(client->redist_default[afi], vrf_id))
+			continue;
+
 		/* Lookup table.  */
 		table = zebra_vrf_table(afi, SAFI_UNICAST, vrf_id);
 		if (!table)
@@ -119,7 +123,7 @@ static void zebra_redistribute(struct zserv *client, int type,
 
 			srcdest_rnode_prefixes(rn, &dst_p, &src_p);
 
-			if (IS_ZEBRA_DEBUG_EVENT)
+			if (IS_ZEBRA_DEBUG_RIB)
 				zlog_debug(
 					"%s: client %s %s(%u) checking: selected=%d, type=%d, distance=%d, metric=%d zebra_check_addr=%d",
 					__func__,
@@ -173,6 +177,13 @@ void redistribute_update(const struct prefix *p, const struct prefix *src_p,
 			  __FUNCTION__);
 		return;
 	}
+	if (!zebra_check_addr(p)) {
+		if (IS_ZEBRA_DEBUG_RIB)
+			zlog_debug("Redist update filter prefix %s",
+				   prefix2str(p, buf, sizeof(buf)));
+		return;
+	}
+
 
 	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
 		send_redistribute = 0;
@@ -194,7 +205,7 @@ void redistribute_update(const struct prefix *p, const struct prefix *src_p,
 			send_redistribute = 1;
 
 		if (send_redistribute) {
-			if (IS_ZEBRA_DEBUG_EVENT) {
+			if (IS_ZEBRA_DEBUG_RIB) {
 				zlog_debug(
 					   "%s: client %s %s(%u), type=%d, distance=%d, metric=%d",
 					   __func__,
@@ -270,6 +281,16 @@ void redistribute_delete(const struct prefix *p, const struct prefix *src_p,
 		return;
 	}
 
+	/* Skip invalid (e.g. linklocal) prefix */
+	if (!zebra_check_addr(p)) {
+		if (IS_ZEBRA_DEBUG_RIB) {
+			zlog_debug(
+				"%u:%s: Redist del old: skipping invalid prefix",
+				vrfid, prefix2str(p, buf, sizeof(buf)));
+		}
+		return;
+	}
+
 	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
 		if (new_re) {
 			/* Skip this client if it will receive an update for the
@@ -322,20 +343,20 @@ void zebra_redistribute_add(ZAPI_HANDLER_ARGS)
 
 	if (IS_ZEBRA_DEBUG_EVENT)
 		zlog_debug(
-			"%s: client proto %s afi=%d, wants %s, vrf %u, instance=%d",
+			"%s: client proto %s afi=%d, wants %s, vrf %s(%u), instance=%d",
 			__func__, zebra_route_string(client->proto), afi,
-			zebra_route_string(type), zvrf_id(zvrf), instance);
+			zebra_route_string(type), VRF_LOGNAME(zvrf->vrf),
+			zvrf_id(zvrf), instance);
 
 	if (afi == 0 || afi >= AFI_MAX) {
 		flog_warn(EC_ZEBRA_REDISTRIBUTE_UNKNOWN_AF,
-			  "%s: Specified afi %d does not exist",
-			  __PRETTY_FUNCTION__, afi);
+			  "%s: Specified afi %d does not exist", __func__, afi);
 		return;
 	}
 
 	if (type == 0 || type >= ZEBRA_ROUTE_MAX) {
 		zlog_debug("%s: Specified Route Type %d does not exist",
-			   __PRETTY_FUNCTION__, type);
+			   __func__, type);
 		return;
 	}
 
@@ -351,8 +372,10 @@ void zebra_redistribute_add(ZAPI_HANDLER_ARGS)
 		if (!vrf_bitmap_check(client->redist[afi][type],
 				      zvrf_id(zvrf))) {
 			if (IS_ZEBRA_DEBUG_EVENT)
-				zlog_debug("%s: setting vrf %u redist bitmap",
-					   __func__, zvrf_id(zvrf));
+				zlog_debug(
+					"%s: setting vrf %s(%u) redist bitmap",
+					__func__, VRF_LOGNAME(zvrf->vrf),
+					zvrf_id(zvrf));
 			vrf_bitmap_set(client->redist[afi][type],
 				       zvrf_id(zvrf));
 			zebra_redistribute(client, type, 0, zvrf_id(zvrf), afi);
@@ -375,14 +398,13 @@ void zebra_redistribute_delete(ZAPI_HANDLER_ARGS)
 
 	if (afi == 0 || afi >= AFI_MAX) {
 		flog_warn(EC_ZEBRA_REDISTRIBUTE_UNKNOWN_AF,
-			  "%s: Specified afi %d does not exist",
-			  __PRETTY_FUNCTION__, afi);
+			  "%s: Specified afi %d does not exist", __func__, afi);
 		return;
 	}
 
 	if (type == 0 || type >= ZEBRA_ROUTE_MAX) {
 		zlog_debug("%s: Specified Route Type %d does not exist",
-			   __PRETTY_FUNCTION__, type);
+			   __func__, type);
 		return;
 	}
 
@@ -409,8 +431,7 @@ void zebra_redistribute_default_add(ZAPI_HANDLER_ARGS)
 
 	if (afi == 0 || afi >= AFI_MAX) {
 		flog_warn(EC_ZEBRA_REDISTRIBUTE_UNKNOWN_AF,
-			  "%s: Specified afi %u does not exist",
-			  __PRETTY_FUNCTION__, afi);
+			  "%s: Specified afi %u does not exist", __func__, afi);
 		return;
 	}
 
@@ -429,8 +450,7 @@ void zebra_redistribute_default_delete(ZAPI_HANDLER_ARGS)
 
 	if (afi == 0 || afi >= AFI_MAX) {
 		flog_warn(EC_ZEBRA_REDISTRIBUTE_UNKNOWN_AF,
-			  "%s: Specified afi %u does not exist",
-			  __PRETTY_FUNCTION__, afi);
+			  "%s: Specified afi %u does not exist", __func__, afi);
 		return;
 	}
 
@@ -620,16 +640,18 @@ int zebra_add_import_table_entry(struct zebra_vrf *zvrf, struct route_node *rn,
 	struct route_entry *newre;
 	struct route_entry *same;
 	struct prefix p;
-	route_map_result_t ret = RMAP_MATCH;
+	struct nexthop_group *ng;
+	route_map_result_t ret = RMAP_PERMITMATCH;
 	afi_t afi;
 
 	afi = family2afi(rn->p.family);
 	if (rmap_name)
 		ret = zebra_import_table_route_map_check(
-			afi, re->type, re->instance, &rn->p, re->ng->nexthop,
+			afi, re->type, re->instance, &rn->p,
+			re->nhe->nhg.nexthop,
 			zvrf->vrf->vrf_id, re->tag, rmap_name);
 
-	if (ret != RMAP_MATCH) {
+	if (ret != RMAP_PERMITMATCH) {
 		UNSET_FLAG(re->flags, ZEBRA_FLAG_SELECTED);
 		zebra_del_import_table_entry(zvrf, rn, re);
 		return 0;
@@ -661,10 +683,11 @@ int zebra_add_import_table_entry(struct zebra_vrf *zvrf, struct route_node *rn,
 	newre->table = zvrf->table_id;
 	newre->uptime = monotime(NULL);
 	newre->instance = re->table;
-	newre->ng = nexthop_group_new();
-	route_entry_copy_nexthops(newre, re->ng->nexthop);
 
-	rib_add_multipath(afi, SAFI_UNICAST, &p, NULL, newre);
+	ng = nexthop_group_new();
+	copy_nexthops(&ng->nexthop, re->nhe->nhg.nexthop, NULL);
+
+	rib_add_multipath(afi, SAFI_UNICAST, &p, NULL, newre, ng);
 
 	return 0;
 }
@@ -679,8 +702,9 @@ int zebra_del_import_table_entry(struct zebra_vrf *zvrf, struct route_node *rn,
 	prefix_copy(&p, &rn->p);
 
 	rib_delete(afi, SAFI_UNICAST, zvrf->vrf->vrf_id, ZEBRA_ROUTE_TABLE,
-		   re->table, re->flags, &p, NULL, re->ng->nexthop, re->nhe_id,
-		   zvrf->table_id, re->metric, re->distance, false);
+		   re->table, re->flags, &p, NULL, re->nhe->nhg.nexthop,
+		   re->nhe_id, zvrf->table_id, re->metric, re->distance,
+		   false);
 
 	return 0;
 }
@@ -696,10 +720,10 @@ int zebra_import_table(afi_t afi, vrf_id_t vrf_id, uint32_t table_id,
 
 	if (!is_zebra_valid_kernel_table(table_id)
 	    || (table_id == RT_TABLE_MAIN))
-		return (-1);
+		return -1;
 
 	if (afi >= AFI_MAX)
-		return (-1);
+		return -1;
 
 	table = zebra_vrf_get_table_with_table_id(afi, SAFI_UNICAST, vrf_id,
 						  table_id);

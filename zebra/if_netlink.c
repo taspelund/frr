@@ -286,7 +286,7 @@ static void netlink_vrf_change(struct nlmsghdr *h, struct rtattr *tb,
 
 	ifi = NLMSG_DATA(h);
 
-	memset(linkinfo, 0, sizeof linkinfo);
+	memset(linkinfo, 0, sizeof(linkinfo));
 	parse_rtattr_nested(linkinfo, IFLA_INFO_MAX, tb);
 
 	if (!linkinfo[IFLA_INFO_DATA]) {
@@ -297,7 +297,7 @@ static void netlink_vrf_change(struct nlmsghdr *h, struct rtattr *tb,
 		return;
 	}
 
-	memset(attr, 0, sizeof attr);
+	memset(attr, 0, sizeof(attr));
 	parse_rtattr_nested(attr, IFLA_VRF_MAX, linkinfo[IFLA_INFO_DATA]);
 	if (!attr[IFLA_VRF_TABLE]) {
 		if (IS_ZEBRA_DEBUG_KERNEL)
@@ -366,7 +366,7 @@ static void netlink_vrf_change(struct nlmsghdr *h, struct rtattr *tb,
 	}
 }
 
-static uint32_t get_iflink_speed(struct interface *interface)
+static uint32_t get_iflink_speed(struct interface *interface, int *error)
 {
 	struct ifreq ifdata;
 	struct ethtool_cmd ecmd;
@@ -374,6 +374,8 @@ static uint32_t get_iflink_speed(struct interface *interface)
 	int rc;
 	const char *ifname = interface->name;
 
+	if (error)
+		*error = 0;
 	/* initialize struct */
 	memset(&ifdata, 0, sizeof(ifdata));
 
@@ -386,7 +388,7 @@ static uint32_t get_iflink_speed(struct interface *interface)
 	ifdata.ifr_data = (caddr_t)&ecmd;
 
 	/* use ioctl to get IP address of an interface */
-	frr_elevate_privs(&zserv_privs) {
+	frr_with_privs(&zserv_privs) {
 		sd = vrf_socket(PF_INET, SOCK_DGRAM, IPPROTO_IP,
 				interface->vrf_id,
 				NULL);
@@ -394,6 +396,9 @@ static uint32_t get_iflink_speed(struct interface *interface)
 			if (IS_ZEBRA_DEBUG_KERNEL)
 				zlog_debug("Failure to read interface %s speed: %d %s",
 					   ifname, errno, safe_strerror(errno));
+			/* no vrf socket creation may probably mean vrf issue */
+			if (error)
+				*error = -1;
 			return 0;
 		}
 	/* Get the current link state for the interface */
@@ -405,6 +410,9 @@ static uint32_t get_iflink_speed(struct interface *interface)
 			zlog_debug(
 				"IOCTL failure to read interface %s speed: %d %s",
 				ifname, errno, safe_strerror(errno));
+		/* no device means interface unreachable */
+		if (errno == ENODEV && error)
+			*error = -1;
 		ecmd.speed_hi = 0;
 		ecmd.speed = 0;
 	}
@@ -414,9 +422,9 @@ static uint32_t get_iflink_speed(struct interface *interface)
 	return ((uint32_t)ecmd.speed_hi << 16) | ecmd.speed;
 }
 
-uint32_t kernel_get_speed(struct interface *ifp)
+uint32_t kernel_get_speed(struct interface *ifp, int *error)
 {
-	return get_iflink_speed(ifp);
+	return get_iflink_speed(ifp, error);
 }
 
 static int netlink_extract_bridge_info(struct rtattr *link_data,
@@ -425,7 +433,7 @@ static int netlink_extract_bridge_info(struct rtattr *link_data,
 	struct rtattr *attr[IFLA_BR_MAX + 1];
 
 	memset(bridge_info, 0, sizeof(*bridge_info));
-	memset(attr, 0, sizeof attr);
+	memset(attr, 0, sizeof(attr));
 	parse_rtattr_nested(attr, IFLA_BR_MAX, link_data);
 	if (attr[IFLA_BR_VLAN_FILTERING])
 		bridge_info->vlan_aware =
@@ -440,7 +448,7 @@ static int netlink_extract_vlan_info(struct rtattr *link_data,
 	vlanid_t vid_in_msg;
 
 	memset(vlan_info, 0, sizeof(*vlan_info));
-	memset(attr, 0, sizeof attr);
+	memset(attr, 0, sizeof(attr));
 	parse_rtattr_nested(attr, IFLA_VLAN_MAX, link_data);
 	if (!attr[IFLA_VLAN_ID]) {
 		if (IS_ZEBRA_DEBUG_KERNEL)
@@ -461,7 +469,7 @@ static int netlink_extract_vxlan_info(struct rtattr *link_data,
 	struct in_addr vtep_ip_in_msg;
 
 	memset(vxl_info, 0, sizeof(*vxl_info));
-	memset(attr, 0, sizeof attr);
+	memset(attr, 0, sizeof(attr));
 	parse_rtattr_nested(attr, IFLA_VXLAN_MAX, link_data);
 	if (!attr[IFLA_VXLAN_ID]) {
 		if (IS_ZEBRA_DEBUG_KERNEL)
@@ -535,7 +543,7 @@ static int netlink_bridge_interface(struct nlmsghdr *h, int len, ns_id_t ns_id,
 
 	/* Fetch name and ifindex */
 	ifi = NLMSG_DATA(h);
-	memset(tb, 0, sizeof tb);
+	memset(tb, 0, sizeof(tb));
 	netlink_parse_rtattr(tb, IFLA_MAX, IFLA_RTA(ifi), len);
 
 	if (tb[IFLA_IFNAME] == NULL)
@@ -559,7 +567,7 @@ static int netlink_bridge_interface(struct nlmsghdr *h, int len, ns_id_t ns_id,
 	/* There is a 1-to-1 mapping of VLAN to VxLAN - hence
 	 * only 1 access VLAN is accepted.
 	 */
-	memset(aftb, 0, sizeof aftb);
+	memset(aftb, 0, sizeof(aftb));
 	parse_rtattr_nested(aftb, IFLA_BRIDGE_MAX, tb[IFLA_AF_SPEC]);
 	if (!aftb[IFLA_BRIDGE_VLAN_INFO])
 		return 0;
@@ -608,10 +616,10 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 	len = h->nlmsg_len - NLMSG_LENGTH(sizeof(struct ifinfomsg));
 	if (len < 0) {
-		zlog_err("%s: Message received from netlink is of a broken size: %d %zu",
-			 __PRETTY_FUNCTION__,
-			 h->nlmsg_len,
-			 (size_t)NLMSG_LENGTH(sizeof(struct ifinfomsg)));
+		zlog_err(
+			"%s: Message received from netlink is of a broken size: %d %zu",
+			__func__, h->nlmsg_len,
+			(size_t)NLMSG_LENGTH(sizeof(struct ifinfomsg)));
 		return -1;
 	}
 
@@ -620,8 +628,8 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 		return netlink_bridge_interface(h, len, ns_id, startup);
 
 	/* Looking up interface name. */
-	memset(tb, 0, sizeof tb);
-	memset(linkinfo, 0, sizeof linkinfo);
+	memset(tb, 0, sizeof(tb));
+	memset(linkinfo, 0, sizeof(linkinfo));
 	netlink_parse_rtattr(tb, IFLA_MAX, IFLA_RTA(ifi), len);
 
 	/* check for wireless messages to ignore */
@@ -696,7 +704,7 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	ifp->flags = ifi->ifi_flags & 0x0000fffff;
 	ifp->mtu6 = ifp->mtu = *(uint32_t *)RTA_DATA(tb[IFLA_MTU]);
 	ifp->metric = 0;
-	ifp->speed = get_iflink_speed(ifp);
+	ifp->speed = get_iflink_speed(ifp, NULL);
 	ifp->ptm_status = ZEBRA_PTM_STATUS_UNKNOWN;
 
 	/* Set zebra interface type */
@@ -850,7 +858,7 @@ int kernel_interface_set_master(struct interface *master,
 		char buf[NL_PKT_BUF_SIZE];
 	} req;
 
-	memset(&req, 0, sizeof req);
+	memset(&req, 0, sizeof(req));
 
 	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
 	req.n.nlmsg_flags = NLM_F_REQUEST;
@@ -859,8 +867,8 @@ int kernel_interface_set_master(struct interface *master,
 
 	req.ifa.ifi_index = slave->ifindex;
 
-	addattr_l(&req.n, sizeof req, IFLA_MASTER, &master->ifindex, 4);
-	addattr_l(&req.n, sizeof req, IFLA_LINK, &slave->ifindex, 4);
+	addattr_l(&req.n, sizeof(req), IFLA_MASTER, &master->ifindex, 4);
+	addattr_l(&req.n, sizeof(req), IFLA_LINK, &slave->ifindex, 4);
 
 	return netlink_talk(netlink_talk_filter, &req.n, &zns->netlink_cmd, zns,
 			    0);
@@ -967,14 +975,14 @@ int netlink_interface_addr(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 	len = h->nlmsg_len - NLMSG_LENGTH(sizeof(struct ifaddrmsg));
 	if (len < 0) {
-		zlog_err("%s: Message received from netlink is of a broken size: %d %zu",
-			 __PRETTY_FUNCTION__,
-			 h->nlmsg_len,
-			 (size_t)NLMSG_LENGTH(sizeof(struct ifaddrmsg)));
+		zlog_err(
+			"%s: Message received from netlink is of a broken size: %d %zu",
+			__func__, h->nlmsg_len,
+			(size_t)NLMSG_LENGTH(sizeof(struct ifaddrmsg)));
 		return -1;
 	}
 
-	memset(tb, 0, sizeof tb);
+	memset(tb, 0, sizeof(tb));
 	netlink_parse_rtattr(tb, IFA_MAX, IFA_RTA(ifa), len);
 
 	ifp = if_lookup_by_index_per_ns(zns, ifa->ifa_index);
@@ -1049,7 +1057,8 @@ int netlink_interface_addr(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 	/* addr is primary key, SOL if we don't have one */
 	if (addr == NULL) {
-		zlog_debug("%s: NULL address", __func__);
+		zlog_debug("%s: Local Interface Address is NULL for %s",
+			   __func__, ifp->name);
 		return -1;
 	}
 
@@ -1167,9 +1176,10 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 	len = h->nlmsg_len - NLMSG_LENGTH(sizeof(struct ifinfomsg));
 	if (len < 0) {
-		zlog_err("%s: Message received from netlink is of a broken size %d %zu",
-			 __PRETTY_FUNCTION__, h->nlmsg_len,
-			 (size_t)NLMSG_LENGTH(sizeof(struct ifinfomsg)));
+		zlog_err(
+			"%s: Message received from netlink is of a broken size %d %zu",
+			__func__, h->nlmsg_len,
+			(size_t)NLMSG_LENGTH(sizeof(struct ifinfomsg)));
 		return -1;
 	}
 
@@ -1178,8 +1188,8 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 		return netlink_bridge_interface(h, len, ns_id, startup);
 
 	/* Looking up interface name. */
-	memset(tb, 0, sizeof tb);
-	memset(linkinfo, 0, sizeof linkinfo);
+	memset(tb, 0, sizeof(tb));
+	memset(linkinfo, 0, sizeof(linkinfo));
 	netlink_parse_rtattr(tb, IFLA_MAX, IFLA_RTA(ifi), len);
 
 	/* check for wireless messages to ignore */
@@ -1386,7 +1396,7 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 				} else {
 					if (IS_ZEBRA_DEBUG_KERNEL)
 						zlog_debug(
-							"Intf %s(%u) has gone DOW",
+							"Intf %s(%u) has gone DOWN",
 							name, ifp->ifindex);
 					if_down(ifp);
 					rib_update(RIB_UPDATE_KERNEL);

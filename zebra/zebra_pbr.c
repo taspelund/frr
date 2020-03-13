@@ -370,6 +370,7 @@ uint32_t zebra_pbr_iptable_hash_key(const void *arg)
 	key = jhash_1word(iptable->tcp_flags, key);
 	key = jhash_1word(iptable->tcp_mask_flags, key);
 	key = jhash_1word(iptable->dscp_value, key);
+	key = jhash_1word(iptable->protocol, key);
 	key = jhash_1word(iptable->fragment, key);
 	key = jhash_1word(iptable->vrf_id, key);
 
@@ -410,6 +411,8 @@ bool zebra_pbr_iptable_hash_equal(const void *arg1, const void *arg2)
 	if (r1->dscp_value != r2->dscp_value)
 		return false;
 	if (r1->fragment != r2->fragment)
+		return false;
+	if (r1->protocol != r2->protocol)
 		return false;
 	return true;
 }
@@ -455,7 +458,7 @@ void zebra_pbr_del_rule(struct zebra_pbr_rule *rule)
 		XFREE(MTYPE_TMP, lookup);
 	} else
 		zlog_debug("%s: Rule being deleted we know nothing about",
-			   __PRETTY_FUNCTION__);
+			   __func__);
 }
 
 static void zebra_pbr_cleanup_rules(struct hash_bucket *b, void *data)
@@ -569,7 +572,7 @@ void zebra_pbr_destroy_ipset(struct zebra_pbr_ipset *ipset)
 	} else
 		zlog_debug(
 			"%s: IPSet Entry being deleted we know nothing about",
-			__PRETTY_FUNCTION__);
+			__func__);
 }
 
 struct pbr_ipset_name_lookup {
@@ -648,7 +651,7 @@ void zebra_pbr_del_ipset_entry(struct zebra_pbr_ipset_entry *ipset)
 		XFREE(MTYPE_TMP, lookup);
 	} else
 		zlog_debug("%s: IPSet being deleted we know nothing about",
-			   __PRETTY_FUNCTION__);
+			   __func__);
 }
 
 static void *pbr_iptable_alloc_intern(void *arg)
@@ -707,7 +710,7 @@ void zebra_pbr_del_iptable(struct zebra_pbr_iptable *iptable)
 		XFREE(MTYPE_TMP, lookup);
 	} else
 		zlog_debug("%s: IPTable being deleted we know nothing about",
-			   __PRETTY_FUNCTION__);
+			   __func__);
 }
 
 /*
@@ -1112,6 +1115,10 @@ static void zebra_pbr_show_iptable_unit(struct zebra_pbr_iptable *iptable,
 			iptable->filter_bm & MATCH_FRAGMENT_INVERSE_SET ?
 			" not" : "", lookup_msg(fragment_value_str,
 					       iptable->fragment, val_str));
+	}
+	if (iptable->protocol) {
+		vty_out(vty, "\t protocol %d\n",
+			iptable->protocol);
 	}
 	ret = hook_call(zebra_pbr_iptable_get_stat, iptable, &pkts,
 			&bytes);

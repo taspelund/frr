@@ -194,6 +194,7 @@ void bgp_adj_in_set(struct bgp_node *rn, struct peer *peer, struct attr *attr,
 	adj = XCALLOC(MTYPE_BGP_ADJ_IN, sizeof(struct bgp_adj_in));
 	adj->peer = peer_lock(peer); /* adj_in peer reference */
 	adj->attr = bgp_attr_intern(attr);
+	adj->uptime = bgp_clock();
 	adj->addpath_rx_id = addpath_id;
 	BGP_ADJ_IN_ADD(rn, adj);
 	bgp_lock_node(rn);
@@ -255,6 +256,5 @@ void bgp_sync_delete(struct peer *peer)
 
 	FOREACH_AFI_SAFI (afi, safi) {
 		XFREE(MTYPE_BGP_SYNCHRONISE, peer->sync[afi][safi]);
-		peer->sync[afi][safi] = NULL;
 	}
 }

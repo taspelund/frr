@@ -111,7 +111,6 @@ static void sync_init(struct update_subgroup *subgrp)
 static void sync_delete(struct update_subgroup *subgrp)
 {
 	XFREE(MTYPE_BGP_SYNCHRONISE, subgrp->sync);
-	subgrp->sync = NULL;
 	if (subgrp->hash)
 		hash_free(subgrp->hash);
 	subgrp->hash = NULL;
@@ -143,6 +142,7 @@ static void conf_copy(struct peer *dst, struct peer *src, afi_t afi,
 	dst->v_routeadv = src->v_routeadv;
 	dst->flags = src->flags;
 	dst->af_flags[afi][safi] = src->af_flags[afi][safi];
+	dst->pmax_out[afi][safi] = src->pmax_out[afi][safi];
 	XFREE(MTYPE_BGP_PEER_HOST, dst->host);
 
 	dst->host = XSTRDUP(MTYPE_BGP_PEER_HOST, src->host);
@@ -219,7 +219,6 @@ static void conf_release(struct peer *src, afi_t afi, safi_t safi)
 	XFREE(MTYPE_BGP_FILTER_NAME, srcfilter->usmap.name);
 
 	XFREE(MTYPE_BGP_PEER_HOST, src->host);
-	src->host = NULL;
 }
 
 static void peer2_updgrp_copy(struct update_group *updgrp, struct peer_af *paf)
@@ -734,7 +733,6 @@ static void update_group_delete(struct update_group *updgrp)
 	conf_release(updgrp->conf, updgrp->afi, updgrp->safi);
 
 	XFREE(MTYPE_BGP_PEER_HOST, updgrp->conf->host);
-	updgrp->conf->host = NULL;
 
 	XFREE(MTYPE_BGP_PEER_IFNAME, updgrp->conf->ifname);
 
@@ -1782,7 +1780,7 @@ int update_group_refresh_default_originate_route_map(struct thread *thread)
 	THREAD_TIMER_OFF(bgp->t_rmap_def_originate_eval);
 	bgp_unlock(bgp);
 
-	return (0);
+	return 0;
 }
 
 /*

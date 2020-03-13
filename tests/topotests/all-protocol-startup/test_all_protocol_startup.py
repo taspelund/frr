@@ -120,6 +120,7 @@ def setup_module(module):
         if net['r%s' % i].daemon_available('ldpd'):
             # Only test LDPd if it's installed and Kernel >= 4.5
             net['r%s' % i].loadConf('ldpd', '%s/r%s/ldpd.conf' % (thisDir, i))
+        net['r%s' % i].loadConf('sharpd')
         net['r%s' % i].startRouter()
 
     # For debugging after starting Quagga/FRR daemons, uncomment the next line
@@ -346,6 +347,36 @@ def test_converge_protocols():
     # For debugging after starting FRR/Quagga daemons, uncomment the next line
     ## CLI(net)
 
+def test_nexthop_groups():
+    global fatal_error
+    global net
+
+    # Skip if previous fatal error condition is raised
+    if (fatal_error != ""):
+        pytest.skip(fatal_error)
+
+    print("\n\n** Verifying Nexthop Groups")
+    print("******************************************\n")
+
+    # Create a lib nexthop-group
+    net["r1"].cmd('vtysh -c "c t" -c "nexthop-group red" -c "nexthop 1.1.1.1" -c "nexthop 1.1.1.2"')
+
+    # Create with sharpd using nexthop-group
+    net["r1"].cmd('vtysh -c "sharp install routes 2.2.2.1 nexthop-group red 1"')
+
+    # Verify route and that zebra created NHGs for and they are valid/installed
+    output = net["r1"].cmd('vtysh -c "show ip route 2.2.2.1/32 nexthop-group"')
+    match = re.search(r"Nexthop Group ID: (\d+)", output);
+    assert match is not None, "Nexthop Group ID not found for sharpd route 2.2.2.1/32"
+
+    nhe_id = int(match.group(1))
+
+    output = net["r1"].cmd('vtysh -c "show nexthop-group rib %d"' % nhe_id)
+    match = re.search(r"Valid", output)
+    assert match is not None, "Nexthop Group ID=%d not marked Valid" % nhe_id
+
+    match = re.search(r"Installed", output)
+    assert match is not None, "Nexthop Group ID=%d not marked Installed" % nhe_id
 
 def test_rip_status():
     global fatal_error
@@ -480,6 +511,8 @@ def test_ospfv2_interfaces():
             actual = net['r%s' % i].cmd('vtysh -c "show ip ospf interface" 2> /dev/null').rstrip()
             # Mask out Bandwidth portion. They may change..
             actual = re.sub(r"BW [0-9]+ Mbit", "BW XX Mbit", actual)
+	    actual = re.sub(r"ifindex [0-9]", "ifindex X", actual)
+
             # Drop time in next due 
             actual = re.sub(r"Hello due in [0-9\.]+s", "Hello due in XX.XXXs", actual)
             # Fix 'MTU mismatch detection: enabled' vs 'MTU mismatch detection:enabled' - accept both

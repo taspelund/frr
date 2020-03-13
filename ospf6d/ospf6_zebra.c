@@ -64,10 +64,9 @@ static int ospf6_router_id_update_zebra(ZAPI_CALLBACK_ARGS)
 	if (IS_OSPF6_DEBUG_ZEBRA(RECV)) {
 		char buf[INET_ADDRSTRLEN];
 
-		zlog_debug("%s: zebra router-id %s update",
-			   __PRETTY_FUNCTION__,
-			   inet_ntop(AF_INET, &router_id.u.prefix4,
-				     buf, INET_ADDRSTRLEN));
+		zlog_debug("%s: zebra router-id %s update", __func__,
+			   inet_ntop(AF_INET, &router_id.u.prefix4, buf,
+				     INET_ADDRSTRLEN));
 	}
 
 	ospf6_router_id_update();
@@ -143,7 +142,7 @@ static int ospf6_zebra_if_address_update_delete(ZAPI_CALLBACK_ARGS)
 		ospf6_interface_state_update(c->ifp);
 	}
 
-	connected_free(c);
+	connected_free(&c);
 
 	return 0;
 }
@@ -520,7 +519,7 @@ uint8_t ospf6_distance_apply(struct prefix_ipv6 *p, struct ospf6_route * or)
 static void ospf6_zebra_connected(struct zclient *zclient)
 {
 	/* Send the client registration */
-	bfd_client_sendmsg(zclient, ZEBRA_BFD_CLIENT_REGISTER);
+	bfd_client_sendmsg(zclient, ZEBRA_BFD_CLIENT_REGISTER, VRF_DEFAULT);
 
 	zclient_send_reg_requests(zclient, VRF_DEFAULT);
 }

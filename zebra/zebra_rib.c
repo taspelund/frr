@@ -37,6 +37,7 @@
 #include "vrf.h"
 #include "workqueue.h"
 #include "nexthop_group_private.h"
+#include "frr_pthread.h"
 
 #include "zebra/zebra_router.h"
 #include "zebra/connected.h"
@@ -192,144 +193,49 @@ int zebra_check_addr(const struct prefix *p)
 	return 1;
 }
 
-/* Add nexthop to the end of a rib node's nexthop list */
-void route_entry_nexthop_add(struct route_entry *re, struct nexthop *nexthop)
-{
-	_nexthop_group_add_sorted(re->ng, nexthop);
-}
-
-
 /**
  * copy_nexthop - copy a nexthop to the rib structure.
  */
 void route_entry_copy_nexthops(struct route_entry *re, struct nexthop *nh)
 {
-	assert(!re->ng->nexthop);
-	copy_nexthops(&re->ng->nexthop, nh, NULL);
+	assert(!re->nhe->nhg.nexthop);
+	copy_nexthops(&re->nhe->nhg.nexthop, nh, NULL);
 }
 
-/* Delete specified nexthop from the list. */
-void route_entry_nexthop_delete(struct route_entry *re, struct nexthop *nexthop)
+static void route_entry_attach_ref(struct route_entry *re,
+				   struct nhg_hash_entry *new)
 {
-	if (nexthop->next)
-		nexthop->next->prev = nexthop->prev;
-	if (nexthop->prev)
-		nexthop->prev->next = nexthop->next;
-	else
-		re->ng->nexthop = nexthop->next;
+	re->nhe = new;
+	re->nhe_id = new->id;
+
+	zebra_nhg_increment_ref(new);
 }
 
-
-struct nexthop *route_entry_nexthop_ifindex_add(struct route_entry *re,
-						ifindex_t ifindex,
-						vrf_id_t nh_vrf_id)
+int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new)
 {
-	struct nexthop *nexthop;
+	struct nhg_hash_entry *old = NULL;
+	int ret = 0;
 
-	nexthop = nexthop_new();
-	nexthop->type = NEXTHOP_TYPE_IFINDEX;
-	nexthop->ifindex = ifindex;
-	nexthop->vrf_id = nh_vrf_id;
+	if (new == NULL) {
+		if (re->nhe)
+			zebra_nhg_decrement_ref(re->nhe);
+		re->nhe = NULL;
+		goto done;
+	}
 
-	route_entry_nexthop_add(re, nexthop);
+	if (re->nhe_id != new->id) {
+		old = re->nhe;
 
-	return nexthop;
-}
+		route_entry_attach_ref(re, new);
 
-struct nexthop *route_entry_nexthop_ipv4_add(struct route_entry *re,
-					     struct in_addr *ipv4,
-					     struct in_addr *src,
-					     vrf_id_t nh_vrf_id)
-{
-	struct nexthop *nexthop;
+		if (old)
+			zebra_nhg_decrement_ref(old);
+	} else if (!re->nhe)
+		/* This is the first time it's being attached */
+		route_entry_attach_ref(re, new);
 
-	nexthop = nexthop_new();
-	nexthop->type = NEXTHOP_TYPE_IPV4;
-	nexthop->vrf_id = nh_vrf_id;
-	nexthop->gate.ipv4 = *ipv4;
-	if (src)
-		nexthop->src.ipv4 = *src;
-
-	route_entry_nexthop_add(re, nexthop);
-
-	return nexthop;
-}
-
-struct nexthop *route_entry_nexthop_ipv4_ifindex_add(struct route_entry *re,
-						     struct in_addr *ipv4,
-						     struct in_addr *src,
-						     ifindex_t ifindex,
-						     vrf_id_t nh_vrf_id)
-{
-	struct nexthop *nexthop;
-	struct interface *ifp;
-
-	nexthop = nexthop_new();
-	nexthop->vrf_id = nh_vrf_id;
-	nexthop->type = NEXTHOP_TYPE_IPV4_IFINDEX;
-	nexthop->gate.ipv4 = *ipv4;
-	if (src)
-		nexthop->src.ipv4 = *src;
-	nexthop->ifindex = ifindex;
-	ifp = if_lookup_by_index(nexthop->ifindex, nh_vrf_id);
-	/*Pending: need to think if null ifp here is ok during bootup?
-	  There was a crash because ifp here was coming to be NULL */
-	if (ifp)
-		if (connected_is_unnumbered(ifp))
-			SET_FLAG(nexthop->flags, NEXTHOP_FLAG_ONLINK);
-
-	route_entry_nexthop_add(re, nexthop);
-
-	return nexthop;
-}
-
-struct nexthop *route_entry_nexthop_ipv6_add(struct route_entry *re,
-					     struct in6_addr *ipv6,
-					     vrf_id_t nh_vrf_id)
-{
-	struct nexthop *nexthop;
-
-	nexthop = nexthop_new();
-	nexthop->vrf_id = nh_vrf_id;
-	nexthop->type = NEXTHOP_TYPE_IPV6;
-	nexthop->gate.ipv6 = *ipv6;
-
-	route_entry_nexthop_add(re, nexthop);
-
-	return nexthop;
-}
-
-struct nexthop *route_entry_nexthop_ipv6_ifindex_add(struct route_entry *re,
-						     struct in6_addr *ipv6,
-						     ifindex_t ifindex,
-						     vrf_id_t nh_vrf_id)
-{
-	struct nexthop *nexthop;
-
-	nexthop = nexthop_new();
-	nexthop->vrf_id = nh_vrf_id;
-	nexthop->type = NEXTHOP_TYPE_IPV6_IFINDEX;
-	nexthop->gate.ipv6 = *ipv6;
-	nexthop->ifindex = ifindex;
-
-	route_entry_nexthop_add(re, nexthop);
-
-	return nexthop;
-}
-
-struct nexthop *route_entry_nexthop_blackhole_add(struct route_entry *re,
-						  enum blackhole_type bh_type)
-{
-	struct nexthop *nexthop;
-
-	nexthop = nexthop_new();
-	nexthop->vrf_id = VRF_DEFAULT;
-	nexthop->type = NEXTHOP_TYPE_BLACKHOLE;
-	nexthop->bh_type = bh_type;
-
-	route_entry_nexthop_add(re, nexthop);
-
-	return nexthop;
+done:
+	return ret;
 }
 
 struct route_entry *rib_match(afi_t afi, safi_t safi, vrf_id_t vrf_id,
@@ -500,7 +406,7 @@ int zebra_rib_labeled_unicast(struct route_entry *re)
 	if (re->type != ZEBRA_ROUTE_BGP)
 		return 0;
 
-	for (ALL_NEXTHOPS_PTR(re->ng, nexthop))
+	for (ALL_NEXTHOPS(re->nhe->nhg, nexthop))
 		if (!nexthop->nh_label || !nexthop->nh_label->num_labels)
 			return 0;
 
@@ -524,7 +430,7 @@ void rib_install_kernel(struct route_node *rn, struct route_entry *re,
 	srcdest_rnode_prefixes(rn, &p, &src_p);
 
 	if (info->safi != SAFI_UNICAST) {
-		for (ALL_NEXTHOPS_PTR(re->ng, nexthop))
+		for (ALL_NEXTHOPS(re->nhe->nhg, nexthop))
 			SET_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB);
 		return;
 	}
@@ -533,7 +439,7 @@ void rib_install_kernel(struct route_node *rn, struct route_entry *re,
 	/*
 	 * Install the resolved nexthop object first.
 	 */
-	zebra_nhg_install_kernel(zebra_nhg_lookup_id(re->nhe_id));
+	zebra_nhg_install_kernel(re->nhe);
 
 	/*
 	 * If this is a replace to a new RE let the originator of the RE
@@ -602,7 +508,7 @@ void rib_uninstall_kernel(struct route_node *rn, struct route_entry *re)
 
 	if (info->safi != SAFI_UNICAST) {
 		UNSET_FLAG(re->status, ROUTE_ENTRY_INSTALLED);
-		for (ALL_NEXTHOPS_PTR(re->ng, nexthop))
+		for (ALL_NEXTHOPS(re->nhe->nhg, nexthop))
 			UNSET_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB);
 		return;
 	}
@@ -662,7 +568,7 @@ static void rib_uninstall(struct route_node *rn, struct route_entry *re)
 			re->fib_ng.nexthop = NULL;
 		}
 
-		for (ALL_NEXTHOPS_PTR(re->ng, nexthop))
+		for (ALL_NEXTHOPS(re->nhe->nhg, nexthop))
 			UNSET_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB);
 	}
 
@@ -726,10 +632,11 @@ void zebra_rib_evaluate_rn_nexthops(struct route_node *rn, uint32_t seq)
 		if (IS_ZEBRA_DEBUG_NHT_DETAILED) {
 			char buf[PREFIX_STRLEN];
 
-			zlog_debug("%s: %s Being examined for Nexthop Tracking Count: %zd",
-				   __PRETTY_FUNCTION__,
-				   srcdest_rnode2str(rn, buf, sizeof(buf)),
-				   dest ? rnh_list_count(&dest->nht) : 0);
+			zlog_debug(
+				"%s: %s Being examined for Nexthop Tracking Count: %zd",
+				__func__,
+				srcdest_rnode2str(rn, buf, sizeof(buf)),
+				dest ? rnh_list_count(&dest->nht) : 0);
 		}
 		if (!dest) {
 			rn = rn->parent;
@@ -838,7 +745,7 @@ static void rib_process_add_fib(struct zebra_vrf *zvrf, struct route_node *rn,
 
 	/* Update real nexthop. This may actually determine if nexthop is active
 	 * or not. */
-	if (!nexthop_group_active_nexthop_num(new->ng)) {
+	if (!nexthop_group_active_nexthop_num(&(new->nhe->nhg))) {
 		UNSET_FLAG(new->status, ROUTE_ENTRY_CHANGED);
 		return;
 	}
@@ -907,7 +814,7 @@ static void rib_process_update_fib(struct zebra_vrf *zvrf,
 
 		/* Update the nexthop; we could determine here that nexthop is
 		 * inactive. */
-		if (nexthop_group_active_nexthop_num(new->ng))
+		if (nexthop_group_active_nexthop_num(&(new->nhe->nhg)))
 			nh_active = 1;
 
 		/* If nexthop is active, install the selected route, if
@@ -986,7 +893,8 @@ static void rib_process_update_fib(struct zebra_vrf *zvrf,
 		 * interface up before IPv4 or IPv6 protocol is ready
 		 * to add routes.
 		 */
-		if (!CHECK_FLAG(new->status, ROUTE_ENTRY_INSTALLED))
+		if (!CHECK_FLAG(new->status, ROUTE_ENTRY_INSTALLED) ||
+		    RIB_SYSTEM_ROUTE(new))
 			rib_install_kernel(rn, new, NULL);
 	}
 
@@ -1024,15 +932,19 @@ static struct route_entry *rib_choose_best(struct route_entry *current,
 		/* both are connected.  are either loop or vrf? */
 		struct nexthop *nexthop = NULL;
 
-		for (ALL_NEXTHOPS_PTR(alternate->ng, nexthop)) {
-			if (if_is_loopback_or_vrf(if_lookup_by_index(
-				    nexthop->ifindex, alternate->vrf_id)))
+		for (ALL_NEXTHOPS(alternate->nhe->nhg, nexthop)) {
+			struct interface *ifp = if_lookup_by_index(
+				nexthop->ifindex, alternate->vrf_id);
+
+			if (ifp && if_is_loopback_or_vrf(ifp))
 				return alternate;
 		}
 
-		for (ALL_NEXTHOPS_PTR(current->ng, nexthop)) {
-			if (if_is_loopback_or_vrf(if_lookup_by_index(
-				    nexthop->ifindex, current->vrf_id)))
+		for (ALL_NEXTHOPS(current->nhe->nhg, nexthop)) {
+			struct interface *ifp = if_lookup_by_index(
+				nexthop->ifindex, current->vrf_id);
+
+			if (ifp && if_is_loopback_or_vrf(ifp))
 				return current;
 		}
 
@@ -1166,7 +1078,8 @@ static void rib_process(struct route_node *rn)
 		}
 
 		/* Infinite distance. */
-		if (re->distance == DISTANCE_INFINITY) {
+		if (re->distance == DISTANCE_INFINITY &&
+		    re->type != ZEBRA_ROUTE_KERNEL) {
 			UNSET_FLAG(re->status, ROUTE_ENTRY_CHANGED);
 			continue;
 		}
@@ -1359,7 +1272,7 @@ static void zebra_rib_fixup_system(struct route_node *rn)
 		SET_FLAG(re->status, ROUTE_ENTRY_INSTALLED);
 		UNSET_FLAG(re->status, ROUTE_ENTRY_QUEUED);
 
-		for (ALL_NEXTHOPS_PTR(re->ng, nhop)) {
+		for (ALL_NEXTHOPS(re->nhe->nhg, nhop)) {
 			if (CHECK_FLAG(nhop->flags, NEXTHOP_FLAG_RECURSIVE))
 				continue;
 
@@ -1460,15 +1373,23 @@ static bool rib_update_re_from_ctx(struct route_entry *re,
 
 	ctx_nexthop = dplane_ctx_get_ng(ctx)->nexthop;
 
+	/* Nothing installed - we can skip some of the checking/comparison
+	 * of nexthops.
+	 */
+	if (ctx_nexthop == NULL) {
+		changed_p = true;
+		goto no_nexthops;
+	}
+
 	/* Get the first `installed` one to check against.
 	 * If the dataplane doesn't set these to be what was actually installed,
-	 * it will just be whatever was in re->ng?
+	 * it will just be whatever was in re->nhe->nhg?
 	 */
 	if (CHECK_FLAG(ctx_nexthop->flags, NEXTHOP_FLAG_RECURSIVE)
 	    || !CHECK_FLAG(ctx_nexthop->flags, NEXTHOP_FLAG_ACTIVE))
 		ctx_nexthop = nexthop_next_active_resolved(ctx_nexthop);
 
-	for (ALL_NEXTHOPS_PTR(re->ng, nexthop)) {
+	for (ALL_NEXTHOPS(re->nhe->nhg, nexthop)) {
 
 		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_RECURSIVE))
 			continue;
@@ -1521,6 +1442,8 @@ static bool rib_update_re_from_ctx(struct route_entry *re,
 				   (changed_p ? "true" : "false"));
 		goto done;
 	}
+
+no_nexthops:
 
 	/* FIB nexthop set differs from the RIB set:
 	 * create a fib-specific nexthop-group
@@ -1876,18 +1799,43 @@ static void rib_process_dplane_notify(struct zebra_dplane_ctx *ctx)
 		goto done;
 	}
 
-	/* Is this a notification that ... matters? We only really care about
-	 * the route that is currently selected for installation.
+	/* Ensure we clear the QUEUED flag */
+	UNSET_FLAG(re->status, ROUTE_ENTRY_QUEUED);
+
+	/* Is this a notification that ... matters? We mostly care about
+	 * the route that is currently selected for installation; we may also
+	 * get an un-install notification, and handle that too.
 	 */
 	if (re != dest->selected_fib) {
-		/* TODO -- don't skip processing entirely? We might like to
-		 * at least report on the event.
+		/*
+		 * If we need to, clean up after a delete that was part of
+		 * an update operation.
 		 */
-		if (debug_p)
-			zlog_debug("%u:%s dplane notif, but type %s not selected_fib",
-				   dplane_ctx_get_vrf(ctx), dest_str,
-				   zebra_route_string(
-					   dplane_ctx_get_type(ctx)));
+		end_count = 0;
+		for (ALL_NEXTHOPS_PTR(dplane_ctx_get_ng(ctx), nexthop)) {
+			if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB))
+				end_count++;
+		}
+
+		/* If no nexthops or none installed, ensure that this re
+		 * gets its 'installed' flag cleared.
+		 */
+		if (end_count == 0) {
+			if (CHECK_FLAG(re->status, ROUTE_ENTRY_INSTALLED))
+				UNSET_FLAG(re->status, ROUTE_ENTRY_INSTALLED);
+			if (debug_p)
+				zlog_debug("%u:%s dplane notif, uninstalled type %s route",
+					   dplane_ctx_get_vrf(ctx), dest_str,
+					   zebra_route_string(
+						   dplane_ctx_get_type(ctx)));
+		} else {
+			/* At least report on the event. */
+			if (debug_p)
+				zlog_debug("%u:%s dplane notif, but type %s not selected_fib",
+					   dplane_ctx_get_vrf(ctx), dest_str,
+					   zebra_route_string(
+						   dplane_ctx_get_type(ctx)));
+		}
 		goto done;
 	}
 
@@ -1896,9 +1844,12 @@ static void rib_process_dplane_notify(struct zebra_dplane_ctx *ctx)
 	 * and then again if there's been a change.
 	 */
 	start_count = 0;
-	for (ALL_NEXTHOPS_PTR(rib_active_nhg(re), nexthop)) {
-		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB))
-			start_count++;
+
+	if (CHECK_FLAG(re->status, ROUTE_ENTRY_INSTALLED)) {
+		for (ALL_NEXTHOPS_PTR(rib_active_nhg(re), nexthop)) {
+			if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB))
+				start_count++;
+		}
 	}
 
 	/* Update zebra's nexthop FIB flags based on the context struct's
@@ -1908,10 +1859,8 @@ static void rib_process_dplane_notify(struct zebra_dplane_ctx *ctx)
 
 	if (!fib_changed) {
 		if (debug_p)
-			zlog_debug("%u:%s No change from dplane notification",
+			zlog_debug("%u:%s dplane notification: rib_update returns FALSE",
 				   dplane_ctx_get_vrf(ctx), dest_str);
-
-		goto done;
 	}
 
 	/*
@@ -1943,7 +1892,7 @@ static void rib_process_dplane_notify(struct zebra_dplane_ctx *ctx)
 				   dplane_ctx_get_vrf(ctx), dest_str);
 
 		/* We expect this to be the selected route, so we want
-		 * to tell others about this transistion.
+		 * to tell others about this transition.
 		 */
 		SET_FLAG(re->status, ROUTE_ENTRY_INSTALLED);
 
@@ -1952,11 +1901,6 @@ static void rib_process_dplane_notify(struct zebra_dplane_ctx *ctx)
 
 		/* Redistribute, lsp, and nht update */
 		redistribute_update(dest_pfx, src_pfx, re, NULL);
-
-		zebra_rib_evaluate_rn_nexthops(
-			rn, zebra_router_get_next_sequence());
-
-		zebra_rib_evaluate_mpls(rn);
 
 	} else if (start_count > 0 && end_count == 0) {
 		if (debug_p)
@@ -1976,12 +1920,13 @@ static void rib_process_dplane_notify(struct zebra_dplane_ctx *ctx)
 
 		/* Redistribute, lsp, and nht update */
 		redistribute_delete(dest_pfx, src_pfx, re, NULL);
-
-		zebra_rib_evaluate_rn_nexthops(
-			rn, zebra_router_get_next_sequence());
-
-		zebra_rib_evaluate_mpls(rn);
 	}
+
+	/* Make any changes visible for lsp and nexthop-tracking processing */
+	zebra_rib_evaluate_rn_nexthops(
+		rn, zebra_router_get_next_sequence());
+
+	zebra_rib_evaluate_mpls(rn);
 
 done:
 	if (rn)
@@ -2063,14 +2008,6 @@ static unsigned int process_subq(struct list *subq, uint8_t qindex)
 	list_delete_node(subq, lnode);
 
 	return 1;
-}
-
-
-/*
- * Perform next-hop tracking processing after RIB updates.
- */
-static void do_nht_processing(void)
-{
 }
 
 /* Dispatch the meta queue by picking, processing and unlocking the next RN from
@@ -2420,8 +2357,8 @@ void rib_unlink(struct route_node *rn, struct route_entry *re)
 		nhe = zebra_nhg_lookup_id(re->nhe_id);
 		if (nhe)
 			zebra_nhg_decrement_ref(nhe);
-	} else if (re->ng)
-		nexthop_group_delete(&re->ng);
+	} else if (re->nhe->nhg.nexthop)
+		nexthops_free(re->nhe->nhg.nexthop);
 
 	nexthops_free(re->fib_ng.nexthop);
 
@@ -2474,13 +2411,14 @@ void _route_entry_dump(const char *func, union prefixconstptr pp,
 	char srcaddr[PREFIX_STRLEN];
 	char nhname[PREFIX_STRLEN];
 	struct nexthop *nexthop;
+	struct vrf *vrf = vrf_lookup_by_id(re->vrf_id);
 
-	zlog_debug("%s: dumping RE entry %p for %s%s%s vrf %u", func,
+	zlog_debug("%s: dumping RE entry %p for %s%s%s vrf %s(%u)", func,
 		   (const void *)re, prefix2str(pp, straddr, sizeof(straddr)),
 		   is_srcdst ? " from " : "",
 		   is_srcdst ? prefix2str(src_pp, srcaddr, sizeof(srcaddr))
 			     : "",
-		   re->vrf_id);
+		   VRF_LOGNAME(vrf), re->vrf_id);
 	zlog_debug("%s: uptime == %lu, type == %u, instance == %d, table == %d",
 		   straddr, (unsigned long)re->uptime, re->type, re->instance,
 		   re->table);
@@ -2488,10 +2426,10 @@ void _route_entry_dump(const char *func, union prefixconstptr pp,
 		"%s: metric == %u, mtu == %u, distance == %u, flags == %u, status == %u",
 		straddr, re->metric, re->mtu, re->distance, re->flags, re->status);
 	zlog_debug("%s: nexthop_num == %u, nexthop_active_num == %u", straddr,
-		   nexthop_group_nexthop_num(re->ng),
-		   nexthop_group_active_nexthop_num(re->ng));
+		   nexthop_group_nexthop_num(&(re->nhe->nhg)),
+		   nexthop_group_active_nexthop_num(&(re->nhe->nhg)));
 
-	for (ALL_NEXTHOPS_PTR(re->ng, nexthop)) {
+	for (ALL_NEXTHOPS(re->nhe->nhg, nexthop)) {
 		struct interface *ifp;
 		struct vrf *vrf = vrf_lookup_by_id(nexthop->vrf_id);
 
@@ -2516,7 +2454,7 @@ void _route_entry_dump(const char *func, union prefixconstptr pp,
 				  INET6_ADDRSTRLEN);
 			break;
 		}
-		zlog_debug("%s: %s %s[%u] vrf %s(%u) with flags %s%s%s%s%s%s",
+		zlog_debug("%s: %s %s[%u] vrf %s(%u) with flags %s%s%s%s%s",
 			   straddr, (nexthop->rparent ? "  NH" : "NH"), nhname,
 			   nexthop->ifindex, vrf ? vrf->name : "Unknown",
 			   nexthop->vrf_id,
@@ -2531,9 +2469,6 @@ void _route_entry_dump(const char *func, union prefixconstptr pp,
 				    : ""),
 			   (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ONLINK)
 				    ? "ONLINK "
-				    : ""),
-			   (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_MATCHED)
-				    ? "MATCHED "
 				    : ""),
 			   (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_DUPLICATE)
 				    ? "DUPLICATE "
@@ -2640,7 +2575,8 @@ void rib_lookup_and_pushup(struct prefix_ipv4 *p, vrf_id_t vrf_id)
 }
 
 int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
-		      struct prefix_ipv6 *src_p, struct route_entry *re)
+		      struct prefix_ipv6 *src_p, struct route_entry *re,
+		      struct nexthop_group *ng)
 {
 	struct nhg_hash_entry *nhe = NULL;
 	struct route_table *table;
@@ -2657,8 +2593,8 @@ int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 	table = zebra_vrf_get_table_with_table_id(afi, safi, re->vrf_id,
 						  re->table);
 	if (!table) {
-		if (re->ng)
-			nexthop_group_delete(&re->ng);
+		if (ng)
+			nexthop_group_delete(&ng);
 		XFREE(MTYPE_RE, re);
 		return 0;
 	}
@@ -2675,13 +2611,13 @@ int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 			return -1;
 		}
 	} else {
-		nhe = zebra_nhg_rib_find(0, re->ng, afi);
+		nhe = zebra_nhg_rib_find(0, ng, afi);
 
 		/*
 		 * The nexthops got copied over into an nhe,
 		 * so free them now.
 		 */
-		nexthop_group_delete(&re->ng);
+		nexthop_group_delete(&ng);
 
 		if (!nhe) {
 			char buf[PREFIX_STRLEN] = "";
@@ -2707,7 +2643,7 @@ int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 	 * level protocols, as the refcnt might be wrong, since it checks
 	 * if old_id != new_id.
 	 */
-	zebra_nhg_re_update_ref(re, nhe);
+	route_entry_update_nhe(re, nhe);
 
 	/* Make it sure prefixlen is applied to the prefix. */
 	apply_mask(p);
@@ -2850,7 +2786,8 @@ void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 
 		if (re->type == ZEBRA_ROUTE_KERNEL && re->metric != metric)
 			continue;
-		if (re->type == ZEBRA_ROUTE_CONNECT && (rtnh = re->ng->nexthop)
+		if (re->type == ZEBRA_ROUTE_CONNECT &&
+		    (rtnh = re->nhe->nhg.nexthop)
 		    && rtnh->type == NEXTHOP_TYPE_IFINDEX && nh) {
 			if (rtnh->ifindex != nh->ifindex)
 				continue;
@@ -2868,7 +2805,7 @@ void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 			same = re;
 			break;
 		}
-		for (ALL_NEXTHOPS_PTR(re->ng, rtnh)) {
+		for (ALL_NEXTHOPS(re->nhe->nhg, rtnh)) {
 			/*
 			 * No guarantee all kernel send nh with labels
 			 * on delete.
@@ -2910,7 +2847,7 @@ void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 			if (allow_delete) {
 				UNSET_FLAG(fib->status, ROUTE_ENTRY_INSTALLED);
 				/* Unset flags. */
-				for (rtnh = fib->ng->nexthop; rtnh;
+				for (rtnh = fib->nhe->nhg.nexthop; rtnh;
 				     rtnh = rtnh->next)
 					UNSET_FLAG(rtnh->flags,
 						   NEXTHOP_FLAG_FIB);
@@ -2966,7 +2903,7 @@ void rib_delete(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 		if (CHECK_FLAG(flags, ZEBRA_FLAG_EVPN_ROUTE)) {
 			struct nexthop *tmp_nh;
 
-			for (ALL_NEXTHOPS_PTR(re->ng, tmp_nh)) {
+			for (ALL_NEXTHOPS(re->nhe->nhg, tmp_nh)) {
 				struct ipaddr vtep_ip;
 
 				memset(&vtep_ip, 0, sizeof(struct ipaddr));
@@ -3006,6 +2943,7 @@ int rib_add(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 {
 	struct route_entry *re = NULL;
 	struct nexthop *nexthop = NULL;
+	struct nexthop_group *ng = NULL;
 
 	/* Allocate new route_entry structure. */
 	re = XCALLOC(MTYPE_RE, sizeof(struct route_entry));
@@ -3021,16 +2959,19 @@ int rib_add(afi_t afi, safi_t safi, vrf_id_t vrf_id, int type,
 	re->tag = tag;
 	re->nhe_id = nhe_id;
 
+	/* If the owner of the route supplies a shared nexthop-group id,
+	 * we'll use that. Otherwise, pass the nexthop along directly.
+	 */
 	if (!nhe_id) {
-		re->ng = nexthop_group_new();
+		ng = nexthop_group_new();
 
 		/* Add nexthop. */
 		nexthop = nexthop_new();
 		*nexthop = *nh;
-		route_entry_nexthop_add(re, nexthop);
+		nexthop_group_add_sorted(ng, nexthop);
 	}
 
-	return rib_add_multipath(afi, safi, p, src_p, re);
+	return rib_add_multipath(afi, safi, p, src_p, re, ng);
 }
 
 static const char *rib_update_event2str(rib_update_event_t event)
@@ -3175,8 +3116,6 @@ static struct rib_update_ctx *rib_update_ctx_init(vrf_id_t vrf_id,
 static void rib_update_ctx_fini(struct rib_update_ctx **ctx)
 {
 	XFREE(MTYPE_RIB_UPDATE_CTX, *ctx);
-
-	*ctx = NULL;
 }
 
 static int rib_update_handler(struct thread *thread)
@@ -3234,7 +3173,7 @@ void rib_update(rib_update_event_t event)
 			      &t_rib_update_threads[event]))
 		rib_update_ctx_fini(&ctx); /* Already scheduled */
 	else if (IS_ZEBRA_DEBUG_EVENT)
-		zlog_debug("%s: Schedued VRF (ALL), event %s", __func__,
+		zlog_debug("%s: Scheduled VRF (ALL), event %s", __func__,
 			   rib_update_event2str(event));
 }
 
@@ -3288,7 +3227,7 @@ void rib_sweep_table(struct route_table *table)
 			 * this decision needs to be revisited
 			 */
 			SET_FLAG(re->status, ROUTE_ENTRY_INSTALLED);
-			for (ALL_NEXTHOPS_PTR(re->ng, nexthop))
+			for (ALL_NEXTHOPS(re->nhe->nhg, nexthop))
 				SET_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB);
 
 			rib_uninstall_kernel(rn, re);
@@ -3407,7 +3346,7 @@ static int handle_pw_result(struct zebra_dplane_ctx *ctx)
 
 	if (dplane_ctx_get_status(ctx) != ZEBRA_DPLANE_REQUEST_SUCCESS) {
 		vrf = zebra_vrf_lookup_by_id(dplane_ctx_get_vrf(ctx));
-		pw = zebra_pw_find(vrf, dplane_ctx_get_pw_ifname(ctx));
+		pw = zebra_pw_find(vrf, dplane_ctx_get_ifname(ctx));
 		if (pw)
 			zebra_pw_install_failure(pw);
 	}
@@ -3434,12 +3373,10 @@ static int rib_process_dplane_results(struct thread *thread)
 		TAILQ_INIT(&ctxlist);
 
 		/* Take lock controlling queue of results */
-		pthread_mutex_lock(&dplane_mutex);
-		{
+		frr_with_mutex(&dplane_mutex) {
 			/* Dequeue list of context structs */
 			dplane_ctx_list_append(&ctxlist, &rib_dplane_q);
 		}
-		pthread_mutex_unlock(&dplane_mutex);
 
 		/* Dequeue context block */
 		ctx = dplane_ctx_dequeue(&ctxlist);
@@ -3521,19 +3458,30 @@ static int rib_process_dplane_results(struct thread *thread)
 				dplane_ctx_fini(&ctx);
 				break;
 
-			default:
+			case DPLANE_OP_MAC_INSTALL:
+			case DPLANE_OP_MAC_DELETE:
+				zebra_vxlan_handle_result(ctx);
+				break;
+
+			/* Some op codes not handled here */
+			case DPLANE_OP_ADDR_INSTALL:
+			case DPLANE_OP_ADDR_UNINSTALL:
+			case DPLANE_OP_NEIGH_INSTALL:
+			case DPLANE_OP_NEIGH_UPDATE:
+			case DPLANE_OP_NEIGH_DELETE:
+			case DPLANE_OP_VTEP_ADD:
+			case DPLANE_OP_VTEP_DELETE:
+			case DPLANE_OP_NONE:
 				/* Don't expect this: just return the struct? */
 				dplane_ctx_fini(&ctx);
 				break;
+
 			} /* Dispatch by op code */
 
 			ctx = dplane_ctx_dequeue(&ctxlist);
 		}
 
 	} while (1);
-
-	/* Check for nexthop tracking processing after finishing with results */
-	do_nht_processing();
 
 	return 0;
 }
@@ -3546,12 +3494,10 @@ static int rib_process_dplane_results(struct thread *thread)
 static int rib_dplane_results(struct dplane_ctx_q *ctxlist)
 {
 	/* Take lock controlling queue of results */
-	pthread_mutex_lock(&dplane_mutex);
-	{
+	frr_with_mutex(&dplane_mutex) {
 		/* Enqueue context blocks */
 		dplane_ctx_list_append(&rib_dplane_q, ctxlist);
 	}
-	pthread_mutex_unlock(&dplane_mutex);
 
 	/* Ensure event is signalled to zebra main pthread */
 	thread_add_event(zrouter.master, rib_process_dplane_results, NULL, 0,
@@ -3631,7 +3577,7 @@ struct route_table *rib_tables_iter_next(rib_tables_iter_t *iter)
 	 * Array that helps us go over all AFI/SAFI combinations via one
 	 * index.
 	 */
-	static struct {
+	static const struct {
 		afi_t afi;
 		safi_t safi;
 	} afi_safis[] = {

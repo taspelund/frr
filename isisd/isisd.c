@@ -57,6 +57,7 @@
 #include "isisd/isis_te.h"
 #include "isisd/isis_mt.h"
 #include "isisd/fabricd.h"
+#include "isisd/isis_nb.h"
 
 struct isis *isis = NULL;
 
@@ -89,13 +90,11 @@ void isis_new(unsigned long process_id, vrf_id_t vrf_id)
 	isis->init_circ_list = list_new();
 	isis->uptime = time(NULL);
 	isis->nexthops = list_new();
-	isis->nexthops6 = list_new();
 	dyn_cache_init();
 	/*
 	 * uncomment the next line for full debugs
 	 */
 	/* isis->debugs = 0xFFFF; */
-	isisMplsTE.status = disable; /* Only support TE metric */
 
 	QOBJ_REG(isis, isis);
 }
@@ -108,13 +107,10 @@ struct isis_area *isis_area_create(const char *area_tag)
 
 	/*
 	 * Fabricd runs only as level-2.
-	 * For IS-IS, the first instance is level-1-2 rest are level-1,
-	 * unless otherwise configured
+	 * For IS-IS, the default is level-1-2
 	 */
-	if (fabricd) {
+	if (fabricd)
 		area->is_type = IS_LEVEL_2;
-	} else if (listcount(isis->area_list) == 0)
-		area->is_type = IS_LEVEL_1_AND_2;
 	else
 		area->is_type = yang_get_default_enum(
 			"/frr-isisd:isis/instance/is-type");
@@ -255,6 +251,10 @@ int isis_area_destroy(const char *area_tag)
 
 	if (fabricd)
 		fabricd_finish(area->fabricd);
+
+	/* Disable MPLS if necessary before flooding LSP */
+	if (IS_MPLS_TE(area->mta))
+		area->mta->status = disable;
 
 	if (area->circuit_list) {
 		for (ALL_LIST_ELEMENTS(area->circuit_list, node, nnode,
@@ -2119,7 +2119,6 @@ int isis_config_write(struct vty *vty)
 			write += area_write_mt_settings(area, vty);
 			write += fabricd_write_settings(area, vty);
 		}
-		isis_mpls_te_config_write_router(vty);
 	}
 
 	return write;

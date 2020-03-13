@@ -49,7 +49,11 @@ DEFINE_MTYPE_STATIC(ZEBRA, NHG_CTX, "Nexthop Group Context");
 /* id counter to keep in sync with kernel */
 uint32_t id_counter;
 
-static struct nhg_hash_entry *depends_find(struct nexthop *nh, afi_t afi);
+/*  */
+static bool g_nexthops_enabled = true;
+
+static struct nhg_hash_entry *depends_find(const struct nexthop *nh,
+					   afi_t afi);
 static void depends_add(struct nhg_connected_tree_head *head,
 			struct nhg_hash_entry *depend);
 static struct nhg_hash_entry *
@@ -98,31 +102,60 @@ nhg_connected_tree_root(struct nhg_connected_tree_head *head)
 	return nhg_connected_tree_first(head);
 }
 
-void nhg_connected_tree_del_nhe(struct nhg_connected_tree_head *head,
-				struct nhg_hash_entry *depend)
+struct nhg_hash_entry *
+nhg_connected_tree_del_nhe(struct nhg_connected_tree_head *head,
+			   struct nhg_hash_entry *depend)
 {
 	struct nhg_connected lookup = {};
 	struct nhg_connected *remove = NULL;
+	struct nhg_hash_entry *removed_nhe;
 
 	lookup.nhe = depend;
 
 	/* Lookup to find the element, then remove it */
 	remove = nhg_connected_tree_find(head, &lookup);
-	remove = nhg_connected_tree_del(head, remove);
-
 	if (remove)
+		/* Re-returning here just in case this API changes..
+		 * the _del list api's are a bit undefined at the moment.
+		 *
+		 * So hopefully returning here will make it fail if the api
+		 * changes to something different than currently expected.
+		 */
+		remove = nhg_connected_tree_del(head, remove);
+
+	/* If the entry was sucessfully removed, free the 'connected` struct */
+	if (remove) {
+		removed_nhe = remove->nhe;
 		nhg_connected_free(remove);
+		return removed_nhe;
+	}
+
+	return NULL;
 }
 
-void nhg_connected_tree_add_nhe(struct nhg_connected_tree_head *head,
-				struct nhg_hash_entry *depend)
+/* Assuming UNIQUE RB tree. If this changes, assumptions here about
+ * insertion need to change.
+ */
+struct nhg_hash_entry *
+nhg_connected_tree_add_nhe(struct nhg_connected_tree_head *head,
+			   struct nhg_hash_entry *depend)
 {
 	struct nhg_connected *new = NULL;
 
 	new = nhg_connected_new(depend);
 
-	if (new)
-		nhg_connected_tree_add(head, new);
+	/* On success, NULL will be returned from the
+	 * RB code.
+	 */
+	if (new && (nhg_connected_tree_add(head, new) == NULL))
+		return NULL;
+
+	/* If it wasn't successful, it must be a duplicate. We enforce the
+	 * unique property for the `nhg_connected` tree.
+	 */
+	nhg_connected_free(new);
+
+	return depend;
 }
 
 static void
@@ -282,34 +315,42 @@ zebra_nhg_connect_depends(struct nhg_hash_entry *nhe,
 	}
 
 	/* Add the ifp now if its not a group or recursive and has ifindex */
-	if (zebra_nhg_depends_is_empty(nhe) && nhe->nhg->nexthop
-	    && nhe->nhg->nexthop->ifindex) {
+	if (zebra_nhg_depends_is_empty(nhe) && nhe->nhg.nexthop
+	    && nhe->nhg.nexthop->ifindex) {
 		struct interface *ifp = NULL;
 
-		ifp = if_lookup_by_index(nhe->nhg->nexthop->ifindex,
-					 nhe->vrf_id);
+		ifp = if_lookup_by_index(nhe->nhg.nexthop->ifindex,
+					 nhe->nhg.nexthop->vrf_id);
 		if (ifp)
 			zebra_nhg_set_if(nhe, ifp);
 		else
 			flog_err(
 				EC_ZEBRA_IF_LOOKUP_FAILED,
 				"Zebra failed to lookup an interface with ifindex=%d in vrf=%u for NHE id=%u",
-				nhe->nhg->nexthop->ifindex, nhe->vrf_id,
-				nhe->id);
+				nhe->nhg.nexthop->ifindex,
+				nhe->nhg.nexthop->vrf_id, nhe->id);
 	}
 }
 
-static struct nhg_hash_entry *zebra_nhg_copy(struct nhg_hash_entry *copy,
-					     uint32_t id)
+struct nhg_hash_entry *zebra_nhg_alloc(void)
 {
 	struct nhg_hash_entry *nhe;
 
 	nhe = XCALLOC(MTYPE_NHG, sizeof(struct nhg_hash_entry));
 
+	return nhe;
+}
+
+static struct nhg_hash_entry *zebra_nhg_copy(const struct nhg_hash_entry *copy,
+					     uint32_t id)
+{
+	struct nhg_hash_entry *nhe;
+
+	nhe = zebra_nhg_alloc();
+
 	nhe->id = id;
 
-	nhe->nhg = nexthop_group_new();
-	nexthop_group_copy(nhe->nhg, copy->nhg);
+	nexthop_group_copy(&(nhe->nhg), &(copy->nhg));
 
 	nhe->vrf_id = copy->vrf_id;
 	nhe->afi = copy->afi;
@@ -329,7 +370,7 @@ static void *zebra_nhg_hash_alloc(void *arg)
 	nhe = zebra_nhg_copy(copy, copy->id);
 
 	/* Mark duplicate nexthops in a group at creation time. */
-	nexthop_group_mark_duplicates(nhe->nhg);
+	nexthop_group_mark_duplicates(&(nhe->nhg));
 
 	zebra_nhg_connect_depends(nhe, copy->nhg_depends);
 	zebra_nhg_insert_id(nhe);
@@ -343,7 +384,8 @@ uint32_t zebra_nhg_hash_key(const void *arg)
 
 	uint32_t key = 0x5a351234;
 
-	key = jhash_3words(nhe->vrf_id, nhe->afi, nexthop_group_hash(nhe->nhg),
+	key = jhash_3words(nhe->vrf_id, nhe->afi,
+			   nexthop_group_hash(&(nhe->nhg)),
 			   key);
 
 	return key;
@@ -374,7 +416,7 @@ bool zebra_nhg_hash_equal(const void *arg1, const void *arg2)
 		return false;
 
 	/* Nexthops should be sorted */
-	for (nexthop1 = nhe1->nhg->nexthop, nexthop2 = nhe2->nhg->nexthop;
+	for (nexthop1 = nhe1->nhg.nexthop, nexthop2 = nhe2->nhg.nexthop;
 	     nexthop1 || nexthop2;
 	     nexthop1 = nexthop1->next, nexthop2 = nexthop2->next) {
 		if (nexthop1 && !nexthop2)
@@ -456,7 +498,7 @@ static int zebra_nhg_process_grp(struct nexthop_group *nhg,
 		 * in the kernel.
 		 */
 
-		copy_nexthops(&nhg->nexthop, depend->nhg->nexthop, NULL);
+		copy_nexthops(&nhg->nexthop, depend->nhg.nexthop, NULL);
 	}
 
 	return 0;
@@ -468,10 +510,12 @@ static void handle_recursive_depend(struct nhg_connected_tree_head *nhg_depends,
 	struct nhg_hash_entry *depend = NULL;
 	struct nexthop_group resolved_ng = {};
 
-	_nexthop_group_add_sorted(&resolved_ng, nh);
+	resolved_ng.nexthop = nh;
 
 	depend = zebra_nhg_rib_find(0, &resolved_ng, afi);
-	depends_add(nhg_depends, depend);
+
+	if (depend)
+		depends_add(nhg_depends, depend);
 }
 
 static bool zebra_nhg_find(struct nhg_hash_entry **nhe, uint32_t id,
@@ -492,14 +536,14 @@ static bool zebra_nhg_find(struct nhg_hash_entry **nhe, uint32_t id,
 	lookup.id = id ? id : ++id_counter;
 
 	lookup.type = type ? type : ZEBRA_ROUTE_NHG;
-	lookup.nhg = nhg;
+	lookup.nhg = *nhg;
 
-	if (lookup.nhg->nexthop->next) {
+	lookup.vrf_id = vrf_id;
+	if (lookup.nhg.nexthop->next) {
 		/* Groups can have all vrfs and AF's in them */
 		lookup.afi = AFI_UNSPEC;
-		lookup.vrf_id = 0;
 	} else {
-		switch (lookup.nhg->nexthop->type) {
+		switch (lookup.nhg.nexthop->type) {
 		case (NEXTHOP_TYPE_IFINDEX):
 		case (NEXTHOP_TYPE_BLACKHOLE):
 			/*
@@ -521,8 +565,6 @@ static bool zebra_nhg_find(struct nhg_hash_entry **nhe, uint32_t id,
 			lookup.afi = AFI_IP6;
 			break;
 		}
-
-		lookup.vrf_id = vrf_id;
 	}
 
 	if (id)
@@ -581,10 +623,11 @@ zebra_nhg_find_nexthop(uint32_t id, struct nexthop *nh, afi_t afi, int type)
 {
 	struct nhg_hash_entry *nhe = NULL;
 	struct nexthop_group nhg = {};
+	vrf_id_t vrf_id = !vrf_is_backend_netns() ? VRF_DEFAULT : nh->vrf_id;
 
-	_nexthop_group_add_sorted(&nhg, nh);
+	nexthop_group_add_sorted(&nhg, nh);
 
-	zebra_nhg_find(&nhe, id, &nhg, NULL, nh->vrf_id, afi, type);
+	zebra_nhg_find(&nhe, id, &nhg, NULL, vrf_id, afi, type);
 
 	return nhe;
 }
@@ -644,9 +687,9 @@ static struct nh_grp *nhg_ctx_get_grp(struct nhg_ctx *ctx)
 	return ctx->u.grp;
 }
 
-static struct nhg_ctx *nhg_ctx_new()
+static struct nhg_ctx *nhg_ctx_new(void)
 {
-	struct nhg_ctx *new = NULL;
+	struct nhg_ctx *new;
 
 	new = XCALLOC(MTYPE_NHG_CTX, sizeof(struct nhg_ctx));
 
@@ -671,7 +714,6 @@ static void nhg_ctx_free(struct nhg_ctx **ctx)
 
 done:
 	XFREE(MTYPE_NHG_CTX, *ctx);
-	*ctx = NULL;
 }
 
 static struct nhg_ctx *nhg_ctx_init(uint32_t id, struct nexthop *nh,
@@ -1021,11 +1063,11 @@ int zebra_nhg_kernel_find(uint32_t id, struct nexthop *nh, struct nh_grp *grp,
 }
 
 /* Kernel-side, received delete message */
-int zebra_nhg_kernel_del(uint32_t id)
+int zebra_nhg_kernel_del(uint32_t id, vrf_id_t vrf_id)
 {
 	struct nhg_ctx *ctx = NULL;
 
-	ctx = nhg_ctx_init(id, NULL, NULL, 0, 0, 0, 0);
+	ctx = nhg_ctx_init(id, NULL, NULL, vrf_id, 0, 0, 0);
 
 	nhg_ctx_set_op(ctx, NHG_CTX_OP_DEL);
 
@@ -1038,25 +1080,54 @@ int zebra_nhg_kernel_del(uint32_t id)
 }
 
 /* Some dependency helper functions */
-static struct nhg_hash_entry *depends_find(struct nexthop *nh, afi_t afi)
+static struct nhg_hash_entry *depends_find_recursive(const struct nexthop *nh,
+						     afi_t afi)
 {
+	struct nhg_hash_entry *nhe;
 	struct nexthop *lookup = NULL;
+
+	lookup = nexthop_dup(nh, NULL);
+
+	nhe = zebra_nhg_find_nexthop(0, lookup, afi, 0);
+
+	nexthops_free(lookup);
+
+	return nhe;
+}
+
+static struct nhg_hash_entry *depends_find_singleton(const struct nexthop *nh,
+						     afi_t afi)
+{
+	struct nhg_hash_entry *nhe;
+	struct nexthop lookup = {};
+
+	/* Capture a snapshot of this single nh; it might be part of a list,
+	 * so we need to make a standalone copy.
+	 */
+	nexthop_copy_no_recurse(&lookup, nh, NULL);
+
+	nhe = zebra_nhg_find_nexthop(0, &lookup, afi, 0);
+
+	/* The copy may have allocated labels; free them if necessary. */
+	nexthop_del_labels(&lookup);
+
+	return nhe;
+}
+
+static struct nhg_hash_entry *depends_find(const struct nexthop *nh, afi_t afi)
+{
 	struct nhg_hash_entry *nhe = NULL;
 
 	if (!nh)
 		goto done;
 
-	copy_nexthops(&lookup, nh, NULL);
-
-	/* Clear it, in case its a group */
-	nexthops_free(lookup->next);
-	nexthops_free(lookup->prev);
-	lookup->next = NULL;
-	lookup->prev = NULL;
-
-	nhe = zebra_nhg_find_nexthop(0, lookup, afi, 0);
-
-	nexthops_free(lookup);
+	/* We are separating these functions out to increase handling speed
+	 * in the non-recursive case (by not alloc/freeing)
+	 */
+	if (CHECK_FLAG(nh->flags, NEXTHOP_FLAG_RECURSIVE))
+		nhe = depends_find_recursive(nh, afi);
+	else
+		nhe = depends_find_singleton(nh, afi);
 
 done:
 	return nhe;
@@ -1065,8 +1136,14 @@ done:
 static void depends_add(struct nhg_connected_tree_head *head,
 			struct nhg_hash_entry *depend)
 {
-	nhg_connected_tree_add_nhe(head, depend);
-	zebra_nhg_increment_ref(depend);
+	/* If NULL is returned, it was successfully added and
+	 * needs to have its refcnt incremented.
+	 *
+	 * Else the NHE is already present in the tree and doesn't
+	 * need to increment the refcnt.
+	 */
+	if (nhg_connected_tree_add_nhe(head, depend) == NULL)
+		zebra_nhg_increment_ref(depend);
 }
 
 static struct nhg_hash_entry *
@@ -1107,39 +1184,43 @@ struct nhg_hash_entry *
 zebra_nhg_rib_find(uint32_t id, struct nexthop_group *nhg, afi_t rt_afi)
 {
 	struct nhg_hash_entry *nhe = NULL;
+	vrf_id_t vrf_id;
 
-	if (!(nhg && nhg->nexthop)) {
-		flog_err(EC_ZEBRA_TABLE_LOOKUP_FAILED,
-			 "No nexthop passed to %s", __func__);
-		return NULL;
-	}
+	/*
+	 * CLANG SA is complaining that nexthop may be NULL
+	 * Make it happy but this is ridonc
+	 */
+	assert(nhg->nexthop);
+	vrf_id = !vrf_is_backend_netns() ? VRF_DEFAULT : nhg->nexthop->vrf_id;
 
-	zebra_nhg_find(&nhe, id, nhg, NULL, nhg->nexthop->vrf_id, rt_afi, 0);
+	zebra_nhg_find(&nhe, id, nhg, NULL, vrf_id, rt_afi, 0);
 
 	return nhe;
 }
 
 static void zebra_nhg_free_members(struct nhg_hash_entry *nhe)
 {
-	nexthop_group_delete(&nhe->nhg);
+	nexthops_free(nhe->nhg.nexthop);
+
 	/* Decrement to remove connection ref */
 	nhg_connected_tree_decrement_ref(&nhe->nhg_depends);
 	nhg_connected_tree_free(&nhe->nhg_depends);
 	nhg_connected_tree_free(&nhe->nhg_dependents);
 }
 
-void zebra_nhg_free(void *arg)
+void zebra_nhg_free(struct nhg_hash_entry *nhe)
 {
-	struct nhg_hash_entry *nhe = NULL;
-
-	nhe = (struct nhg_hash_entry *)arg;
-
 	if (nhe->refcnt)
 		zlog_debug("nhe_id=%u hash refcnt=%d", nhe->id, nhe->refcnt);
 
 	zebra_nhg_free_members(nhe);
 
 	XFREE(MTYPE_NHG, nhe);
+}
+
+void zebra_nhg_hash_free(void *p)
+{
+	zebra_nhg_free((struct nhg_hash_entry *)p);
 }
 
 void zebra_nhg_decrement_ref(struct nhg_hash_entry *nhe)
@@ -1218,7 +1299,7 @@ static void nexthop_set_resolved(afi_t afi, const struct nexthop *newhop,
 		break;
 	case NEXTHOP_TYPE_BLACKHOLE:
 		resolved_hop->type = NEXTHOP_TYPE_BLACKHOLE;
-		resolved_hop->bh_type = nexthop->bh_type;
+		resolved_hop->bh_type = newhop->bh_type;
 		break;
 	}
 
@@ -1292,6 +1373,7 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 	struct nexthop *newhop;
 	struct interface *ifp;
 	rib_dest_t *dest;
+	struct zebra_vrf *zvrf;
 
 	if ((nexthop->type == NEXTHOP_TYPE_IPV4)
 	    || nexthop->type == NEXTHOP_TYPE_IPV6)
@@ -1330,7 +1412,7 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 			if (IS_ZEBRA_DEBUG_RIB_DETAILED)
 				zlog_debug(
 					"\t%s: Onlink and interface: %u[%u] does not exist",
-					__PRETTY_FUNCTION__, nexthop->ifindex,
+					__func__, nexthop->ifindex,
 					nexthop->vrf_id);
 			return 0;
 		}
@@ -1341,16 +1423,27 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 			if (IS_ZEBRA_DEBUG_RIB_DETAILED)
 				zlog_debug(
 					"\t%s: Onlink and interface %s is not operative",
-					__PRETTY_FUNCTION__, ifp->name);
+					__func__, ifp->name);
 			return 0;
 		}
 		if (!if_is_operative(ifp)) {
 			if (IS_ZEBRA_DEBUG_RIB_DETAILED)
 				zlog_debug(
 					"\t%s: Interface %s is not unnumbered",
-					__PRETTY_FUNCTION__, ifp->name);
+					__func__, ifp->name);
 			return 0;
 		}
+	}
+
+	if ((top->p.family == AF_INET && top->p.prefixlen == 32
+	     && nexthop->gate.ipv4.s_addr == top->p.u.prefix4.s_addr)
+	    || (top->p.family == AF_INET6 && top->p.prefixlen == 128
+		&& memcmp(&nexthop->gate.ipv6, &top->p.u.prefix6, 16) == 0)) {
+		if (IS_ZEBRA_DEBUG_RIB_DETAILED)
+			zlog_debug(
+				"\t:%s: Attempting to install a max prefixlength route through itself",
+				__func__);
+		return 0;
 	}
 
 	/* Make lookup prefix. */
@@ -1372,10 +1465,11 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 	}
 	/* Lookup table.  */
 	table = zebra_vrf_table(afi, SAFI_UNICAST, nexthop->vrf_id);
-	if (!table) {
+	/* get zvrf */
+	zvrf = zebra_vrf_lookup_by_id(nexthop->vrf_id);
+	if (!table || !zvrf) {
 		if (IS_ZEBRA_DEBUG_RIB_DETAILED)
-			zlog_debug("\t%s: Table not found",
-				   __PRETTY_FUNCTION__);
+			zlog_debug("\t%s: Table not found", __func__);
 		return 0;
 	}
 
@@ -1388,13 +1482,13 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 		 * resolved by a route NH1. The exception is if the route is a
 		 * host route.
 		 */
-		if (top && rn == top)
+		if (rn == top)
 			if (((afi == AFI_IP) && (rn->p.prefixlen != 32))
 			    || ((afi == AFI_IP6) && (rn->p.prefixlen != 128))) {
 				if (IS_ZEBRA_DEBUG_RIB_DETAILED)
 					zlog_debug(
 						"\t%s: Matched against ourself and prefix length is not max bit length",
-						__PRETTY_FUNCTION__);
+						__func__);
 				return 0;
 			}
 
@@ -1403,11 +1497,11 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 		 * allowed.
 		 */
 		if (is_default_prefix(&rn->p)
-		    && !rnh_resolve_via_default(p.family)) {
+		    && !rnh_resolve_via_default(zvrf, p.family)) {
 			if (IS_ZEBRA_DEBUG_RIB_DETAILED)
 				zlog_debug(
 					"\t:%s: Resolved against default route",
-					__PRETTY_FUNCTION__);
+					__func__);
 			return 0;
 		}
 
@@ -1433,7 +1527,7 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 
 		if (match->type == ZEBRA_ROUTE_CONNECT) {
 			/* Directly point connected route. */
-			newhop = match->ng->nexthop;
+			newhop = match->nhe->nhg.nexthop;
 			if (newhop) {
 				if (nexthop->type == NEXTHOP_TYPE_IPV4
 				    || nexthop->type == NEXTHOP_TYPE_IPV6)
@@ -1442,7 +1536,7 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 			return 1;
 		} else if (CHECK_FLAG(re->flags, ZEBRA_FLAG_ALLOW_RECURSION)) {
 			resolved = 0;
-			for (ALL_NEXTHOPS_PTR(match->ng, newhop)) {
+			for (ALL_NEXTHOPS(match->nhe->nhg, newhop)) {
 				if (!CHECK_FLAG(match->status,
 						ROUTE_ENTRY_INSTALLED))
 					continue;
@@ -1459,11 +1553,11 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 
 			if (!resolved && IS_ZEBRA_DEBUG_RIB_DETAILED)
 				zlog_debug("\t%s: Recursion failed to find",
-					   __PRETTY_FUNCTION__);
+					   __func__);
 			return resolved;
 		} else if (re->type == ZEBRA_ROUTE_STATIC) {
 			resolved = 0;
-			for (ALL_NEXTHOPS_PTR(match->ng, newhop)) {
+			for (ALL_NEXTHOPS(match->nhe->nhg, newhop)) {
 				if (!CHECK_FLAG(match->status,
 						ROUTE_ENTRY_INSTALLED))
 					continue;
@@ -1481,14 +1575,13 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 			if (!resolved && IS_ZEBRA_DEBUG_RIB_DETAILED)
 				zlog_debug(
 					"\t%s: Static route unable to resolve",
-					__PRETTY_FUNCTION__);
+					__func__);
 			return resolved;
 		} else {
 			if (IS_ZEBRA_DEBUG_RIB_DETAILED) {
 				zlog_debug(
 					"\t%s: Route Type %s has not turned on recursion",
-					__PRETTY_FUNCTION__,
-					zebra_route_string(re->type));
+					__func__, zebra_route_string(re->type));
 				if (re->type == ZEBRA_ROUTE_BGP
 				    && !CHECK_FLAG(re->flags, ZEBRA_FLAG_IBGP))
 					zlog_debug(
@@ -1498,8 +1591,7 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 		}
 	}
 	if (IS_ZEBRA_DEBUG_RIB_DETAILED)
-		zlog_debug("\t%s: Nexthop did not lookup in table",
-			   __PRETTY_FUNCTION__);
+		zlog_debug("\t%s: Nexthop did not lookup in table", __func__);
 	return 0;
 }
 
@@ -1519,7 +1611,7 @@ static unsigned nexthop_active_check(struct route_node *rn,
 				     struct nexthop *nexthop)
 {
 	struct interface *ifp;
-	route_map_result_t ret = RMAP_MATCH;
+	route_map_result_t ret = RMAP_PERMITMATCH;
 	int family;
 	char buf[SRCDEST2STR_BUFFER];
 	const struct prefix *p, *src_p;
@@ -1536,7 +1628,16 @@ static unsigned nexthop_active_check(struct route_node *rn,
 	switch (nexthop->type) {
 	case NEXTHOP_TYPE_IFINDEX:
 		ifp = if_lookup_by_index(nexthop->ifindex, nexthop->vrf_id);
-		if (ifp && if_is_operative(ifp))
+		/*
+		 * If the interface exists and its operative or its a kernel
+		 * route and interface is up, its active. We trust kernel routes
+		 * to be good.
+		 */
+		if (ifp
+		    && (if_is_operative(ifp)
+			|| (if_is_up(ifp)
+			    && (re->type == ZEBRA_ROUTE_KERNEL
+				|| re->type == ZEBRA_ROUTE_SYSTEM))))
 			SET_FLAG(nexthop->flags, NEXTHOP_FLAG_ACTIVE);
 		else
 			UNSET_FLAG(nexthop->flags, NEXTHOP_FLAG_ACTIVE);
@@ -1583,7 +1684,7 @@ static unsigned nexthop_active_check(struct route_node *rn,
 	if (!CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ACTIVE)) {
 		if (IS_ZEBRA_DEBUG_RIB_DETAILED)
 			zlog_debug("\t%s: Unable to find a active nexthop",
-				   __PRETTY_FUNCTION__);
+				   __func__);
 		return 0;
 	}
 
@@ -1612,7 +1713,7 @@ static unsigned nexthop_active_check(struct route_node *rn,
 	zvrf = zebra_vrf_lookup_by_id(nexthop->vrf_id);
 	if (!zvrf) {
 		if (IS_ZEBRA_DEBUG_RIB_DETAILED)
-			zlog_debug("\t%s: zvrf is NULL", __PRETTY_FUNCTION__);
+			zlog_debug("\t%s: zvrf is NULL", __func__);
 		return CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ACTIVE);
 	}
 
@@ -1654,7 +1755,7 @@ int nexthop_active_update(struct route_node *rn, struct route_entry *re)
 	UNSET_FLAG(re->status, ROUTE_ENTRY_CHANGED);
 
 	/* Copy over the nexthops in current state */
-	nexthop_group_copy(&new_grp, re->ng);
+	nexthop_group_copy(&new_grp, &(re->nhe->nhg));
 
 	for (nexthop = new_grp.nexthop; nexthop; nexthop = nexthop->next) {
 
@@ -1704,7 +1805,7 @@ int nexthop_active_update(struct route_node *rn, struct route_entry *re)
 
 		new_nhe = zebra_nhg_rib_find(0, &new_grp, rt_afi);
 
-		zebra_nhg_re_update_ref(re, new_nhe);
+		route_entry_update_nhe(re, new_nhe);
 	}
 
 	if (curr_active) {
@@ -1728,40 +1829,6 @@ int nexthop_active_update(struct route_node *rn, struct route_entry *re)
 	 */
 	nexthops_free(new_grp.nexthop);
 	return curr_active;
-}
-
-static void zebra_nhg_re_attach_ref(struct route_entry *re,
-				    struct nhg_hash_entry *new)
-{
-	re->ng = new->nhg;
-	re->nhe_id = new->id;
-
-	zebra_nhg_increment_ref(new);
-}
-
-int zebra_nhg_re_update_ref(struct route_entry *re, struct nhg_hash_entry *new)
-{
-	struct nhg_hash_entry *old = NULL;
-	int ret = 0;
-
-	if (new == NULL) {
-		re->ng = NULL;
-		goto done;
-	}
-
-	if (re->nhe_id != new->id) {
-		old = zebra_nhg_lookup_id(re->nhe_id);
-
-		zebra_nhg_re_attach_ref(re, new);
-
-		if (old)
-			zebra_nhg_decrement_ref(old);
-	} else if (!re->ng)
-		/* This is the first time it's being attached */
-		zebra_nhg_re_attach_ref(re, new);
-
-done:
-	return ret;
 }
 
 /* Convert a nhe into a group array */
@@ -1800,7 +1867,7 @@ uint8_t zebra_nhg_nhe2grp(struct nh_grp *grp, struct nhg_hash_entry *nhe,
 		if (!duplicate) {
 			grp[i].id = depend->id;
 			/* We aren't using weights for anything right now */
-			grp[i].weight = depend->nhg->nexthop->weight;
+			grp[i].weight = depend->nhg.nexthop->weight;
 			i++;
 		}
 
@@ -1936,6 +2003,13 @@ void zebra_nhg_dplane_result(struct zebra_dplane_ctx *ctx)
 	case DPLANE_OP_SYS_ROUTE_DELETE:
 	case DPLANE_OP_ADDR_INSTALL:
 	case DPLANE_OP_ADDR_UNINSTALL:
+	case DPLANE_OP_MAC_INSTALL:
+	case DPLANE_OP_MAC_DELETE:
+	case DPLANE_OP_NEIGH_INSTALL:
+	case DPLANE_OP_NEIGH_UPDATE:
+	case DPLANE_OP_NEIGH_DELETE:
+	case DPLANE_OP_VTEP_ADD:
+	case DPLANE_OP_VTEP_DELETE:
 	case DPLANE_OP_NONE:
 		break;
 	}
@@ -1957,4 +2031,19 @@ static void zebra_nhg_sweep_entry(struct hash_bucket *bucket, void *arg)
 void zebra_nhg_sweep_table(struct hash *hash)
 {
 	hash_iterate(hash, zebra_nhg_sweep_entry, NULL);
+}
+
+/* Global control to disable use of kernel nexthops, if available. We can't
+ * force the kernel to support nexthop ids, of course, but we can disable
+ * zebra's use of them, for testing e.g. By default, if the kernel supports
+ * nexthop ids, zebra uses them.
+ */
+void zebra_nhg_enable_kernel_nexthops(bool set)
+{
+	g_nexthops_enabled = set;
+}
+
+bool zebra_nhg_kernel_nexthops_enabled(void)
+{
+	return g_nexthops_enabled;
 }

@@ -23,10 +23,8 @@
 #ifndef __ZEBRA_NHG_H__
 #define __ZEBRA_NHG_H__
 
-#include "zebra/rib.h"
+#include "lib/nexthop.h"
 #include "lib/nexthop_group.h"
-
-#include "zebra/zebra_dplane.h"
 
 /* This struct is used exclusively for dataplane
  * interaction via a dataplane context.
@@ -42,16 +40,15 @@ struct nh_grp {
 PREDECL_RBTREE_UNIQ(nhg_connected_tree);
 
 /*
- * Hashtables contiaining entries found in `zebra_router`.
+ * Hashtables containing nhg entries is in `zebra_router`.
  */
-
 struct nhg_hash_entry {
 	uint32_t id;
 	afi_t afi;
 	vrf_id_t vrf_id;
 	int type;
 
-	struct nexthop_group *nhg;
+	struct nexthop_group nhg;
 
 	/* If this is not a group, it
 	 * will be a single nexthop
@@ -155,11 +152,23 @@ struct nhg_ctx {
 	enum nhg_ctx_status status;
 };
 
+/* Global control to disable use of kernel nexthops, if available. We can't
+ * force the kernel to support nexthop ids, of course, but we can disable
+ * zebra's use of them, for testing e.g. By default, if the kernel supports
+ * nexthop ids, zebra uses them.
+ */
+void zebra_nhg_enable_kernel_nexthops(bool set);
+bool zebra_nhg_kernel_nexthops_enabled(void);
 
 /**
  * NHE abstracted tree functions.
  * Use these where possible instead of the direct ones access ones.
  */
+struct nhg_hash_entry *zebra_nhg_alloc(void);
+void zebra_nhg_free(struct nhg_hash_entry *nhe);
+/* In order to clear a generic hash, we need a generic api, sigh. */
+void zebra_nhg_hash_free(void *p);
+
 extern struct nhg_hash_entry *zebra_nhg_resolve(struct nhg_hash_entry *nhe);
 
 extern unsigned int zebra_nhg_depends_count(const struct nhg_hash_entry *nhe);
@@ -192,7 +201,7 @@ extern int zebra_nhg_kernel_find(uint32_t id, struct nexthop *nh,
 				 vrf_id_t vrf_id, afi_t afi, int type,
 				 int startup);
 /* Del via kernel */
-extern int zebra_nhg_kernel_del(uint32_t id);
+extern int zebra_nhg_kernel_del(uint32_t id, vrf_id_t vrf_id);
 
 /* Find via route creation */
 extern struct nhg_hash_entry *
@@ -201,8 +210,6 @@ zebra_nhg_rib_find(uint32_t id, struct nexthop_group *nhg, afi_t rt_afi);
 /* Reference counter functions */
 extern void zebra_nhg_decrement_ref(struct nhg_hash_entry *nhe);
 extern void zebra_nhg_increment_ref(struct nhg_hash_entry *nhe);
-extern int zebra_nhg_re_update_ref(struct route_entry *re,
-				   struct nhg_hash_entry *nhe);
 
 /* Check validity of nhe, if invalid will update dependents as well */
 extern void zebra_nhg_check_valid(struct nhg_hash_entry *nhe);
@@ -224,5 +231,7 @@ extern void zebra_nhg_dplane_result(struct zebra_dplane_ctx *ctx);
 extern void zebra_nhg_sweep_table(struct hash *hash);
 
 /* Nexthop resolution processing */
+struct route_entry; /* Forward ref to avoid circular includes */
 extern int nexthop_active_update(struct route_node *rn, struct route_entry *re);
-#endif
+
+#endif	/* __ZEBRA_NHG_H__ */

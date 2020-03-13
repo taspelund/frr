@@ -33,6 +33,8 @@
 #include "mpls.h"
 #include "jhash.h"
 #include "printfrr.h"
+#include "vrf.h"
+#include "nexthop_group.h"
 
 DEFINE_MTYPE_STATIC(LIB, NEXTHOP, "Nexthop")
 DEFINE_MTYPE_STATIC(LIB, NH_LABEL, "Nexthop label")
@@ -206,7 +208,7 @@ int nexthop_same_firsthop(struct nexthop *next1, struct nexthop *next2)
  */
 const char *nexthop_type_to_str(enum nexthop_types_t nh_type)
 {
-	static const char *desc[] = {
+	static const char *const desc[] = {
 		"none",		 "Directly connected",
 		"IPv4 nexthop",  "IPv4 nexthop with ifindex",
 		"IPv6 nexthop",  "IPv6 nexthop with ifindex",
@@ -229,7 +231,23 @@ bool nexthop_labels_match(const struct nexthop *nh1, const struct nexthop *nh2)
 
 struct nexthop *nexthop_new(void)
 {
-	return XCALLOC(MTYPE_NEXTHOP, sizeof(struct nexthop));
+	struct nexthop *nh;
+
+	nh = XCALLOC(MTYPE_NEXTHOP, sizeof(struct nexthop));
+
+	/*
+	 * Default the weight to 1 here for all nexthops.
+	 * The linux kernel does some weird stuff with adding +1 to
+	 * all nexthop weights it gets over netlink.
+	 * To handle this, just default everything to 1 right from
+	 * from the beggining so we don't have to special case
+	 * default weights in the linux netlink code.
+	 *
+	 * 1 should be a valid on all platforms anyway.
+	 */
+	nh->weight = 1;
+
+	return nh;
 }
 
 /* Free nexthop. */
@@ -287,12 +305,102 @@ bool nexthop_same_no_labels(const struct nexthop *nh1,
 	return true;
 }
 
+/*
+ * Allocate a new nexthop object and initialize it from various args.
+ */
+struct nexthop *nexthop_from_ifindex(ifindex_t ifindex, vrf_id_t vrf_id)
+{
+	struct nexthop *nexthop;
+
+	nexthop = nexthop_new();
+	nexthop->type = NEXTHOP_TYPE_IFINDEX;
+	nexthop->ifindex = ifindex;
+	nexthop->vrf_id = vrf_id;
+
+	return nexthop;
+}
+
+struct nexthop *nexthop_from_ipv4(const struct in_addr *ipv4,
+				  const struct in_addr *src,
+				  vrf_id_t vrf_id)
+{
+	struct nexthop *nexthop;
+
+	nexthop = nexthop_new();
+	nexthop->type = NEXTHOP_TYPE_IPV4;
+	nexthop->vrf_id = vrf_id;
+	nexthop->gate.ipv4 = *ipv4;
+	if (src)
+		nexthop->src.ipv4 = *src;
+
+	return nexthop;
+}
+
+struct nexthop *nexthop_from_ipv4_ifindex(const struct in_addr *ipv4,
+					  const struct in_addr *src,
+					  ifindex_t ifindex, vrf_id_t vrf_id)
+{
+	struct nexthop *nexthop;
+
+	nexthop = nexthop_new();
+	nexthop->type = NEXTHOP_TYPE_IPV4_IFINDEX;
+	nexthop->vrf_id = vrf_id;
+	nexthop->gate.ipv4 = *ipv4;
+	if (src)
+		nexthop->src.ipv4 = *src;
+	nexthop->ifindex = ifindex;
+
+	return nexthop;
+}
+
+struct nexthop *nexthop_from_ipv6(const struct in6_addr *ipv6,
+				  vrf_id_t vrf_id)
+{
+	struct nexthop *nexthop;
+
+	nexthop = nexthop_new();
+	nexthop->vrf_id = vrf_id;
+	nexthop->type = NEXTHOP_TYPE_IPV6;
+	nexthop->gate.ipv6 = *ipv6;
+
+	return nexthop;
+}
+
+struct nexthop *nexthop_from_ipv6_ifindex(const struct in6_addr *ipv6,
+					  ifindex_t ifindex, vrf_id_t vrf_id)
+{
+	struct nexthop *nexthop;
+
+	nexthop = nexthop_new();
+	nexthop->vrf_id = vrf_id;
+	nexthop->type = NEXTHOP_TYPE_IPV6_IFINDEX;
+	nexthop->gate.ipv6 = *ipv6;
+	nexthop->ifindex = ifindex;
+
+	return nexthop;
+}
+
+struct nexthop *nexthop_from_blackhole(enum blackhole_type bh_type)
+{
+	struct nexthop *nexthop;
+
+	nexthop = nexthop_new();
+	nexthop->vrf_id = VRF_DEFAULT;
+	nexthop->type = NEXTHOP_TYPE_BLACKHOLE;
+	nexthop->bh_type = bh_type;
+
+	return nexthop;
+}
+
 /* Update nexthop with label information. */
 void nexthop_add_labels(struct nexthop *nexthop, enum lsp_types_t type,
 			uint8_t num_labels, mpls_label_t *label)
 {
 	struct mpls_label_stack *nh_label;
 	int i;
+
+	if (num_labels == 0)
+		return;
 
 	nexthop->nh_label_type = type;
 	nh_label = XCALLOC(MTYPE_NH_LABEL,
@@ -458,8 +566,9 @@ uint32_t nexthop_hash(const struct nexthop *nexthop)
 	return key;
 }
 
-void nexthop_copy(struct nexthop *copy, const struct nexthop *nexthop,
-		  struct nexthop *rparent)
+void nexthop_copy_no_recurse(struct nexthop *copy,
+			     const struct nexthop *nexthop,
+			     struct nexthop *rparent)
 {
 	copy->vrf_id = nexthop->vrf_id;
 	copy->ifindex = nexthop->ifindex;
@@ -474,6 +583,28 @@ void nexthop_copy(struct nexthop *copy, const struct nexthop *nexthop,
 		nexthop_add_labels(copy, nexthop->nh_label_type,
 				   nexthop->nh_label->num_labels,
 				   &nexthop->nh_label->label[0]);
+}
+
+void nexthop_copy(struct nexthop *copy, const struct nexthop *nexthop,
+		  struct nexthop *rparent)
+{
+	nexthop_copy_no_recurse(copy, nexthop, rparent);
+
+	/* Bit of a special case here, we need to handle the case
+	 * of a nexthop resolving to agroup. Hence, we need to
+	 * use a nexthop_group API.
+	 */
+	if (CHECK_FLAG(copy->flags, NEXTHOP_FLAG_RECURSIVE))
+		copy_nexthops(&copy->resolved, nexthop->resolved, copy);
+}
+
+struct nexthop *nexthop_dup_no_recurse(const struct nexthop *nexthop,
+				       struct nexthop *rparent)
+{
+	struct nexthop *new = nexthop_new();
+
+	nexthop_copy_no_recurse(new, nexthop, rparent);
+	return new;
 }
 
 struct nexthop *nexthop_dup(const struct nexthop *nexthop,

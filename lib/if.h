@@ -27,7 +27,10 @@
 #include "qobj.h"
 #include "hook.h"
 
-DECLARE_MTYPE(IF)
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 DECLARE_MTYPE(CONNECTED_LABEL)
 
 /* Interface link-layer type, if known. Derived from:
@@ -300,9 +303,9 @@ struct interface {
 };
 
 RB_HEAD(if_name_head, interface);
-RB_PROTOTYPE(if_name_head, interface, name_entry, if_cmp_func);
+RB_PROTOTYPE(if_name_head, interface, name_entry, if_cmp_func)
 RB_HEAD(if_index_head, interface);
-RB_PROTOTYPE(if_index_head, interface, index_entry, if_cmp_index_func);
+RB_PROTOTYPE(if_index_head, interface, index_entry, if_cmp_index_func)
 DECLARE_QOBJ_TYPE(interface)
 
 #define IFNAME_RB_INSERT(vrf, ifp)                                             \
@@ -510,7 +513,7 @@ extern void if_delete_retain(struct interface *);
 
 /* Delete and free the interface structure: calls if_delete_retain and then
    deletes it from the interface list and frees the structure. */
-extern void if_delete(struct interface *);
+extern void if_delete(struct interface **ifp);
 
 extern int if_is_up(const struct interface *ifp);
 extern int if_is_running(const struct interface *ifp);
@@ -540,7 +543,7 @@ extern ifindex_t ifname2ifindex(const char *ifname, vrf_id_t vrf_id);
 
 /* Connected address functions. */
 extern struct connected *connected_new(void);
-extern void connected_free(struct connected *);
+extern void connected_free(struct connected **connected);
 extern void connected_add(struct interface *, struct connected *);
 extern struct connected *
 connected_add_by_prefix(struct interface *, struct prefix *, struct prefix *);
@@ -573,5 +576,9 @@ extern void if_down_via_zapi(struct interface *ifp);
 extern void if_destroy_via_zapi(struct interface *ifp);
 
 extern const struct frr_yang_module_info frr_interface_info;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _ZEBRA_IF_H */

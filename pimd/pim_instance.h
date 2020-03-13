@@ -26,7 +26,10 @@
 #include "pim_str.h"
 #include "pim_msdp.h"
 #include "pim_assert.h"
+#include "pim_bsm.h"
 #include "pim_vxlan_instance.h"
+#include "pim_oil.h"
+#include "pim_upstream.h"
 
 #if defined(HAVE_LINUX_MROUTE_H)
 #include <linux/mroute.h>
@@ -84,6 +87,7 @@ enum pim_mlag_flags {
 	/* zebra is up on the peer */
 	PIM_MLAGF_PEER_ZEBRA_UP = (1 << 4)
 };
+
 struct pim_router {
 	struct thread_master *master;
 
@@ -151,8 +155,7 @@ struct pim_instance {
 	struct list *static_routes;
 
 	// Upstream vrf specific information
-	struct list *upstream_list;
-	struct hash *upstream_hash;
+	struct rb_pim_upstream_head upstream_head;
 	struct timer_wheel *upstream_sg_wheel;
 
 	/*
@@ -163,8 +166,7 @@ struct pim_instance {
 
 	int iface_vif_index[MAXVIFS];
 
-	struct list *channel_oil_list;
-	struct hash *channel_oil_hash;
+	struct rb_pim_oil_head channel_oil_head;
 
 	struct pim_msdp msdp;
 	struct pim_vxlan_instance vxlan;
@@ -177,7 +179,14 @@ struct pim_instance {
 
 	bool ecmp_enable;
 	bool ecmp_rebalance_enable;
+	/* No. of Dual active I/fs in pim_instance */
 	uint32_t inst_mlag_intf_cnt;
+
+	/* Bsm related */
+	struct bsm_scope global_scope;
+	uint64_t bsm_rcvd;
+	uint64_t bsm_sent;
+	uint64_t bsm_dropped;
 
 	/* If we need to rescan all our upstreams */
 	struct thread *rpf_cache_refresher;

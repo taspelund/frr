@@ -33,6 +33,7 @@
 #include "pim_static.h"
 #include "pim_ssmpingd.h"
 #include "pim_vty.h"
+#include "pim_bsm.h"
 #include "pim_mlag.h"
 
 static void pim_instance_terminate(struct pim_instance *pim)
@@ -52,6 +53,8 @@ static void pim_instance_terminate(struct pim_instance *pim)
 	pim_upstream_terminate(pim);
 
 	pim_rp_free(pim);
+
+	pim_bsm_proc_free(pim);
 
 	/* Traverse and cleanup rpf_hash */
 	if (pim->rpf_hash) {
@@ -98,7 +101,7 @@ static struct pim_instance *pim_instance_init(struct vrf *vrf)
 					 hash_name);
 
 	if (PIM_DEBUG_ZEBRA)
-		zlog_debug("%s: NHT rpf hash init ", __PRETTY_FUNCTION__);
+		zlog_debug("%s: NHT rpf hash init ", __func__);
 
 	pim->ssm_info = pim_ssm_init();
 
@@ -108,6 +111,8 @@ static struct pim_instance *pim_instance_init(struct vrf *vrf)
 	pim->send_v6_secondary = 1;
 
 	pim_rp_init(pim);
+
+	pim_bsm_proc_init(pim);
 
 	pim_oil_init(pim);
 
@@ -160,7 +165,7 @@ static int pim_vrf_enable(struct vrf *vrf)
 {
 	struct pim_instance *pim = (struct pim_instance *)vrf->info;
 
-	zlog_debug("%s: for %s", __PRETTY_FUNCTION__, vrf->name);
+	zlog_debug("%s: for %s", __func__, vrf->name);
 
 	pim_mroute_socket_enable(pim);
 

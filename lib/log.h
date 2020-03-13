@@ -26,6 +26,16 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include "lib/hook.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Hook for external logging function */
+DECLARE_HOOK(zebra_ext_log, (int priority, const char *format, va_list args),
+	     (priority, format, args));
 
 /* Here is some guidance on logging levels to use:
  *
@@ -71,20 +81,13 @@ extern void openzlog(const char *progname, const char *protoname,
 /* Close zlog function. */
 extern void closezlog(void);
 
-/* GCC have printf type attribute check.  */
-#ifdef __GNUC__
-#define PRINTF_ATTRIBUTE(a,b) __attribute__ ((__format__ (__printf__, a, b)))
-#else
-#define PRINTF_ATTRIBUTE(a,b)
-#endif /* __GNUC__ */
-
 /* Handy zlog functions. */
-extern void zlog_err(const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
-extern void zlog_warn(const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
-extern void zlog_info(const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
-extern void zlog_notice(const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
-extern void zlog_debug(const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
-extern void zlog(int priority, const char *format, ...) PRINTF_ATTRIBUTE(2, 3);
+extern void zlog_err(const char *format, ...) PRINTFRR(1, 2);
+extern void zlog_warn(const char *format, ...) PRINTFRR(1, 2);
+extern void zlog_info(const char *format, ...) PRINTFRR(1, 2);
+extern void zlog_notice(const char *format, ...) PRINTFRR(1, 2);
+extern void zlog_debug(const char *format, ...) PRINTFRR(1, 2);
+extern void zlog(int priority, const char *format, ...) PRINTFRR(2, 3);
 
 /* For logs which have error codes associated with them */
 #define flog_err(ferr_id, format, ...)                                        \
@@ -215,5 +218,9 @@ struct timestamp_control {
 	"Local use\n"                                                          \
 	"Local use\n"                                                          \
 	"Local use\n"
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _ZEBRA_LOG_H */

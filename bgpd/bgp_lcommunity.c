@@ -357,7 +357,7 @@ static const char *lcommunity_gettoken(const char *str,
 	const char *p = str;
 
 	/* Skip white space. */
-	while (isspace((int)*p)) {
+	while (isspace((unsigned char)*p)) {
 		p++;
 		str++;
 	}
@@ -367,14 +367,14 @@ static const char *lcommunity_gettoken(const char *str,
 		return NULL;
 
 	/* Community value. */
-	if (isdigit((int)*p)) {
+	if (isdigit((unsigned char)*p)) {
 		int separator = 0;
 		int digit = 0;
 		uint32_t globaladmin = 0;
 		uint32_t localdata1 = 0;
 		uint32_t localdata2 = 0;
 
-		while (isdigit((int)*p) || *p == ':') {
+		while (isdigit((unsigned char)*p) || *p == ':') {
 			if (*p == ':') {
 				if (separator == 2) {
 					*token = lcommunity_token_unknown;
@@ -437,7 +437,8 @@ struct lcommunity *lcommunity_str2com(const char *str)
 	enum lcommunity_token token = lcommunity_token_unknown;
 	struct lcommunity_val lval;
 
-	while ((str = lcommunity_gettoken(str, &lval, &token))) {
+	do {
+		str = lcommunity_gettoken(str, &lval, &token);
 		switch (token) {
 		case lcommunity_token_val:
 			if (lcom == NULL)
@@ -450,7 +451,8 @@ struct lcommunity *lcommunity_str2com(const char *str)
 				lcommunity_free(&lcom);
 			return NULL;
 		}
-	}
+	} while (str);
+
 	return lcom;
 }
 
@@ -525,10 +527,158 @@ void lcommunity_del_val(struct lcommunity *lcom, uint8_t *ptr)
 						 lcom->val, lcom_length(lcom));
 			else {
 				XFREE(MTYPE_LCOMMUNITY_VAL, lcom->val);
-				lcom->val = NULL;
 			}
 			return;
 		}
 		i++;
+	}
+}
+
+static struct lcommunity *bgp_aggr_lcommunity_lookup(
+						struct bgp_aggregate *aggregate,
+						struct lcommunity *lcommunity)
+{
+	return hash_lookup(aggregate->lcommunity_hash, lcommunity);
+}
+
+static void *bgp_aggr_lcommunty_hash_alloc(void *p)
+{
+	struct lcommunity *ref = (struct lcommunity *)p;
+	struct lcommunity *lcommunity = NULL;
+
+	lcommunity = lcommunity_dup(ref);
+	return lcommunity;
+}
+
+static void bgp_aggr_lcommunity_prepare(struct hash_bucket *hb, void *arg)
+{
+	struct lcommunity *hb_lcommunity = hb->data;
+	struct lcommunity **aggr_lcommunity = arg;
+
+	if (*aggr_lcommunity)
+		*aggr_lcommunity = lcommunity_merge(*aggr_lcommunity,
+						    hb_lcommunity);
+	else
+		*aggr_lcommunity = lcommunity_dup(hb_lcommunity);
+}
+
+void bgp_aggr_lcommunity_remove(void *arg)
+{
+	struct lcommunity *lcommunity = arg;
+
+	lcommunity_free(&lcommunity);
+}
+
+void bgp_compute_aggregate_lcommunity(struct bgp_aggregate *aggregate,
+				      struct lcommunity *lcommunity)
+{
+
+	bgp_compute_aggregate_lcommunity_hash(aggregate, lcommunity);
+	bgp_compute_aggregate_lcommunity_val(aggregate);
+}
+
+void bgp_compute_aggregate_lcommunity_hash(struct bgp_aggregate *aggregate,
+					   struct lcommunity *lcommunity)
+{
+
+	struct lcommunity *aggr_lcommunity = NULL;
+
+	if ((aggregate == NULL) || (lcommunity == NULL))
+		return;
+
+	/* Create hash if not already created.
+	 */
+	if (aggregate->lcommunity_hash == NULL)
+		aggregate->lcommunity_hash = hash_create(
+					lcommunity_hash_make, lcommunity_cmp,
+					"BGP Aggregator lcommunity hash");
+
+	aggr_lcommunity = bgp_aggr_lcommunity_lookup(aggregate, lcommunity);
+	if (aggr_lcommunity == NULL) {
+		/* Insert lcommunity into hash.
+		 */
+		aggr_lcommunity = hash_get(aggregate->lcommunity_hash,
+					   lcommunity,
+					   bgp_aggr_lcommunty_hash_alloc);
+	}
+
+	/* Increment reference counter.
+	 */
+	aggr_lcommunity->refcnt++;
+}
+
+void bgp_compute_aggregate_lcommunity_val(struct bgp_aggregate *aggregate)
+{
+	struct lcommunity *lcommerge = NULL;
+
+	if (aggregate == NULL)
+		return;
+
+	/* Re-compute aggregate's lcommunity.
+	 */
+	if (aggregate->lcommunity)
+		lcommunity_free(&aggregate->lcommunity);
+	if (aggregate->lcommunity_hash &&
+	    aggregate->lcommunity_hash->count) {
+		hash_iterate(aggregate->lcommunity_hash,
+			     bgp_aggr_lcommunity_prepare,
+			     &aggregate->lcommunity);
+		lcommerge = aggregate->lcommunity;
+		aggregate->lcommunity = lcommunity_uniq_sort(lcommerge);
+		if (lcommerge)
+			lcommunity_free(&lcommerge);
+	}
+}
+
+void bgp_remove_lcommunity_from_aggregate(struct bgp_aggregate *aggregate,
+					  struct lcommunity *lcommunity)
+{
+	struct lcommunity *aggr_lcommunity = NULL;
+	struct lcommunity *ret_lcomm = NULL;
+
+	if ((!aggregate)
+	    || (!aggregate->lcommunity_hash)
+	    || (!lcommunity))
+		return;
+
+	/* Look-up the lcommunity in the hash.
+	 */
+	aggr_lcommunity = bgp_aggr_lcommunity_lookup(aggregate, lcommunity);
+	if (aggr_lcommunity) {
+		aggr_lcommunity->refcnt--;
+
+		if (aggr_lcommunity->refcnt == 0) {
+			ret_lcomm = hash_release(aggregate->lcommunity_hash,
+						 aggr_lcommunity);
+			lcommunity_free(&ret_lcomm);
+
+			bgp_compute_aggregate_lcommunity_val(aggregate);
+
+		}
+	}
+}
+
+void bgp_remove_lcomm_from_aggregate_hash(struct bgp_aggregate *aggregate,
+					  struct lcommunity *lcommunity)
+{
+	struct lcommunity *aggr_lcommunity = NULL;
+	struct lcommunity *ret_lcomm = NULL;
+
+	if ((!aggregate)
+	    || (!aggregate->lcommunity_hash)
+	    || (!lcommunity))
+		return;
+
+	/* Look-up the lcommunity in the hash.
+	 */
+	aggr_lcommunity = bgp_aggr_lcommunity_lookup(aggregate, lcommunity);
+	if (aggr_lcommunity) {
+		aggr_lcommunity->refcnt--;
+
+		if (aggr_lcommunity->refcnt == 0) {
+			ret_lcomm = hash_release(aggregate->lcommunity_hash,
+						 aggr_lcommunity);
+			lcommunity_free(&ret_lcomm);
+		}
 	}
 }

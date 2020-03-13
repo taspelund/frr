@@ -76,6 +76,7 @@ extern unsigned long conf_bgp_debug_vpn;
 extern unsigned long conf_bgp_debug_flowspec;
 extern unsigned long conf_bgp_debug_labelpool;
 extern unsigned long conf_bgp_debug_pbr;
+extern unsigned long conf_bgp_debug_graceful_restart;
 
 extern unsigned long term_bgp_debug_as4;
 extern unsigned long term_bgp_debug_neighbor_events;
@@ -91,6 +92,7 @@ extern unsigned long term_bgp_debug_vpn;
 extern unsigned long term_bgp_debug_flowspec;
 extern unsigned long term_bgp_debug_labelpool;
 extern unsigned long term_bgp_debug_pbr;
+extern unsigned long term_bgp_debug_graceful_restart;
 
 extern struct list *bgp_debug_neighbor_events_peers;
 extern struct list *bgp_debug_keepalive_peers;
@@ -131,6 +133,8 @@ struct bgp_debug_filter {
 #define BGP_DEBUG_PACKET_SEND         0x01
 #define BGP_DEBUG_PACKET_SEND_DETAIL  0x02
 
+#define BGP_DEBUG_GRACEFUL_RESTART     0x01
+
 #define CONF_DEBUG_ON(a, b)	(conf_bgp_debug_ ## a |= (BGP_DEBUG_ ## b))
 #define CONF_DEBUG_OFF(a, b)	(conf_bgp_debug_ ## a &= ~(BGP_DEBUG_ ## b))
 
@@ -151,8 +155,7 @@ struct bgp_debug_filter {
 #define BGP_DEBUG(a, b)		(term_bgp_debug_ ## a & BGP_DEBUG_ ## b)
 #define CONF_BGP_DEBUG(a, b)    (conf_bgp_debug_ ## a & BGP_DEBUG_ ## b)
 
-extern const char *bgp_type_str[];
-extern const char *pmsi_tnltype_str[];
+extern const char *const bgp_type_str[];
 
 extern int bgp_dump_attr(struct attr *, char *, size_t);
 extern int bgp_debug_peer_updout_enabled(char *host);

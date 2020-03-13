@@ -127,6 +127,43 @@ struct bgp_table *bgp_table_init(struct bgp *bgp, afi_t afi, safi_t safi)
 	return rt;
 }
 
+/* Delete the route node from the selection deferral route list */
+void bgp_delete_listnode(struct bgp_node *node)
+{
+	struct route_node *rn = NULL;
+	struct bgp_table *table = NULL;
+	struct bgp *bgp = NULL;
+	afi_t afi;
+	safi_t safi;
+
+	/* If the route to be deleted is selection pending, update the
+	 * route node in gr_info
+	 */
+	if (CHECK_FLAG(node->flags, BGP_NODE_SELECT_DEFER)) {
+		table = bgp_node_table(node);
+
+		if (table) {
+			bgp = table->bgp;
+			afi = table->afi;
+			safi = table->safi;
+		} else
+			return;
+
+		rn = bgp_node_to_rnode(node);
+
+		if (bgp && rn && rn->lock == 1) {
+			/* Delete the route from the selection pending list */
+			if ((node->rt_node)
+			    && (bgp->gr_info[afi][safi].route_list)) {
+				list_delete_node(
+					bgp->gr_info[afi][safi].route_list,
+					node->rt_node);
+				node->rt_node = NULL;
+			}
+		}
+	}
+}
+
 static struct bgp_node *
 bgp_route_next_until_maxlen(struct bgp_node *node, const struct bgp_node *limit,
 			    const uint8_t maxlen)
@@ -156,8 +193,11 @@ void bgp_table_range_lookup(const struct bgp_table *table, struct prefix *p,
 	struct bgp_node *node = bgp_node_from_rnode(table->route_table->top);
 	struct bgp_node *matched = NULL;
 
-	while (node && node->p.prefixlen <= p->prefixlen
-	       && prefix_match(&node->p, p)) {
+	if (node == NULL)
+		return;
+
+	while (node &&
+	       node->p.prefixlen <= p->prefixlen && prefix_match(&node->p, p)) {
 		if (bgp_node_has_bgp_path_info_data(node)
 		    && node->p.prefixlen == p->prefixlen) {
 			matched = node;
@@ -167,13 +207,19 @@ void bgp_table_range_lookup(const struct bgp_table *table, struct prefix *p,
 			&p->u.prefix, node->p.prefixlen)]);
 	}
 
-	if (node == NULL)
+	if (!node)
 		return;
 
-	if ((matched == NULL && node->p.prefixlen > maxlen) || !node->parent)
+	if (matched == NULL && node->p.prefixlen <= maxlen
+	    && prefix_match(p, &node->p) && node->parent == NULL)
+		matched = node;
+	else if ((matched == NULL && node->p.prefixlen > maxlen) || !node->parent)
 		return;
-	else if (matched == NULL)
+	else if (matched == NULL && node->parent)
 		matched = node = bgp_node_from_rnode(node->parent);
+
+	if (!matched)
+		return;
 
 	if (bgp_node_has_bgp_path_info_data(matched)) {
 		bgp_lock_node(matched);

@@ -26,6 +26,10 @@
 #include "prefix.h"
 #include "mpls.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Maximum next hop string length - gateway + ifindex */
 #define NEXTHOP_STRLEN (INET6_ADDRSTRLEN + 30)
 
@@ -75,10 +79,13 @@ struct nexthop {
 #define NEXTHOP_FLAG_ACTIVE     (1 << 0) /* This nexthop is alive. */
 #define NEXTHOP_FLAG_FIB        (1 << 1) /* FIB nexthop. */
 #define NEXTHOP_FLAG_RECURSIVE  (1 << 2) /* Recursive nexthop. */
-#define NEXTHOP_FLAG_ONLINK     (1 << 3) /* Nexthop should be installed onlink. */
-#define NEXTHOP_FLAG_MATCHED    (1 << 4) /* Already matched vs a nexthop */
-#define NEXTHOP_FLAG_DUPLICATE  (1 << 5) /* nexthop duplicates another active one */
-#define NEXTHOP_FLAG_RNH_FILTERED  (1 << 6) /* rmap filtered, used by rnh */
+#define NEXTHOP_FLAG_ONLINK     (1 << 3) /* Nexthop should be installed
+					  * onlink.
+					  */
+#define NEXTHOP_FLAG_DUPLICATE  (1 << 4) /* nexthop duplicates another
+					  * active one
+					  */
+#define NEXTHOP_FLAG_RNH_FILTERED  (1 << 5) /* rmap filtered, used by rnh */
 #define NEXTHOP_IS_ACTIVE(flags)                                               \
 	(CHECK_FLAG(flags, NEXTHOP_FLAG_ACTIVE)                                \
 	 && !CHECK_FLAG(flags, NEXTHOP_FLAG_DUPLICATE))
@@ -119,6 +126,22 @@ void nexthops_free(struct nexthop *nexthop);
 void nexthop_add_labels(struct nexthop *, enum lsp_types_t, uint8_t,
 			mpls_label_t *);
 void nexthop_del_labels(struct nexthop *);
+
+/*
+ * Allocate a new nexthop object and initialize it from various args.
+ */
+struct nexthop *nexthop_from_ifindex(ifindex_t ifindex, vrf_id_t vrf_id);
+struct nexthop *nexthop_from_ipv4(const struct in_addr *ipv4,
+				  const struct in_addr *src,
+				  vrf_id_t vrf_id);
+struct nexthop *nexthop_from_ipv4_ifindex(const struct in_addr *ipv4,
+					  const struct in_addr *src,
+					  ifindex_t ifindex, vrf_id_t vrf_id);
+struct nexthop *nexthop_from_ipv6(const struct in6_addr *ipv6,
+				  vrf_id_t vrf_id);
+struct nexthop *nexthop_from_ipv6_ifindex(const struct in6_addr *ipv6,
+					  ifindex_t ifindex, vrf_id_t vrf_id);
+struct nexthop *nexthop_from_blackhole(enum blackhole_type bh_type);
 
 /*
  * Hash a nexthop. Suitable for use with hash tables.
@@ -167,8 +190,19 @@ extern unsigned int nexthop_level(struct nexthop *nexthop);
 /* Copies to an already allocated nexthop struct */
 extern void nexthop_copy(struct nexthop *copy, const struct nexthop *nexthop,
 			 struct nexthop *rparent);
+/* Copies to an already allocated nexthop struct, not including recurse info */
+extern void nexthop_copy_no_recurse(struct nexthop *copy,
+				    const struct nexthop *nexthop,
+				    struct nexthop *rparent);
 /* Duplicates a nexthop and returns the newly allocated nexthop */
 extern struct nexthop *nexthop_dup(const struct nexthop *nexthop,
 				   struct nexthop *rparent);
+/* Duplicates a nexthop and returns the newly allocated nexthop */
+extern struct nexthop *nexthop_dup_no_recurse(const struct nexthop *nexthop,
+					      struct nexthop *rparent);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /*_LIB_NEXTHOP_H */

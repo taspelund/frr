@@ -180,7 +180,7 @@ void bgp_tip_del(struct bgp *bgp, struct in_addr *tip)
 
 /* BGP own address structure */
 struct bgp_addr {
-	struct in_addr addr;
+	struct prefix p;
 	struct list *ifp_name_list;
 };
 
@@ -190,8 +190,11 @@ static void show_address_entry(struct hash_bucket *bucket, void *args)
 	struct bgp_addr *addr = (struct bgp_addr *)bucket->data;
 	char *name;
 	struct listnode *node;
+	char str[INET6_ADDRSTRLEN] = {0};
 
-	vty_out(vty, "addr: %s, count: %d : ", inet_ntoa(addr->addr),
+	vty_out(vty, "addr: %s, count: %d : ",
+		inet_ntop(addr->p.family, &(addr->p.u.prefix),
+			  str, INET6_ADDRSTRLEN),
 		addr->ifp_name_list->count);
 
 	for (ALL_LIST_ELEMENTS_RO(addr->ifp_name_list, node, name)) {
@@ -217,11 +220,11 @@ static void bgp_address_hash_string_del(void *val)
 
 static void *bgp_address_hash_alloc(void *p)
 {
-	const struct in_addr *val = (const struct in_addr *)p;
-	struct bgp_addr *addr;
+	struct bgp_addr *copy_addr = p;
+	struct bgp_addr *addr = NULL;
 
 	addr = XMALLOC(MTYPE_BGP_ADDR, sizeof(struct bgp_addr));
-	addr->addr.s_addr = val->s_addr;
+	prefix_copy(&addr->p, &copy_addr->p);
 
 	addr->ifp_name_list = list_new();
 	addr->ifp_name_list->del = bgp_address_hash_string_del;
@@ -241,7 +244,7 @@ static unsigned int bgp_address_hash_key_make(const void *p)
 {
 	const struct bgp_addr *addr = p;
 
-	return jhash_1word(addr->addr.s_addr, 0);
+	return prefix_hash_key(&addr->p);
 }
 
 static bool bgp_address_hash_cmp(const void *p1, const void *p2)
@@ -249,14 +252,14 @@ static bool bgp_address_hash_cmp(const void *p1, const void *p2)
 	const struct bgp_addr *addr1 = p1;
 	const struct bgp_addr *addr2 = p2;
 
-	return addr1->addr.s_addr == addr2->addr.s_addr;
+	return prefix_same(&addr1->p, &addr2->p);
 }
 
 void bgp_address_init(struct bgp *bgp)
 {
 	bgp->address_hash =
 		hash_create(bgp_address_hash_key_make, bgp_address_hash_cmp,
-			    "BGP Address Hash");
+				"BGP Connected Address Hash");
 }
 
 void bgp_address_destroy(struct bgp *bgp)
@@ -276,7 +279,12 @@ static void bgp_address_add(struct bgp *bgp, struct connected *ifc,
 	struct listnode *node;
 	char *name;
 
-	tmp.addr = p->u.prefix4;
+	tmp.p = *p;
+
+	if (tmp.p.family == AF_INET)
+		tmp.p.prefixlen = IPV4_MAX_BITLEN;
+	else if (tmp.p.family == AF_INET6)
+		tmp.p.prefixlen = IPV6_MAX_BITLEN;
 
 	addr = hash_get(bgp->address_hash, &tmp, bgp_address_hash_alloc);
 
@@ -298,7 +306,12 @@ static void bgp_address_del(struct bgp *bgp, struct connected *ifc,
 	struct listnode *node;
 	char *name;
 
-	tmp.addr = p->u.prefix4;
+	tmp.p = *p;
+
+	if (tmp.p.family == AF_INET)
+		tmp.p.prefixlen = IPV4_MAX_BITLEN;
+	else if (tmp.p.family == AF_INET6)
+		tmp.p.prefixlen = IPV6_MAX_BITLEN;
 
 	addr = hash_lookup(bgp->address_hash, &tmp);
 	/* may have been deleted earlier by bgp_interface_down() */
@@ -379,6 +392,8 @@ void bgp_connected_add(struct bgp *bgp, struct connected *ifc)
 		if (IN6_IS_ADDR_LINKLOCAL(&p.u.prefix6))
 			return;
 
+		bgp_address_add(bgp, ifc, addr);
+
 		rn = bgp_node_get(bgp->connected_table[AFI_IP6],
 				  (struct prefix *)&p);
 
@@ -419,6 +434,8 @@ void bgp_connected_delete(struct bgp *bgp, struct connected *ifc)
 		if (IN6_IS_ADDR_LINKLOCAL(&p.u.prefix6))
 			return;
 
+		bgp_address_del(bgp, ifc, addr);
+
 		rn = bgp_node_lookup(bgp->connected_table[AFI_IP6],
 				     (struct prefix *)&p);
 	}
@@ -453,21 +470,77 @@ static void bgp_connected_cleanup(struct route_table *table,
 	}
 }
 
-int bgp_nexthop_self(struct bgp *bgp, struct in_addr nh_addr)
+int bgp_nexthop_self(struct bgp *bgp, afi_t afi, uint8_t type, uint8_t sub_type,
+		struct attr *attr, struct bgp_node *rn)
 {
-	struct bgp_addr tmp, *addr;
-	struct tip_addr tmp_tip, *tip;
+	uint8_t new_afi = afi == AFI_IP ? AF_INET : AF_INET6;
+	struct bgp_addr tmp_addr = {{0}}, *addr = NULL;
+	struct tip_addr tmp_tip, *tip = NULL;
 
-	tmp.addr = nh_addr;
+	bool is_bgp_static_route =
+		((type == ZEBRA_ROUTE_BGP) && (sub_type == BGP_ROUTE_STATIC))
+			? true
+			: false;
 
-	addr = hash_lookup(bgp->address_hash, &tmp);
+	if (!is_bgp_static_route)
+		new_afi = BGP_ATTR_NEXTHOP_AFI_IP6(attr) ? AF_INET6 : AF_INET;
+
+	tmp_addr.p.family = new_afi;
+	switch (new_afi) {
+	case AF_INET:
+		if (is_bgp_static_route) {
+			tmp_addr.p.u.prefix4 = rn->p.u.prefix4;
+			tmp_addr.p.prefixlen = rn->p.prefixlen;
+		} else {
+			/* Here we need to find out which nexthop to be used*/
+			if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP)) {
+				tmp_addr.p.u.prefix4 = attr->nexthop;
+				tmp_addr.p.prefixlen = IPV4_MAX_BITLEN;
+			} else if ((attr->mp_nexthop_len)
+				   && ((attr->mp_nexthop_len
+					== BGP_ATTR_NHLEN_IPV4)
+				       || (attr->mp_nexthop_len
+					   == BGP_ATTR_NHLEN_VPNV4))) {
+				tmp_addr.p.u.prefix4 =
+					attr->mp_nexthop_global_in;
+				tmp_addr.p.prefixlen = IPV4_MAX_BITLEN;
+			} else
+				return 0;
+		}
+		break;
+	case AF_INET6:
+		if (is_bgp_static_route) {
+			tmp_addr.p.u.prefix6 = rn->p.u.prefix6;
+			tmp_addr.p.prefixlen = rn->p.prefixlen;
+		} else {
+			tmp_addr.p.u.prefix6 = attr->mp_nexthop_global;
+			tmp_addr.p.prefixlen = IPV6_MAX_BITLEN;
+		}
+		break;
+	default:
+		break;
+	}
+
+	addr = hash_lookup(bgp->address_hash, &tmp_addr);
 	if (addr)
 		return 1;
 
-	tmp_tip.addr = nh_addr;
-	tip = hash_lookup(bgp->tip_hash, &tmp_tip);
-	if (tip)
-		return 1;
+	if (new_afi == AF_INET) {
+		memset(&tmp_tip, 0, sizeof(struct tip_addr));
+		tmp_tip.addr = attr->nexthop;
+
+		if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_NEXT_HOP)) {
+			tmp_tip.addr = attr->nexthop;
+		} else if ((attr->mp_nexthop_len) &&
+			   ((attr->mp_nexthop_len == BGP_ATTR_NHLEN_IPV4)
+			    || (attr->mp_nexthop_len == BGP_ATTR_NHLEN_VPNV4))) {
+			tmp_tip.addr = attr->mp_nexthop_global_in;
+		}
+
+		tip = hash_lookup(bgp->tip_hash, &tmp_tip);
+		if (tip)
+			return 1;
+	}
 
 	return 0;
 }

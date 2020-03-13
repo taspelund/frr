@@ -407,7 +407,6 @@ static void control_reset_buf(struct bfd_control_buffer *bcb)
 {
 	/* Get ride of old data. */
 	XFREE(MTYPE_BFDD_NOTIFICATION, bcb->bcb_buf);
-	bcb->bcb_buf = NULL;
 	bcb->bcb_pos = 0;
 	bcb->bcb_left = 0;
 }
@@ -471,7 +470,7 @@ static int control_read(struct thread *t)
 	bcb->bcb_buf = XMALLOC(MTYPE_BFDD_NOTIFICATION,
 			       sizeof(bcm) + bcb->bcb_left + 1);
 	if (bcb->bcb_buf == NULL) {
-		log_warning("%s: not enough memory for message size: %u",
+		log_warning("%s: not enough memory for message size: %zu",
 			    __func__, bcb->bcb_left);
 		control_free(bcs);
 		return 0;
@@ -774,13 +773,13 @@ static void _control_notify(struct bfd_control_socket *bcs,
 	control_queue_enqueue(bcs, bcm);
 }
 
-int control_notify(struct bfd_session *bs)
+int control_notify(struct bfd_session *bs, uint8_t notify_state)
 {
 	struct bfd_control_socket *bcs;
 	struct bfd_notify_peer *bnp;
 
 	/* Notify zebra listeners as well. */
-	ptm_bfd_notify(bs);
+	ptm_bfd_notify(bs, notify_state);
 
 	/*
 	 * PERFORMANCE: reuse the bfd_control_msg allocated data for

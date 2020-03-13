@@ -37,6 +37,8 @@
 #include "bgpd/bgp_vty.h"
 #include "bgpd/bgp_errors.h"
 #include "bgpd/bgp_ecommunity.h"
+#include "bgpd/bgp_lcommunity.h"
+#include "bgpd/bgp_community.h"
 
 #define SHOW_DISPLAY_STANDARD 0
 #define SHOW_DISPLAY_TAGS 1
@@ -385,8 +387,10 @@ static void display_l3vni(struct vty *vty, struct bgp *bgp_vrf,
 				       bgp_vrf->evpn_info->advertise_pip ?
 				       "Enabled" : "Disabled");
 		json_object_string_add(json, "sysIP",
-				       inet_ntoa(bgp_vrf->evpn_info->pip_ip));
-		json_object_string_add(json, "sysMAC",
+				       inet_ntop(AF_INET,
+					&bgp_vrf->evpn_info->pip_ip,
+					buf1, INET_ADDRSTRLEN));
+		json_object_string_add(json, "sysMac",
 				prefix_mac2str(&bgp_vrf->evpn_info->pip_rmac,
 					       buf2, sizeof(buf2)));
 		json_object_string_add(json, "rmac",
@@ -767,7 +771,7 @@ static void show_vni_routes(struct bgp *bgp, struct bgpevpn *vpn, int type,
 		for (; pi; pi = pi->next) {
 			json_object *json_path = NULL;
 
-			if (vtep_ip.s_addr
+			if (vtep_ip.s_addr != INADDR_ANY
 			    && !IPV4_ADDR_SAME(&(vtep_ip),
 					       &(pi->attr->nexthop)))
 				continue;
@@ -1207,6 +1211,38 @@ static int bgp_show_ethernet_vpn(struct vty *vty, struct prefix_rd *prd,
 				        struct peer *peer = output_arg;
 
 					if (peer_cmp(peer, pi->peer) != 0)
+						continue;
+				}
+				if (type == bgp_show_type_lcommunity_exact) {
+					struct lcommunity *lcom = output_arg;
+
+					if (!pi->attr->lcommunity ||
+						!lcommunity_cmp(
+						pi->attr->lcommunity, lcom))
+						continue;
+				}
+				if (type == bgp_show_type_lcommunity) {
+					struct lcommunity *lcom = output_arg;
+
+					if (!pi->attr->lcommunity ||
+						!lcommunity_match(
+						pi->attr->lcommunity, lcom))
+						continue;
+				}
+				if (type == bgp_show_type_community) {
+					struct community *com = output_arg;
+
+					if (!pi->attr->community ||
+						!community_match(
+						pi->attr->community, com))
+						continue;
+				}
+				if (type == bgp_show_type_community_exact) {
+					struct community *com = output_arg;
+
+					if (!pi->attr->community ||
+						!community_cmp(
+						pi->attr->community, com))
 						continue;
 				}
 				if (header) {
@@ -1749,6 +1785,71 @@ DEFUN(show_ip_bgp_evpn_rd_overlay,
 	return bgp_show_ethernet_vpn(vty, &prd, bgp_show_type_normal, NULL,
 				     SHOW_DISPLAY_OVERLAY,
 				     use_json(argc, argv));
+}
+
+DEFUN(show_bgp_l2vpn_evpn_com,
+      show_bgp_l2vpn_evpn_com_cmd,
+      "show bgp l2vpn evpn \
+      <community AA:NN|large-community AA:BB:CC> \
+      [exact-match] [json]",
+      SHOW_STR
+      BGP_STR
+      L2VPN_HELP_STR
+      EVPN_HELP_STR
+      "Display routes matching the community\n"
+      "Community number where AA and NN are (0-65535)\n"
+      "Display routes matching the large-community\n"
+      "List of large-community numbers\n"
+      "Exact match of the communities\n"
+      JSON_STR)
+{
+	int idx = 0;
+	int ret = 0;
+	const char *clist_number_or_name;
+	int show_type = bgp_show_type_normal;
+	struct community *com;
+	struct lcommunity *lcom;
+
+	if (argv_find(argv, argc, "large-community", &idx)) {
+		clist_number_or_name = argv[++idx]->arg;
+		show_type = bgp_show_type_lcommunity;
+
+		if (++idx < argc && strmatch(argv[idx]->text, "exact-match"))
+			show_type = bgp_show_type_lcommunity_exact;
+
+		lcom = lcommunity_str2com(clist_number_or_name);
+		if (!lcom) {
+			vty_out(vty, "%% Large-community malformed\n");
+			return CMD_WARNING;
+		}
+
+		ret = bgp_show_ethernet_vpn(vty, NULL, show_type, lcom,
+					    SHOW_DISPLAY_STANDARD,
+					    use_json(argc, argv));
+
+		lcommunity_free(&lcom);
+	} else if (argv_find(argv, argc, "community", &idx)) {
+		clist_number_or_name = argv[++idx]->arg;
+		show_type = bgp_show_type_community;
+
+		if (++idx < argc && strmatch(argv[idx]->text, "exact-match"))
+			show_type = bgp_show_type_community_exact;
+
+		com = community_str2com(clist_number_or_name);
+
+		if (!com) {
+			vty_out(vty, "%% Community malformed: %s\n",
+				clist_number_or_name);
+			return CMD_WARNING;
+		}
+
+		ret = bgp_show_ethernet_vpn(vty, NULL, show_type, com,
+					    SHOW_DISPLAY_STANDARD,
+					    use_json(argc, argv));
+		community_free(&com);
+	}
+
+	return ret;
 }
 
 /* For testing purpose, static route of EVPN RT-5. */
@@ -3572,6 +3673,8 @@ DEFUN (bgp_evpn_advertise_type5,
 		if (bgp_vrf->adv_cmd_rmap[afi][safi].name) {
 			XFREE(MTYPE_ROUTE_MAP_NAME,
 			      bgp_vrf->adv_cmd_rmap[afi][safi].name);
+			route_map_counter_decrement(
+					bgp_vrf->adv_cmd_rmap[afi][safi].map);
 			bgp_vrf->adv_cmd_rmap[afi][safi].name = NULL;
 			bgp_vrf->adv_cmd_rmap[afi][safi].map = NULL;
 		}
@@ -3583,6 +3686,8 @@ DEFUN (bgp_evpn_advertise_type5,
 			XSTRDUP(MTYPE_ROUTE_MAP_NAME, argv[idx_rmap + 1]->arg);
 		bgp_vrf->adv_cmd_rmap[afi][safi].map =
 			route_map_lookup_by_name(argv[idx_rmap + 1]->arg);
+		route_map_counter_increment(
+				bgp_vrf->adv_cmd_rmap[afi][safi].map);
 	}
 
 	/* advertise type-5 routes */
@@ -3951,7 +4056,7 @@ DEFUN(show_bgp_l2vpn_evpn_es,
  */
 DEFUN(show_bgp_l2vpn_evpn_summary,
       show_bgp_l2vpn_evpn_summary_cmd,
-      "show bgp [vrf VRFNAME] l2vpn evpn summary [json]",
+      "show bgp [vrf VRFNAME] l2vpn evpn summary [failed] [json]",
       SHOW_STR
       BGP_STR
       "bgp vrf\n"
@@ -3959,15 +4064,20 @@ DEFUN(show_bgp_l2vpn_evpn_summary,
       L2VPN_HELP_STR
       EVPN_HELP_STR
       "Summary of BGP neighbor status\n"
+      "Show only sessions not in Established state\n"
       JSON_STR)
 {
 	int idx_vrf = 0;
 	bool uj = use_json(argc, argv);
 	char *vrf = NULL;
+	bool show_failed = false;
 
 	if (argv_find(argv, argc, "vrf", &idx_vrf))
 		vrf = argv[++idx_vrf]->arg;
-	return bgp_show_summary_vty(vty, vrf, AFI_L2VPN, SAFI_EVPN, uj);
+	if (argv_find(argv, argc, "failed", &idx_vrf))
+		show_failed = true;
+	return bgp_show_summary_vty(vty, vrf, AFI_L2VPN, SAFI_EVPN,
+				    show_failed, uj);
 }
 
 /*
@@ -5719,6 +5829,7 @@ void bgp_ethernetvpn_init(void)
 	install_element(VIEW_NODE, &show_bgp_evpn_route_vni_all_cmd);
 	install_element(VIEW_NODE, &show_bgp_evpn_import_rt_cmd);
 	install_element(VIEW_NODE, &show_bgp_vrf_l3vni_info_cmd);
+	install_element(VIEW_NODE, &show_bgp_l2vpn_evpn_com_cmd);
 
 	install_element(BGP_EVPN_NODE, &bgp_evpn_vni_cmd);
 	install_element(BGP_EVPN_NODE, &no_bgp_evpn_vni_cmd);

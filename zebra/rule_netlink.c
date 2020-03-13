@@ -54,6 +54,7 @@
  */
 static int netlink_rule_update(int cmd, struct zebra_pbr_rule *rule)
 {
+	uint8_t protocol = RTPROT_ZEBRA;
 	int family;
 	int bytelen;
 	struct {
@@ -77,6 +78,9 @@ static int netlink_rule_update(int cmd, struct zebra_pbr_rule *rule)
 
 	req.frh.family = family;
 	req.frh.action = FR_ACT_TO_TBL;
+
+	addattr_l(&req.n, sizeof(req),
+		  FRA_PROTOCOL, &protocol, sizeof(protocol));
 
 	/* rule's pref # */
 	addattr32(&req.n, sizeof(req), FRA_PRIORITY, rule->rule.priority);
@@ -115,9 +119,10 @@ static int netlink_rule_update(int cmd, struct zebra_pbr_rule *rule)
 
 	if (IS_ZEBRA_DEBUG_KERNEL)
 		zlog_debug(
-			"Tx %s family %s IF %s(%u) Pref %u Src %s Dst %s Table %u",
+			"Tx %s family %s IF %s(%u) Pref %u Fwmark %u Src %s Dst %s Table %u",
 			nl_msg_type_to_str(cmd), nl_family_to_str(family),
 			rule->ifname, rule->rule.ifindex, rule->rule.priority,
+			rule->rule.filter.fwmark,
 			prefix2str(&rule->rule.filter.src_ip, buf1,
 				   sizeof(buf1)),
 			prefix2str(&rule->rule.filter.dst_ip, buf2,
@@ -196,9 +201,10 @@ int netlink_rule_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 	len = h->nlmsg_len - NLMSG_LENGTH(sizeof(struct fib_rule_hdr));
 	if (len < 0) {
-		zlog_err("%s: Message received from netlink is of a broken size: %d %zu",
-			 __PRETTY_FUNCTION__, h->nlmsg_len,
-			 (size_t)NLMSG_LENGTH(sizeof(struct fib_rule_hdr)));
+		zlog_err(
+			"%s: Message received from netlink is of a broken size: %d %zu",
+			__func__, h->nlmsg_len,
+			(size_t)NLMSG_LENGTH(sizeof(struct fib_rule_hdr)));
 		return -1;
 	}
 

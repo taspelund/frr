@@ -42,7 +42,12 @@ import os
 import sys
 import logging
 import json
-import ConfigParser
+
+if sys.version_info[0] > 2:
+    import configparser
+else:
+    import ConfigParser as configparser
+
 import glob
 import grp
 import platform
@@ -56,6 +61,7 @@ from mininet.cli import CLI
 
 from lib import topotest
 from lib.topolog import logger, logger_config
+from lib.topotest import set_sysctl
 
 CWD = os.path.dirname(os.path.realpath(__file__))
 
@@ -153,7 +159,7 @@ class Topogen(object):
         Loads the configuration file `pytest.ini` located at the root dir of
         topotests.
         """
-        self.config = ConfigParser.ConfigParser(tgen_defaults)
+        self.config = configparser.ConfigParser(tgen_defaults)
         pytestini_path = os.path.join(CWD, '../pytest.ini')
         self.config.read(pytestini_path)
 
@@ -535,6 +541,7 @@ class TopoRouter(TopoGear):
     RD_NHRP = 11
     RD_STATIC = 12
     RD_BFD = 13
+    RD_SHARP = 14
     RD = {
         RD_ZEBRA: 'zebra',
         RD_RIP: 'ripd',
@@ -549,6 +556,7 @@ class TopoRouter(TopoGear):
         RD_NHRP: 'nhrpd',
         RD_STATIC: 'staticd',
         RD_BFD: 'bfdd',
+        RD_SHARP: 'sharpd',
     }
 
     def __init__(self, tgen, cls, name, **params):
@@ -599,7 +607,7 @@ class TopoRouter(TopoGear):
     def _prepare_tmpfiles(self):
         # Create directories if they don't exist
         try:
-            os.makedirs(self.logdir, 0755)
+            os.makedirs(self.logdir, 0o755)
         except OSError:
             pass
 
@@ -608,10 +616,10 @@ class TopoRouter(TopoGear):
             # Only allow group, if it exist.
             gid = grp.getgrnam(self.routertype)[2]
             os.chown(self.logdir, 0, gid)
-            os.chmod(self.logdir, 0775)
+            os.chmod(self.logdir, 0o775)
         except KeyError:
             # Allow anyone, but set the sticky bit to avoid file deletions
-            os.chmod(self.logdir, 01777)
+            os.chmod(self.logdir, 0o1777)
 
         # Try to find relevant old logfiles in /tmp and delete them
         map(os.remove, glob.glob('{}/{}/*.log'.format(self.logdir, self.name)))
@@ -669,6 +677,10 @@ class TopoRouter(TopoGear):
 
         if result != '':
             self.tgen.set_error(result)
+        else:
+            # Enable MPLS processing on all interfaces.
+            for interface in self.links.keys():
+                set_sysctl(nrouter, 'net.mpls.conf.{}.input'.format(interface), 1)
 
         return result
 
@@ -931,7 +943,7 @@ def diagnose_env_linux():
     logger.info('Running environment diagnostics')
 
     # Load configuration
-    config = ConfigParser.ConfigParser(tgen_defaults)
+    config = configparser.ConfigParser(tgen_defaults)
     pytestini_path = os.path.join(CWD, '../pytest.ini')
     config.read(pytestini_path)
 

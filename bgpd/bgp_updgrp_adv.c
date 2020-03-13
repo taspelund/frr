@@ -64,6 +64,12 @@ static int bgp_adj_out_compare(const struct bgp_adj_out *o1,
 	if (o1->subgroup > o2->subgroup)
 		return 1;
 
+	if (o1->addpath_tx_id < o2->addpath_tx_id)
+		return -1;
+
+	if (o1->addpath_tx_id > o2->addpath_tx_id)
+		return 1;
+
 	return 0;
 }
 RB_GENERATE(bgp_adj_out_rb, bgp_adj_out, adj_entry, bgp_adj_out_compare);
@@ -72,32 +78,17 @@ static inline struct bgp_adj_out *adj_lookup(struct bgp_node *rn,
 					     struct update_subgroup *subgrp,
 					     uint32_t addpath_tx_id)
 {
-	struct bgp_adj_out *adj, lookup;
-	struct peer *peer;
-	afi_t afi;
-	safi_t safi;
-	int addpath_capable;
+	struct bgp_adj_out lookup;
 
 	if (!rn || !subgrp)
 		return NULL;
 
-	peer = SUBGRP_PEER(subgrp);
-	afi = SUBGRP_AFI(subgrp);
-	safi = SUBGRP_SAFI(subgrp);
-	addpath_capable = bgp_addpath_encode_tx(peer, afi, safi);
-
 	/* update-groups that do not support addpath will pass 0 for
-	 * addpath_tx_id so do not both matching against it */
+	 * addpath_tx_id. */
 	lookup.subgroup = subgrp;
-	adj = RB_FIND(bgp_adj_out_rb, &rn->adj_out, &lookup);
-	if (adj) {
-		if (addpath_capable) {
-			if (adj->addpath_tx_id == addpath_tx_id)
-				return adj;
-		} else
-			return adj;
-	}
-	return NULL;
+	lookup.addpath_tx_id = addpath_tx_id;
+
+	return RB_FIND(bgp_adj_out_rb, &rn->adj_out, &lookup);
 }
 
 static void adj_free(struct bgp_adj_out *adj)
@@ -403,13 +394,14 @@ struct bgp_adj_out *bgp_adj_out_alloc(struct update_subgroup *subgrp,
 
 	adj = XCALLOC(MTYPE_BGP_ADJ_OUT, sizeof(struct bgp_adj_out));
 	adj->subgroup = subgrp;
+	adj->addpath_tx_id = addpath_tx_id;
+
 	if (rn) {
 		RB_INSERT(bgp_adj_out_rb, &rn->adj_out, adj);
 		bgp_lock_node(rn);
 		adj->rn = rn;
 	}
 
-	adj->addpath_tx_id = addpath_tx_id;
 	TAILQ_INSERT_TAIL(&(subgrp->adjq), adj, subgrp_adj_train);
 	SUBGRP_INCR_STAT(subgrp, adj_count);
 	return adj;
@@ -710,14 +702,13 @@ void subgroup_default_originate(struct update_subgroup *subgrp, int withdraw)
 {
 	struct bgp *bgp;
 	struct attr attr;
+	struct attr *new_attr = &attr;
 	struct aspath *aspath;
-	struct bgp_path_info tmp_info;
 	struct prefix p;
 	struct peer *from;
 	struct bgp_node *rn;
-	struct bgp_path_info *ri;
 	struct peer *peer;
-	int ret = RMAP_DENYMATCH;
+	route_map_result_t ret = RMAP_DENYMATCH;
 	afi_t afi;
 	safi_t safi;
 
@@ -755,37 +746,33 @@ void subgroup_default_originate(struct update_subgroup *subgrp, int withdraw)
 	}
 
 	if (peer->default_rmap[afi][safi].name) {
+		struct attr attr_tmp = attr;
+		struct bgp_path_info bpi_rmap = {0};
+
+		bpi_rmap.peer = bgp->peer_self;
+		bpi_rmap.attr = &attr_tmp;
+
 		SET_FLAG(bgp->peer_self->rmap_type, PEER_RMAP_TYPE_DEFAULT);
+
+		/* Iterate over the RIB to see if we can announce
+		 * the default route. We announce the default
+		 * route only if route-map has a match.
+		 */
 		for (rn = bgp_table_top(bgp->rib[afi][safi]); rn;
 		     rn = bgp_route_next(rn)) {
-			for (ri = bgp_node_get_bgp_path_info(rn);
-			     ri; ri = ri->next) {
-				struct attr dummy_attr;
+			ret = route_map_apply(peer->default_rmap[afi][safi].map,
+					      &rn->p, RMAP_BGP, &bpi_rmap);
 
-				/* Provide dummy so the route-map can't modify
-				 * the attributes */
-				dummy_attr = *ri->attr;
-				tmp_info.peer = ri->peer;
-				tmp_info.attr = &dummy_attr;
-
-				ret = route_map_apply(
-					peer->default_rmap[afi][safi].map,
-					&rn->p, RMAP_BGP, &tmp_info);
-
-				/* The route map might have set attributes. If
-				 * we don't flush them
-				 * here, they will be leaked. */
-				bgp_attr_flush(&dummy_attr);
-				if (ret != RMAP_DENYMATCH)
-					break;
-			}
 			if (ret != RMAP_DENYMATCH)
 				break;
 		}
 		bgp->peer_self->rmap_type = 0;
+		new_attr = bgp_attr_intern(&attr_tmp);
 
-		if (ret == RMAP_DENYMATCH)
+		if (ret == RMAP_DENYMATCH) {
+			bgp_attr_flush(&attr_tmp);
 			withdraw = 1;
+		}
 	}
 
 	if (withdraw) {
@@ -796,13 +783,12 @@ void subgroup_default_originate(struct update_subgroup *subgrp, int withdraw)
 		if (!CHECK_FLAG(subgrp->sflags,
 				SUBGRP_STATUS_DEFAULT_ORIGINATE)) {
 
-			if (bgp_flag_check(bgp, BGP_FLAG_GRACEFUL_SHUTDOWN)) {
-				bgp_attr_add_gshut_community(&attr);
-			}
+			if (CHECK_FLAG(bgp->flags, BGP_FLAG_GRACEFUL_SHUTDOWN))
+				bgp_attr_add_gshut_community(new_attr);
 
 			SET_FLAG(subgrp->sflags,
 				 SUBGRP_STATUS_DEFAULT_ORIGINATE);
-			subgroup_default_update_packet(subgrp, &attr, from);
+			subgroup_default_update_packet(subgrp, new_attr, from);
 
 			/* The 'neighbor x.x.x.x default-originate' default will
 			 * act as an

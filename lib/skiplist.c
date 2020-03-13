@@ -211,12 +211,12 @@ int skiplist_insert(register struct skiplist *l, register void *key,
 	q = newNodeOfLevel(k);
 	q->key = key;
 	q->value = value;
-#if SKIPLIST_0TIMER_DEBUG
+#ifdef SKIPLIST_0TIMER_DEBUG
 	q->flags = SKIPLIST_NODE_FLAG_INSERTED; /* debug */
 #endif
 
 	++(l->stats->forward[k]);
-#if SKIPLIST_DEBUG
+#ifdef SKIPLIST_DEBUG
 	zlog_debug("%s: incremented stats @%p:%d, now %ld", __func__, l, k,
 		   l->stats->forward[k] - (struct skiplistnode *)NULL);
 #endif
@@ -281,7 +281,7 @@ int skiplist_delete(register struct skiplist *l, register void *key,
 /*
  * found node to delete
  */
-#if SKIPLIST_0TIMER_DEBUG
+#ifdef SKIPLIST_0TIMER_DEBUG
 			q->flags &= ~SKIPLIST_NODE_FLAG_INSERTED;
 #endif
 			/*
@@ -300,7 +300,7 @@ int skiplist_delete(register struct skiplist *l, register void *key,
 				p->forward[k] = q->forward[k];
 			}
 			--(l->stats->forward[k - 1]);
-#if SKIPLIST_DEBUG
+#ifdef SKIPLIST_DEBUG
 			zlog_debug("%s: decremented stats @%p:%d, now %ld",
 				   __func__, l, k - 1,
 				   l->stats->forward[k - 1]
@@ -378,7 +378,7 @@ int skiplist_next_value(register struct skiplist *l, /* in */
 			void **valuePointer,	 /* in/out */
 			void **cursor)		     /* in/out */
 {
-	register int k, m;
+	register int k;
 	register struct skiplistnode *p, *q;
 
 	CHECKLAST(l);
@@ -389,7 +389,7 @@ int skiplist_next_value(register struct skiplist *l, /* in */
 
 	if (!cursor || !*cursor) {
 		p = l->header;
-		k = m = l->level;
+		k = l->level;
 
 		/*
 		 * Find matching key
@@ -549,7 +549,7 @@ int skiplist_delete_first(register struct skiplist *l)
 		}
 	}
 
-#if SKIPLIST_0TIMER_DEBUG
+#ifdef SKIPLIST_0TIMER_DEBUG
 	q->flags &= ~SKIPLIST_NODE_FLAG_INSERTED;
 #endif
 	/*
@@ -561,7 +561,7 @@ int skiplist_delete_first(register struct skiplist *l)
 	}
 
 	--(l->stats->forward[nodelevel]);
-#if SKIPLIST_DEBUG
+#ifdef SKIPLIST_DEBUG
 	zlog_debug("%s: decremented stats @%p:%d, now %ld", __func__, l,
 		   nodelevel,
 		   l->stats->forward[nodelevel] - (struct skiplistnode *)NULL);
@@ -608,7 +608,7 @@ void skiplist_test(struct vty *vty)
 	struct skiplist *l;
 	register int i, k;
 	void *keys[sampleSize];
-	void *v;
+	void *v = NULL;
 
 	zlog_debug("%s: entry", __func__);
 

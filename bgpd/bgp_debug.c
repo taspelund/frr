@@ -63,6 +63,7 @@ unsigned long conf_bgp_debug_vpn;
 unsigned long conf_bgp_debug_flowspec;
 unsigned long conf_bgp_debug_labelpool;
 unsigned long conf_bgp_debug_pbr;
+unsigned long conf_bgp_debug_graceful_restart;
 
 unsigned long term_bgp_debug_as4;
 unsigned long term_bgp_debug_neighbor_events;
@@ -80,6 +81,7 @@ unsigned long term_bgp_debug_vpn;
 unsigned long term_bgp_debug_flowspec;
 unsigned long term_bgp_debug_labelpool;
 unsigned long term_bgp_debug_pbr;
+unsigned long term_bgp_debug_graceful_restart;
 
 struct list *bgp_debug_neighbor_events_peers = NULL;
 struct list *bgp_debug_keepalive_peers = NULL;
@@ -101,7 +103,7 @@ const struct message bgp_status_msg[] = {{Idle, "Idle"},
 					 {0}};
 
 /* BGP message type string. */
-const char *bgp_type_str[] = {NULL,	   "OPEN",      "UPDATE",
+const char *const bgp_type_str[] = {NULL,	   "OPEN",      "UPDATE",
 			      "NOTIFICATION", "KEEPALIVE", "ROUTE-REFRESH",
 			      "CAPABILITY"};
 
@@ -169,8 +171,8 @@ static const struct message bgp_notify_capability_msg[] = {
 	{0}};
 
 /* Origin strings. */
-const char *bgp_origin_str[] = {"i", "e", "?"};
-const char *bgp_origin_long_str[] = {"IGP", "EGP", "incomplete"};
+const char *const bgp_origin_str[] = {"i", "e", "?"};
+const char *const bgp_origin_long_str[] = {"IGP", "EGP", "incomplete"};
 
 static int bgp_debug_print_evpn_prefix(struct vty *vty, const char *desc,
 				       struct prefix *p);
@@ -207,13 +209,8 @@ static void bgp_debug_list_free(struct list *list)
 	if (list)
 		for (ALL_LIST_ELEMENTS(list, node, nnode, filter)) {
 			listnode_delete(list, filter);
-
-			if (filter->p)
-				prefix_free(filter->p);
-
-			if (filter->host)
-				XFREE(MTYPE_BGP_DEBUG_STR, filter->host);
-
+			prefix_free(&filter->p);
+			XFREE(MTYPE_BGP_DEBUG_STR, filter->host);
 			XFREE(MTYPE_BGP_DEBUG_FILTER, filter);
 		}
 }
@@ -323,7 +320,7 @@ static int bgp_debug_list_remove_entry(struct list *list, const char *host,
 		} else if (p && filter->p->prefixlen == p->prefixlen
 			   && prefix_match(filter->p, p)) {
 			listnode_delete(list, filter);
-			prefix_free(filter->p);
+			prefix_free(&filter->p);
 			XFREE(MTYPE_BGP_DEBUG_FILTER, filter);
 			return 1;
 		}
@@ -509,7 +506,7 @@ void bgp_notify_print(struct peer *peer, struct bgp_notify *bgp_notify,
 	char msg_buf[1024];
 
 	if (BGP_DEBUG(neighbor_events, NEIGHBOR_EVENTS)
-	    || bgp_flag_check(peer->bgp, BGP_FLAG_LOG_NEIGHBOR_CHANGES)) {
+	    || CHECK_FLAG(peer->bgp->flags, BGP_FLAG_LOG_NEIGHBOR_CHANGES)) {
 		code_str = bgp_notify_code_str(bgp_notify->code);
 		subcode_str = bgp_notify_subcode_str(bgp_notify->code,
 						     bgp_notify->subcode);
@@ -1412,7 +1409,7 @@ DEFPY (debug_bgp_update_prefix_afi_safi,
 
 	ret = bgp_debug_parse_evpn_prefix(vty, argv, argc, &argv_p);
 	if (ret != CMD_SUCCESS) {
-		prefix_free(argv_p);
+		prefix_free(&argv_p);
 		return ret;
 	}
 
@@ -1425,7 +1422,7 @@ DEFPY (debug_bgp_update_prefix_afi_safi,
 		vty_out(vty,
 			"BGP updates debugging is already enabled for %s\n",
 			buf);
-		prefix_free(argv_p);
+		prefix_free(&argv_p);
 		return CMD_SUCCESS;
 	}
 
@@ -1438,7 +1435,7 @@ DEFPY (debug_bgp_update_prefix_afi_safi,
 		vty_out(vty, "BGP updates debugging is on for %s\n", buf);
 	}
 
-	prefix_free(argv_p);
+	prefix_free(&argv_p);
 
 	return CMD_SUCCESS;
 }
@@ -1477,7 +1474,7 @@ DEFPY (no_debug_bgp_update_prefix_afi_safi,
 
 	ret = bgp_debug_parse_evpn_prefix(vty, argv, argc, &argv_p);
 	if (ret != CMD_SUCCESS) {
-		prefix_free(argv_p);
+		prefix_free(&argv_p);
 		return ret;
 	}
 
@@ -1505,7 +1502,7 @@ DEFPY (no_debug_bgp_update_prefix_afi_safi,
 		vty_out(vty, "BGP updates debugging was not enabled for %s\n",
 			buf);
 
-	prefix_free(argv_p);
+	prefix_free(&argv_p);
 
 	return ret;
 }
@@ -1644,6 +1641,23 @@ DEFUN (debug_bgp_zebra,
 	return CMD_SUCCESS;
 }
 
+DEFUN (debug_bgp_graceful_restart,
+       debug_bgp_graceful_restart_cmd,
+       "debug bgp graceful-restart",
+       DEBUG_STR
+       BGP_STR
+       GR_DEBUG)
+{
+	if (vty->node == CONFIG_NODE) {
+		DEBUG_ON(graceful_restart, GRACEFUL_RESTART);
+	} else {
+		TERM_DEBUG_ON(graceful_restart, GRACEFUL_RESTART);
+		vty_out(vty, "BGP Graceful Restart debugging is on\n");
+	}
+	return CMD_SUCCESS;
+}
+
+
 DEFUN (debug_bgp_zebra_prefix,
        debug_bgp_zebra_prefix_cmd,
        "debug bgp zebra prefix <A.B.C.D/M|X:X::X:X/M>",
@@ -1698,6 +1712,23 @@ DEFUN (no_debug_bgp_zebra,
 	else {
 		TERM_DEBUG_OFF(zebra, ZEBRA);
 		vty_out(vty, "BGP zebra debugging is off\n");
+	}
+	return CMD_SUCCESS;
+}
+
+DEFUN (no_debug_bgp_graceful_restart,
+	no_debug_bgp_graceful_restart_cmd,
+	"no debug bgp graceful-restart",
+	DEBUG_STR
+	BGP_STR
+	GR_DEBUG
+	NO_STR)
+{
+	if (vty->node == CONFIG_NODE) {
+		DEBUG_OFF(graceful_restart, GRACEFUL_RESTART);
+	} else {
+		TERM_DEBUG_OFF(graceful_restart, GRACEFUL_RESTART);
+		vty_out(vty, "BGP Graceful Restart debugging is off\n");
 	}
 	return CMD_SUCCESS;
 }
@@ -2039,6 +2070,8 @@ DEFUN (no_debug_bgp,
 	TERM_DEBUG_OFF(labelpool, LABELPOOL);
 	TERM_DEBUG_OFF(pbr, PBR);
 	TERM_DEBUG_OFF(pbr, PBR_ERROR);
+	TERM_DEBUG_OFF(graceful_restart, GRACEFUL_RESTART);
+
 	vty_out(vty, "All possible debugging has been turned off\n");
 
 	return CMD_SUCCESS;
@@ -2095,6 +2128,9 @@ DEFUN_NOSH (show_debugging_bgp,
 	if (BGP_DEBUG(zebra, ZEBRA))
 		bgp_debug_list_print(vty, "  BGP zebra debugging is on",
 				     bgp_debug_zebra_prefixes);
+
+	if (BGP_DEBUG(graceful_restart, GRACEFUL_RESTART))
+		vty_out(vty, "  BGP graceful-restart debugging is on");
 
 	if (BGP_DEBUG(allow_martians, ALLOW_MARTIANS))
 		vty_out(vty, "  BGP allow martian next hop debugging is on\n");
@@ -2229,6 +2265,11 @@ static int bgp_config_write_debug(struct vty *vty)
 		vty_out(vty, "debug bgp pbr error\n");
 		write++;
 	}
+
+	if (CONF_BGP_DEBUG(graceful_restart, GRACEFUL_RESTART)) {
+		vty_out(vty, "debug bgp graceful-restart\n");
+		write++;
+	}
 	return write;
 }
 
@@ -2261,6 +2302,9 @@ void bgp_debug_init(void)
 	install_element(CONFIG_NODE, &debug_bgp_update_groups_cmd);
 	install_element(ENABLE_NODE, &debug_bgp_bestpath_prefix_cmd);
 	install_element(CONFIG_NODE, &debug_bgp_bestpath_prefix_cmd);
+
+	install_element(ENABLE_NODE, &debug_bgp_graceful_restart_cmd);
+	install_element(CONFIG_NODE, &debug_bgp_graceful_restart_cmd);
 
 	/* debug bgp updates (in|out) */
 	install_element(ENABLE_NODE, &debug_bgp_update_direct_cmd);
@@ -2326,6 +2370,9 @@ void bgp_debug_init(void)
 	install_element(CONFIG_NODE, &no_debug_bgp_bestpath_cmd);
 	install_element(ENABLE_NODE, &no_debug_bgp_bestpath_prefix_cmd);
 	install_element(CONFIG_NODE, &no_debug_bgp_bestpath_prefix_cmd);
+
+	install_element(ENABLE_NODE, &no_debug_bgp_graceful_restart_cmd);
+	install_element(CONFIG_NODE, &no_debug_bgp_graceful_restart_cmd);
 
 	install_element(ENABLE_NODE, &debug_bgp_vpn_cmd);
 	install_element(CONFIG_NODE, &debug_bgp_vpn_cmd);
