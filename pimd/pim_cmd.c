@@ -3731,8 +3731,6 @@ static void pim_show_bsr(struct pim_instance *pim,
 	char bsr_str[PREFIX_STRLEN];
 	json_object *json = NULL;
 
-	vty_out(vty, "PIMv2 Bootstrap information\n");
-
 	if (pim->global_scope.current_bsr.s_addr == INADDR_ANY) {
 		strlcpy(bsr_str, "0.0.0.0", sizeof(bsr_str));
 		pim_time_uptime(uptime, sizeof(uptime),
@@ -3778,6 +3776,7 @@ static void pim_show_bsr(struct pim_instance *pim,
 	}
 
 	else {
+		vty_out(vty, "PIMv2 Bootstrap information\n");
 		vty_out(vty, "Current preferred BSR address: %s\n", bsr_str);
 		vty_out(vty,
 			"Priority        Fragment-Tag       State           UpTime\n");

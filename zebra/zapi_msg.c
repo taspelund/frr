@@ -2418,9 +2418,11 @@ static inline void zread_rule(ZAPI_HANDLER_ARGS)
 		}
 		if (!(zpr.rule.filter.dst_ip.family == AF_INET
 		      || zpr.rule.filter.dst_ip.family == AF_INET6)) {
-			zlog_warn("Unsupported PBR IP family: %s (%" PRIu8 ")",
-				  family2str(zpr.rule.filter.dst_ip.family),
-				  zpr.rule.filter.dst_ip.family);
+			zlog_warn(
+				"Unsupported PBR destination IP family: %s (%" PRIu8
+				")",
+				family2str(zpr.rule.filter.dst_ip.family),
+				zpr.rule.filter.dst_ip.family);
 			return;
 		}
 
@@ -2509,6 +2511,23 @@ static inline void zread_ipset_entry(ZAPI_HANDLER_ARGS)
 			zpi.filter_bm |= PBR_FILTER_SRC_PORT_RANGE;
 		if (zpi.proto != 0)
 			zpi.filter_bm |= PBR_FILTER_PROTO;
+
+		if (!(zpi.dst.family == AF_INET
+		      || zpi.dst.family == AF_INET6)) {
+			zlog_warn(
+				"Unsupported PBR destination IP family: %s (%" PRIu8
+				")",
+				family2str(zpi.dst.family), zpi.dst.family);
+			goto stream_failure;
+		}
+		if (!(zpi.src.family == AF_INET
+		      || zpi.src.family == AF_INET6)) {
+			zlog_warn(
+				"Unsupported PBR source IP family: %s (%" PRIu8
+				")",
+				family2str(zpi.src.family), zpi.src.family);
+			goto stream_failure;
+		}
 
 		/* calculate backpointer */
 		zpi.backpointer =
