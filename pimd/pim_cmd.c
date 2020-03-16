@@ -4492,7 +4492,6 @@ DEFUN (show_ip_pim_interface,
        SHOW_STR
        IP_STR
        PIM_STR
-       "MLAG\n"
        VRF_CMD_HELP_STR
        "PIM interface information\n"
        "MLAG\n"
