@@ -1998,7 +1998,7 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 			if ((p->family == AF_INET) &&
 				(!bgp_subgrp_multiaccess_check_v4(
 					piattr->nexthop,
-					subgrp))) {
+					subgrp, from))) {
 				subgroup_announce_reset_nhop(
 					(peer_cap_enhe(peer, afi, safi)
 						 ? AF_INET6
@@ -2010,7 +2010,7 @@ int subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 			if ((p->family == AF_INET6) &&
 				(!bgp_subgrp_multiaccess_check_v6(
 					piattr->mp_nexthop_global,
-					subgrp))) {
+					subgrp, from))) {
 				subgroup_announce_reset_nhop(
 					(peer_cap_enhe(peer, afi, safi)
 						? AF_INET6
