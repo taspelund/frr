@@ -1520,6 +1520,10 @@ static void pim_show_interface_traffic(struct pim_instance *pim,
 					    pim_ifp->pim_ifstat_join_recv);
 			json_object_int_add(json_row, "joinTx",
 					    pim_ifp->pim_ifstat_join_send);
+			json_object_int_add(json_row, "pruneTx",
+					    pim_ifp->pim_ifstat_prune_send);
+			json_object_int_add(json_row, "pruneRx",
+					    pim_ifp->pim_ifstat_prune_recv);
 			json_object_int_add(json_row, "registerRx",
 					    pim_ifp->pim_ifstat_reg_recv);
 			json_object_int_add(json_row, "registerTx",
@@ -1706,6 +1710,10 @@ static void pim_show_join_helper(struct vty *vty, struct pim_interface *pim_ifp,
 			pim_ifchannel_ifjoin_name(ch->ifjoin_state, ch->flags));
 		if (PIM_IF_FLAG_TEST_S_G_RPT(ch->flags))
 			json_object_int_add(json_row, "SGRpt", 1);
+		if (PIM_IF_FLAG_TEST_PROTO_PIM(ch->flags))
+			json_object_int_add(json_row, "protocolPim", 1);
+		if (PIM_IF_FLAG_TEST_PROTO_IGMP(ch->flags))
+			json_object_int_add(json_row, "protocolIgmp", 1);
 		json_object_object_get_ex(json_iface, ch_grp_str, &json_grp);
 		if (!json_grp) {
 			json_grp = json_object_new_object();
@@ -5789,13 +5797,18 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty,
 	int oif_vif_index;
 	struct interface *ifp_in;
 	char proto[100];
+	char state_str[PIM_REG_STATE_STR_LEN];
 	char mroute_uptime[10];
 
 	if (uj) {
 		json = json_object_new_object();
 	} else {
+		vty_out(vty, "IP Multicast Routing Table\n");
+		vty_out(vty, "Flags: S- Sparse, C - Connected, P - Pruned\n");
 		vty_out(vty,
-			"Source          Group           Proto  Input            Output           TTL  Uptime\n");
+			"       R - RP-bit set, F - Register flag, T - SPT-bit set\n");
+		vty_out(vty,
+			"\nSource          Group           Flags       Proto  Input            Output           TTL  Uptime\n");
 	}
 
 	now = pim_time_monotonic_sec();
@@ -5818,6 +5831,23 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty,
 			       sizeof(grp_str));
 		pim_inet4_dump("<source?>", c_oil->oil.mfcc_origin, src_str,
 			       sizeof(src_str));
+
+		strlcpy(state_str, "S", sizeof(state_str));
+		/* When a non DR receives a igmp join, it creates a (*,G)
+		 * channel_oil without any upstream creation */
+		if (c_oil->up) {
+			if (PIM_UPSTREAM_FLAG_TEST_SRC_IGMP(c_oil->up->flags))
+				strlcat(state_str, "C", sizeof(state_str));
+			if (pim_upstream_is_sg_rpt(c_oil->up))
+				strlcat(state_str, "R", sizeof(state_str));
+			if (PIM_UPSTREAM_FLAG_TEST_FHR(c_oil->up->flags))
+				strlcat(state_str, "F", sizeof(state_str));
+			if (c_oil->up->sptbit == PIM_UPSTREAM_SPTBIT_TRUE)
+				strlcat(state_str, "T", sizeof(state_str));
+		}
+		if (pim_channel_oil_empty(c_oil))
+			strlcat(state_str, "P", sizeof(state_str));
+
 		ifp_in = pim_if_find_by_vif_index(pim, c_oil->oil.mfcc_parent);
 
 		if (ifp_in)
@@ -5841,7 +5871,8 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty,
 			}
 
 			/* Find the source nested under the group, create it if
-			 * it doesn't exist */
+			 * it doesn't exist
+			 */
 			json_object_object_get_ex(json_group, src_str,
 						  &json_source);
 
@@ -5964,14 +5995,16 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty,
 				}
 
 				vty_out(vty,
-					"%-15s %-15s %-6s %-16s %-16s %-3d  %8s\n",
-					src_str, grp_str, proto, in_ifname,
-					out_ifname, ttl, mroute_uptime);
+					"%-15s %-15s %-15s %-6s %-16s %-16s %-3d  %8s\n",
+					src_str, grp_str, state_str, proto,
+					in_ifname, out_ifname, ttl,
+					mroute_uptime);
 
 				if (first) {
 					src_str[0] = '\0';
 					grp_str[0] = '\0';
 					in_ifname[0] = '\0';
+					state_str[0] = '\0';
 					mroute_uptime[0] = '\0';
 					first = 0;
 				}
@@ -5979,9 +6012,10 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty,
 		}
 
 		if (!uj && !found_oif) {
-			vty_out(vty, "%-15s %-15s %-6s %-16s %-16s %-3d  %8s\n",
-				src_str, grp_str, "none", in_ifname, "none", 0,
-				"--:--:--");
+			vty_out(vty,
+				"%-15s %-15s %-15s %-6s %-16s %-16s %-3d  %8s\n",
+				src_str, grp_str, state_str, "none", in_ifname,
+				"none", 0, "--:--:--");
 		}
 	}
 
@@ -6599,18 +6633,18 @@ static int pim_cmd_spt_switchover(struct pim_instance *pim,
 
 	switch (pim->spt.switchover) {
 	case PIM_SPT_IMMEDIATE:
-		XFREE(MTYPE_PIM_SPT_PLIST_NAME, pim->spt.plist);
+		XFREE(MTYPE_PIM_PLIST_NAME, pim->spt.plist);
 
 		pim_upstream_add_lhr_star_pimreg(pim);
 		break;
 	case PIM_SPT_INFINITY:
 		pim_upstream_remove_lhr_star_pimreg(pim, plist);
 
-		XFREE(MTYPE_PIM_SPT_PLIST_NAME, pim->spt.plist);
+		XFREE(MTYPE_PIM_PLIST_NAME, pim->spt.plist);
 
 		if (plist)
 			pim->spt.plist =
-				XSTRDUP(MTYPE_PIM_SPT_PLIST_NAME, plist);
+				XSTRDUP(MTYPE_PIM_PLIST_NAME, plist);
 		break;
 	}
 
@@ -6669,6 +6703,26 @@ DEFUN (no_ip_pim_spt_switchover_infinity_plist,
 {
 	PIM_DECLVAR_CONTEXT(vrf, pim);
 	return pim_cmd_spt_switchover(pim, PIM_SPT_IMMEDIATE, NULL);
+}
+
+DEFPY (pim_register_accept_list,
+       pim_register_accept_list_cmd,
+       "[no] ip pim register-accept-list WORD$word",
+       NO_STR
+       IP_STR
+       PIM_STR
+       "Only accept registers from a specific source prefix list\n"
+       "Prefix-List name\n")
+{
+	PIM_DECLVAR_CONTEXT(vrf, pim);
+
+	if (no)
+		XFREE(MTYPE_PIM_PLIST_NAME, pim->register_plist);
+	else {
+		XFREE(MTYPE_PIM_PLIST_NAME, pim->register_plist);
+		pim->register_plist = XSTRDUP(MTYPE_PIM_PLIST_NAME, word);
+	}
+	return CMD_SUCCESS;
 }
 
 DEFUN (ip_pim_joinprune_time,
@@ -10769,6 +10823,8 @@ void pim_cmd_init(void)
 	install_element(CONFIG_NODE,
 			&no_ip_pim_spt_switchover_infinity_plist_cmd);
 	install_element(VRF_NODE, &no_ip_pim_spt_switchover_infinity_plist_cmd);
+	install_element(CONFIG_NODE, &pim_register_accept_list_cmd);
+	install_element(VRF_NODE, &pim_register_accept_list_cmd);
 	install_element(CONFIG_NODE, &ip_pim_joinprune_time_cmd);
 	install_element(VRF_NODE, &ip_pim_joinprune_time_cmd);
 	install_element(CONFIG_NODE, &no_ip_pim_joinprune_time_cmd);

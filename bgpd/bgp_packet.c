@@ -1142,6 +1142,15 @@ static int bgp_open_receive(struct peer *peer, bgp_size_t size)
 		return BGP_Stop;
 	}
 
+	/* Codification of AS 0 Processing */
+	if (remote_as == BGP_AS_ZERO) {
+		flog_err(EC_BGP_PKT_OPEN, "%s bad OPEN, got AS set to 0",
+			 peer->host);
+		bgp_notify_send(peer, BGP_NOTIFY_OPEN_ERR,
+				BGP_NOTIFY_OPEN_BAD_PEER_AS);
+		return BGP_Stop;
+	}
+
 	if (remote_as == BGP_AS_TRANS) {
 		/* Take the AS4 from the capability.  We must have received the
 		 * capability now!  Otherwise we have a asn16 peer who uses
@@ -1447,7 +1456,7 @@ static int bgp_update_receive(struct peer *peer, bgp_size_t size)
 			 peer->host,
 			 lookup_msg(bgp_status_msg, peer->status, NULL));
 		bgp_notify_send(peer, BGP_NOTIFY_FSM_ERR,
-				BGP_NOTIFY_SUBCODE_UNSPECIFIC);
+				bgp_fsm_error_subcode(peer->status));
 		return BGP_Stop;
 	}
 
@@ -1859,7 +1868,7 @@ static int bgp_route_refresh_receive(struct peer *peer, bgp_size_t size)
 			peer->host,
 			lookup_msg(bgp_status_msg, peer->status, NULL));
 		bgp_notify_send(peer, BGP_NOTIFY_FSM_ERR,
-				BGP_NOTIFY_SUBCODE_UNSPECIFIC);
+				bgp_fsm_error_subcode(peer->status));
 		return BGP_Stop;
 	}
 
@@ -2251,7 +2260,7 @@ int bgp_capability_receive(struct peer *peer, bgp_size_t size)
 			peer->host,
 			lookup_msg(bgp_status_msg, peer->status, NULL));
 		bgp_notify_send(peer, BGP_NOTIFY_FSM_ERR,
-				BGP_NOTIFY_SUBCODE_UNSPECIFIC);
+				bgp_fsm_error_subcode(peer->status));
 		return BGP_Stop;
 	}
 
