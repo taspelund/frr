@@ -130,8 +130,8 @@ static struct peer *peer_xfer_conn(struct peer *from_peer)
 	afi_t afi;
 	safi_t safi;
 	int fd;
-	int status, pstatus;
-	unsigned char last_evt, last_maj_evt;
+	enum bgp_fsm_status status, pstatus;
+	enum bgp_fsm_events last_evt, last_maj_evt;
 
 	assert(from_peer != NULL);
 
@@ -456,6 +456,10 @@ void bgp_timer_set(struct peer *peer)
 		bgp_keepalives_off(peer);
 		BGP_TIMER_OFF(peer->t_routeadv);
 		break;
+	case BGP_STATUS_MAX:
+		flog_err(EC_LIB_DEVELOPMENT,
+			 "BGP_STATUS_MAX while a legal state is not valid state for the FSM");
+		break;
 	}
 }
 
@@ -660,32 +664,29 @@ static int bgp_graceful_deferral_timer_expire(struct thread *thread)
 	return bgp_best_path_select_defer(bgp, afi, safi);
 }
 
-static int bgp_update_delay_applicable(struct bgp *bgp)
+static bool bgp_update_delay_applicable(struct bgp *bgp)
 {
 	/* update_delay_over flag should be reset (set to 0) for any new
 	   applicability of the update-delay during BGP process lifetime.
 	   And it should be set after an occurence of the update-delay is
 	   over)*/
 	if (!bgp->update_delay_over)
-		return 1;
-
-	return 0;
+		return true;
+	return false;
 }
 
-int bgp_update_delay_active(struct bgp *bgp)
+bool bgp_update_delay_active(struct bgp *bgp)
 {
 	if (bgp->t_update_delay)
-		return 1;
-
-	return 0;
+		return true;
+	return false;
 }
 
-int bgp_update_delay_configured(struct bgp *bgp)
+bool bgp_update_delay_configured(struct bgp *bgp)
 {
 	if (bgp->v_update_delay)
-		return 1;
-
-	return 0;
+		return true;
+	return false;
 }
 
 /* Do the post-processing needed when bgp comes out of the read-only mode
@@ -836,28 +837,25 @@ void bgp_adjust_routeadv(struct peer *peer)
 	}
 }
 
-static int bgp_maxmed_onstartup_applicable(struct bgp *bgp)
+static bool bgp_maxmed_onstartup_applicable(struct bgp *bgp)
 {
 	if (!bgp->maxmed_onstartup_over)
-		return 1;
-
-	return 0;
+		return true;
+	return false;
 }
 
-int bgp_maxmed_onstartup_configured(struct bgp *bgp)
+bool bgp_maxmed_onstartup_configured(struct bgp *bgp)
 {
 	if (bgp->v_maxmed_onstartup != BGP_MAXMED_ONSTARTUP_UNCONFIGURED)
-		return 1;
-
-	return 0;
+		return true;
+	return false;
 }
 
-int bgp_maxmed_onstartup_active(struct bgp *bgp)
+bool bgp_maxmed_onstartup_active(struct bgp *bgp)
 {
 	if (bgp->t_maxmed_onstartup)
-		return 1;
-
-	return 0;
+		return true;
+	return false;
 }
 
 void bgp_maxmed_update(struct bgp *bgp)
@@ -2037,7 +2035,7 @@ void bgp_fsm_event_update(struct peer *peer, int valid)
 /* Finite State Machine structure */
 static const struct {
 	int (*func)(struct peer *);
-	int next_state;
+	enum bgp_fsm_status next_state;
 } FSM[BGP_STATUS_MAX - 1][BGP_EVENTS_MAX - 1] = {
 	{
 		/* Idle state: In Idle state, all events other than BGP_Start is
@@ -2184,7 +2182,7 @@ static const struct {
 /* Execute event process. */
 int bgp_event(struct thread *thread)
 {
-	int event;
+	enum bgp_fsm_events event;
 	struct peer *peer;
 	int ret;
 
@@ -2196,9 +2194,9 @@ int bgp_event(struct thread *thread)
 	return (ret);
 }
 
-int bgp_event_update(struct peer *peer, int event)
+int bgp_event_update(struct peer *peer, enum bgp_fsm_events event)
 {
-	int next;
+	enum bgp_fsm_status next;
 	int ret = 0;
 	struct peer *other;
 	int passive_conn = 0;

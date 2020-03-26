@@ -131,6 +131,9 @@ struct zserv {
 
 	bool notify_owner;
 
+	/* Indicates if client is synchronous. */
+	bool synchronous;
+
 	/* client's protocol */
 	uint8_t proto;
 	uint16_t instance;
@@ -314,7 +317,7 @@ extern void zserv_read_file(char *input);
 #endif
 
 /* TODO */
-int zebra_finalize(struct thread *event);
+__attribute__((__noreturn__)) int zebra_finalize(struct thread *event);
 
 /*
  * Graceful restart functions.

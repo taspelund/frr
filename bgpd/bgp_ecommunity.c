@@ -80,8 +80,8 @@ static void ecommunity_hash_free(struct ecommunity *ecom)
    once and whether the new value should replace what is existing or
    not.
 */
-int ecommunity_add_val(struct ecommunity *ecom, struct ecommunity_val *eval,
-		       bool unique, bool overwrite)
+bool ecommunity_add_val(struct ecommunity *ecom, struct ecommunity_val *eval,
+			bool unique, bool overwrite)
 {
 	int c, ins_idx;
 
@@ -90,7 +90,7 @@ int ecommunity_add_val(struct ecommunity *ecom, struct ecommunity_val *eval,
 		ecom->size = 1;
 		ecom->val = XCALLOC(MTYPE_ECOMMUNITY_VAL, ECOMMUNITY_SIZE);
 		memcpy(ecom->val, eval->val, ECOMMUNITY_SIZE);
-		return 1;
+		return true;
 	}
 
 	/* If the value already exists in the structure return 0.  */
@@ -106,12 +106,12 @@ int ecommunity_add_val(struct ecommunity *ecom, struct ecommunity_val *eval,
 					memcpy(p, eval->val, ECOMMUNITY_SIZE);
 					return 1;
 				}
-				return 0;
+				return false;
 			}
 		}
 		int ret = memcmp(p, eval->val, ECOMMUNITY_SIZE);
 		if (ret == 0)
-			return 0;
+			return false;
 		if (ret > 0) {
 			if (!unique)
 				break;
@@ -134,7 +134,7 @@ int ecommunity_add_val(struct ecommunity *ecom, struct ecommunity_val *eval,
 	memcpy(ecom->val + (ins_idx * ECOMMUNITY_SIZE),
 	       eval->val, ECOMMUNITY_SIZE);
 
-	return 1;
+	return true;
 }
 
 /* This function takes pointer to Extended Communites strucutre then
@@ -581,7 +581,7 @@ struct ecommunity *ecommunity_str2com(const char *str, int type,
 	return ecom;
 }
 
-static int ecommunity_rt_soo_str(char *buf, size_t bufsz, uint8_t *pnt,
+static int ecommunity_rt_soo_str(char *buf, size_t bufsz, const uint8_t *pnt,
 				 int type, int sub_type, int format)
 {
 	int len = 0;
@@ -637,7 +637,7 @@ static int ecommunity_rt_soo_str(char *buf, size_t bufsz, uint8_t *pnt,
 	return len;
 }
 
-static int ecommunity_lb_str(char *buf, size_t bufsz, uint8_t *pnt)
+static int ecommunity_lb_str(char *buf, size_t bufsz, const uint8_t *pnt)
 {
 	int len = 0;
 	as_t as;
@@ -901,20 +901,20 @@ char *ecommunity_ecom2str(struct ecommunity *ecom, int format, int filter)
 	return str_buf;
 }
 
-int ecommunity_match(const struct ecommunity *ecom1,
-		     const struct ecommunity *ecom2)
+bool ecommunity_match(const struct ecommunity *ecom1,
+		      const struct ecommunity *ecom2)
 {
 	int i = 0;
 	int j = 0;
 
 	if (ecom1 == NULL && ecom2 == NULL)
-		return 1;
+		return true;
 
 	if (ecom1 == NULL || ecom2 == NULL)
-		return 0;
+		return false;
 
 	if (ecom1->size < ecom2->size)
-		return 0;
+		return false;
 
 	/* Every community on com2 needs to be on com1 for this to match */
 	while (i < ecom1->size && j < ecom2->size) {
@@ -926,9 +926,9 @@ int ecommunity_match(const struct ecommunity *ecom1,
 	}
 
 	if (j == ecom2->size)
-		return 1;
+		return true;
 	else
-		return 0;
+		return false;
 }
 
 /* return first occurence of type */
@@ -953,15 +953,14 @@ extern struct ecommunity_val *ecommunity_lookup(const struct ecommunity *ecom,
 /* remove ext. community matching type and subtype
  * return 1 on success ( removed ), 0 otherwise (not present)
  */
-extern int ecommunity_strip(struct ecommunity *ecom, uint8_t type,
-			    uint8_t subtype)
+extern bool ecommunity_strip(struct ecommunity *ecom, uint8_t type,
+			     uint8_t subtype)
 {
 	uint8_t *p, *q, *new;
 	int c, found = 0;
 	/* When this is fist value, just add it.  */
-	if (ecom == NULL || ecom->val == NULL) {
-		return 0;
-	}
+	if (ecom == NULL || ecom->val == NULL)
+		return false;
 
 	/* Check if any existing ext community matches. */
 	/* Certain extended communities like the Route Target can be present
@@ -974,14 +973,14 @@ extern int ecommunity_strip(struct ecommunity *ecom, uint8_t type,
 	}
 	/* If no matching ext community exists, return. */
 	if (found == 0)
-		return 0;
+		return false;
 
 	/* Handle the case where everything needs to be stripped. */
 	if (found == ecom->size) {
 		XFREE(MTYPE_ECOMMUNITY_VAL, ecom->val);
 		ecom->size = 0;
 		ecom->val = NULL;
-		return 1;
+		return true;
 	}
 
 	/* Strip matching ext community(ies). */
@@ -997,21 +996,21 @@ extern int ecommunity_strip(struct ecommunity *ecom, uint8_t type,
 	XFREE(MTYPE_ECOMMUNITY_VAL, ecom->val);
 	ecom->val = new;
 	ecom->size -= found;
-	return 1;
+	return true;
 }
 
 /*
  * Remove specified extended community value from extended community.
  * Returns 1 if value was present (and hence, removed), 0 otherwise.
  */
-int ecommunity_del_val(struct ecommunity *ecom, struct ecommunity_val *eval)
+bool ecommunity_del_val(struct ecommunity *ecom, struct ecommunity_val *eval)
 {
 	uint8_t *p;
 	int c, found = 0;
 
 	/* Make sure specified value exists. */
 	if (ecom == NULL || ecom->val == NULL)
-		return 0;
+		return false;
 	c = 0;
 	for (p = ecom->val; c < ecom->size; p += ECOMMUNITY_SIZE, c++) {
 		if (!memcmp(p, eval->val, ECOMMUNITY_SIZE)) {
@@ -1020,7 +1019,7 @@ int ecommunity_del_val(struct ecommunity *ecom, struct ecommunity_val *eval)
 		}
 	}
 	if (found == 0)
-		return 0;
+		return false;
 
 	/* Delete the selected value */
 	ecom->size--;
@@ -1033,7 +1032,7 @@ int ecommunity_del_val(struct ecommunity *ecom, struct ecommunity_val *eval)
 		       (ecom->size - c) * ECOMMUNITY_SIZE);
 	XFREE(MTYPE_ECOMMUNITY_VAL, ecom->val);
 	ecom->val = p;
-	return 1;
+	return true;
 }
 
 int ecommunity_fill_pbr_action(struct ecommunity_val *ecom_eval,
@@ -1089,9 +1088,9 @@ int ecommunity_fill_pbr_action(struct ecommunity_val *ecom_eval,
  * return the BGP link bandwidth extended community, if present;
  * the actual bandwidth is returned via param
  */
-uint8_t *ecommunity_linkbw_present(struct ecommunity *ecom, uint32_t *bw)
+const uint8_t *ecommunity_linkbw_present(struct ecommunity *ecom, uint32_t *bw)
 {
-	uint8_t *eval;
+	const uint8_t *eval;
 	int i;
 
 	if (bw)
@@ -1101,7 +1100,7 @@ uint8_t *ecommunity_linkbw_present(struct ecommunity *ecom, uint32_t *bw)
 		return NULL;
 
 	for (i = 0; i < ecom->size; i++) {
-		uint8_t *pnt;
+		const uint8_t *pnt;
 		uint8_t type, sub_type;
 		uint32_t bwval;
 
@@ -1131,7 +1130,8 @@ struct ecommunity *ecommunity_replace_linkbw(as_t as,
 {
 	struct ecommunity *new;
 	struct ecommunity_val lb_eval;
-	uint8_t *eval, type;
+	const uint8_t *eval;
+	uint8_t type;
 	uint32_t cur_bw;
 
 	/* Nothing to replace if link-bandwidth doesn't exist or

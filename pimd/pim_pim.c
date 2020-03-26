@@ -42,7 +42,6 @@
 #include "pim_bsm.h"
 
 static int on_pim_hello_send(struct thread *t);
-static int pim_hello_send(struct interface *ifp, uint16_t holdtime);
 
 static const char *pim_pim_msgtype2str(enum pim_msg_type type)
 {
@@ -135,6 +134,18 @@ void pim_sock_delete(struct interface *ifp, const char *delete_message)
 	pim_neighbor_delete_all(ifp, delete_message);
 
 	sock_close(ifp);
+}
+
+/* For now check dst address for hello, assrt and join/prune is all pim rtr */
+static bool pim_pkt_dst_addr_ok(enum pim_msg_type type, in_addr_t addr)
+{
+	if ((type == PIM_MSG_TYPE_HELLO) || (type == PIM_MSG_TYPE_ASSERT)
+	    || (type == PIM_MSG_TYPE_JOIN_PRUNE)) {
+		if (addr != qpim_all_pim_routers_addr.s_addr)
+			return false;
+	}
+
+	return true;
 }
 
 int pim_pim_packet(struct interface *ifp, uint8_t *buf, size_t len)
@@ -235,6 +246,21 @@ int pim_pim_packet(struct interface *ifp, uint8_t *buf, size_t len)
 		if (PIM_DEBUG_PIM_PACKETDUMP_RECV) {
 			pim_pkt_dump(__func__, pim_msg, pim_msg_len);
 		}
+	}
+
+	if (!pim_pkt_dst_addr_ok(header->type, ip_hdr->ip_dst.s_addr)) {
+		char dst_str[INET_ADDRSTRLEN];
+		char src_str[INET_ADDRSTRLEN];
+
+		pim_inet4_dump("<dst?>", ip_hdr->ip_dst, dst_str,
+			       sizeof(dst_str));
+		pim_inet4_dump("<src?>", ip_hdr->ip_src, src_str,
+			       sizeof(src_str));
+		zlog_warn(
+			"%s: Ignoring Pkt. Unexpected IP destination %s for %s (Expected: all_pim_routers_addr) from %s",
+			__func__, dst_str, pim_pim_msgtype2str(header->type),
+			src_str);
+		return -1;
 	}
 
 	switch (header->type) {
@@ -662,7 +688,7 @@ static int hello_send(struct interface *ifp, uint16_t holdtime)
 	return 0;
 }
 
-static int pim_hello_send(struct interface *ifp, uint16_t holdtime)
+int pim_hello_send(struct interface *ifp, uint16_t holdtime)
 {
 	struct pim_interface *pim_ifp = ifp->info;
 

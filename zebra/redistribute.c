@@ -173,8 +173,7 @@ void redistribute_update(const struct prefix *p, const struct prefix *src_p,
 	afi = family2afi(p->family);
 	if (!afi) {
 		flog_warn(EC_ZEBRA_REDISTRIBUTE_UNKNOWN_AF,
-			  "%s: Unknown AFI/SAFI prefix received\n",
-			  __FUNCTION__);
+			  "%s: Unknown AFI/SAFI prefix received\n", __func__);
 		return;
 	}
 	if (!zebra_check_addr(p)) {
@@ -269,7 +268,7 @@ void redistribute_delete(const struct prefix *p, const struct prefix *src_p,
 	/* Add DISTANCE_INFINITY check. */
 	if (old_re && (old_re->distance == DISTANCE_INFINITY)) {
 		if (IS_ZEBRA_DEBUG_RIB)
-			zlog_debug("\tSkipping due to Infinite Distance");
+			zlog_debug("        Skipping due to Infinite Distance");
 		return;
 	}
 
@@ -292,6 +291,10 @@ void redistribute_delete(const struct prefix *p, const struct prefix *src_p,
 	}
 
 	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		/* Do not send unsolicited messages to synchronous clients. */
+		if (client->synchronous)
+			continue;
+
 		if (new_re) {
 			/* Skip this client if it will receive an update for the
 			 * 'new' re
@@ -473,6 +476,12 @@ void zebra_interface_up_update(struct interface *ifp)
 	if (ifp->ptm_status || !ifp->ptm_enable) {
 		for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode,
 				       client)) {
+			/* Do not send unsolicited messages to synchronous
+			 * clients.
+			 */
+			if (client->synchronous)
+				continue;
+
 			zsend_interface_update(ZEBRA_INTERFACE_UP,
 					       client, ifp);
 			zsend_interface_link_params(client, ifp);
@@ -491,6 +500,10 @@ void zebra_interface_down_update(struct interface *ifp)
 			   ifp->name, ifp->vrf_id);
 
 	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		/* Do not send unsolicited messages to synchronous clients. */
+		if (client->synchronous)
+			continue;
+
 		zsend_interface_update(ZEBRA_INTERFACE_DOWN, client, ifp);
 	}
 }
@@ -506,6 +519,10 @@ void zebra_interface_add_update(struct interface *ifp)
 			   ifp->vrf_id);
 
 	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		/* Do not send unsolicited messages to synchronous clients. */
+		if (client->synchronous)
+			continue;
+
 		client->ifadd_cnt++;
 		zsend_interface_add(client, ifp);
 		zsend_interface_link_params(client, ifp);
@@ -522,6 +539,10 @@ void zebra_interface_delete_update(struct interface *ifp)
 			   ifp->name, ifp->vrf_id);
 
 	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		/* Do not send unsolicited messages to synchronous clients. */
+		if (client->synchronous)
+			continue;
+
 		client->ifdel_cnt++;
 		zsend_interface_delete(client, ifp);
 	}
@@ -553,12 +574,17 @@ void zebra_interface_address_add_update(struct interface *ifp,
 
 	router_id_add_address(ifc);
 
-	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client))
+	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		/* Do not send unsolicited messages to synchronous clients. */
+		if (client->synchronous)
+			continue;
+
 		if (CHECK_FLAG(ifc->conf, ZEBRA_IFC_REAL)) {
 			client->connected_rt_add_cnt++;
 			zsend_interface_address(ZEBRA_INTERFACE_ADDRESS_ADD,
 						client, ifp, ifc);
 		}
+	}
 }
 
 /* Interface address deletion. */
@@ -582,12 +608,17 @@ void zebra_interface_address_delete_update(struct interface *ifp,
 
 	router_id_del_address(ifc);
 
-	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client))
+	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		/* Do not send unsolicited messages to synchronous clients. */
+		if (client->synchronous)
+			continue;
+
 		if (CHECK_FLAG(ifc->conf, ZEBRA_IFC_REAL)) {
 			client->connected_rt_del_cnt++;
 			zsend_interface_address(ZEBRA_INTERFACE_ADDRESS_DELETE,
 						client, ifp, ifc);
 		}
+	}
 }
 
 /* Interface VRF change. May need to delete from clients not interested in
@@ -604,6 +635,10 @@ void zebra_interface_vrf_update_del(struct interface *ifp, vrf_id_t new_vrf_id)
 			ifp->name, ifp->vrf_id, new_vrf_id);
 
 	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		/* Do not send unsolicited messages to synchronous clients. */
+		if (client->synchronous)
+			continue;
+
 		/* Need to delete if the client is not interested in the new
 		 * VRF. */
 		zsend_interface_update(ZEBRA_INTERFACE_DOWN, client, ifp);
@@ -627,6 +662,10 @@ void zebra_interface_vrf_update_add(struct interface *ifp, vrf_id_t old_vrf_id)
 			ifp->name, old_vrf_id, ifp->vrf_id);
 
 	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		/* Do not send unsolicited messages to synchronous clients. */
+		if (client->synchronous)
+			continue;
+
 		/* Need to add if the client is interested in the new VRF. */
 		client->ifadd_cnt++;
 		zsend_interface_add(client, ifp);
@@ -914,6 +953,11 @@ void zebra_interface_parameters_update(struct interface *ifp)
 		zlog_debug("MESSAGE: ZEBRA_INTERFACE_LINK_PARAMS %s(%u)",
 			   ifp->name, ifp->vrf_id);
 
-	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client))
+	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		/* Do not send unsolicited messages to synchronous clients. */
+		if (client->synchronous)
+			continue;
+
 		zsend_interface_link_params(client, ifp);
+	}
 }

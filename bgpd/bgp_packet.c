@@ -587,7 +587,7 @@ void bgp_open_send(struct peer *peer)
  * @param peer
  * @return 0
  */
-static int bgp_write_notify(struct peer *peer)
+static void bgp_write_notify(struct peer *peer)
 {
 	int ret, val;
 	uint8_t type;
@@ -597,7 +597,7 @@ static int bgp_write_notify(struct peer *peer)
 	s = stream_fifo_pop(peer->obuf);
 
 	if (!s)
-		return 0;
+		return;
 
 	assert(stream_get_endp(s) >= BGP_HEADER_SIZE);
 
@@ -617,7 +617,7 @@ static int bgp_write_notify(struct peer *peer)
 	if (ret <= 0) {
 		stream_free(s);
 		BGP_EVENT_ADD(peer, TCP_fatal_error);
-		return 0;
+		return;
 	}
 
 	/* Disable Nagle, make NOTIFY packet go out right away */
@@ -649,8 +649,6 @@ static int bgp_write_notify(struct peer *peer)
 	BGP_EVENT_ADD(peer, BGP_Stop);
 
 	stream_free(s);
-
-	return 0;
 }
 
 /*
@@ -2337,7 +2335,7 @@ int bgp_process_packet(struct thread *thread)
 				flog_err(
 					EC_BGP_PKT_OPEN,
 					"%s: BGP OPEN receipt failed for peer: %s",
-					__FUNCTION__, peer->host);
+					__func__, peer->host);
 			break;
 		case BGP_MSG_UPDATE:
 			atomic_fetch_add_explicit(&peer->update_in, 1,
@@ -2348,7 +2346,7 @@ int bgp_process_packet(struct thread *thread)
 				flog_err(
 					EC_BGP_UPDATE_RCV,
 					"%s: BGP UPDATE receipt failed for peer: %s",
-					__FUNCTION__, peer->host);
+					__func__, peer->host);
 			break;
 		case BGP_MSG_NOTIFY:
 			atomic_fetch_add_explicit(&peer->notify_in, 1,
@@ -2358,7 +2356,7 @@ int bgp_process_packet(struct thread *thread)
 				flog_err(
 					EC_BGP_NOTIFY_RCV,
 					"%s: BGP NOTIFY receipt failed for peer: %s",
-					__FUNCTION__, peer->host);
+					__func__, peer->host);
 			break;
 		case BGP_MSG_KEEPALIVE:
 			peer->readtime = monotime(NULL);
@@ -2369,7 +2367,7 @@ int bgp_process_packet(struct thread *thread)
 				flog_err(
 					EC_BGP_KEEP_RCV,
 					"%s: BGP KEEPALIVE receipt failed for peer: %s",
-					__FUNCTION__, peer->host);
+					__func__, peer->host);
 			break;
 		case BGP_MSG_ROUTE_REFRESH_NEW:
 		case BGP_MSG_ROUTE_REFRESH_OLD:
@@ -2380,7 +2378,7 @@ int bgp_process_packet(struct thread *thread)
 				flog_err(
 					EC_BGP_RFSH_RCV,
 					"%s: BGP ROUTEREFRESH receipt failed for peer: %s",
-					__FUNCTION__, peer->host);
+					__func__, peer->host);
 			break;
 		case BGP_MSG_CAPABILITY:
 			atomic_fetch_add_explicit(&peer->dynamic_cap_in, 1,
@@ -2390,7 +2388,7 @@ int bgp_process_packet(struct thread *thread)
 				flog_err(
 					EC_BGP_CAP_RCV,
 					"%s: BGP CAPABILITY receipt failed for peer: %s",
-					__FUNCTION__, peer->host);
+					__func__, peer->host);
 			break;
 		default:
 			/* Suppress uninitialized variable warning */

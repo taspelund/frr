@@ -1122,16 +1122,6 @@ case "$host_os" in
     AC_DEFINE([OPEN_BSD], [1], [OpenBSD])
     AC_DEFINE([KAME], [1], [KAME IPv6])
     AC_DEFINE([BSD_V6_SYSCTL], [1], [BSD v6 sysctl to turn on and off forwarding])
-
-    if test "$enable_pimd" != "no"; then
-      case "$host_os" in
-      openbsd6.0)
-        ;;
-      openbsd[6-9]*)
-        AC_MSG_FAILURE([pimd cannot be enabled as PIM support has been removed from OpenBSD 6.1])
-        ;;
-      esac
-    fi
     ;;
   *)
     AC_MSG_RESULT([BSD])
@@ -1791,6 +1781,42 @@ if test "$enable_rpki" = "yes"; then
   )
 fi
 
+dnl ------------------------------------
+dnl pimd is not supported on OpenBSD and MacOS
+dnl ------------------------------------
+if test "$enable_pimd" != "no"; then
+AC_MSG_CHECKING([for pimd OS support])
+case "$host_os" in
+  darwin*)
+    AC_MSG_RESULT([no])
+    enable_pimd="no"
+    ;;
+  openbsd*)
+    AC_MSG_RESULT([no])
+    enable_pimd="no"
+    ;;
+  *)
+    AC_MSG_RESULT([yes])
+    ;;
+esac
+fi
+
+dnl -------------------------------------
+dnl VRRP is only supported on linux
+dnl -------------------------------------
+if test "$enable_vrrpd" != "no"; then
+AC_MSG_CHECKING([for VRRP OS support])
+case "$host_os" in
+  linux*)
+    AC_MSG_RESULT([yes])
+    ;;
+  *)
+    AC_MSG_RESULT([no])
+    enable_vrrpd="no"
+    ;;
+esac
+fi
+
 dnl ------------------------------------------
 dnl Check whether rtrlib was build with ssh support
 dnl ------------------------------------------
@@ -1979,6 +2005,10 @@ AC_CHECK_DECL([CLOCK_MONOTONIC],
 	[AC_CHECK_LIB([rt], [clock_gettime], [LIBS="$LIBS -lrt"])
 	 AC_DEFINE([HAVE_CLOCK_MONOTONIC], [1], [Have monotonic clock])
 ], [AC_MSG_RESULT([no])], [FRR_INCLUDES])
+
+AC_SEARCH_LIBS([clock_nanosleep], [rt], [
+  AC_DEFINE([HAVE_CLOCK_NANOSLEEP], [1], [Have clock_nanosleep()])
+])
 
 dnl --------------------------------------
 dnl checking for flex and bison

@@ -255,6 +255,9 @@ struct zclient {
 	/* Do we care about failure events for route install? */
 	bool receive_notify;
 
+	/* Is this a synchronous client? */
+	bool synchronous;
+
 	/* Socket to zebra daemon. */
 	int sock;
 
@@ -569,6 +572,7 @@ enum zebra_neigh_state { ZEBRA_NEIGH_INACTIVE = 0, ZEBRA_NEIGH_ACTIVE = 1 };
 
 struct zclient_options {
 	bool receive_notify;
+	bool synchronous;
 };
 
 extern struct zclient_options zclient_options_default;
@@ -738,7 +742,7 @@ extern void zebra_read_pw_status_update(ZAPI_CALLBACK_ARGS, struct zapi_pw_statu
 
 extern int zclient_route_send(uint8_t, struct zclient *, struct zapi_route *);
 extern int zclient_send_rnh(struct zclient *zclient, int command,
-			    struct prefix *p, bool exact_match,
+			    const struct prefix *p, bool exact_match,
 			    vrf_id_t vrf_id);
 int zapi_nexthop_encode(struct stream *s, const struct zapi_nexthop *api_nh,
 			uint32_t api_flags);
@@ -795,5 +799,10 @@ extern void zclient_send_mlag_deregister(struct zclient *client);
 
 extern void zclient_send_mlag_data(struct zclient *client,
 				   struct stream *client_s);
+
+/* Send the hello message.
+ * Returns 0 for success or -1 on an I/O error.
+ */
+extern int zclient_send_hello(struct zclient *client);
 
 #endif /* _ZEBRA_ZCLIENT_H */

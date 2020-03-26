@@ -130,14 +130,14 @@ static struct cluster_list *cluster_parse(struct in_addr *pnt, int length)
 	return cluster;
 }
 
-int cluster_loop_check(struct cluster_list *cluster, struct in_addr originator)
+bool cluster_loop_check(struct cluster_list *cluster, struct in_addr originator)
 {
 	int i;
 
 	for (i = 0; i < cluster->length / 4; i++)
 		if (cluster->list[i].s_addr == originator.s_addr)
-			return 1;
-	return 0;
+			return true;
+	return false;
 }
 
 static unsigned int cluster_hash_key_make(const void *p)
@@ -263,16 +263,16 @@ void bgp_attr_flush_encap(struct attr *attr)
  *
  * This algorithm could be made faster if needed
  */
-static int encap_same(const struct bgp_attr_encap_subtlv *h1,
-		      const struct bgp_attr_encap_subtlv *h2)
+static bool encap_same(const struct bgp_attr_encap_subtlv *h1,
+		       const struct bgp_attr_encap_subtlv *h2)
 {
 	const struct bgp_attr_encap_subtlv *p;
 	const struct bgp_attr_encap_subtlv *q;
 
 	if (h1 == h2)
-		return 1;
+		return true;
 	if (h1 == NULL || h2 == NULL)
-		return 0;
+		return false;
 
 	for (p = h1; p; p = p->next) {
 		for (q = h2; q; q = q->next) {
@@ -283,7 +283,7 @@ static int encap_same(const struct bgp_attr_encap_subtlv *h1,
 			}
 		}
 		if (!q)
-			return 0;
+			return false;
 	}
 
 	for (p = h2; p; p = p->next) {
@@ -295,10 +295,10 @@ static int encap_same(const struct bgp_attr_encap_subtlv *h1,
 			}
 		}
 		if (!q)
-			return 0;
+			return false;
 	}
 
-	return 1;
+	return true;
 }
 
 static void *encap_hash_alloc(void *p)
@@ -1274,7 +1274,7 @@ const uint8_t attr_flags_values[] = {
 };
 static const size_t attr_flags_values_max = array_size(attr_flags_values) - 1;
 
-static int bgp_attr_flag_invalid(struct bgp_attr_parser_args *args)
+static bool bgp_attr_flag_invalid(struct bgp_attr_parser_args *args)
 {
 	uint8_t mask = BGP_ATTR_FLAG_EXTLEN;
 	const uint8_t flags = args->flags;
@@ -1282,9 +1282,9 @@ static int bgp_attr_flag_invalid(struct bgp_attr_parser_args *args)
 
 	/* there may be attributes we don't know about */
 	if (attr_code > attr_flags_values_max)
-		return 0;
+		return false;
 	if (attr_flags_values[attr_code] == 0)
-		return 0;
+		return false;
 
 	/* RFC4271, "For well-known attributes, the Transitive bit MUST be set
 	 * to
@@ -1296,7 +1296,7 @@ static int bgp_attr_flag_invalid(struct bgp_attr_parser_args *args)
 			EC_BGP_ATTR_FLAG,
 			"%s well-known attributes must have transitive flag set (%x)",
 			lookup_msg(attr_str, attr_code, NULL), flags);
-		return 1;
+		return true;
 	}
 
 	/* "For well-known attributes and for optional non-transitive
@@ -1309,7 +1309,7 @@ static int bgp_attr_flag_invalid(struct bgp_attr_parser_args *args)
 				 "%s well-known attribute "
 				 "must NOT have the partial flag set (%x)",
 				 lookup_msg(attr_str, attr_code, NULL), flags);
-			return 1;
+			return true;
 		}
 		if (CHECK_FLAG(flags, BGP_ATTR_FLAG_OPTIONAL)
 		    && !CHECK_FLAG(flags, BGP_ATTR_FLAG_TRANS)) {
@@ -1317,7 +1317,7 @@ static int bgp_attr_flag_invalid(struct bgp_attr_parser_args *args)
 				 "%s optional + transitive attribute "
 				 "must NOT have the partial flag set (%x)",
 				 lookup_msg(attr_str, attr_code, NULL), flags);
-			return 1;
+			return true;
 		}
 	}
 
@@ -1329,10 +1329,10 @@ static int bgp_attr_flag_invalid(struct bgp_attr_parser_args *args)
 		SET_FLAG(mask, BGP_ATTR_FLAG_PARTIAL);
 
 	if ((flags & ~mask) == attr_flags_values[attr_code])
-		return 0;
+		return false;
 
 	bgp_attr_flags_diagnose(args, attr_flags_values[attr_code]);
-	return 1;
+	return true;
 }
 
 /* Get origin attribute of the update message. */
@@ -2385,8 +2385,7 @@ static int bgp_attr_encap(uint8_t type, struct peer *peer, /* IN */
  * Returns 0 if there was an error that needs to be passed up the stack
  */
 static bgp_attr_parse_ret_t bgp_attr_psid_sub(uint8_t type, uint16_t length,
-					      struct bgp_attr_parser_args *args,
-					      struct bgp_nlri *mp_update)
+					      struct bgp_attr_parser_args *args)
 {
 	struct peer *const peer = args->peer;
 	struct attr *const attr = args->attr;
@@ -2424,15 +2423,6 @@ static bgp_attr_parse_ret_t bgp_attr_psid_sub(uint8_t type, uint16_t length,
 		/* Store label index; subsequently, we'll check on
 		 * address-family */
 		attr->label_index = label_index;
-
-		/*
-		 * Ignore the Label index attribute unless received for
-		 * labeled-unicast
-		 * SAFI.
-		 */
-		if (!mp_update->length
-		    || mp_update->safi != SAFI_LABELED_UNICAST)
-			attr->label_index = BGP_INVALID_LABEL_INDEX;
 	}
 
 	/* Placeholder code for the IPv6 SID type */
@@ -2631,8 +2621,7 @@ static bgp_attr_parse_ret_t bgp_attr_psid_sub(uint8_t type, uint16_t length,
 /* Prefix SID attribute
  * draft-ietf-idr-bgp-prefix-sid-05
  */
-bgp_attr_parse_ret_t bgp_attr_prefix_sid(struct bgp_attr_parser_args *args,
-					 struct bgp_nlri *mp_update)
+bgp_attr_parse_ret_t bgp_attr_prefix_sid(struct bgp_attr_parser_args *args)
 {
 	struct peer *const peer = args->peer;
 	struct attr *const attr = args->attr;
@@ -2643,8 +2632,10 @@ bgp_attr_parse_ret_t bgp_attr_prefix_sid(struct bgp_attr_parser_args *args,
 	uint8_t type;
 	uint16_t length;
 	size_t headersz = sizeof(type) + sizeof(length);
+	size_t psid_parsed_length = 0;
 
-	while (STREAM_READABLE(peer->curr) > 0) {
+	while (STREAM_READABLE(peer->curr) > 0
+	       && psid_parsed_length < args->length) {
 
 		if (STREAM_READABLE(peer->curr) < headersz) {
 			flog_err(
@@ -2662,7 +2653,7 @@ bgp_attr_parse_ret_t bgp_attr_prefix_sid(struct bgp_attr_parser_args *args,
 		if (STREAM_READABLE(peer->curr) < length) {
 			flog_err(
 				EC_BGP_ATTR_LEN,
-				"Malformed Prefix SID attribute - insufficient data (need %" PRIu8
+				"Malformed Prefix SID attribute - insufficient data (need %" PRIu16
 				" for attribute body, have %zu remaining in UPDATE)",
 				length, STREAM_READABLE(peer->curr));
 			return bgp_attr_malformed(args,
@@ -2670,10 +2661,23 @@ bgp_attr_parse_ret_t bgp_attr_prefix_sid(struct bgp_attr_parser_args *args,
 						  args->total);
 		}
 
-		ret = bgp_attr_psid_sub(type, length, args, mp_update);
+		ret = bgp_attr_psid_sub(type, length, args);
 
 		if (ret != BGP_ATTR_PARSE_PROCEED)
 			return ret;
+
+		psid_parsed_length += length + headersz;
+
+		if (psid_parsed_length > args->length) {
+			flog_err(
+				EC_BGP_ATTR_LEN,
+				"Malformed Prefix SID attribute - TLV overflow by attribute (need %zu"
+				" for TLV length, have %zu overflowed in UPDATE)",
+				length + headersz, psid_parsed_length - (length + headersz));
+			return bgp_attr_malformed(
+				args, BGP_NOTIFY_UPDATE_ATTR_LENG_ERR,
+				args->total);
+		}
 	}
 
 	return BGP_ATTR_PARSE_PROCEED;
@@ -3069,7 +3073,7 @@ bgp_attr_parse_ret_t bgp_attr_parse(struct peer *peer, struct attr *attr,
 					     startp);
 			break;
 		case BGP_ATTR_PREFIX_SID:
-			ret = bgp_attr_prefix_sid(&attr_args, mp_update);
+			ret = bgp_attr_prefix_sid(&attr_args);
 			break;
 		case BGP_ATTR_PMSI_TUNNEL:
 			ret = bgp_attr_pmsi_tunnel(&attr_args);
@@ -3115,6 +3119,17 @@ bgp_attr_parse_ret_t bgp_attr_parse(struct peer *peer, struct attr *attr,
 			goto done;
 		}
 	}
+
+	/*
+	 * draft-ietf-idr-bgp-prefix-sid-27#section-3:
+	 * About Prefix-SID path attribute,
+	 * Label-Index TLV(type1) and The Originator SRGB TLV(type-3)
+	 * may only appear in a BGP Prefix-SID attribute attached to
+	 * IPv4/IPv6 Labeled Unicast prefixes ([RFC8277]).
+	 * It MUST be ignored when received for other BGP AFI/SAFI combinations.
+	 */
+	if (!attr->mp_nexthop_len || mp_update->safi != SAFI_LABELED_UNICAST)
+		attr->label_index = BGP_INVALID_LABEL_INDEX;
 
 	/* Check final read pointer is same as end pointer. */
 	if (BGP_INPUT_PNT(peer) != endp) {
@@ -3550,7 +3565,7 @@ void bgp_packet_mpattr_end(struct stream *s, size_t sizep)
 	stream_putw_at(s, sizep, (stream_get_endp(s) - sizep) - 2);
 }
 
-static int bgp_append_local_as(struct peer *peer, afi_t afi, safi_t safi)
+static bool bgp_append_local_as(struct peer *peer, afi_t afi, safi_t safi)
 {
 	if (!BGP_AS_IS_PRIVATE(peer->local_as)
 	    || (BGP_AS_IS_PRIVATE(peer->local_as)
@@ -3562,8 +3577,8 @@ static int bgp_append_local_as(struct peer *peer, afi_t afi, safi_t safi)
 			       PEER_FLAG_REMOVE_PRIVATE_AS_REPLACE)
 		&& !CHECK_FLAG(peer->af_flags[afi][safi],
 			       PEER_FLAG_REMOVE_PRIVATE_AS_ALL_REPLACE)))
-		return 1;
-	return 0;
+		return true;
+	return false;
 }
 
 /* Make attribute packet. */
@@ -4118,7 +4133,7 @@ void bgp_attr_finish(void)
 
 /* Make attribute packet. */
 void bgp_dump_routes_attr(struct stream *s, struct attr *attr,
-			  struct prefix *prefix)
+			  const struct prefix *prefix)
 {
 	unsigned long cp;
 	unsigned long len;

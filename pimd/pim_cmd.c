@@ -3023,7 +3023,7 @@ static void pim_show_bsm_db(struct pim_instance *pim, struct vty *vty, bool uj)
 	}
 
 	for (ALL_LIST_ELEMENTS_RO(pim->global_scope.bsm_list, bsmnode, bsm)) {
-		char grp_str[INET_ADDRSTRLEN];
+		char grp_str[PREFIX_STRLEN];
 		char rp_str[INET_ADDRSTRLEN];
 		char bsr_str[INET_ADDRSTRLEN];
 		struct bsmmsg_grpinfo *group;
@@ -3192,7 +3192,7 @@ static void pim_show_group_rp_mappings_info(struct pim_instance *pim,
 		if (!bsgrp)
 			continue;
 
-		char grp_str[INET_ADDRSTRLEN];
+		char grp_str[PREFIX_STRLEN];
 
 		prefix2str(&bsgrp->group, grp_str, sizeof(grp_str));
 
@@ -5808,7 +5808,7 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty,
 		vty_out(vty,
 			"       R - RP-bit set, F - Register flag, T - SPT-bit set\n");
 		vty_out(vty,
-			"\nSource          Group           Flags       Proto  Input            Output           TTL  Uptime\n");
+			"\nSource          Group           Flags   Proto  Input            Output           TTL  Uptime\n");
 	}
 
 	now = pim_time_monotonic_sec();
@@ -7290,11 +7290,20 @@ DEFUN (no_ip_pim_ecmp_rebalance,
 static int pim_cmd_igmp_start(struct vty *vty, struct interface *ifp)
 {
 	struct pim_interface *pim_ifp;
+	struct pim_instance *pim;
 	uint8_t need_startup = 0;
 
 	pim_ifp = ifp->info;
 
 	if (!pim_ifp) {
+		pim = pim_get_pim_instance(ifp->vrf_id);
+		/* Limit mcast interfaces to number of vifs available */
+		if (pim->mcast_if_count == MAXVIFS) {
+			vty_out(vty,
+				"Max multicast interfaces(%d) Reached. Could not enable IGMP on interface %s\n",
+				MAXVIFS, ifp->name);
+			return CMD_WARNING_CONFIG_FAILED;
+		}
 		(void)pim_if_new(ifp, true, false, false, false);
 		need_startup = 1;
 	} else {
@@ -8044,13 +8053,21 @@ DEFPY_HIDDEN (interface_ip_igmp_query_generate,
 	return CMD_SUCCESS;
 }
 
-static int pim_cmd_interface_add(struct interface *ifp)
+static int pim_cmd_interface_add(struct vty *vty, struct interface *ifp)
 {
 	struct pim_interface *pim_ifp = ifp->info;
+	struct pim_instance *pim;
 
-	if (!pim_ifp)
+	if (!pim_ifp) {
+		pim = pim_get_pim_instance(ifp->vrf_id);
+		/* Limiting mcast interfaces to number of VIFs */
+		if (pim->mcast_if_count == MAXVIFS) {
+			vty_out(vty, "Max multicast interfaces(%d) reached.",
+				MAXVIFS);
+			return 0;
+		}
 		pim_ifp = pim_if_new(ifp, false, true, false, false);
-	else
+	} else
 		PIM_IF_DO_PIM(pim_ifp->options);
 
 	pim_if_addr_add_all(ifp);
@@ -8121,15 +8138,17 @@ DEFPY (interface_ip_pim_activeactive,
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	struct pim_interface *pim_ifp;
 
-	if (!no && !pim_cmd_interface_add(ifp)) {
-		vty_out(vty, "Could not enable PIM SM active-active on interface\n");
+	if (!no && !pim_cmd_interface_add(vty, ifp)) {
+		vty_out(vty,
+			"Could not enable PIM SM active-active on interface %s\n",
+			ifp->name);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
 
-        if (PIM_DEBUG_MLAG)
-                zlog_debug("%sConfiguring PIM active-active on Interface: %s",
-                           no ? "Un-":" ", ifp->name);
+	if (PIM_DEBUG_MLAG)
+		zlog_debug("%sConfiguring PIM active-active on Interface: %s",
+			   no ? "Un-" : " ", ifp->name);
 
 	pim_ifp = ifp->info;
 	if (no)
@@ -8149,8 +8168,9 @@ DEFUN_HIDDEN (interface_ip_pim_ssm,
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 
-	if (!pim_cmd_interface_add(ifp)) {
-		vty_out(vty, "Could not enable PIM SM on interface\n");
+	if (!pim_cmd_interface_add(vty, ifp)) {
+		vty_out(vty, "Could not enable PIM SM on interface %s\n",
+			ifp->name);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
@@ -8166,8 +8186,9 @@ static int interface_ip_pim_helper(struct vty *vty)
 
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 
-	if (!pim_cmd_interface_add(ifp)) {
-		vty_out(vty, "Could not enable PIM SM on interface\n");
+	if (!pim_cmd_interface_add(vty, ifp)) {
+		vty_out(vty, "Could not enable PIM SM on interface %s\n",
+			ifp->name);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
@@ -8455,8 +8476,10 @@ DEFUN (interface_ip_pim_hello,
 	struct pim_interface *pim_ifp = ifp->info;
 
 	if (!pim_ifp) {
-		if (!pim_cmd_interface_add(ifp)) {
-			vty_out(vty, "Could not enable PIM SM on interface\n");
+		if (!pim_cmd_interface_add(vty, ifp)) {
+			vty_out(vty,
+				"Could not enable PIM SM on interface %s\n",
+				ifp->name);
 			return CMD_WARNING_CONFIG_FAILED;
 		}
 	}
@@ -9198,8 +9221,10 @@ DEFUN (ip_pim_bfd,
 	struct bfd_info *bfd_info = NULL;
 
 	if (!pim_ifp) {
-		if (!pim_cmd_interface_add(ifp)) {
-			vty_out(vty, "Could not enable PIM SM on interface\n");
+		if (!pim_cmd_interface_add(vty, ifp)) {
+			vty_out(vty,
+				"Could not enable PIM SM on interface %s\n",
+				ifp->name);
 			return CMD_WARNING;
 		}
 	}
@@ -9249,8 +9274,10 @@ DEFUN (ip_pim_bsm,
 	struct pim_interface *pim_ifp = ifp->info;
 
 	if (!pim_ifp) {
-		if (!pim_cmd_interface_add(ifp)) {
-			vty_out(vty, "Could not enable PIM SM on interface\n");
+		if (!pim_cmd_interface_add(vty, ifp)) {
+			vty_out(vty,
+				"Could not enable PIM SM on interface %s\n",
+				ifp->name);
 			return CMD_WARNING;
 		}
 	}
@@ -9293,8 +9320,10 @@ DEFUN (ip_pim_ucast_bsm,
 	struct pim_interface *pim_ifp = ifp->info;
 
 	if (!pim_ifp) {
-		if (!pim_cmd_interface_add(ifp)) {
-			vty_out(vty, "Could not enable PIM SM on interface\n");
+		if (!pim_cmd_interface_add(vty, ifp)) {
+			vty_out(vty,
+				"Could not enable PIM SM on interface %s\n",
+				ifp->name);
 			return CMD_WARNING;
 		}
 	}
@@ -9361,8 +9390,10 @@ DEFUN(
 	struct pim_interface *pim_ifp = ifp->info;
 
 	if (!pim_ifp) {
-		if (!pim_cmd_interface_add(ifp)) {
-			vty_out(vty, "Could not enable PIM SM on interface\n");
+		if (!pim_cmd_interface_add(vty, ifp)) {
+			vty_out(vty,
+				"Could not enable PIM SM on interface %s\n",
+				ifp->name);
 			return CMD_WARNING;
 		}
 	}

@@ -328,8 +328,8 @@ extern bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *,
 				       struct prefix *, afi_t, safi_t,
 				       struct peer *, struct prefix_rd *,
 				       mpls_label_t *, uint32_t, int, uint32_t);
-extern void bgp_dump_routes_attr(struct stream *, struct attr *,
-				 struct prefix *);
+extern void bgp_dump_routes_attr(struct stream *s, struct attr *attr,
+				 const struct prefix *p);
 extern bool attrhash_cmp(const void *arg1, const void *arg2);
 extern unsigned int attrhash_key_make(const void *);
 extern void attr_show_all(struct vty *);
@@ -337,7 +337,7 @@ extern unsigned long int attr_count(void);
 extern unsigned long int attr_unknown_count(void);
 
 /* Cluster list prototypes. */
-extern int cluster_loop_check(struct cluster_list *, struct in_addr);
+extern bool cluster_loop_check(struct cluster_list *, struct in_addr);
 extern void cluster_unintern(struct cluster_list *);
 
 /* Below exported for unit-test purposes only */
@@ -355,8 +355,7 @@ extern int bgp_mp_reach_parse(struct bgp_attr_parser_args *args,
 extern int bgp_mp_unreach_parse(struct bgp_attr_parser_args *args,
 				struct bgp_nlri *);
 extern bgp_attr_parse_ret_t
-bgp_attr_prefix_sid(struct bgp_attr_parser_args *args,
-		    struct bgp_nlri *mp_update);
+bgp_attr_prefix_sid(struct bgp_attr_parser_args *args);
 
 extern struct bgp_attr_encap_subtlv *
 encap_tlv_dup(struct bgp_attr_encap_subtlv *orig);
