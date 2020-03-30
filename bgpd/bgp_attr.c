@@ -898,14 +898,11 @@ struct attr *bgp_attr_default_set(struct attr *attr, uint8_t origin)
 }
 
 /* Create the attributes for an aggregate */
-struct attr *bgp_attr_aggregate_intern(struct bgp *bgp, uint8_t origin,
-				       struct aspath *aspath,
-				       struct community *community,
-				       struct ecommunity *ecommunity,
-				       struct lcommunity *lcommunity,
-				       struct bgp_aggregate *aggregate,
-				       uint8_t atomic_aggregate,
-				       struct prefix *p)
+struct attr *bgp_attr_aggregate_intern(
+	struct bgp *bgp, uint8_t origin, struct aspath *aspath,
+	struct community *community, struct ecommunity *ecommunity,
+	struct lcommunity *lcommunity, struct bgp_aggregate *aggregate,
+	uint8_t atomic_aggregate, const struct prefix *p)
 {
 	struct attr attr;
 	struct attr *new;
@@ -1655,19 +1652,20 @@ static int bgp_attr_aggregator(struct bgp_attr_parser_args *args)
 	else
 		aggregator_as = stream_getw(peer->curr);
 
-	/* Codification of AS 0 Processing */
-	if (aggregator_as == BGP_AS_ZERO) {
-		flog_err(EC_BGP_ATTR_LEN,
-			 "AGGREGATOR attribute is BGP_AS_ZERO(0)");
-		return bgp_attr_malformed(args, BGP_NOTIFY_UPDATE_MAL_AS_PATH,
-					  args->total);
-	}
-
 	attr->aggregator_as = aggregator_as;
 	attr->aggregator_addr.s_addr = stream_get_ipv4(peer->curr);
 
 	/* Set atomic aggregate flag. */
 	attr->flag |= ATTR_FLAG_BIT(BGP_ATTR_AGGREGATOR);
+
+	/* Codification of AS 0 Processing */
+	if (aggregator_as == BGP_AS_ZERO) {
+		flog_err(EC_BGP_ATTR_LEN,
+			 "AGGREGATOR AS number is 0 for aspath: %s",
+			 aspath_print(attr->aspath));
+		return bgp_attr_malformed(args, BGP_NOTIFY_UPDATE_MAL_AS_PATH,
+					  args->total);
+	}
 
 	return BGP_ATTR_PARSE_PROCEED;
 }
@@ -1690,19 +1688,20 @@ bgp_attr_as4_aggregator(struct bgp_attr_parser_args *args,
 					  0);
 	}
 
-	/* Codification of AS 0 Processing */
 	aggregator_as = stream_getl(peer->curr);
-	if (aggregator_as == BGP_AS_ZERO) {
-		flog_err(EC_BGP_ATTR_LEN,
-			 "AS4_AGGREGATOR attribute is BGP_AS_ZERO(0)");
-		return bgp_attr_malformed(args, BGP_NOTIFY_UPDATE_MAL_AS_PATH,
-					  0);
-	}
-
 	*as4_aggregator_as = aggregator_as;
 	as4_aggregator_addr->s_addr = stream_get_ipv4(peer->curr);
 
 	attr->flag |= ATTR_FLAG_BIT(BGP_ATTR_AS4_AGGREGATOR);
+
+	/* Codification of AS 0 Processing */
+	if (aggregator_as == BGP_AS_ZERO) {
+		flog_err(EC_BGP_ATTR_LEN,
+			 "AS4_AGGREGATOR AS number is 0 for aspath: %s",
+			 aspath_print(attr->aspath));
+		return bgp_attr_malformed(args, BGP_NOTIFY_UPDATE_MAL_AS_PATH,
+					  0);
+	}
 
 	return BGP_ATTR_PARSE_PROCEED;
 }
@@ -3419,10 +3418,10 @@ size_t bgp_packet_mpattr_start(struct stream *s, struct peer *peer, afi_t afi,
 }
 
 void bgp_packet_mpattr_prefix(struct stream *s, afi_t afi, safi_t safi,
-			      struct prefix *p, struct prefix_rd *prd,
-			      mpls_label_t *label, uint32_t num_labels,
-			      int addpath_encode, uint32_t addpath_tx_id,
-			      struct attr *attr)
+			      const struct prefix *p,
+			      const struct prefix_rd *prd, mpls_label_t *label,
+			      uint32_t num_labels, int addpath_encode,
+			      uint32_t addpath_tx_id, struct attr *attr)
 {
 	if (safi == SAFI_MPLS_VPN) {
 		if (addpath_encode)
@@ -3448,7 +3447,8 @@ void bgp_packet_mpattr_prefix(struct stream *s, afi_t afi, safi_t safi,
 		stream_put_prefix_addpath(s, p, addpath_encode, addpath_tx_id);
 }
 
-size_t bgp_packet_mpattr_prefix_size(afi_t afi, safi_t safi, struct prefix *p)
+size_t bgp_packet_mpattr_prefix_size(afi_t afi, safi_t safi,
+				     const struct prefix *p)
 {
 	int size = PSIZE(p->prefixlen);
 	if (safi == SAFI_MPLS_VPN)
@@ -4082,8 +4082,9 @@ size_t bgp_packet_mpunreach_start(struct stream *s, afi_t afi, safi_t safi)
 	return attrlen_pnt;
 }
 
-void bgp_packet_mpunreach_prefix(struct stream *s, struct prefix *p, afi_t afi,
-				 safi_t safi, struct prefix_rd *prd,
+void bgp_packet_mpunreach_prefix(struct stream *s, const struct prefix *p,
+				 afi_t afi, safi_t safi,
+				 const struct prefix_rd *prd,
 				 mpls_label_t *label, uint32_t num_labels,
 				 int addpath_encode, uint32_t addpath_tx_id,
 				 struct attr *attr)

@@ -6652,6 +6652,7 @@ DEFUN(no_neighbor_maximum_prefix_out,
 	if (!peer)
 		return CMD_WARNING_CONFIG_FAILED;
 
+	UNSET_FLAG(peer->af_flags[afi][safi], PEER_FLAG_MAX_PREFIX_OUT);
 	peer->pmax_out[afi][safi] = 0;
 
 	return CMD_SUCCESS;
@@ -8017,27 +8018,32 @@ static int bgp_clear_prefix(struct vty *vty, const char *view_name,
 
 	if (safi == SAFI_MPLS_VPN) {
 		for (rn = bgp_table_top(rib); rn; rn = bgp_route_next(rn)) {
-			if (prd && memcmp(rn->p.u.val, prd->val, 8) != 0)
+			const struct prefix *rn_p = bgp_node_get_prefix(rn);
+
+			if (prd && memcmp(rn_p->u.val, prd->val, 8) != 0)
 				continue;
 
 			table = bgp_node_get_bgp_table_info(rn);
-			if (table != NULL) {
+			if (table == NULL)
+				continue;
 
-				if ((rm = bgp_node_match(table, &match))
-				    != NULL) {
-					if (rm->p.prefixlen
-					    == match.prefixlen) {
-						SET_FLAG(rm->flags,
-							 BGP_NODE_USER_CLEAR);
-						bgp_process(bgp, rm, afi, safi);
-					}
-					bgp_unlock_node(rm);
+			if ((rm = bgp_node_match(table, &match)) != NULL) {
+				const struct prefix *rm_p =
+					bgp_node_get_prefix(rm);
+
+				if (rm_p->prefixlen == match.prefixlen) {
+					SET_FLAG(rm->flags,
+						 BGP_NODE_USER_CLEAR);
+					bgp_process(bgp, rm, afi, safi);
 				}
+				bgp_unlock_node(rm);
 			}
 		}
 	} else {
 		if ((rn = bgp_node_match(rib, &match)) != NULL) {
-			if (rn->p.prefixlen == match.prefixlen) {
+			const struct prefix *rn_p = bgp_node_get_prefix(rn);
+
+			if (rn_p->prefixlen == match.prefixlen) {
 				SET_FLAG(rn->flags, BGP_NODE_USER_CLEAR);
 				bgp_process(bgp, rn, afi, safi);
 			}
@@ -9178,10 +9184,12 @@ static int bgp_show_summary(struct vty *vty, struct bgp *bgp, int afi, int safi,
 					vty_out(vty, "%*s", max_neighbor_width - len,
 						" ");
 
-				vty_out(vty, "4 %10u %9u %9u %8" PRIu64 " %4d %4zd %8s",
+				vty_out(vty,
+					"4 %10u %9u %9u %8" PRIu64 " %4d %4zu %8s",
 					peer->as, PEER_TOTAL_RX(peer),
-					PEER_TOTAL_TX(peer), peer->version[afi][safi],
-					0, peer->obuf->count,
+					PEER_TOTAL_TX(peer),
+					peer->version[afi][safi], 0,
+					peer->obuf->count,
 					peer_uptime(peer->uptime, timebuf,
 						    BGP_UPTIME_LEN, 0, NULL));
 
