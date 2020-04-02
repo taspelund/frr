@@ -7,6 +7,7 @@ usr/lib/*/frr/libfrrfpm_pb.*
 usr/lib/*/frr/libmlag_pb.*
 usr/lib/*/frr/libfrrcares.*
 usr/lib/*/frr/libfrrospfapiclient.*
+usr/lib/*/frr/libfrrgrpc_pb.*
 usr/lib/frr/*.sh
 usr/lib/frr/*d
 usr/lib/frr/watchfrr
@@ -15,6 +16,7 @@ usr/lib/*/frr/modules/zebra_cumulus_mlag.so
 usr/lib/*/frr/modules/zebra_irdp.so
 usr/lib/*/frr/modules/zebra_fpm.so
 usr/lib/*/frr/modules/bgpd_bmp.so
+usr/lib/*/frr/modules/grpc.so
 usr/share/doc/frr/examples
 usr/share/man/
 usr/share/yang/
