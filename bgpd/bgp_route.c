@@ -2290,6 +2290,53 @@ struct bgp_process_queue {
 	unsigned int queued;
 };
 
+static void bgp_process_evpn_route_injection(struct bgp *bgp, afi_t afi,
+					     safi_t safi, struct bgp_node *rn,
+					     struct bgp_path_info *new_select,
+					     struct bgp_path_info *old_select)
+{
+	if ((afi != AFI_IP && afi != AFI_IP6) || (safi != SAFI_UNICAST))
+		return;
+
+	if (advertise_type5_routes(bgp, afi) &&
+	    new_select && is_route_injectable_into_evpn(new_select)) {
+
+		/* apply the route-map */
+		if (bgp->adv_cmd_rmap[afi][safi].map) {
+			int ret = 0;
+			struct bgp_path_info rmap_path;
+			struct bgp_path_info_extra rmap_path_extra;
+			struct attr dummy_attr;
+
+			dummy_attr = *new_select->attr;
+
+			/* Fill temp path_info */
+			prep_for_rmap_apply(&rmap_path, &rmap_path_extra,
+					    new_select, new_select->peer,
+					    &dummy_attr);
+
+			RESET_FLAG(dummy_attr.rmap_change_flags);
+
+			ret = route_map_apply(bgp->adv_cmd_rmap[afi][safi].map,
+					      &rn->p, RMAP_BGP, &rmap_path);
+
+			if (ret == RMAP_DENYMATCH)
+				bgp_evpn_withdraw_type5_route(
+					bgp, &rn->p, afi, safi);
+			else
+				bgp_evpn_advertise_type5_route(
+					bgp, &rn->p, &dummy_attr,
+					afi, safi);
+		} else {
+			bgp_evpn_advertise_type5_route(bgp, &rn->p,
+						       new_select->attr,
+						       afi, safi);
+		}
+	} else if (advertise_type5_routes(bgp, afi) &&
+		   old_select && is_route_injectable_into_evpn(old_select))
+		bgp_evpn_withdraw_type5_route(bgp, &rn->p, afi, safi);
+}
+
 /*
  * old_select = The old best path
  * new_select = the new best path
@@ -2459,6 +2506,13 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 			UNSET_FLAG(rn->flags, BGP_NODE_LABEL_CHANGED);
 		}
 
+		/* advertise/withdraw type-5 routes */
+		if (CHECK_FLAG(old_select->flags, BGP_PATH_LINK_BW_CHG)
+		    || CHECK_FLAG(old_select->flags, BGP_PATH_MULTIPATH_CHG))
+			bgp_process_evpn_route_injection(bgp, afi, safi, rn,
+							 old_select,
+							 old_select);
+
 		UNSET_FLAG(old_select->flags, BGP_PATH_MULTIPATH_CHG);
 		UNSET_FLAG(old_select->flags, BGP_PATH_LINK_BW_CHG);
 		bgp_zebra_clear_route_change_flags(rn);
@@ -2549,51 +2603,8 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 	}
 
 	/* advertise/withdraw type-5 routes */
-	if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) {
-		if (advertise_type5_routes(bgp, afi) &&
-		    new_select &&
-		    is_route_injectable_into_evpn(new_select)) {
-
-			/* apply the route-map */
-			if (bgp->adv_cmd_rmap[afi][safi].map) {
-				int ret = 0;
-				struct bgp_path_info rmap_path;
-				struct bgp_path_info_extra rmap_path_extra;
-				struct attr dummy_attr;
-
-				dummy_attr = *new_select->attr;
-
-				/* Fill temp path_info */
-				prep_for_rmap_apply(
-					&rmap_path, &rmap_path_extra,
-					new_select, new_select->peer,
-					&dummy_attr);
-
-				RESET_FLAG(dummy_attr.rmap_change_flags);
-
-				ret = route_map_apply(
-					bgp->adv_cmd_rmap[afi][safi].map,
-					&rn->p, RMAP_BGP, &rmap_path);
-
-				if (ret == RMAP_DENYMATCH)
-					bgp_evpn_withdraw_type5_route(
-						bgp, &rn->p, afi, safi);
-				else
-					bgp_evpn_advertise_type5_route(
-						bgp, &rn->p, &dummy_attr,
-						afi, safi);
-			} else {
-				bgp_evpn_advertise_type5_route(bgp,
-							       &rn->p,
-							       new_select->attr,
-							       afi, safi);
-
-			}
-		} else if (advertise_type5_routes(bgp, afi) &&
-			   old_select &&
-			   is_route_injectable_into_evpn(old_select))
-			bgp_evpn_withdraw_type5_route(bgp, &rn->p, afi, safi);
-	}
+	bgp_process_evpn_route_injection(bgp, afi, safi, rn,
+					 new_select, old_select);
 
 	/* Clear any route change flags. */
 	bgp_zebra_clear_route_change_flags(rn);
