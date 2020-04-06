@@ -644,9 +644,9 @@ static int ecommunity_lb_str(char *buf, size_t bufsz, const uint8_t *pnt)
 	uint32_t bw;
 	char bps_buf[20] = {0};
 
-#define ONE_GBPS_BYTES (1024 * 1024 * 1024 / 8)
-#define ONE_MBPS_BYTES (1024 * 1024 / 8)
-#define ONE_KBPS_BYTES (1024 / 8)
+#define ONE_GBPS_BYTES (1000 * 1000 * 1000 / 8)
+#define ONE_MBPS_BYTES (1000 * 1000 / 8)
+#define ONE_KBPS_BYTES (1000 / 8)
 
 	as = (*pnt++ << 8);
 	as |= (*pnt++);
@@ -953,8 +953,8 @@ extern struct ecommunity_val *ecommunity_lookup(const struct ecommunity *ecom,
 /* remove ext. community matching type and subtype
  * return 1 on success ( removed ), 0 otherwise (not present)
  */
-extern bool ecommunity_strip(struct ecommunity *ecom, uint8_t type,
-			     uint8_t subtype)
+bool ecommunity_strip(struct ecommunity *ecom, uint8_t type,
+		      uint8_t subtype)
 {
 	uint8_t *p, *q, *new;
 	int c, found = 0;
@@ -1082,86 +1082,6 @@ int ecommunity_fill_pbr_action(struct ecommunity_val *ecom_eval,
 	} else
 		return -1;
 	return 0;
-}
-
-/*
- * return the BGP link bandwidth extended community, if present;
- * the actual bandwidth is returned via param
- */
-const uint8_t *ecommunity_linkbw_present(struct ecommunity *ecom, uint32_t *bw)
-{
-	const uint8_t *eval;
-	int i;
-
-	if (bw)
-		*bw = 0;
-
-	if (!ecom || !ecom->size)
-		return NULL;
-
-	for (i = 0; i < ecom->size; i++) {
-		const uint8_t *pnt;
-		uint8_t type, sub_type;
-		uint32_t bwval;
-
-		eval = pnt = (ecom->val + (i * ECOMMUNITY_SIZE));
-		type = *pnt++;
-		sub_type = *pnt++;
-
-		if ((type == ECOMMUNITY_ENCODE_AS ||
-		     type == ECOMMUNITY_ENCODE_AS_NON_TRANS) &&
-		    sub_type == ECOMMUNITY_LINK_BANDWIDTH) {
-			pnt += 2; /* bandwidth is encoded as AS:val */
-			pnt = ptr_get_be32(pnt, &bwval);
-			(void)pnt; /* consume value */
-			if (bw)
-				*bw = bwval;
-			return eval;
-		}
-	}
-
-	return NULL;
-}
-
-
-struct ecommunity *ecommunity_replace_linkbw(as_t as,
-					     struct ecommunity *ecom,
-					     uint64_t cum_bw)
-{
-	struct ecommunity *new;
-	struct ecommunity_val lb_eval;
-	const uint8_t *eval;
-	uint8_t type;
-	uint32_t cur_bw;
-
-	/* Nothing to replace if link-bandwidth doesn't exist or
-	 * is non-transitive - just return existing extcommunity.
-	 */
-	new = ecom;
-	if (!ecom || !ecom->size)
-		return new;
-
-	eval = ecommunity_linkbw_present(ecom, &cur_bw);
-	if (!eval)
-		return new;
-
-	type = *eval;
-	if (type & ECOMMUNITY_FLAG_NON_TRANSITIVE)
-		return new;
-
-	/* Transitive link-bandwidth exists, replace with the passed
-	 * (cumulative) bandwidth value. We need to create a new
-	 * extcommunity for this - refer to AS-Path replace function
-	 * for reference.
-	 */
-	if (cum_bw > 0xFFFFFFFF)
-		cum_bw = 0xFFFFFFFF;
-	encode_lb_extcomm(as > BGP_AS_MAX ? BGP_AS_TRANS : as, cum_bw,
-			  false, &lb_eval);
-	new = ecommunity_dup(ecom);
-	ecommunity_add_val(new, &lb_eval, true, true);
-
-	return new;
 }
 
 static struct ecommunity *bgp_aggr_ecommunity_lookup(
@@ -1309,4 +1229,84 @@ void bgp_remove_ecomm_from_aggregate_hash(struct bgp_aggregate *aggregate,
 			ecommunity_free(&ret_ecomm);
 		}
 	}
+}
+
+/*
+ * return the BGP link bandwidth extended community, if present;
+ * the actual bandwidth is returned via param
+ */
+const uint8_t *ecommunity_linkbw_present(struct ecommunity *ecom, uint32_t *bw)
+{
+	const uint8_t *eval;
+	int i;
+
+	if (bw)
+		*bw = 0;
+
+	if (!ecom || !ecom->size)
+		return NULL;
+
+	for (i = 0; i < ecom->size; i++) {
+		const uint8_t *pnt;
+		uint8_t type, sub_type;
+		uint32_t bwval;
+
+		eval = pnt = (ecom->val + (i * ECOMMUNITY_SIZE));
+		type = *pnt++;
+		sub_type = *pnt++;
+
+		if ((type == ECOMMUNITY_ENCODE_AS ||
+		     type == ECOMMUNITY_ENCODE_AS_NON_TRANS) &&
+		    sub_type == ECOMMUNITY_LINK_BANDWIDTH) {
+			pnt += 2; /* bandwidth is encoded as AS:val */
+			pnt = ptr_get_be32(pnt, &bwval);
+			(void)pnt; /* consume value */
+			if (bw)
+				*bw = bwval;
+			return eval;
+		}
+	}
+
+	return NULL;
+}
+
+
+struct ecommunity *ecommunity_replace_linkbw(as_t as,
+					     struct ecommunity *ecom,
+					     uint64_t cum_bw)
+{
+	struct ecommunity *new;
+	struct ecommunity_val lb_eval;
+	const uint8_t *eval;
+	uint8_t type;
+	uint32_t cur_bw;
+
+	/* Nothing to replace if link-bandwidth doesn't exist or
+	 * is non-transitive - just return existing extcommunity.
+	 */
+	new = ecom;
+	if (!ecom || !ecom->size)
+		return new;
+
+	eval = ecommunity_linkbw_present(ecom, &cur_bw);
+	if (!eval)
+		return new;
+
+	type = *eval;
+	if (type & ECOMMUNITY_FLAG_NON_TRANSITIVE)
+		return new;
+
+	/* Transitive link-bandwidth exists, replace with the passed
+	 * (cumulative) bandwidth value. We need to create a new
+	 * extcommunity for this - refer to AS-Path replace function
+	 * for reference.
+	 */
+	if (cum_bw > 0xFFFFFFFF)
+		cum_bw = 0xFFFFFFFF;
+	encode_lb_extcomm(as > BGP_AS_MAX ? BGP_AS_TRANS : as, cum_bw,
+			  false, &lb_eval);
+	new = ecommunity_dup(ecom);
+	ecommunity_add_val(new, &lb_eval, true, true);
+
+	return new;
 }

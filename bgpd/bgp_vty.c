@@ -2974,43 +2974,9 @@ DEFUN (no_bgp_bestpath_med,
 }
 
 /* "bgp bestpath bandwidth" configuration. */
-DEFUN (bgp_bestpath_bw,
+DEFPY (bgp_bestpath_bw,
        bgp_bestpath_bw_cmd,
-       "bgp bestpath bandwidth <ignore|skip-missing|default-weight-for-missing>",
-       "BGP specific commands\n"
-       "Change the default bestpath selection\n"
-       "Link Bandwidth attribute\n"
-       "Ignore link bandwidth (i.e., do regular ECMP, not weighted)\n"
-       "Ignore paths without link bandwidth for ECMP (if other paths have it)\n"
-       "Assign a low default weight (value 1) to paths not having link bandwidth\n")
-{
-	VTY_DECLVAR_CONTEXT(bgp, bgp);
-	int idx_lb = 3;
-	afi_t afi;
-	safi_t safi;
-
-	if (!strcmp(argv[idx_lb]->text, "ignore"))
-		bgp->lb_handling = BGP_LINK_BW_IGNORE_BW;
-	else if (!strcmp(argv[idx_lb]->text, "skip-missing"))
-		bgp->lb_handling = BGP_LINK_BW_SKIP_MISSING;
-	else if (!strcmp(argv[idx_lb]->text, "default-weight-for-missing"))
-		bgp->lb_handling = BGP_LINK_BW_DEFWT_4_MISSING;
-	else
-		return CMD_ERR_NO_MATCH;
-
-	/* This config is used in route install, so redo that. */
-	FOREACH_AFI_SAFI (afi, safi) {
-		if (!bgp_fibupd_safi(safi))
-			continue;
-		bgp_zebra_announce_table(bgp, afi, safi);
-	}
-
-	return CMD_SUCCESS;
-}
-
-DEFUN (no_bgp_bestpath_bw,
-       no_bgp_bestpath_bw_cmd,
-       "no bgp bestpath bandwidth [<ignore|skip-missing|default-weight-for-missing>]",
+       "[no$no] bgp bestpath bandwidth [<ignore|skip-missing|default-weight-for-missing>$bw_cfg]",
        NO_STR
        "BGP specific commands\n"
        "Change the default bestpath selection\n"
@@ -3023,7 +2989,22 @@ DEFUN (no_bgp_bestpath_bw,
 	afi_t afi;
 	safi_t safi;
 
-	bgp->lb_handling = BGP_LINK_BW_ECMP;
+	if (no) {
+		bgp->lb_handling = BGP_LINK_BW_ECMP;
+	} else {
+		if (!bw_cfg) {
+			vty_out(vty, "%% Bandwidth configuration must be specified\n");
+			return CMD_ERR_INCOMPLETE;
+		}
+		if (!strcmp(bw_cfg, "ignore"))
+			bgp->lb_handling = BGP_LINK_BW_IGNORE_BW;
+		else if (!strcmp(bw_cfg, "skip-missing"))
+			bgp->lb_handling = BGP_LINK_BW_SKIP_MISSING;
+		else if (!strcmp(bw_cfg, "default-weight-for-missing"))
+			bgp->lb_handling = BGP_LINK_BW_DEFWT_4_MISSING;
+		else
+			return CMD_ERR_NO_MATCH;
+	}
 
 	/* This config is used in route install, so redo that. */
 	FOREACH_AFI_SAFI (afi, safi) {
@@ -9115,13 +9096,6 @@ static int bgp_show_summary(struct vty *vty, struct bgp *bgp, int afi, int safi,
 				peer_uptime(peer->uptime, timebuf, BGP_UPTIME_LEN,
 					    use_json, json_peer);
 
-				/*
-				 * Adding "pfxRcd" field to match with the corresponding
-				 * CLI. "prefixReceivedCount" will be deprecated in
-				 * future.
-				 */
-				json_object_int_add(json_peer, "prefixReceivedCount",
-						    peer->pcount[afi][pfx_rcd_safi]);
 				json_object_int_add(json_peer, "pfxRcd",
 						    peer->pcount[afi][pfx_rcd_safi]);
 
@@ -15670,7 +15644,6 @@ void bgp_vty_init(void)
 
 	/* "bgp bestpath bandwidth" commands */
 	install_element(BGP_NODE, &bgp_bestpath_bw_cmd);
-	install_element(BGP_NODE, &no_bgp_bestpath_bw_cmd);
 
 	/* "no bgp default ipv4-unicast" commands. */
 	install_element(BGP_NODE, &no_bgp_default_ipv4_unicast_cmd);

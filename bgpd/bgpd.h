@@ -238,20 +238,6 @@ enum bgp_instance_type {
 	BGP_INSTANCE_TYPE_VIEW
 };
 
-/* Handling of BGP link bandwidth (LB) on receiver - whether and how to
- * do weighted ECMP. Note: This applies after multipath computation.
- */
-enum bgp_link_bw_handling {
-	/* Do ECMP if some paths don't have LB - default */
-	BGP_LINK_BW_ECMP,
-	/* Completely ignore LB, just do regular ECMP */
-	BGP_LINK_BW_IGNORE_BW,
-	/* Skip paths without LB, do wECMP on others */
-	BGP_LINK_BW_SKIP_MISSING,
-	/* Do wECMP with default weight for paths not having LB */
-	BGP_LINK_BW_DEFWT_4_MISSING
-};
-
 #define BGP_SEND_EOR(bgp, afi, safi)                                           \
 	(!CHECK_FLAG(bgp->flags, BGP_FLAG_GR_DISABLE_EOR)                      \
 	 && ((bgp->gr_info[afi][safi].t_select_deferral == NULL)               \
@@ -297,6 +283,20 @@ enum global_gr_command {
 
 #define BGP_GR_SUCCESS 0
 #define BGP_GR_FAILURE 1
+
+/* Handling of BGP link bandwidth (LB) on receiver - whether and how to
+ * do weighted ECMP. Note: This applies after multipath computation.
+ */
+enum bgp_link_bw_handling {
+	/* Do ECMP if some paths don't have LB - default */
+	BGP_LINK_BW_ECMP,
+	/* Completely ignore LB, just do regular ECMP */
+	BGP_LINK_BW_IGNORE_BW,
+	/* Skip paths without LB, do wECMP on others */
+	BGP_LINK_BW_SKIP_MISSING,
+	/* Do wECMP with default weight for paths not having LB */
+	BGP_LINK_BW_DEFWT_4_MISSING
+};
 
 /* BGP instance structure.  */
 struct bgp {

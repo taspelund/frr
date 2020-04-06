@@ -464,10 +464,10 @@ bool bgp_path_info_mpath_chkwtd(struct bgp *bgp, struct bgp_path_info *path)
 	 */
 	if (bgp->lb_handling != BGP_LINK_BW_SKIP_MISSING &&
 	    bgp->lb_handling != BGP_LINK_BW_DEFWT_4_MISSING)
-		return ((path->mpath->mp_flags & BGP_MP_LB_ALL));
+		return (path->mpath->mp_flags & BGP_MP_LB_ALL);
 
 	/* At least one path should have bandwidth. */
-	return ((path->mpath->mp_flags & BGP_MP_LB_PRESENT));
+	return (path->mpath->mp_flags & BGP_MP_LB_PRESENT);
 }
 
 /*
@@ -518,8 +518,8 @@ void bgp_path_info_mpath_update(struct bgp_node *rn,
 	struct listnode *mp_node, *mp_next_node;
 	struct bgp_path_info *cur_mpath, *new_mpath, *next_mpath, *prev_mpath;
 	int mpath_changed, debug;
-	bool all_paths_lb;
 	char nh_buf[2][INET6_ADDRSTRLEN];
+	bool all_paths_lb;
 	char path_buf[PATH_ADDPATH_STR_BUFFER];
 
 	mpath_changed = 0;

@@ -482,6 +482,10 @@ static inline void prep_for_rmap_apply(struct bgp_path_info *dst_pi,
 	dst_pi->sub_type = src_pi->sub_type;
 	dst_pi->mpath = src_pi->mpath;
 	dst_pi->net = rn;
+	dst_pi->flags = src_pi->flags;
+	dst_pi->type = src_pi->type;
+	dst_pi->sub_type = src_pi->sub_type;
+	dst_pi->mpath = src_pi->mpath;
 	if (src_pi->extra) {
 		memcpy(dst_pie, src_pi->extra,
 		       sizeof(struct bgp_path_info_extra));

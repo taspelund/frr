@@ -206,8 +206,8 @@ extern char *ecommunity_str(struct ecommunity *);
 extern struct ecommunity_val *ecommunity_lookup(const struct ecommunity *,
 						uint8_t, uint8_t);
 extern bool ecommunity_add_val(struct ecommunity *ecom,
-			      struct ecommunity_val *eval,
-			      bool unique, bool overwrite);
+			       struct ecommunity_val *eval,
+			       bool unique, bool overwrite);
 
 /* for vpn */
 extern struct ecommunity *ecommunity_new(void);
@@ -241,7 +241,10 @@ extern void bgp_remove_ecomm_from_aggregate_hash(
 					struct bgp_aggregate *aggregate,
 					struct ecommunity *ecommunity);
 extern void bgp_aggr_ecommunity_remove(void *arg);
-
+extern const uint8_t *ecommunity_linkbw_present(struct ecommunity *ecom,
+						uint32_t *bw);
+extern struct ecommunity *ecommunity_replace_linkbw(as_t as,
+				struct ecommunity *ecom, uint64_t cum_bw);
 
 static inline void ecommunity_strip_rts(struct ecommunity *ecom)
 {

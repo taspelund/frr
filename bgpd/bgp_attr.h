@@ -245,14 +245,14 @@ struct attr {
 	/* EVPN local router-mac */
 	struct ethaddr rmac;
 
-	/* Link bandwidth value, if any. */
-	uint32_t link_bw;
-
 	/* Distance as applied by Route map */
 	uint8_t distance;
 
 	/* rmap set table */
 	uint32_t rmap_table_id;
+
+	/* Link bandwidth value, if any. */
+	uint32_t link_bw;
 };
 
 /* rmap_change_flags definition */

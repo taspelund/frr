@@ -1196,7 +1196,7 @@ void bgp_zebra_announce(struct bgp_node *rn, const struct prefix *p,
 	bool is_evpn;
 	int nh_updated;
 	bool do_wt_ecmp;
-	uint64_t cum_bw;
+	uint64_t cum_bw = 0;
 
 	/* Don't try to install if we're not connected to Zebra or Zebra doesn't
 	 * know of this instance.

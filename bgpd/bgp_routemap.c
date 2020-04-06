@@ -64,6 +64,7 @@
 #include "bgpd/bgp_pbr.h"
 #include "bgpd/bgp_flowspec_util.h"
 #include "bgpd/bgp_encap_types.h"
+#include "bgpd/bgp_mpath.h"
 
 #ifdef ENABLE_BGP_VNC
 #include "bgpd/rfapi/bgp_rfapi_cfg.h"
@@ -2549,7 +2550,7 @@ route_set_ecommunity_lb(void *rule, const struct prefix *prefix,
 	struct rmap_ecomm_lb_set *rels = rule;
 	struct bgp_path_info *path;
 	struct peer *peer;
-	struct ecommunity ecom_lb;
+	struct ecommunity ecom_lb = {0};
 	struct ecommunity_val lb_eval;
 	uint32_t bw_bytes = 0;
 	uint16_t mpath_count = 0;
@@ -2567,9 +2568,8 @@ route_set_ecommunity_lb(void *rule, const struct prefix *prefix,
 
 	/* Build link bandwidth extended community */
 	as = (peer->bgp->as > BGP_AS_MAX) ? BGP_AS_TRANS : peer->bgp->as;
-	memset(&ecom_lb, 0, sizeof(ecom_lb));
 	if (rels->lb_type == RMAP_ECOMM_LB_SET_VALUE) {
-		bw_bytes = ((uint64_t)(rels->bw * 1024 * 1024))/8;
+		bw_bytes = ((uint64_t)(rels->bw * 1000 * 1000))/8;
 	} else if (rels->lb_type == RMAP_ECOMM_LB_SET_CUMUL) {
 		/* process this only for the best path. */
 		if (!CHECK_FLAG(path->flags, BGP_PATH_SELECTED))
@@ -2578,12 +2578,14 @@ route_set_ecommunity_lb(void *rule, const struct prefix *prefix,
 		bw_bytes = (uint32_t)bgp_path_info_mpath_cumbw(path);
 		if (!bw_bytes)
 			return RMAP_OKAY;
+
 	} else if (rels->lb_type == RMAP_ECOMM_LB_SET_NUM_MPATH) {
+
 		/* process this only for the best path. */
 		if (!CHECK_FLAG(path->flags, BGP_PATH_SELECTED))
 			return RMAP_OKAY;
 
-		bw_bytes = ((uint64_t)(peer->bgp->lb_ref_bw * 1024 * 1024))/8;
+		bw_bytes = ((uint64_t)(peer->bgp->lb_ref_bw * 1000 * 1000))/8;
 		mpath_count = bgp_path_info_mpath_count(path) + 1;
 		bw_bytes *= mpath_count;
 	}
@@ -2611,7 +2613,6 @@ route_set_ecommunity_lb(void *rule, const struct prefix *prefix,
 	 * setting decisions.
 	 */
 	SET_FLAG(path->attr->rmap_change_flags, BATTR_RMAP_LINK_BW_SET);
-
 
 	return RMAP_OKAY;
 }
@@ -2665,8 +2666,10 @@ static void route_set_ecommunity_lb_free(void *rule)
 
 /* Set community rule structure. */
 struct route_map_rule_cmd route_set_ecommunity_lb_cmd = {
-	"extcommunity bandwidth", route_set_ecommunity_lb,
-	route_set_ecommunity_lb_compile, route_set_ecommunity_lb_free,
+	"extcommunity bandwidth",
+	route_set_ecommunity_lb,
+	route_set_ecommunity_lb_compile,
+	route_set_ecommunity_lb_free,
 };
 
 /* `set origin ORIGIN' */
