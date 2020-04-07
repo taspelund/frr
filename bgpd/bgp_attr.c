@@ -119,11 +119,11 @@ static void *cluster_hash_alloc(void *p)
 /* Cluster list related functions. */
 static struct cluster_list *cluster_parse(struct in_addr *pnt, int length)
 {
-	struct cluster_list tmp;
+	struct cluster_list tmp = {};
 	struct cluster_list *cluster;
 
 	tmp.length = length;
-	tmp.list = pnt;
+	tmp.list = length == 0 ? NULL : pnt;
 
 	cluster = hash_get(cluster_hash, &tmp, cluster_hash_alloc);
 	cluster->refcnt++;
@@ -180,14 +180,16 @@ static struct cluster_list *cluster_intern(struct cluster_list *cluster)
 	return find;
 }
 
-void cluster_unintern(struct cluster_list *cluster)
+static void cluster_unintern(struct cluster_list **cluster)
 {
-	if (cluster->refcnt)
-		cluster->refcnt--;
+	if ((*cluster)->refcnt)
+		(*cluster)->refcnt--;
 
-	if (cluster->refcnt == 0) {
-		hash_release(cluster_hash, cluster);
-		cluster_free(cluster);
+	if ((*cluster)->refcnt == 0) {
+		void *p = hash_release(cluster_hash, *cluster);
+		assert(p == *cluster);
+		cluster_free(*cluster);
+		*cluster = NULL;
 	}
 }
 
@@ -1035,7 +1037,7 @@ void bgp_attr_unintern_sub(struct attr *attr)
 	UNSET_FLAG(attr->flag, ATTR_FLAG_BIT(BGP_ATTR_LARGE_COMMUNITIES));
 
 	if (attr->cluster)
-		cluster_unintern(attr->cluster);
+		cluster_unintern(&attr->cluster);
 	UNSET_FLAG(attr->flag, ATTR_FLAG_BIT(BGP_ATTR_CLUSTER_LIST));
 
 	if (attr->transit)
@@ -1830,7 +1832,8 @@ bgp_attr_community(struct bgp_attr_parser_args *args)
 
 	if (length == 0) {
 		attr->community = NULL;
-		return BGP_ATTR_PARSE_PROCEED;
+		return bgp_attr_malformed(args, BGP_NOTIFY_UPDATE_OPT_ATTR_ERR,
+					  args->total);
 	}
 
 	attr->community =
@@ -1892,7 +1895,7 @@ bgp_attr_cluster_list(struct bgp_attr_parser_args *args)
 	 * malformed, the UPDATE message SHALL be handled using the approach
 	 * of "treat-as-withdraw".
 	 */
-	if (length % 4) {
+	if (length == 0 || length % 4) {
 		flog_err(EC_BGP_ATTR_LEN, "Bad cluster list length %d", length);
 
 		return bgp_attr_malformed(args, BGP_NOTIFY_UPDATE_ATTR_LENG_ERR,
@@ -2171,7 +2174,8 @@ bgp_attr_large_community(struct bgp_attr_parser_args *args)
 	if (length == 0) {
 		attr->lcommunity = NULL;
 		/* Empty extcomm doesn't seem to be invalid per se */
-		return BGP_ATTR_PARSE_PROCEED;
+		return bgp_attr_malformed(args, BGP_NOTIFY_UPDATE_OPT_ATTR_ERR,
+					  args->total);
 	}
 
 	attr->lcommunity =
@@ -2200,7 +2204,8 @@ bgp_attr_ext_communities(struct bgp_attr_parser_args *args)
 	if (length == 0) {
 		attr->ecommunity = NULL;
 		/* Empty extcomm doesn't seem to be invalid per se */
-		return BGP_ATTR_PARSE_PROCEED;
+		return bgp_attr_malformed(args, BGP_NOTIFY_UPDATE_OPT_ATTR_ERR,
+					  args->total);
 	}
 
 	attr->ecommunity =
