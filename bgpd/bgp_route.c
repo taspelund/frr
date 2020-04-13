@@ -2444,6 +2444,54 @@ struct bgp_process_queue {
 	unsigned int queued;
 };
 
+static void bgp_process_evpn_route_injection(struct bgp *bgp, afi_t afi,
+					     safi_t safi, struct bgp_node *rn,
+					     struct bgp_path_info *new_select,
+					     struct bgp_path_info *old_select)
+{
+	const struct prefix *p = bgp_node_get_prefix(rn);
+
+	if ((afi != AFI_IP && afi != AFI_IP6) || (safi != SAFI_UNICAST))
+		return;
+
+	if (advertise_type5_routes(bgp, afi) && new_select
+	    && is_route_injectable_into_evpn(new_select)) {
+
+		/* apply the route-map */
+		if (bgp->adv_cmd_rmap[afi][safi].map) {
+			route_map_result_t ret;
+			struct bgp_path_info rmap_path;
+			struct bgp_path_info_extra rmap_path_extra;
+			struct attr dummy_attr;
+
+			dummy_attr = *new_select->attr;
+
+			/* Fill temp path_info */
+			prep_for_rmap_apply(&rmap_path, &rmap_path_extra, rn,
+					    new_select, new_select->peer,
+					    &dummy_attr);
+
+			RESET_FLAG(dummy_attr.rmap_change_flags);
+
+			ret = route_map_apply(bgp->adv_cmd_rmap[afi][safi].map,
+					      p, RMAP_BGP, &rmap_path);
+
+			if (ret == RMAP_DENYMATCH) {
+				bgp_attr_flush(&dummy_attr);
+				bgp_evpn_withdraw_type5_route(bgp, p, afi,
+							      safi);
+			} else
+				bgp_evpn_advertise_type5_route(
+					bgp, p, &dummy_attr, afi, safi);
+		} else {
+			bgp_evpn_advertise_type5_route(bgp, p, new_select->attr,
+						       afi, safi);
+		}
+	} else if (advertise_type5_routes(bgp, afi) && old_select
+		   && is_route_injectable_into_evpn(old_select))
+		bgp_evpn_withdraw_type5_route(bgp, p, afi, safi);
+}
+
 /*
  * old_select = The old best path
  * new_select = the new best path
@@ -2615,6 +2663,12 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 			UNSET_FLAG(rn->flags, BGP_NODE_LABEL_CHANGED);
 		}
 
+		/* advertise/withdraw type-5 routes */
+		if (CHECK_FLAG(old_select->flags, BGP_PATH_LINK_BW_CHG)
+		    || CHECK_FLAG(old_select->flags, BGP_PATH_MULTIPATH_CHG))
+			bgp_process_evpn_route_injection(
+				bgp, afi, safi, rn, old_select, old_select);
+
 		UNSET_FLAG(old_select->flags, BGP_PATH_MULTIPATH_CHG);
 		UNSET_FLAG(old_select->flags, BGP_PATH_LINK_BW_CHG);
 		bgp_zebra_clear_route_change_flags(rn);
@@ -2704,52 +2758,8 @@ static void bgp_process_main_one(struct bgp *bgp, struct bgp_node *rn,
 		}
 	}
 
-	/* advertise/withdraw type-5 routes */
-	if ((afi == AFI_IP || afi == AFI_IP6) && (safi == SAFI_UNICAST)) {
-		const struct prefix *p = bgp_node_get_prefix(rn);
-
-		if (advertise_type5_routes(bgp, afi) &&
-		    new_select &&
-		    is_route_injectable_into_evpn(new_select)) {
-
-			/* apply the route-map */
-			if (bgp->adv_cmd_rmap[afi][safi].map) {
-				route_map_result_t ret;
-				struct bgp_path_info rmap_path;
-				struct bgp_path_info_extra rmap_path_extra;
-				struct attr dummy_attr;
-
-				dummy_attr = *new_select->attr;
-
-				/* Fill temp path_info */
-				prep_for_rmap_apply(
-					&rmap_path, &rmap_path_extra,
-					rn, new_select, new_select->peer,
-					&dummy_attr);
-
-				RESET_FLAG(dummy_attr.rmap_change_flags);
-
-				ret = route_map_apply(
-					bgp->adv_cmd_rmap[afi][safi].map,
-					p, RMAP_BGP, &rmap_path);
-				if (ret == RMAP_DENYMATCH) {
-					bgp_attr_flush(&dummy_attr);
-					bgp_evpn_withdraw_type5_route(
-						bgp, p, afi, safi);
-				} else
-					bgp_evpn_advertise_type5_route(
-						bgp, p, &dummy_attr,
-						afi, safi);
-			} else {
-				bgp_evpn_advertise_type5_route(bgp, p,
-							       new_select->attr,
-							       afi, safi);
-			}
-		} else if (advertise_type5_routes(bgp, afi) &&
-			   old_select &&
-			   is_route_injectable_into_evpn(old_select))
-			bgp_evpn_withdraw_type5_route(bgp, p, afi, safi);
-	}
+	bgp_process_evpn_route_injection(bgp, afi, safi, rn, new_select,
+					 old_select);
 
 	/* Clear any route change flags. */
 	bgp_zebra_clear_route_change_flags(rn);
@@ -3237,7 +3247,7 @@ static bool bgp_update_martian_nexthop(struct bgp *bgp, afi_t afi, safi_t safi,
 				       uint8_t type, uint8_t stype,
 				       struct attr *attr, struct bgp_node *rn)
 {
-	bool ret = 0;
+	bool ret = false;
 
 	/* Only validated for unicast and multicast currently. */
 	/* Also valid for EVPN where the nexthop is an IP address. */
@@ -8305,7 +8315,7 @@ void route_vty_out_overlay(struct vty *vty, const struct prefix *p,
 			mac = ecom_mac2str((char *)routermac->val);
 		if (mac) {
 			if (!json_path) {
-				vty_out(vty, "/%s", (char *)mac);
+				vty_out(vty, "/%s", mac);
 			} else {
 				json_object_string_add(json_overlay, "rmac",
 						       mac);
@@ -10282,7 +10292,7 @@ static int bgp_show_route_in_table(struct vty *vty, struct bgp *bgp,
 		}
 	} else if (safi == SAFI_EVPN) {
 		struct bgp_node *longest_pfx;
-		bool is_exact_pfxlen_match = FALSE;
+		bool is_exact_pfxlen_match = false;
 
 		for (rn = bgp_table_top(rib); rn; rn = bgp_route_next(rn)) {
 			const struct prefix *rn_p = bgp_node_get_prefix(rn);
@@ -10294,7 +10304,7 @@ static int bgp_show_route_in_table(struct vty *vty, struct bgp *bgp,
 				continue;
 
 			longest_pfx = NULL;
-			is_exact_pfxlen_match = FALSE;
+			is_exact_pfxlen_match = false;
 			/*
 			 * Search through all the prefixes for a match.  The
 			 * pfx's are enumerated in ascending order of pfxlens.
@@ -10316,7 +10326,7 @@ static int bgp_show_route_in_table(struct vty *vty, struct bgp *bgp,
 						bgp_evpn_get_type5_prefixlen(
 							rm_p);
 					if (type5_pfxlen == match.prefixlen) {
-						is_exact_pfxlen_match = TRUE;
+						is_exact_pfxlen_match = true;
 						bgp_unlock_node(rm);
 						break;
 					}
@@ -11601,8 +11611,8 @@ static void show_adj_route(struct vty *vty, struct peer *peer, afi_t afi,
 	struct bgp_table *table;
 	struct bgp_adj_in *ain;
 	struct bgp_adj_out *adj;
-	unsigned long output_count;
-	unsigned long filtered_count;
+	unsigned long output_count = 0;
+	unsigned long filtered_count = 0;
 	struct bgp_node *rn;
 	int header1 = 1;
 	struct bgp *bgp;
@@ -11892,6 +11902,12 @@ static void show_adj_route(struct vty *vty, struct peer *peer, afi_t afi,
 
 		vty_out(vty, "%s\n", json_object_to_json_string_ext(
 					     json, JSON_C_TO_STRING_PRETTY));
+
+		if (!output_count && !filtered_count) {
+			json_object_free(json_scode);
+			json_object_free(json_ocode);
+		}
+
 		json_object_free(json);
 	} else if (output_count > 0) {
 		if (filtered_count > 0)
@@ -12275,7 +12291,7 @@ static int bgp_distance_set(struct vty *vty, const char *distance_str,
 	distance = atoi(distance_str);
 
 	/* Get BGP distance node. */
-	rn = bgp_node_get(bgp_distance_table[afi][safi], (struct prefix *)&p);
+	rn = bgp_node_get(bgp_distance_table[afi][safi], &p);
 	bdistance = bgp_node_get_bgp_distance_info(rn);
 	if (bdistance)
 		bgp_unlock_node(rn);
@@ -12316,8 +12332,7 @@ static int bgp_distance_unset(struct vty *vty, const char *distance_str,
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	rn = bgp_node_lookup(bgp_distance_table[afi][safi],
-			     (struct prefix *)&p);
+	rn = bgp_node_lookup(bgp_distance_table[afi][safi], &p);
 	if (!rn) {
 		vty_out(vty, "Can't find specified prefix\n");
 		return CMD_WARNING_CONFIG_FAILED;

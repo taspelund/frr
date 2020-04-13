@@ -650,7 +650,7 @@ static int ecommunity_lb_str(char *buf, size_t bufsz, const uint8_t *pnt)
 
 	as = (*pnt++ << 8);
 	as |= (*pnt++);
-	pnt = ptr_get_be32(pnt, &bw);
+	(void)ptr_get_be32(pnt, &bw);
 	if (bw >= ONE_GBPS_BYTES)
 		sprintf(bps_buf, "%.3f Gbps", (float)(bw/ONE_GBPS_BYTES));
 	else if (bw >= ONE_MBPS_BYTES)
@@ -823,7 +823,7 @@ char *ecommunity_ecom2str(struct ecommunity *ecom, int format, int filter)
 			if (sub_type == ECOMMUNITY_REDIRECT_VRF) {
 				char buf[16] = {};
 				ecommunity_rt_soo_str(
-					buf, sizeof(buf), (uint8_t *)pnt,
+					buf, sizeof(buf), pnt,
 					type & ~ECOMMUNITY_ENCODE_TRANS_EXP,
 					ECOMMUNITY_ROUTE_TARGET,
 					ECOMMUNITY_FORMAT_DISPLAY);
