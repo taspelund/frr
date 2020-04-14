@@ -324,10 +324,7 @@ const char *vrf_id_to_name(vrf_id_t vrf_id)
 	struct vrf *vrf;
 
 	vrf = vrf_lookup_by_id(vrf_id);
-	if (vrf)
-		return vrf->name;
-
-	return "n/a";
+	return VRF_LOGNAME(vrf);
 }
 
 vrf_id_t vrf_name_to_id(const char *name)
@@ -593,10 +590,22 @@ int vrf_get_backend(void)
 	return vrf_backend;
 }
 
-void vrf_configure_backend(int vrf_backend_netns)
+int vrf_configure_backend(enum vrf_backend_type backend)
 {
-	vrf_backend = vrf_backend_netns;
+	/* Work around issue in old gcc */
+	switch (backend) {
+	case VRF_BACKEND_UNKNOWN:
+	case VRF_BACKEND_NETNS:
+	case VRF_BACKEND_VRF_LITE:
+		break;
+	default:
+		return -1;
+	}
+
+	vrf_backend = backend;
 	vrf_backend_configured = 1;
+
+	return 0;
 }
 
 int vrf_handler_create(struct vty *vty, const char *vrfname,
