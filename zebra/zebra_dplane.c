@@ -3467,6 +3467,29 @@ kernel_dplane_route_update(struct zebra_dplane_ctx *ctx)
 }
 
 /*
+ * Handler for kernel-facing bridge port updates
+ */
+static enum zebra_dplane_result
+kernel_dplane_br_port_update(struct zebra_dplane_ctx *ctx)
+{
+	enum zebra_dplane_result res;
+
+
+	if (IS_ZEBRA_DEBUG_DPLANE_DETAIL)
+		zlog_debug("Dplane br-port update %s, idx %u",
+			   dplane_ctx_get_ifname(ctx),
+			   dplane_ctx_get_ifindex(ctx));
+
+	res = kernel_br_port_update_ctx(ctx);
+
+	if (res != ZEBRA_DPLANE_REQUEST_SUCCESS)
+		atomic_fetch_add_explicit(&zdplane_info.dg_br_port_errors,
+					  1, memory_order_relaxed);
+
+	return res;
+}
+
+/*
  * Handler for kernel-facing interface address updates
  */
 static enum zebra_dplane_result
@@ -3630,6 +3653,10 @@ static int kernel_dplane_process_func(struct zebra_dplane_provider *prov)
 		case DPLANE_OP_PW_INSTALL:
 		case DPLANE_OP_PW_UNINSTALL:
 			res = kernel_dplane_pw_update(ctx);
+			break;
+
+		case DPLANE_OP_BR_PORT_UPDATE:
+			res = kernel_dplane_br_port_update(ctx);
 			break;
 
 		case DPLANE_OP_ADDR_INSTALL:
