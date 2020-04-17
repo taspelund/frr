@@ -195,6 +195,7 @@ static inline unsigned int bf_find_next_set_bit(bitfield_t v,
 	do {                                                                   \
 		if ((v).data) {                                                \
 			free((v).data);                                        \
+			(v).data = NULL;                                       \
 		}                                                              \
 	} while (0)
 
