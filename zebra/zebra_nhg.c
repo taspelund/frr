@@ -1782,9 +1782,15 @@ static int nexthop_active(afi_t afi, struct route_entry *re,
 	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ONLINK)) {
 		ifp = if_lookup_by_index(nexthop->ifindex, nexthop->vrf_id);
 		if (!ifp) {
-			if (IS_ZEBRA_DEBUG_NHG_DETAIL)
-				zlog_debug("nexthop %pNHv marked onlink but nhif %u vrf %u doesn't exist",
-					   nexthop, nexthop->vrf_id);
+			if (IS_ZEBRA_DEBUG_NHG_DETAIL) {
+				struct vrf *vrf =
+					vrf_lookup_by_id(nexthop->vrf_id);
+
+				zlog_debug("nexthop %pNHv marked onlink but nhif %u vrf %s(%u) doesn't exist",
+					   nexthop, nexthop->ifindex,
+					   VRF_LOGNAME(vrf), nexthop->vrf_id);
+			}
+
 			return 0;
 		}
 		if (!if_is_operative(ifp)) {
