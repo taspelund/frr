@@ -2163,38 +2163,118 @@ void bgp_evpn_es_show_esi(struct vty *vty, esi_t *esi, bool uj)
  * in that VRF.
  */
 /******************************** L3 NHG management *************************/
-static void bgp_evpn_l3nhg_zebra_add(struct bgp_evpn_es_vrf *es_vrf)
+static void bgp_evpn_l3nhg_zebra_add_v4_or_v6(struct bgp_evpn_es_vrf *es_vrf,
+		bool v4_nhg)
 {
+	uint32_t nhg_id = v4_nhg ? es_vrf->nhg_id : es_vrf->v6_nhg_id;
 	uint32_t nh_cnt = 0;
+	struct bgp_evpn_es *es = es_vrf->es;
 	struct listnode *node;
 	struct bgp_evpn_es_vtep *es_vtep;
-	struct bgp_evpn_es *es = es_vrf->es;
+	struct zapi_nexthop nh_array[MULTIPATH_NUM];
+	struct nexthop nh;
+	struct zapi_nexthop *api_nh;
+
+	/* Skip installation of L3-NHG if host routes used */
+	if (!nhg_id)
+		return;
 
 	if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
-		zlog_debug("es %s vrf %u nhg 0x%x to zebra",
-			es->esi_str, es_vrf->bgp_vrf->vrf_id, es_vrf->nhg_id);
+		zlog_debug("es %s vrf %u %s nhg %d to zebra",
+			es->esi_str, es_vrf->bgp_vrf->vrf_id,
+			v4_nhg ? "v4_nhg" : "v6_nhg",
+			nhg_id);
+
+	/* only the gateway ip changes for each NH. rest of the params
+	 * are constant
+	 */
+	memset(&nh, 0, sizeof(nh));
+	nh.vrf_id = es_vrf->bgp_vrf->vrf_id;
+	nh.flags = NEXTHOP_FLAG_ONLINK;
+	nh.ifindex = es_vrf->bgp_vrf->l3vni_svi_ifindex;
+	nh.weight = 1;
+	nh.type = v4_nhg ? NEXTHOP_TYPE_IPV4_IFINDEX : NEXTHOP_TYPE_IPV6_IFINDEX;
+
 	for (ALL_LIST_ELEMENTS_RO(es->es_vtep_list, node, es_vtep)) {
-		if (CHECK_FLAG(es_vtep->flags, BGP_EVPNES_VTEP_ACTIVE)) {
-			++nh_cnt;
-			if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
-				zlog_debug("nhg 0x%x vtep %s dev 0x%x",
-					es_vrf->nhg_id,
+		if (!CHECK_FLAG(es_vtep->flags, BGP_EVPNES_VTEP_ACTIVE))
+			continue;
+
+		/* overwrite the gw */
+		if (v4_nhg)
+			nh.gate.ipv4 = es_vtep->vtep_ip;
+		else
+			ipv4_to_ipv4_mapped_ipv6(&nh.gate.ipv6,
+					es_vtep->vtep_ip);
+
+		/* convert to zapi format */
+		api_nh = &nh_array[nh_cnt];
+		zapi_nexthop_from_nexthop(api_nh, &nh);
+
+		++nh_cnt;
+		if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
+			zlog_debug("nhg %d vtep %s l3-svi %d",
+					nhg_id,
 					inet_ntoa(es_vtep->vtep_ip),
 					es_vrf->bgp_vrf->l3vni_svi_ifindex);
-		}
 	}
 
-	/* XXX - program NHG in zebra */
+	if (!nh_cnt)
+		return;
+
+	zclient_nhg_add(zclient, nhg_id, nh_cnt, nh_array);
+	zclient_send_message(zclient);
+}
+
+static bool bgp_evpn_l3nhg_zebra_ok(struct bgp_evpn_es_vrf *es_vrf)
+{
+	if (!bgp_mh_info->host_routes_use_l3nhg &&
+			!bgp_mh_info->install_l3nhg)
+		return false;
+
+	/* Check socket. */
+	if (!zclient || zclient->sock < 0)
+		return false;
+
+	return true;
+}
+
+static void bgp_evpn_l3nhg_zebra_add(struct bgp_evpn_es_vrf *es_vrf)
+{
+	if (!bgp_evpn_l3nhg_zebra_ok(es_vrf))
+		return;
+
+	bgp_evpn_l3nhg_zebra_add_v4_or_v6(es_vrf, true /*v4_nhg*/);
+	bgp_evpn_l3nhg_zebra_add_v4_or_v6(es_vrf, false /*v4_nhg*/);
+}
+
+static void bgp_evpn_l3nhg_zebra_del_v4_or_v6(struct bgp_evpn_es_vrf *es_vrf,
+		bool v4_nhg)
+{
+	uint32_t nhg_id = v4_nhg ? es_vrf->nhg_id : es_vrf->v6_nhg_id;
+
+	/* Skip installation of L3-NHG if host routes used */
+	if (!nhg_id)
+		return;
+
+	if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
+		zlog_debug("es %s vrf %u %s nhg %d to zebra",
+			es_vrf->es->esi_str, es_vrf->bgp_vrf->vrf_id,
+			v4_nhg ? "v4_nhg" : "v6_nhg",
+			nhg_id);
+
+	zclient_nhg_del(zclient, nhg_id);
+	zclient_send_message(zclient);
 }
 
 static void bgp_evpn_l3nhg_zebra_del(struct bgp_evpn_es_vrf *es_vrf)
 {
-	if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
-		zlog_debug("es %s vrf %u nhg 0x%x to zebra",
-			es_vrf->es->esi_str, es_vrf->bgp_vrf->vrf_id,
-			es_vrf->nhg_id);
+	if (!bgp_evpn_l3nhg_zebra_ok(es_vrf))
+		return;
 
-	/* XXX - program NHG in zebra */
+	bgp_evpn_l3nhg_zebra_del_v4_or_v6(es_vrf,
+			true /*v4_nhg*/);
+	bgp_evpn_l3nhg_zebra_del_v4_or_v6(es_vrf,
+			false /*v4_nhg*/);
 }
 
 static void bgp_evpn_l3nhg_deactivate(struct bgp_evpn_es_vrf *es_vrf)
@@ -2203,7 +2283,7 @@ static void bgp_evpn_l3nhg_deactivate(struct bgp_evpn_es_vrf *es_vrf)
 		return;
 
 	if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
-		zlog_debug("es %s vrf %u nhg 0x%x de-activate",
+		zlog_debug("es %s vrf %u nhg %d de-activate",
 			es_vrf->es->esi_str, es_vrf->bgp_vrf->vrf_id,
 			es_vrf->nhg_id);
 	bgp_evpn_l3nhg_zebra_del(es_vrf);
@@ -2223,7 +2303,7 @@ static void bgp_evpn_l3nhg_activate(struct bgp_evpn_es_vrf *es_vrf,
 			return;
 	} else {
 		if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
-			zlog_debug("es %s vrf %u nhg 0x%x activate",
+			zlog_debug("es %s vrf %u nhg %d activate",
 				es_vrf->es->esi_str, es_vrf->bgp_vrf->vrf_id,
 				es_vrf->nhg_id);
 		es_vrf->flags |= BGP_EVPNES_VRF_NHG_ACTIVE;
@@ -2290,9 +2370,12 @@ static struct bgp_evpn_es_vrf *bgp_evpn_es_vrf_create(struct bgp_evpn_es *es,
 
 	/* setup the L3 NHG id for the ES */
 	es_vrf->nhg_id = bgp_l3nhg_id_alloc();
+	es_vrf->v6_nhg_id = bgp_l3nhg_id_alloc();
+
 	if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
-		zlog_debug("es %s vrf %u nhg 0x%x create",
-			es->esi_str, bgp_vrf->vrf_id, es_vrf->nhg_id);
+		zlog_debug("es %s vrf %u nhg %d v6_nhg %d create",
+			es->esi_str, bgp_vrf->vrf_id, es_vrf->nhg_id,
+			es_vrf->v6_nhg_id);
 	bgp_evpn_l3nhg_activate(es_vrf, false /* update */);
 
 	return es_vrf;
@@ -2305,7 +2388,7 @@ static void bgp_evpn_es_vrf_delete(struct bgp_evpn_es_vrf *es_vrf)
 	struct bgp *bgp_vrf = es_vrf->bgp_vrf;
 
 	if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
-		zlog_debug("es %s vrf %u nhg 0x%x delete",
+		zlog_debug("es %s vrf %u nhg %d delete",
 			es->esi_str, bgp_vrf->vrf_id, es_vrf->nhg_id);
 
 	/* Remove the NHG resources */
@@ -2313,6 +2396,9 @@ static void bgp_evpn_es_vrf_delete(struct bgp_evpn_es_vrf *es_vrf)
 	if (es_vrf->nhg_id)
 		bgp_l3nhg_id_free(es_vrf->nhg_id);
 	es_vrf->nhg_id = 0;
+	if (es_vrf->v6_nhg_id)
+		bgp_l3nhg_id_free(es_vrf->v6_nhg_id);
+	es_vrf->v6_nhg_id = 0;
 
 	/* remove from the ES's VRF list */
 	list_delete_node(es->es_vrf_list, &es_vrf->es_listnode);
@@ -3632,6 +3718,8 @@ void bgp_evpn_mh_init(void)
 	/* config knobs - XXX add cli to control it */
 	bgp_mh_info->ead_evi_adv_for_down_links = true;
 	bgp_mh_info->consistency_checking = true;
+	bgp_mh_info->install_l3nhg = true;
+	bgp_mh_info->host_routes_use_l3nhg = false;
 
 	if (bgp_mh_info->consistency_checking)
 		thread_add_timer(bm->master, bgp_evpn_run_consistency_checks,
