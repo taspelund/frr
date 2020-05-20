@@ -1280,6 +1280,8 @@ void bgp_zebra_announce(struct bgp_node *rn, const struct prefix *p,
 	if (bgp_evpn_path_es_use_nhg(bgp, info, &nhg_id)) {
 		mpinfo = NULL;
 		api.nhgid = nhg_id;
+		if (nhg_id)
+			SET_FLAG(api.message, ZAPI_MESSAGE_NHG);
 	} else {
 		mpinfo = info;
 	}
