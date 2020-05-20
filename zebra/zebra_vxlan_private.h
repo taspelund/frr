@@ -26,11 +26,13 @@
 
 #include <zebra.h>
 
-#include <zebra.h>
-
 #include "if.h"
 #include "linklist.h"
 #include "zebra_vxlan.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define ERR_STR_SZ 256
 
@@ -299,6 +301,7 @@ struct zebra_mac_t_ {
 /* remote VTEP advertised MAC as default GW */
 #define ZEBRA_MAC_REMOTE_DEF_GW	0x40
 #define ZEBRA_MAC_DUPLICATE 0x80
+#define ZEBRA_MAC_FPM_SENT  0x100 /* whether or not this entry was sent. */
 
 	/* back pointer to zvni */
 	zebra_vni_t     *zvni;
@@ -468,7 +471,19 @@ struct nh_walk_ctx {
 	struct json_object *json;
 };
 
+extern zebra_l3vni_t *zl3vni_from_vrf(vrf_id_t vrf_id);
+extern struct interface *zl3vni_map_to_vxlan_if(zebra_l3vni_t *zl3vni);
+extern struct interface *zl3vni_map_to_svi_if(zebra_l3vni_t *zl3vni);
 extern struct interface *zl3vni_map_to_mac_vlan_if(zebra_l3vni_t *zl3vni);
+
+DECLARE_HOOK(zebra_rmac_update, (zebra_mac_t *rmac, zebra_l3vni_t *zl3vni,
+	     bool delete, const char *reason), (rmac, zl3vni, delete, reason))
+
+
+#ifdef __cplusplus
+}
+#endif
+
 /*
  * Multicast hash table.
  *

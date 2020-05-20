@@ -92,6 +92,46 @@ void listnode_add_head(struct list *list, void *val)
 	list->count++;
 }
 
+bool listnode_add_sort_nodup(struct list *list, void *val)
+{
+	struct listnode *n;
+	struct listnode *new;
+	int ret;
+
+	assert(val != NULL);
+
+	if (list->cmp) {
+		for (n = list->head; n; n = n->next) {
+			ret = (*list->cmp)(val, n->data);
+			if (ret < 0) {
+				new = listnode_new();
+				new->data = val;
+
+				new->next = n;
+				new->prev = n->prev;
+
+				if (n->prev)
+					n->prev->next = new;
+				else
+					list->head = new;
+				n->prev = new;
+				list->count++;
+				return true;
+			}
+			/* found duplicate return false */
+			if (ret == 0)
+				return false;
+		}
+	}
+
+	new = listnode_new();
+	new->data = val;
+
+	LISTNODE_ATTACH(list, new);
+
+	return true;
+}
+
 void listnode_add_sort(struct list *list, void *val)
 {
 	struct listnode *n;
@@ -242,6 +282,23 @@ void list_delete_all_node(struct list *list)
 	list->count = 0;
 }
 
+void list_filter_out_nodes(struct list *list, bool (*cond)(void *data))
+{
+	struct listnode *node;
+	struct listnode *next;
+	void *data;
+
+	assert(list);
+
+	for (ALL_LIST_ELEMENTS(list, node, next, data)) {
+		if ((cond && cond(data)) || (!cond)) {
+			if (*list->del)
+				(*list->del)(data);
+			list_delete_node(list, node);
+		}
+	}
+}
+
 void list_delete(struct list **list)
 {
 	assert(*list);
@@ -261,6 +318,13 @@ struct listnode *listnode_lookup(struct list *list, const void *data)
 	return NULL;
 }
 
+struct listnode *listnode_lookup_nocheck(struct list *list, void *data)
+{
+	if (!list)
+		return NULL;
+	return listnode_lookup(list, data);
+}
+
 void list_delete_node(struct list *list, struct listnode *node)
 {
 	if (node->prev)
@@ -273,29 +337,6 @@ void list_delete_node(struct list *list, struct listnode *node)
 		list->tail = node->prev;
 	list->count--;
 	listnode_free(node);
-}
-
-void list_add_list(struct list *list, struct list *add)
-{
-	struct listnode *n;
-
-	for (n = listhead(add); n; n = listnextnode(n))
-		listnode_add(list, n->data);
-}
-
-struct list *list_dup(struct list *list)
-{
-	struct list *new = list_new();
-	struct listnode *ln;
-	void *data;
-
-	new->cmp = list->cmp;
-	new->del = list->del;
-
-	for (ALL_LIST_ELEMENTS_RO(list, ln, data))
-		listnode_add(new, data);
-
-	return new;
 }
 
 void list_sort(struct list *list, int (*cmp)(const void **, const void **))
@@ -319,6 +360,13 @@ void list_sort(struct list *list, int (*cmp)(const void **, const void **))
 		listnode_add(list, items[j]);
 
 	XFREE(MTYPE_TMP, items);
+}
+
+struct listnode *listnode_add_force(struct list **list, void *val)
+{
+	if (*list == NULL)
+		*list = list_new();
+	return listnode_add(*list, val);
 }
 
 void **list_to_array(struct list *list, void **arr, size_t arrlen)

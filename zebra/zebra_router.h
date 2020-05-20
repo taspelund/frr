@@ -26,6 +26,10 @@
 
 #include "zebra/zebra_ns.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * This header file contains the idea of a router and as such
  * owns data that is associated with a router from zebra's
@@ -93,8 +97,14 @@ struct zebra_mlag_info {
 	/* MLAG Thread context 'master' */
 	struct thread_master *th_master;
 
-	/* Threads for read/write. */
+	/*
+	 * Event for Initial MLAG Connection setup & Data Read
+	 * Read can be performed only after successful connection establishment,
+	 * so no issues.
+	 *
+	 */
 	struct thread *t_read;
+	/* Event for MLAG write */
 	struct thread *t_write;
 };
 
@@ -106,6 +116,9 @@ struct zebra_router {
 
 	/* Lists of clients who have connected to us */
 	struct list *client_list;
+
+	/* List of clients in GR */
+	struct list *stale_client_list;
 
 	struct zebra_router_table_head tables;
 
@@ -120,9 +133,8 @@ struct zebra_router {
 
 	struct hash *iptable_hash;
 
-#if defined(HAVE_RTADV)
-	struct rtadv rtadv;
-#endif /* HAVE_RTADV */
+	/* used if vrf backend is not network namespace */
+	int rtadv_sock;
 
 	/* A sequence number used for tracking routes */
 	_Atomic uint32_t sequence_num;
@@ -188,6 +200,8 @@ extern int zebra_router_config_write(struct vty *vty);
 extern void zebra_router_sweep_route(void);
 extern void zebra_router_sweep_nhgs(void);
 
+extern void zebra_router_show_table_summary(struct vty *vty);
+
 extern uint32_t zebra_router_get_next_sequence(void);
 
 static inline vrf_id_t zebra_vrf_get_evpn_id(void)
@@ -204,5 +218,11 @@ extern void multicast_mode_ipv4_set(enum multicast_mode mode);
 
 extern enum multicast_mode multicast_mode_ipv4_get(void);
 
-extern void zebra_router_show_table_summary(struct vty *vty);
+/* zebra_northbound.c */
+extern const struct frr_yang_module_info frr_zebra_info;
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

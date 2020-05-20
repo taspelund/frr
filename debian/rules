@@ -4,7 +4,6 @@
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
-
 ifneq (,$(filter terse,$(DEB_BUILD_OPTIONS)))
   MAKE_SILENT="V=0"
   export DH_VERBOSE=0
@@ -79,12 +78,14 @@ override_dh_auto_configure:
 		--enable-datacenter=yes \
 		--enable-bfdd=no \
 		--enable-sharpd=yes \
+		--enable-grpc=yes \
 		# end
 
 override_dh_auto_install:
 	dh_auto_install
 
 	sed -e '1c #!/usr/bin/python3' -i debian/tmp/usr/lib/frr/frr-reload.py
+	sed -e '1c #!/usr/bin/python3' -i debian/tmp/usr/lib/frr/generate_support_bundle.py
 
 # let dh_systemd_* and dh_installinit do their thing automatically
 ifeq ($(filter pkg.frr.nosystemd,$(DEB_BUILD_PROFILES)),)
@@ -115,10 +116,10 @@ override_dh_auto_build:
 	dh_auto_build -- $(MAKE_SILENT)
 
 override_dh_installinit:
-	dh_installinit
+	dh_installinit -r
 
 override_dh_installsystemd:
-	dh_installsystemd
+	dh_installsystemd -r
 
 override_dh_makeshlibs:
 	dh_makeshlibs -n

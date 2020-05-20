@@ -29,6 +29,10 @@
 #include "zebra/zebra_l2.h"
 #include "zebra/zebra_nhg_private.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* For interface multicast configuration. */
 #define IF_ZEBRA_MULTICAST_UNSPEC 0
 #define IF_ZEBRA_MULTICAST_ON     1
@@ -113,6 +117,7 @@ struct rtadvconf {
 	   Default: The value specified in the "Assigned Numbers" RFC
 	   [ASSIGNED] that was in effect at the time of implementation. */
 	int AdvCurHopLimit;
+#define RTADV_DEFAULT_HOPLIMIT 64 /* 64 hops */
 
 	/* The value to be placed in the Router Lifetime field of Router
 	   Advertisements sent from the interface, in seconds.  MUST be
@@ -170,6 +175,22 @@ struct rtadvconf {
 #define RTADV_PREF_MEDIUM 0x0 /* Per RFC4191. */
 
 	/*
+	 * List of recursive DNS servers to include in the RDNSS option.
+	 * See [RFC8106 5.1]
+	 *
+	 * Default: empty list; do not emit RDNSS option
+	 */
+	struct list *AdvRDNSSList;
+
+	/*
+	 * List of DNS search domains to include in the DNSSL option.
+	 * See [RFC8106 5.2]
+	 *
+	 * Default: empty list; do not emit DNSSL option
+	 */
+	struct list *AdvDNSSLList;
+
+	/*
 	 * rfc4861 states RAs must be sent at least 3 seconds apart.
 	 * We allow faster retransmits to speed up convergence but can
 	 * turn that capability off to meet the rfc if needed.
@@ -188,6 +209,41 @@ struct rtadvconf {
 
 #define RTADV_FAST_REXMIT_PERIOD 1 /* 1 sec */
 #define RTADV_NUM_FAST_REXMITS   4 /* Fast Rexmit RA 4 times on certain events */
+};
+
+struct rtadv_rdnss {
+	/* Address of recursive DNS server to advertise */
+	struct in6_addr addr;
+
+	/*
+	 * Lifetime in seconds; all-ones means infinity, zero
+	 * stop using it.
+	 */
+	uint32_t lifetime;
+
+	/* If lifetime not set, use a default of 3*MaxRtrAdvInterval */
+	int lifetime_set;
+};
+
+/*
+ * [RFC1035 2.3.4] sets the maximum length of a domain name (a sequence of
+ * labels, each prefixed by a length octet) at 255 octets.
+ */
+#define RTADV_MAX_ENCODED_DOMAIN_NAME 255
+
+struct rtadv_dnssl {
+	/* Domain name without trailing root zone dot (NUL-terminated) */
+	char name[RTADV_MAX_ENCODED_DOMAIN_NAME - 1];
+
+	/* Name encoded as in [RFC1035 3.1] */
+	uint8_t encoded_name[RTADV_MAX_ENCODED_DOMAIN_NAME];
+
+	/* Actual length of encoded_name */
+	size_t encoded_len;
+
+	/* Lifetime as for RDNSS */
+	uint32_t lifetime;
+	int lifetime_set;
 };
 
 #endif /* HAVE_RTADV */
@@ -409,5 +465,9 @@ extern int interface_list_proc(void);
 #ifdef HAVE_PROC_NET_IF_INET6
 extern int ifaddr_proc_ipv6(void);
 #endif /* HAVE_PROC_NET_IF_INET6 */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _ZEBRA_INTERFACE_H */

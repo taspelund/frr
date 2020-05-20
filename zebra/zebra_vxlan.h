@@ -35,6 +35,11 @@
 #include "lib/json.h"
 #include "zebra/zebra_vrf.h"
 #include "zebra/zserv.h"
+#include "zebra/zebra_dplane.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Is EVPN enabled? */
 #define EVPN_ENABLED(zvrf)  (zvrf)->advertise_all_vni
@@ -194,9 +199,9 @@ extern void zebra_vxlan_cleanup_tables(struct zebra_vrf *);
 extern void zebra_vxlan_init(void);
 extern void zebra_vxlan_disable(void);
 extern void zebra_vxlan_evpn_vrf_route_add(vrf_id_t vrf_id,
-					   struct ethaddr *rmac,
-					   struct ipaddr *ip,
-					   struct prefix *host_prefix);
+					   const struct ethaddr *rmac,
+					   const struct ipaddr *ip,
+					   const struct prefix *host_prefix);
 extern void zebra_vxlan_evpn_vrf_route_del(vrf_id_t vrf_id,
 					   struct ipaddr *vtep_ip,
 					   struct prefix *host_prefix);
@@ -212,8 +217,14 @@ extern int zebra_vxlan_clear_dup_detect_vni_all(struct vty *vty,
 extern int zebra_vxlan_clear_dup_detect_vni(struct vty *vty,
 					    struct zebra_vrf *zvrf,
 					    vni_t vni);
+extern void zebra_vxlan_handle_result(struct zebra_dplane_ctx *ctx);
+
 extern void zebra_evpn_init(void);
 extern void zebra_vxlan_macvlan_up(struct interface *ifp);
 extern void zebra_vxlan_macvlan_down(struct interface *ifp);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _ZEBRA_VXLAN_H */
