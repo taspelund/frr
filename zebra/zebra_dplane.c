@@ -72,6 +72,7 @@ const uint32_t DPLANE_DEFAULT_NEW_WORK = 100;
  */
 struct dplane_nexthop_info {
 	uint32_t id;
+	uint32_t old_id;
 	afi_t afi;
 	vrf_id_t vrf_id;
 	int type;
@@ -147,6 +148,17 @@ struct dplane_pw_info {
 };
 
 /*
+ * Bridge port info for the dataplane
+ */
+struct dplane_br_port_info {
+	uint32_t sph_filter_cnt;
+	struct in_addr sph_filters[ES_VTEP_MAX_CNT];
+	/* DPLANE_BR_PORT_XXX - see zebra_dplane.h*/
+	uint32_t flags;
+	uint32_t backup_nhg_id;
+};
+
+/*
  * Interface/prefix info for the dataplane
  */
 struct dplane_intf_info {
@@ -179,6 +191,8 @@ struct dplane_mac_info {
 	struct ethaddr mac;
 	struct in_addr vtep_ip;
 	bool is_sticky;
+	uint32_t nhg_id;
+	uint32_t update_flags;
 };
 
 /*
@@ -189,6 +203,7 @@ struct dplane_neigh_info {
 	struct ethaddr mac;
 	uint32_t flags;
 	uint16_t state;
+	uint32_t update_flags;
 };
 
 /*
@@ -235,6 +250,7 @@ struct zebra_dplane_ctx {
 		struct dplane_route_info rinfo;
 		zebra_lsp_t lsp;
 		struct dplane_pw_info pw;
+		struct dplane_br_port_info br_port;
 		struct dplane_intf_info intf;
 		struct dplane_mac_info macinfo;
 		struct dplane_neigh_info neigh;
@@ -352,6 +368,9 @@ static struct zebra_dplane_globals {
 	_Atomic uint32_t dg_pws_in;
 	_Atomic uint32_t dg_pw_errors;
 
+	_Atomic uint32_t dg_br_port_in;
+	_Atomic uint32_t dg_br_port_errors;
+
 	_Atomic uint32_t dg_intf_addrs_in;
 	_Atomic uint32_t dg_intf_addr_errors;
 
@@ -405,13 +424,14 @@ static enum zebra_dplane_result mac_update_common(
 	enum dplane_op_e op, const struct interface *ifp,
 	const struct interface *br_ifp,
 	vlanid_t vid, const struct ethaddr *mac,
-	struct in_addr vtep_ip,	bool sticky);
+	struct in_addr vtep_ip,	bool sticky, uint32_t nhg_id,
+	uint32_t update_flags);
 static enum zebra_dplane_result neigh_update_internal(
 	enum dplane_op_e op,
 	const struct interface *ifp,
 	const struct ethaddr *mac,
 	const struct ipaddr *ip,
-	uint32_t flags, uint16_t state);
+	uint32_t flags, uint16_t state, uint32_t update_flags);
 
 /*
  * Public APIs
@@ -556,6 +576,7 @@ static void dplane_ctx_free_internal(struct zebra_dplane_ctx *ctx)
 	case DPLANE_OP_NEIGH_DELETE:
 	case DPLANE_OP_VTEP_ADD:
 	case DPLANE_OP_VTEP_DELETE:
+	case DPLANE_OP_BR_PORT_UPDATE:
 	case DPLANE_OP_NONE:
 		break;
 	}
@@ -747,6 +768,10 @@ const char *dplane_op2str(enum dplane_op_e op)
 		break;
 	case DPLANE_OP_SYS_ROUTE_DELETE:
 		ret = "SYS_ROUTE_DEL";
+		break;
+
+	case DPLANE_OP_BR_PORT_UPDATE:
+		ret = "BR_PORT_UPDATE";
 		break;
 
 	case DPLANE_OP_ADDR_INSTALL:
@@ -1133,6 +1158,12 @@ uint32_t dplane_ctx_get_nhe_id(const struct zebra_dplane_ctx *ctx)
 	return ctx->u.rinfo.nhe.id;
 }
 
+uint32_t dplane_ctx_get_old_nhe_id(const struct zebra_dplane_ctx *ctx)
+{
+	DPLANE_CTX_VALID(ctx);
+	return ctx->u.rinfo.nhe.old_id;
+}
+
 afi_t dplane_ctx_get_nhe_afi(const struct zebra_dplane_ctx *ctx)
 {
 	DPLANE_CTX_VALID(ctx);
@@ -1417,6 +1448,18 @@ bool dplane_ctx_mac_is_sticky(const struct zebra_dplane_ctx *ctx)
 	return ctx->u.macinfo.is_sticky;
 }
 
+uint32_t dplane_ctx_mac_get_nhg_id(const struct zebra_dplane_ctx *ctx)
+{
+	DPLANE_CTX_VALID(ctx);
+	return ctx->u.macinfo.nhg_id;
+}
+
+uint32_t dplane_ctx_mac_get_update_flags(const struct zebra_dplane_ctx *ctx)
+{
+	DPLANE_CTX_VALID(ctx);
+	return ctx->u.macinfo.update_flags;
+}
+
 const struct ethaddr *dplane_ctx_mac_get_addr(
 	const struct zebra_dplane_ctx *ctx)
 {
@@ -1462,6 +1505,43 @@ uint16_t dplane_ctx_neigh_get_state(const struct zebra_dplane_ctx *ctx)
 {
 	DPLANE_CTX_VALID(ctx);
 	return ctx->u.neigh.state;
+}
+
+uint32_t dplane_ctx_neigh_get_update_flags(const struct zebra_dplane_ctx *ctx)
+{
+	DPLANE_CTX_VALID(ctx);
+	return ctx->u.neigh.update_flags;
+}
+
+uint32_t dplane_ctx_get_br_port_flags(const struct zebra_dplane_ctx *ctx)
+{
+	DPLANE_CTX_VALID(ctx);
+
+	return ctx->u.br_port.flags;
+}
+
+uint32_t dplane_ctx_get_br_port_sph_filter_cnt(
+		const struct zebra_dplane_ctx *ctx)
+{
+	DPLANE_CTX_VALID(ctx);
+
+	return ctx->u.br_port.sph_filter_cnt;
+}
+
+const struct in_addr *dplane_ctx_get_br_port_sph_filters(
+		const struct zebra_dplane_ctx *ctx)
+{
+	DPLANE_CTX_VALID(ctx);
+
+	return ctx->u.br_port.sph_filters;
+}
+
+uint32_t dplane_ctx_get_br_port_backup_nhg_id(
+		const struct zebra_dplane_ctx *ctx)
+{
+	DPLANE_CTX_VALID(ctx);
+
+	return ctx->u.br_port.backup_nhg_id;
 }
 
 /*
@@ -1620,6 +1700,7 @@ int dplane_ctx_route_init(struct zebra_dplane_ctx *ctx, enum dplane_op_e op,
 		struct nhg_hash_entry *nhe = zebra_nhg_resolve(re->nhe);
 
 		ctx->u.rinfo.nhe.id = nhe->id;
+		ctx->u.rinfo.nhe.old_id = 0;
 		/*
 		 * Check if the nhe is installed/queued before doing anything
 		 * with this route.
@@ -1925,6 +2006,7 @@ dplane_route_update_internal(struct route_node *rn,
 			ctx->u.rinfo.zd_old_instance = old_re->instance;
 			ctx->u.rinfo.zd_old_distance = old_re->distance;
 			ctx->u.rinfo.zd_old_metric = old_re->metric;
+			ctx->u.rinfo.nhe.old_id = old_re->nhe->id;
 
 #ifndef HAVE_NETLINK
 			/* For bsd, capture previous re's nexthops too, sigh.
@@ -2369,6 +2451,78 @@ done:
 }
 
 /*
+ * Enqueue access br_port update.
+ */
+enum zebra_dplane_result dplane_br_port_update(const struct interface *ifp,
+					bool non_df, uint32_t sph_filter_cnt,
+					const struct in_addr *sph_filters,
+					uint32_t backup_nhg_id)
+{
+	enum zebra_dplane_result result = ZEBRA_DPLANE_REQUEST_FAILURE;
+	uint32_t flags = 0;
+	int ret;
+	struct zebra_dplane_ctx *ctx = NULL;
+	struct zebra_ns *zns;
+	enum dplane_op_e op = DPLANE_OP_BR_PORT_UPDATE;
+
+	if (non_df)
+		flags |= DPLANE_BR_PORT_NON_DF;
+
+	if (IS_ZEBRA_DEBUG_DPLANE_DETAIL || IS_ZEBRA_DEBUG_EVPN_MH_ES) {
+		uint32_t i;
+		char vtep_str[ES_VTEP_LIST_STR_SZ];
+
+		vtep_str[0] = '\0';
+		for (i = 0; i < sph_filter_cnt; ++i) {
+			sprintf(vtep_str + strlen(vtep_str), "%s ",
+					inet_ntoa(sph_filters[i]));
+		}
+		zlog_debug("init br_port ctx %s: ifp %s, flags 0x%x backup_nhg 0x%x sph %s",
+			   dplane_op2str(op),
+			   ifp->name, flags, backup_nhg_id, vtep_str);
+	}
+
+	ctx = dplane_ctx_alloc();
+
+	ctx->zd_op = op;
+	ctx->zd_status = ZEBRA_DPLANE_REQUEST_SUCCESS;
+	ctx->zd_vrf_id = ifp->vrf_id;
+
+	zns = zebra_ns_lookup(ifp->vrf_id);
+	dplane_ctx_ns_init(ctx, zns, false);
+
+	ctx->zd_ifindex = ifp->ifindex;
+	strlcpy(ctx->zd_ifname, ifp->name, sizeof(ctx->zd_ifname));
+
+	/* Init the br-port-specific data area */
+	memset(&ctx->u.br_port, 0, sizeof(ctx->u.br_port));
+
+	ctx->u.br_port.flags = flags;
+	ctx->u.br_port.backup_nhg_id = backup_nhg_id;
+	ctx->u.br_port.sph_filter_cnt = sph_filter_cnt;
+	memcpy(ctx->u.br_port.sph_filters, sph_filters,
+		sizeof(ctx->u.br_port.sph_filters[0]) * sph_filter_cnt);
+
+	/* Enqueue for processing on the dplane pthread */
+	ret = dplane_update_enqueue(ctx);
+
+	/* Increment counter */
+	atomic_fetch_add_explicit(&zdplane_info.dg_br_port_in, 1,
+				  memory_order_relaxed);
+
+	if (ret == AOK) {
+		result = ZEBRA_DPLANE_REQUEST_QUEUED;
+	} else {
+		/* Error counter */
+		atomic_fetch_add_explicit(&zdplane_info.dg_br_port_errors, 1,
+					  memory_order_relaxed);
+		dplane_ctx_free(&ctx);
+	}
+
+	return result;
+}
+
+/*
  * Enqueue interface address add for the dataplane.
  */
 enum zebra_dplane_result dplane_intf_addr_set(const struct interface *ifp,
@@ -2495,35 +2649,75 @@ static enum zebra_dplane_result intf_addr_update_internal(
 /*
  * Enqueue vxlan/evpn mac add (or update).
  */
-enum zebra_dplane_result dplane_mac_add(const struct interface *ifp,
+enum zebra_dplane_result dplane_rem_mac_add(const struct interface *ifp,
 					const struct interface *bridge_ifp,
 					vlanid_t vid,
 					const struct ethaddr *mac,
 					struct in_addr vtep_ip,
-					bool sticky)
+					bool sticky,
+					uint32_t nhg_id,
+					bool was_static)
 {
 	enum zebra_dplane_result result;
+	uint32_t update_flags = 0;
+
+	update_flags |= DPLANE_MAC_REMOTE;
+	if (was_static)
+		update_flags |= DPLANE_MAC_WAS_STATIC;
 
 	/* Use common helper api */
 	result = mac_update_common(DPLANE_OP_MAC_INSTALL, ifp, bridge_ifp,
-				   vid, mac, vtep_ip, sticky);
+				   vid, mac, vtep_ip, sticky, nhg_id, update_flags);
 	return result;
 }
 
 /*
  * Enqueue vxlan/evpn mac delete.
  */
-enum zebra_dplane_result dplane_mac_del(const struct interface *ifp,
+enum zebra_dplane_result dplane_rem_mac_del(const struct interface *ifp,
 					const struct interface *bridge_ifp,
 					vlanid_t vid,
 					const struct ethaddr *mac,
 					struct in_addr vtep_ip)
 {
 	enum zebra_dplane_result result;
+	uint32_t update_flags = 0;
+
+	update_flags |= DPLANE_MAC_REMOTE;
 
 	/* Use common helper api */
 	result = mac_update_common(DPLANE_OP_MAC_DELETE, ifp, bridge_ifp,
-				   vid, mac, vtep_ip, false);
+				   vid, mac, vtep_ip, false, 0, update_flags);
+	return result;
+}
+
+/*
+ * Enqueue local mac add (or update).
+ */
+enum zebra_dplane_result dplane_local_mac_add(const struct interface *ifp,
+					const struct interface *bridge_ifp,
+					vlanid_t vid,
+					const struct ethaddr *mac,
+					bool sticky,
+					uint32_t set_static,
+					uint32_t set_inactive)
+{
+	enum zebra_dplane_result result;
+	uint32_t update_flags = 0;
+	struct in_addr vtep_ip;
+
+	if (set_static)
+		update_flags |= DPLANE_MAC_SET_STATIC;
+
+	if (set_inactive)
+		update_flags |= DPLANE_MAC_SET_INACTIVE;
+
+	vtep_ip.s_addr = 0;
+
+	/* Use common helper api */
+	result = mac_update_common(DPLANE_OP_MAC_INSTALL, ifp, bridge_ifp,
+				     vid, mac, vtep_ip, sticky, 0,
+				     update_flags);
 	return result;
 }
 
@@ -2537,7 +2731,9 @@ void dplane_mac_init(struct zebra_dplane_ctx *ctx,
 		     vlanid_t vid,
 		     const struct ethaddr *mac,
 		     struct in_addr vtep_ip,
-		     bool sticky)
+		     bool sticky,
+		     uint32_t nhg_id,
+		     uint32_t update_flags)
 {
 	struct zebra_ns *zns;
 
@@ -2558,6 +2754,8 @@ void dplane_mac_init(struct zebra_dplane_ctx *ctx,
 	ctx->u.macinfo.mac = *mac;
 	ctx->u.macinfo.vid = vid;
 	ctx->u.macinfo.is_sticky = sticky;
+	ctx->u.macinfo.nhg_id = nhg_id;
+	ctx->u.macinfo.update_flags = update_flags;
 }
 
 /*
@@ -2570,7 +2768,9 @@ mac_update_common(enum dplane_op_e op,
 		  vlanid_t vid,
 		  const struct ethaddr *mac,
 		  struct in_addr vtep_ip,
-		  bool sticky)
+		  bool sticky,
+		  uint32_t nhg_id,
+		  uint32_t update_flags)
 {
 	enum zebra_dplane_result result = ZEBRA_DPLANE_REQUEST_FAILURE;
 	int ret;
@@ -2590,7 +2790,8 @@ mac_update_common(enum dplane_op_e op,
 	ctx->zd_op = op;
 
 	/* Common init for the ctx */
-	dplane_mac_init(ctx, ifp, br_ifp, vid, mac, vtep_ip, sticky);
+	dplane_mac_init(ctx, ifp, br_ifp, vid, mac, vtep_ip, sticky,
+			nhg_id, update_flags);
 
 	/* Enqueue for processing on the dplane pthread */
 	ret = dplane_update_enqueue(ctx);
@@ -2614,15 +2815,56 @@ mac_update_common(enum dplane_op_e op,
 /*
  * Enqueue evpn neighbor add for the dataplane.
  */
-enum zebra_dplane_result dplane_neigh_add(const struct interface *ifp,
+enum zebra_dplane_result dplane_rem_neigh_add(const struct interface *ifp,
 					  const struct ipaddr *ip,
 					  const struct ethaddr *mac,
-					  uint32_t flags)
+					  uint32_t flags, bool was_static)
 {
 	enum zebra_dplane_result result = ZEBRA_DPLANE_REQUEST_FAILURE;
+	uint32_t update_flags = 0;
+
+	update_flags |= DPLANE_NEIGH_REMOTE;
+
+	if (was_static)
+		update_flags |= DPLANE_NEIGH_WAS_STATIC;
 
 	result = neigh_update_internal(DPLANE_OP_NEIGH_INSTALL,
-				       ifp, mac, ip, flags, DPLANE_NUD_NOARP);
+				       ifp, mac, ip, flags, DPLANE_NUD_NOARP,
+				       update_flags);
+
+	return result;
+}
+
+/*
+ * Enqueue local neighbor add for the dataplane.
+ */
+enum zebra_dplane_result dplane_local_neigh_add(const struct interface *ifp,
+					  const struct ipaddr *ip,
+					  const struct ethaddr *mac,
+					  bool set_router, bool set_static,
+					  bool set_inactive)
+{
+	enum zebra_dplane_result result = ZEBRA_DPLANE_REQUEST_FAILURE;
+	uint32_t update_flags = 0;
+	uint32_t ntf = 0;
+	uint16_t state;
+
+	if (set_static)
+		update_flags |= DPLANE_NEIGH_SET_STATIC;
+
+	if (set_inactive) {
+		update_flags |= DPLANE_NEIGH_SET_INACTIVE;
+		state = DPLANE_NUD_STALE;
+	} else {
+		state = DPLANE_NUD_REACHABLE;
+	}
+
+	if (set_router)
+		ntf |= DPLANE_NTF_ROUTER;
+
+	result = neigh_update_internal(DPLANE_OP_NEIGH_INSTALL,
+				       ifp, mac, ip, ntf,
+				       state, update_flags);
 
 	return result;
 }
@@ -2630,14 +2872,18 @@ enum zebra_dplane_result dplane_neigh_add(const struct interface *ifp,
 /*
  * Enqueue evpn neighbor update for the dataplane.
  */
-enum zebra_dplane_result dplane_neigh_update(const struct interface *ifp,
+enum zebra_dplane_result dplane_rem_neigh_update(const struct interface *ifp,
 					     const struct ipaddr *ip,
 					     const struct ethaddr *mac)
 {
 	enum zebra_dplane_result result;
+	uint32_t update_flags = 0;
+
+	update_flags |= DPLANE_NEIGH_REMOTE;
 
 	result = neigh_update_internal(DPLANE_OP_NEIGH_UPDATE,
-				       ifp, mac, ip, 0, DPLANE_NUD_PROBE);
+				       ifp, mac, ip, 0, DPLANE_NUD_PROBE,
+				       update_flags);
 
 	return result;
 }
@@ -2645,13 +2891,16 @@ enum zebra_dplane_result dplane_neigh_update(const struct interface *ifp,
 /*
  * Enqueue evpn neighbor delete for the dataplane.
  */
-enum zebra_dplane_result dplane_neigh_delete(const struct interface *ifp,
+enum zebra_dplane_result dplane_rem_neigh_delete(const struct interface *ifp,
 					     const struct ipaddr *ip)
 {
 	enum zebra_dplane_result result;
+	uint32_t update_flags = 0;
+
+	update_flags |= DPLANE_NEIGH_REMOTE;
 
 	result = neigh_update_internal(DPLANE_OP_NEIGH_DELETE,
-				       ifp, NULL, ip, 0, 0);
+				       ifp, NULL, ip, 0, 0, update_flags);
 
 	return result;
 }
@@ -2675,7 +2924,7 @@ enum zebra_dplane_result dplane_vtep_add(const struct interface *ifp,
 	addr.ipaddr_v4 = *ip;
 
 	result = neigh_update_internal(DPLANE_OP_VTEP_ADD,
-				       ifp, &mac, &addr, 0, 0);
+				       ifp, &mac, &addr, 0, 0, 0);
 
 	return result;
 }
@@ -2700,7 +2949,7 @@ enum zebra_dplane_result dplane_vtep_delete(const struct interface *ifp,
 	addr.ipaddr_v4 = *ip;
 
 	result = neigh_update_internal(DPLANE_OP_VTEP_DELETE,
-				       ifp, &mac, &addr, 0, 0);
+				       ifp, &mac, &addr, 0, 0, 0);
 
 	return result;
 }
@@ -2713,7 +2962,8 @@ neigh_update_internal(enum dplane_op_e op,
 		      const struct interface *ifp,
 		      const struct ethaddr *mac,
 		      const struct ipaddr *ip,
-		      uint32_t flags, uint16_t state)
+		      uint32_t flags, uint16_t state,
+			  uint32_t update_flags)
 {
 	enum zebra_dplane_result result = ZEBRA_DPLANE_REQUEST_FAILURE;
 	int ret;
@@ -2750,6 +3000,7 @@ neigh_update_internal(enum dplane_op_e op,
 		ctx->u.neigh.mac = *mac;
 	ctx->u.neigh.flags = flags;
 	ctx->u.neigh.state = state;
+	ctx->u.neigh.update_flags = update_flags;
 
 	/* Enqueue for processing on the dplane pthread */
 	ret = dplane_update_enqueue(ctx);
@@ -2839,6 +3090,13 @@ int dplane_show_helper(struct vty *vty, bool detailed)
 				    memory_order_relaxed);
 	vty_out(vty, "EVPN neigh updates:       %"PRIu64"\n", incoming);
 	vty_out(vty, "EVPN neigh errors:        %"PRIu64"\n", errs);
+
+	incoming = atomic_load_explicit(&zdplane_info.dg_br_port_in,
+					memory_order_relaxed);
+	errs = atomic_load_explicit(&zdplane_info.dg_br_port_errors,
+				    memory_order_relaxed);
+	vty_out(vty, "Bridge port updates:      %"PRIu64"\n", incoming);
+	vty_out(vty, "Bridge port errors:       %"PRIu64"\n", errs);
 
 	return CMD_SUCCESS;
 }
@@ -3206,6 +3464,21 @@ kernel_dplane_route_update(struct zebra_dplane_ctx *ctx)
 			   ctx, dplane_op2str(dplane_ctx_get_op(ctx)));
 	}
 
+	/*
+	 * If the old and new context type, and nexthop group id
+	 * are the same there is no need to send down a route replace
+	 * as that we know we have sent a nexthop group replace
+	 * or an upper level protocol has sent us the exact
+	 * same route again.
+	 */
+	if ((dplane_ctx_get_type(ctx) == dplane_ctx_get_old_type(ctx))
+	    && (dplane_ctx_get_nhe_id(ctx) == dplane_ctx_get_old_nhe_id(ctx))) {
+		if (IS_ZEBRA_DEBUG_DPLANE_DETAIL)
+			zlog_debug("Ignoring Route exactly the same");
+
+		return ZEBRA_DPLANE_REQUEST_SUCCESS;
+	}
+
 	/* Call into the synchronous kernel-facing code here */
 	res = kernel_route_update(ctx);
 
@@ -3213,6 +3486,29 @@ kernel_dplane_route_update(struct zebra_dplane_ctx *ctx)
 		atomic_fetch_add_explicit(
 			&zdplane_info.dg_route_errors, 1,
 			memory_order_relaxed);
+
+	return res;
+}
+
+/*
+ * Handler for kernel-facing bridge port updates
+ */
+static enum zebra_dplane_result
+kernel_dplane_br_port_update(struct zebra_dplane_ctx *ctx)
+{
+	enum zebra_dplane_result res;
+
+
+	if (IS_ZEBRA_DEBUG_DPLANE_DETAIL)
+		zlog_debug("Dplane br-port update %s, idx %u",
+			   dplane_ctx_get_ifname(ctx),
+			   dplane_ctx_get_ifindex(ctx));
+
+	res = kernel_br_port_update_ctx(ctx);
+
+	if (res != ZEBRA_DPLANE_REQUEST_SUCCESS)
+		atomic_fetch_add_explicit(&zdplane_info.dg_br_port_errors,
+					  1, memory_order_relaxed);
 
 	return res;
 }
@@ -3381,6 +3677,10 @@ static int kernel_dplane_process_func(struct zebra_dplane_provider *prov)
 		case DPLANE_OP_PW_INSTALL:
 		case DPLANE_OP_PW_UNINSTALL:
 			res = kernel_dplane_pw_update(ctx);
+			break;
+
+		case DPLANE_OP_BR_PORT_UPDATE:
+			res = kernel_dplane_br_port_update(ctx);
 			break;
 
 		case DPLANE_OP_ADDR_INSTALL:

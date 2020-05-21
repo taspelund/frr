@@ -87,6 +87,7 @@
 #include "bgpd/bgp_pbr.h"
 #include "bgpd/bgp_addpath.h"
 #include "bgpd/bgp_evpn_private.h"
+#include "bgpd/bgp_evpn_mh.h"
 #include "bgpd/bgp_mac.h"
 
 DEFINE_MTYPE_STATIC(BGPD, PEER_TX_SHUTDOWN_MSG, "Peer shutdown message (TX)");
@@ -6946,6 +6947,8 @@ void bgp_master_init(struct thread_master *master, const int buffer_size)
 	/* mpls label dynamic allocation pool */
 	bgp_lp_init(bm->master, &bm->labelpool);
 
+	bgp_l3nhg_init();
+	bgp_evpn_mh_init();
 	QOBJ_REG(bm, bgp_master);
 }
 
@@ -7145,6 +7148,8 @@ void bgp_terminate(void)
 		BGP_TIMER_OFF(bm->t_rmap_update);
 
 	bgp_mac_finish();
+	bgp_evpn_mh_finish();
+	bgp_l3nhg_finish();
 }
 
 struct peer *peer_lookup_in_view(struct vty *vty, struct bgp *bgp,

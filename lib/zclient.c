@@ -957,6 +957,51 @@ done:
 	return ret;
 }
 
+extern void zclient_nhg_del(struct zclient *zclient, uint32_t id)
+{
+	struct stream *s = zclient->obuf;
+
+	stream_reset(s);
+	zclient_create_header(s, ZEBRA_NHG_DEL, VRF_DEFAULT);
+
+	stream_putw(s, zclient->redist_default);
+	stream_putl(s, id);
+
+	stream_putw_at(s, 0, stream_get_endp(s));
+}
+
+static void zclient_nhg_writer(struct stream *s, uint16_t proto, int cmd,
+			       uint32_t id, size_t nhops,
+			       struct zapi_nexthop *znh)
+{
+	size_t i;
+
+	stream_reset(s);
+
+	zapi_nexthop_group_sort(znh, nhops);
+
+	zclient_create_header(s, cmd, VRF_DEFAULT);
+
+	stream_putw(s, proto);
+	stream_putl(s, id);
+	stream_putw(s, nhops);
+	for (i = 0; i < nhops; i++) {
+		zapi_nexthop_encode(s, znh, 0);
+		znh++;
+	}
+
+	stream_putw_at(s, 0, stream_get_endp(s));
+}
+
+extern void zclient_nhg_add(struct zclient *zclient, uint32_t id,
+			    size_t nhops, struct zapi_nexthop *znh)
+{
+	struct stream *s = zclient->obuf;
+
+	zclient_nhg_writer(s, zclient->redist_default, ZEBRA_NHG_ADD, id, nhops,
+			   znh);
+}
+
 int zapi_route_encode(uint8_t cmd, struct stream *s, struct zapi_route *api)
 {
 	struct zapi_nexthop *api_nh;
@@ -997,6 +1042,9 @@ int zapi_route_encode(uint8_t cmd, struct stream *s, struct zapi_route *api)
 		stream_putc(s, api->src_prefix.prefixlen);
 		stream_write(s, (uint8_t *)&api->src_prefix.prefix, psize);
 	}
+
+	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_NHG))
+		stream_putl(s, api->nhgid);
 
 	/* Nexthops.  */
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_NEXTHOP)) {
@@ -1107,8 +1155,8 @@ int zapi_route_encode(uint8_t cmd, struct stream *s, struct zapi_route *api)
 /*
  * Decode a single zapi nexthop object
  */
-static int zapi_nexthop_decode(struct stream *s, struct zapi_nexthop *api_nh,
-			       uint32_t api_flags)
+int zapi_nexthop_decode(struct stream *s, struct zapi_nexthop *api_nh,
+			uint32_t api_flags)
 {
 	int ret = -1;
 
@@ -1253,6 +1301,9 @@ int zapi_route_decode(struct stream *s, struct zapi_route *api)
 		}
 	}
 
+	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_NHG))
+		STREAM_GETL(s, api->nhgid);
+
 	/* Nexthops. */
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_NEXTHOP)) {
 		STREAM_GETW(s, api->nexthop_num);
@@ -1351,6 +1402,22 @@ int zapi_pbr_rule_encode(uint8_t cmd, struct stream *s, struct pbr_rule *zrule)
 	stream_putw_at(s, 0, stream_get_endp(s));
 
 	return 0;
+}
+
+bool zapi_nhg_notify_decode(struct stream *s, uint32_t *id,
+			    enum zapi_nhg_notify_owner *note)
+{
+	uint16_t read_id;
+
+	STREAM_GETL(s, read_id);
+	STREAM_GET(note, s, sizeof(*note));
+
+	*id = read_id;
+
+	return true;
+
+stream_failure:
+	return false;
 }
 
 bool zapi_route_notify_decode(struct stream *s, struct prefix *p,
@@ -1503,6 +1570,9 @@ int zapi_nexthop_from_nexthop(struct zapi_nexthop *znh,
 	znh->weight = nh->weight;
 	znh->ifindex = nh->ifindex;
 	znh->gate = nh->gate;
+
+	if (CHECK_FLAG(nh->flags, NEXTHOP_FLAG_ONLINK))
+		SET_FLAG(znh->flags, ZAPI_NEXTHOP_FLAG_ONLINK);
 
 	if (nh->nh_label && (nh->nh_label->num_labels > 0)) {
 
@@ -3242,6 +3312,16 @@ static int zclient_read(struct thread *thread)
 			(*zclient->local_es_del)(command, zclient, length,
 						 vrf_id);
 		break;
+	case ZEBRA_LOCAL_ES_EVI_ADD:
+		if (zclient->local_es_evi_add)
+			(*zclient->local_es_evi_add)(command, zclient, length,
+						 vrf_id);
+		break;
+	case ZEBRA_LOCAL_ES_EVI_DEL:
+		if (zclient->local_es_evi_del)
+			(*zclient->local_es_evi_del)(command, zclient, length,
+						 vrf_id);
+		break;
 	case ZEBRA_VNI_ADD:
 		if (zclient->local_vni_add)
 			(*zclient->local_vni_add)(command, zclient, length,
@@ -3296,6 +3376,11 @@ static int zclient_read(struct thread *thread)
 		if (zclient->rule_notify_owner)
 			(*zclient->rule_notify_owner)(command, zclient, length,
 						      vrf_id);
+		break;
+	case ZEBRA_NHG_NOTIFY_OWNER:
+		if (zclient->nhg_notify_owner)
+			(*zclient->nhg_notify_owner)(command, zclient, length,
+						     vrf_id);
 		break;
 	case ZEBRA_GET_LABEL_CHUNK:
 		if (zclient->label_chunk)
@@ -3524,4 +3609,14 @@ int32_t zapi_capabilities_decode(struct stream *s, struct zapi_cap *api)
 	}
 stream_failure:
 	return 0;
+}
+
+/*
+ * Get a starting nhg point for a routing protocol
+ */
+uint32_t zclient_get_nhg_start(uint32_t proto)
+{
+	assert(proto < ZEBRA_ROUTE_MAX);
+
+	return ZEBRA_NHG_PROTO_SPACING * proto;
 }

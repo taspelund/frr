@@ -79,6 +79,7 @@
 #include "bgpd/bgp_encap_types.h"
 #include "bgpd/bgp_encap_tlv.h"
 #include "bgpd/bgp_evpn.h"
+#include "bgpd/bgp_evpn_mh.h"
 #include "bgpd/bgp_evpn_vty.h"
 #include "bgpd/bgp_flowspec.h"
 #include "bgpd/bgp_flowspec_util.h"
@@ -227,6 +228,9 @@ void bgp_path_info_extra_free(struct bgp_path_info_extra **extra)
 
 	if (e->bgp_orig)
 		bgp_unlock(e->bgp_orig);
+
+	if (e->es_info)
+		bgp_evpn_path_es_info_free(e->es_info);
 
 	if ((*extra)->bgp_fs_iprule)
 		list_delete(&((*extra)->bgp_fs_iprule));
@@ -543,6 +547,11 @@ static int bgp_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
 	uint32_t new_mm_seq;
 	uint32_t exist_mm_seq;
 	int nh_cmp;
+	esi_t *exist_esi;
+	esi_t *new_esi;
+	bool same_esi;
+	bool old_proxy;
+	bool new_proxy;
 
 	*paths_eq = 0;
 
@@ -620,6 +629,47 @@ static int bgp_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
 			}
 		}
 
+		new_esi = bgp_evpn_attr_get_esi(newattr);
+		exist_esi = bgp_evpn_attr_get_esi(existattr);
+		if (bgp_evpn_is_esi_valid(new_esi) &&
+				!memcmp(new_esi, exist_esi, sizeof(esi_t))) {
+			same_esi = true;
+		} else {
+			same_esi = false;
+		}
+
+		/* If both paths have the same non-zero ES and
+		 * one path is local it wins.
+		 * PS: Note the local path wins even if the remote
+		 * has the higher MM seq. The local path's
+		 * MM seq will be fixed up to match the highest
+		 * rem seq, subsequently.
+		 */
+		if (same_esi) {
+			char esi_buf[ESI_STR_LEN];
+
+			if (bgp_evpn_is_path_local(bgp, new)) {
+				*reason = bgp_path_selection_evpn_local_path;
+				if (debug)
+					zlog_debug(
+						"%s: %s wins over %s as ES %s is same and local",
+						pfx_buf, new_buf, exist_buf,
+						esi_to_str(new_esi, esi_buf,
+						sizeof(esi_buf)));
+				return 1;
+			}
+			if (bgp_evpn_is_path_local(bgp, exist)) {
+				*reason = bgp_path_selection_evpn_local_path;
+				if (debug)
+					zlog_debug(
+						"%s: %s loses to %s as ES %s is same and local",
+						pfx_buf, new_buf, exist_buf,
+						esi_to_str(new_esi, esi_buf,
+						sizeof(esi_buf)));
+				return 0;
+			}
+		}
+
 		new_mm_seq = mac_mobility_seqnum(newattr);
 		exist_mm_seq = mac_mobility_seqnum(existattr);
 
@@ -640,6 +690,30 @@ static int bgp_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
 					"%s: %s loses to %s due to MM seq %u < %u",
 					pfx_buf, new_buf, exist_buf, new_mm_seq,
 					exist_mm_seq);
+			return 0;
+		}
+
+		/* if the sequence numbers and ESI are the same and one path
+		 * is non-proxy it wins (over proxy)
+		 */
+		new_proxy = bgp_evpn_attr_is_proxy(newattr);
+		old_proxy = bgp_evpn_attr_is_proxy(existattr);
+		if (same_esi && bgp_evpn_attr_is_local_es(newattr) &&
+				old_proxy != new_proxy) {
+			if (!new_proxy) {
+				*reason = bgp_path_selection_evpn_non_proxy;
+				if (debug)
+					zlog_debug(
+						"%s: %s wins over %s, same seq/es and non-proxy",
+						pfx_buf, new_buf, exist_buf);
+				return 1;
+			}
+
+			*reason = bgp_path_selection_evpn_non_proxy;
+			if (debug)
+				zlog_debug(
+					"%s: %s loses to %s, same seq/es and non-proxy",
+					pfx_buf, new_buf, exist_buf);
 			return 0;
 		}
 
@@ -1173,6 +1247,17 @@ static int bgp_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
 			   pfx_buf, new_buf, exist_buf);
 
 	return 1;
+}
+
+
+int bgp_evpn_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
+			     struct bgp_path_info *exist, int *paths_eq)
+{
+	enum bgp_path_selection_reason reason;
+	char pfx_buf[PREFIX2STR_BUFFER];
+
+	return bgp_path_info_cmp(bgp, new, exist, paths_eq, NULL, 0, pfx_buf,
+				AFI_L2VPN, SAFI_EVPN, &reason);
 }
 
 /* Compare two bgp route entity.  Return -1 if new is preferred, 1 if exist
@@ -3185,19 +3270,10 @@ struct bgp_path_info *info_make(int type, int sub_type, unsigned short instance,
 }
 
 static void overlay_index_update(struct attr *attr,
-				 struct eth_segment_id *eth_s_id,
 				 union gw_addr *gw_ip)
 {
 	if (!attr)
 		return;
-
-	if (eth_s_id == NULL) {
-		memset(&(attr->evpn_overlay.eth_s_id), 0,
-		       sizeof(struct eth_segment_id));
-	} else {
-		memcpy(&(attr->evpn_overlay.eth_s_id), eth_s_id,
-		       sizeof(struct eth_segment_id));
-	}
 	if (gw_ip == NULL) {
 		memset(&(attr->evpn_overlay.gw_ip), 0, sizeof(union gw_addr));
 	} else {
@@ -3207,20 +3283,17 @@ static void overlay_index_update(struct attr *attr,
 }
 
 static bool overlay_index_equal(afi_t afi, struct bgp_path_info *path,
-				struct eth_segment_id *eth_s_id,
 				union gw_addr *gw_ip)
 {
-	struct eth_segment_id *path_eth_s_id, *path_eth_s_id_remote;
 	union gw_addr *path_gw_ip, *path_gw_ip_remote;
 	union {
-		struct eth_segment_id esi;
+		esi_t esi;
 		union gw_addr ip;
 	} temp;
 
 	if (afi != AFI_L2VPN)
 		return true;
 
-	path_eth_s_id = &(path->attr->evpn_overlay.eth_s_id);
 	path_gw_ip = &(path->attr->evpn_overlay.gw_ip);
 
 	if (gw_ip == NULL) {
@@ -3229,17 +3302,7 @@ static bool overlay_index_equal(afi_t afi, struct bgp_path_info *path,
 	} else
 		path_gw_ip_remote = gw_ip;
 
-	if (eth_s_id == NULL) {
-		memset(&temp, 0, sizeof(temp));
-		path_eth_s_id_remote = &temp.esi;
-	} else
-		path_eth_s_id_remote = eth_s_id;
-
-	if (!memcmp(path_gw_ip, path_gw_ip_remote, sizeof(union gw_addr)))
-		return false;
-
-	return !memcmp(path_eth_s_id, path_eth_s_id_remote,
-		       sizeof(struct eth_segment_id));
+	return !!memcmp(path_gw_ip, path_gw_ip_remote, sizeof(union gw_addr));
 }
 
 /* Check if received nexthop is valid or not. */
@@ -3517,7 +3580,7 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 				  num_labels * sizeof(mpls_label_t))
 				   == 0)
 		    && (overlay_index_equal(
-			       afi, pi, evpn == NULL ? NULL : &evpn->eth_s_id,
+			       afi, pi,
 			       evpn == NULL ? NULL : &evpn->gw_ip))) {
 			if (CHECK_FLAG(bgp->af_flags[afi][safi],
 				       BGP_CONFIG_DAMPENING)
@@ -3737,7 +3800,7 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 		/* Update Overlay Index */
 		if (afi == AFI_L2VPN) {
 			overlay_index_update(
-				pi->attr, evpn == NULL ? NULL : &evpn->eth_s_id,
+				pi->attr,
 				evpn == NULL ? NULL : &evpn->gw_ip);
 		}
 
@@ -3906,7 +3969,6 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 	/* Update Overlay Index */
 	if (afi == AFI_L2VPN) {
 		overlay_index_update(new->attr,
-				     evpn == NULL ? NULL : &evpn->eth_s_id,
 				     evpn == NULL ? NULL : &evpn->gw_ip);
 	}
 	/* Nexthop reachability check. */
@@ -5293,7 +5355,7 @@ static void bgp_static_update_safi(struct bgp *bgp, const struct prefix *p,
 		else if (bgp_static->gatewayIp.family == AF_INET6)
 			memcpy(&(add.ipv6), &(bgp_static->gatewayIp.u.prefix6),
 			       sizeof(struct in6_addr));
-		overlay_index_update(&attr, bgp_static->eth_s_id, &add);
+		memcpy(&attr.esi, bgp_static->eth_s_id, sizeof(esi_t));
 		if (bgp_static->encap_tunneltype == BGP_ENCAP_TYPE_VXLAN) {
 			struct bgp_encap_type_vxlan bet;
 			memset(&bet, 0, sizeof(struct bgp_encap_type_vxlan));
@@ -5344,7 +5406,7 @@ static void bgp_static_update_safi(struct bgp *bgp, const struct prefix *p,
 	if (pi) {
 		memset(&add, 0, sizeof(union gw_addr));
 		if (attrhash_cmp(pi->attr, attr_new)
-		    && overlay_index_equal(afi, pi, bgp_static->eth_s_id, &add)
+		    && overlay_index_equal(afi, pi, &add)
 		    && !CHECK_FLAG(pi->flags, BGP_PATH_REMOVED)) {
 			bgp_unlock_node(rn);
 			bgp_attr_unintern(&attr_new);
@@ -5850,7 +5912,7 @@ int bgp_static_set_safi(afi_t afi, safi_t safi, struct vty *vty,
 			if (esi) {
 				bgp_static->eth_s_id =
 					XCALLOC(MTYPE_ATTR,
-						sizeof(struct eth_segment_id));
+						sizeof(esi_t));
 				str2esi(esi, bgp_static->eth_s_id);
 			}
 			if (routermac) {
@@ -7577,6 +7639,7 @@ void route_vty_out(struct vty *vty, const struct prefix *p,
 	const char *nexthop_vrfname = VRF_DEFAULT_NAME;
 	char *nexthop_hostname =
 		bgp_nexthop_hostname(path->peer, path->nexthop);
+	char esi_buf[ESI_STR_LEN];
 
 	if (json_paths)
 		json_path = json_object_new_object();
@@ -7896,6 +7959,11 @@ void route_vty_out(struct vty *vty, const struct prefix *p,
 		vty_out(vty, "%s", bgp_origin_str[attr->origin]);
 
 	if (json_paths) {
+		if (bgp_evpn_is_esi_valid(&attr->esi)) {
+			json_object_string_add(json_path, "esi",
+					esi_to_str(&attr->esi,
+					esi_buf, sizeof(esi_buf)));
+		}
 		if (safi == SAFI_EVPN &&
 		    attr->flag & ATTR_FLAG_BIT(BGP_ATTR_EXT_COMMUNITIES)) {
 			json_ext_community = json_object_new_object();
@@ -7941,10 +8009,28 @@ void route_vty_out(struct vty *vty, const struct prefix *p,
 	} else {
 		vty_out(vty, "\n");
 
-		if (safi == SAFI_EVPN &&
-		    attr->flag & ATTR_FLAG_BIT(BGP_ATTR_EXT_COMMUNITIES)) {
-			vty_out(vty, "%*s", 20, " ");
-			vty_out(vty, "%s\n", attr->ecommunity->str);
+		if (safi == SAFI_EVPN) {
+			struct bgp_path_es_info *path_es_info = NULL;
+
+			if (path->extra)
+				path_es_info = path->extra->es_info;
+
+			if (bgp_evpn_is_esi_valid(&attr->esi)) {
+				/* XXX - add these params to the json out */
+				vty_out(vty, "%*s", 20, " ");
+				vty_out(vty, "ESI:%s",
+						esi_to_str(&attr->esi,
+						esi_buf, sizeof(esi_buf)));
+				if (path_es_info && path_es_info->es)
+					vty_out(vty, " VNI: %u",
+							path_es_info->vni);
+				vty_out(vty, "\n");
+			}
+			if (attr->flag &
+				ATTR_FLAG_BIT(BGP_ATTR_EXT_COMMUNITIES)) {
+				vty_out(vty, "%*s", 20, " ");
+				vty_out(vty, "%s\n", attr->ecommunity->str);
+			}
 		}
 
 #ifdef ENABLE_BGP_VNC
@@ -8269,15 +8355,6 @@ void route_vty_out_overlay(struct vty *vty, const struct prefix *p,
 		}
 	}
 
-	char *str = esi2str(&(attr->evpn_overlay.eth_s_id));
-
-	if (!json_path)
-		vty_out(vty, "%s", str);
-	else
-		json_object_string_add(json_overlay, "esi", str);
-
-	XFREE(MTYPE_TMP, str);
-
 	if (is_evpn_prefix_ipaddr_v4((struct prefix_evpn *)p)) {
 		inet_ntop(AF_INET, &(attr->evpn_overlay.gw_ip.ipv4), buf,
 			  BUFSIZ);
@@ -8561,6 +8638,10 @@ static const char *bgp_path_selection_reason2str(
 		return "EVPN sequence number";
 	case bgp_path_selection_evpn_lower_ip:
 		return "EVPN lower IP";
+	case bgp_path_selection_evpn_local_path:
+		return "EVPN local ES path";
+	case bgp_path_selection_evpn_non_proxy:
+		return "EVPN non poxy";
 	case bgp_path_selection_weight:
 		return "Weight";
 	case bgp_path_selection_local_pref:
@@ -8597,6 +8678,64 @@ static const char *bgp_path_selection_reason2str(
 		return "Nothing left to compare";
 	}
 	return "Invalid (internal error)";
+}
+
+static void route_vty_out_detail_es_info(struct vty *vty,
+		struct bgp_path_info *pi,
+		struct attr *attr, json_object *json_path)
+{
+	char esi_buf[ESI_STR_LEN];
+	bool es_local = !!CHECK_FLAG(attr->es_flags, ATTR_ES_IS_LOCAL);
+	bool peer_router = !!CHECK_FLAG(attr->es_flags,
+			ATTR_ES_PEER_ROUTER);
+	bool peer_active = !!CHECK_FLAG(attr->es_flags,
+			ATTR_ES_PEER_ACTIVE);
+	bool peer_proxy = !!CHECK_FLAG(attr->es_flags,
+			ATTR_ES_PEER_PROXY);
+	esi_to_str(&attr->esi, esi_buf, sizeof(esi_buf));
+	if (json_path) {
+		json_object *json_es_info = NULL;
+
+		json_object_string_add(
+				json_path, "esi",
+				esi_buf);
+		if (es_local || bgp_evpn_attr_is_sync(attr)) {
+			json_es_info = json_object_new_object();
+			if (es_local)
+				json_object_boolean_true_add(
+						json_es_info, "localEs");
+			if (peer_active)
+				json_object_boolean_true_add(
+						json_es_info, "peerActive");
+			if (peer_proxy)
+				json_object_boolean_true_add(
+						json_es_info, "peerProxy");
+			if (peer_router)
+				json_object_boolean_true_add(
+						json_es_info, "peerRouter");
+			if (attr->mm_sync_seqnum)
+				json_object_int_add(
+						json_es_info, "peerSeq",
+						attr->mm_sync_seqnum);
+			json_object_object_add(
+					json_path, "es_info",
+					json_es_info);
+		}
+	} else {
+		if (bgp_evpn_attr_is_sync(attr))
+			vty_out(vty,
+					"      ESI %s %s peer-info: (%s%s%sMM: %d)\n",
+					esi_buf,
+					es_local ? "local-es":"",
+					peer_proxy ? "proxy " : "",
+					peer_active ? "active ":"",
+					peer_router ? "router ":"",
+					attr->mm_sync_seqnum);
+		else
+			vty_out(vty, "      ESI %s %s\n",
+					esi_buf,
+					es_local ? "local-es":"");
+	}
 }
 
 void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
@@ -9052,6 +9191,11 @@ void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
 		if (json_paths)
 			json_object_boolean_true_add(json_nexthop_global,
 						     "used");
+	}
+
+	if (safi == SAFI_EVPN &&
+			bgp_evpn_is_esi_valid(&attr->esi)) {
+		route_vty_out_detail_es_info(vty, path, attr, json_path);
 	}
 
 	/* Line 3 display Origin, Med, Locpref, Weight, Tag, valid,
@@ -13200,6 +13344,7 @@ static void bgp_config_write_network_evpn(struct vty *vty, struct bgp *bgp,
 	char buf[PREFIX_STRLEN * 2];
 	char buf2[SU_ADDRSTRLEN];
 	char rdbuf[RD_ADDRSTRLEN];
+	char esi_buf[ESI_BYTES];
 
 	/* Network configuration. */
 	for (prn = bgp_table_top(bgp->route[afi][safi]); prn;
@@ -13214,13 +13359,13 @@ static void bgp_config_write_network_evpn(struct vty *vty, struct bgp *bgp,
 				continue;
 
 			char *macrouter = NULL;
-			char *esi = NULL;
 
 			if (bgp_static->router_mac)
 				macrouter = prefix_mac2str(
 					bgp_static->router_mac, NULL, 0);
 			if (bgp_static->eth_s_id)
-				esi = esi2str(bgp_static->eth_s_id);
+				esi_to_str(bgp_static->eth_s_id,
+						esi_buf, sizeof(esi_buf));
 			p = bgp_node_get_prefix(rn);
 			prd = (struct prefix_rd *)bgp_node_get_prefix(prn);
 
@@ -13250,11 +13395,10 @@ static void bgp_config_write_network_evpn(struct vty *vty, struct bgp *bgp,
 				"  network %s rd %s ethtag %u label %u esi %s gwip %s routermac %s\n",
 				buf, rdbuf,
 				p->u.prefix_evpn.prefix_addr.eth_tag,
-				decode_label(&bgp_static->label), esi, buf2,
+				decode_label(&bgp_static->label), esi_buf, buf2,
 				macrouter);
 
 			XFREE(MTYPE_TMP, macrouter);
-			XFREE(MTYPE_TMP, esi);
 		}
 	}
 }

@@ -44,6 +44,7 @@
 #include "zebra/zebra_routemap.h"
 #include "lib/json.h"
 #include "zebra/zebra_vxlan.h"
+#include "zebra/zebra_evpn_mh.h"
 #ifndef VTYSH_EXTRACT_PL
 #include "zebra/zebra_vty_clippy.c"
 #endif
@@ -53,6 +54,7 @@
 #include "zebra/zebra_vxlan_private.h"
 #include "zebra/zebra_pbr.h"
 #include "zebra/zebra_nhg.h"
+#include "zebra/zebra_evpn_mh.h"
 #include "zebra/interface.h"
 
 extern int allow_delete;
@@ -1116,7 +1118,7 @@ static void show_nexthop_group_out(struct vty *vty, struct nhg_hash_entry *nhe)
 	struct vrf *nhe_vrf = vrf_lookup_by_id(nhe->vrf_id);
 	struct nexthop_group *backup_nhg;
 
-	vty_out(vty, "ID: %u\n", nhe->id);
+	vty_out(vty, "ID: %u (%s)\n", nhe->id, zebra_route_string(nhe->type));
 	vty_out(vty, "     RefCnt: %d\n", nhe->refcnt);
 
 	if (nhe_vrf)
@@ -1125,9 +1127,6 @@ static void show_nexthop_group_out(struct vty *vty, struct nhg_hash_entry *nhe)
 	else
 		vty_out(vty, "     VRF: UNKNOWN AFI: %s\n",
 			afi2str(nhe->afi));
-
-	if (CHECK_FLAG(nhe->flags, NEXTHOP_GROUP_UNHASHABLE))
-		vty_out(vty, "     Duplicate - from kernel not hashable\n");
 
 	if (CHECK_FLAG(nhe->flags, NEXTHOP_GROUP_VALID)) {
 		vty_out(vty, "     Valid");
@@ -1399,6 +1398,19 @@ DEFPY_HIDDEN(nexthop_group_use_enable,
 	return CMD_SUCCESS;
 }
 
+DEFPY_HIDDEN (proto_nexthop_group_only,
+              proto_nexthop_group_only_cmd,
+              "[no] zebra nexthop proto only",
+              NO_STR
+              ZEBRA_STR
+              "Nexthop configuration\n"
+              "Configure exclusive use of proto nexthops\n"
+              "Only use proto nexthops\n")
+{
+	zebra_nhg_set_proto_nexthops_only(!no);
+	return CMD_SUCCESS;
+}
+
 DEFUN (no_ip_nht_default_route,
        no_ip_nht_default_route_cmd,
        "no ip nht resolve-via-default",
@@ -1519,7 +1531,7 @@ DEFPY (show_route,
 	afi_t afi = ipv4 ? AFI_IP : AFI_IP6;
 	struct vrf *vrf;
 	int type = 0;
-	struct zebra_vrf *zvrf;
+	struct zebra_vrf *zvrf = NULL;
 
 	if (!vrf_is_backend_netns()) {
 		if ((vrf_all || vrf_name) && (table || table_all)) {
@@ -2195,6 +2207,72 @@ DEFUN (show_vrf,
 	return CMD_SUCCESS;
 }
 
+DEFPY (evpn_mh_mac_holdtime,
+	   evpn_mh_mac_holdtime_cmd,
+	   "[no$no] evpn mh mac-holdtime (0-86400)$duration",
+	   NO_STR
+	   "EVPN\n"
+	   "Multihoming\n"
+	   "MAC hold time\n"
+	   "duration in seconds\n")
+{
+	bool set_default;
+
+	set_default = no ? true : false;
+
+	return zebra_evpn_mh_mac_holdtime_update(vty,
+			duration, set_default);
+}
+
+DEFPY (evpn_mh_neigh_holdtime,
+	   evpn_mh_neigh_holdtime_cmd,
+	   "[no$no] evpn mh neigh-holdtime (0-86400)$duration",
+	   NO_STR
+	   "EVPN\n"
+	   "Multihoming\n"
+	   "Neighbor entry hold time\n"
+	   "duration in seconds\n")
+{
+	bool set_default;
+
+	set_default = no ? true : false;
+
+	return zebra_evpn_mh_neigh_holdtime_update(vty,
+			duration, set_default);
+}
+
+DEFPY (evpn_mh_redirect_off,
+	   evpn_mh_redirect_off_cmd,
+	   "[no$no] evpn mh redirect-off",
+	   NO_STR
+	   "EVPN\n"
+	   "Multihoming\n"
+	   "ES bond redirect for fast-failover off\n")
+{
+	bool redirect_off;
+
+	redirect_off = no ? false : true;
+
+	return zebra_evpn_mh_redirect_off(vty, redirect_off);
+}
+
+DEFPY (evpn_mh_startup_delay,
+	   evpn_mh_startup_delay_cmd,
+	   "[no] evpn mh startup-delay(0-3600)$duration",
+	   NO_STR
+	   "EVPN\n"
+	   "Multihoming\n"
+	   "Startup delay\n"
+	   "duration in seconds\n")
+{
+	bool set_default;
+
+	set_default = no ? true : false;
+
+	return zebra_evpn_mh_startup_delay_update(vty,
+			duration, set_default);
+}
+
 DEFUN (default_vrf_vni_mapping,
        default_vrf_vni_mapping_cmd,
        "vni " CMD_VNI_RANGE "[prefix-routes-only]",
@@ -2369,6 +2447,81 @@ DEFUN (show_evpn_global,
 	bool uj = use_json(argc, argv);
 
 	zebra_vxlan_print_evpn(vty, uj);
+	return CMD_SUCCESS;
+}
+
+DEFPY(show_evpn_es,
+      show_evpn_es_cmd,
+      "show evpn es [NAME$esi_str|detail$detail] [json$json]",
+      SHOW_STR
+      "EVPN\n"
+      "Ethernet Segment\n"
+      "ES ID\n"
+      JSON_STR
+      "Detailed information\n")
+{
+	esi_t esi;
+	bool uj = !!json;
+
+	if (esi_str) {
+		if (!str_to_esi(esi_str, &esi)) {
+			vty_out(vty, "%% Malformed ESI\n");
+			return CMD_WARNING;
+		}
+		zebra_evpn_es_show_esi(vty, uj, &esi);
+	} else {
+		if (detail)
+			zebra_evpn_es_show_detail(vty, uj);
+		else
+			zebra_evpn_es_show(vty, uj);
+	}
+
+	return CMD_SUCCESS;
+}
+
+DEFPY(show_evpn_es_evi,
+      show_evpn_es_evi_cmd,
+      "show evpn es-evi [vni (1-16777215)$vni] [detail$detail] [json$json]",
+      SHOW_STR
+      "EVPN\n"
+      "Ethernet Segment per EVI\n"
+      "VxLAN Network Identifier\n"
+      "VNI\n"
+      "Detailed information\n"
+      JSON_STR)
+{
+	bool uj = !!json;
+	bool ud = !!detail;
+
+	if (vni)
+		zebra_evpn_es_evi_show_vni(vty, uj, vni, ud);
+	else
+		zebra_evpn_es_evi_show(vty, uj, ud);
+
+	return CMD_SUCCESS;
+}
+
+DEFPY(show_evpn_access_vlan,
+      show_evpn_access_vlan_cmd,
+      "show evpn access-vlan [(1-4094)$vid | detail$detail] [json$json]",
+      SHOW_STR
+      "EVPN\n"
+      "Access VLANs\n"
+      "VLAN ID\n"
+      "Detailed information\n"
+      JSON_STR)
+{
+	bool uj = !!json;
+
+	if (vid) {
+		zebra_evpn_acc_vl_show_vid(vty, uj, vid);
+	} else {
+		if (detail)
+			zebra_evpn_acc_vl_show_detail(vty, uj);
+		else
+			zebra_evpn_acc_vl_show(vty, uj);
+	}
+
 	return CMD_SUCCESS;
 }
 
@@ -3147,9 +3300,14 @@ static int config_write_protocol(struct vty *vty)
 	/* Include dataplane info */
 	dplane_config_write_helper(vty);
 
+	zebra_evpn_mh_config_write(vty);
+
 	/* Include nexthop-group config */
 	if (!zebra_nhg_kernel_nexthops_enabled())
 		vty_out(vty, "no zebra nexthop kernel enable\n");
+
+	if (zebra_nhg_proto_nexthops_only())
+		vty_out(vty, "zebra nexthop proto only\n");
 
 	return 1;
 }
@@ -3523,6 +3681,7 @@ void zebra_vty_init(void)
 	install_element(CONFIG_NODE, &zebra_packet_process_cmd);
 	install_element(CONFIG_NODE, &no_zebra_packet_process_cmd);
 	install_element(CONFIG_NODE, &nexthop_group_use_enable_cmd);
+	install_element(CONFIG_NODE, &proto_nexthop_group_only_cmd);
 
 	install_element(VIEW_NODE, &show_nexthop_group_cmd);
 	install_element(VIEW_NODE, &show_interface_nexthop_group_cmd);
@@ -3555,6 +3714,9 @@ void zebra_vty_init(void)
 	install_element(VIEW_NODE, &show_evpn_vni_cmd);
 	install_element(VIEW_NODE, &show_evpn_vni_detail_cmd);
 	install_element(VIEW_NODE, &show_evpn_vni_vni_cmd);
+	install_element(VIEW_NODE, &show_evpn_es_cmd);
+	install_element(VIEW_NODE, &show_evpn_es_evi_cmd);
+	install_element(VIEW_NODE, &show_evpn_access_vlan_cmd);
 	install_element(VIEW_NODE, &show_evpn_rmac_vni_mac_cmd);
 	install_element(VIEW_NODE, &show_evpn_rmac_vni_cmd);
 	install_element(VIEW_NODE, &show_evpn_rmac_vni_all_cmd);
@@ -3581,6 +3743,10 @@ void zebra_vty_init(void)
 	install_element(VIEW_NODE, &show_pbr_ipset_cmd);
 	install_element(VIEW_NODE, &show_pbr_iptable_cmd);
 
+	install_element(CONFIG_NODE, &evpn_mh_mac_holdtime_cmd);
+	install_element(CONFIG_NODE, &evpn_mh_neigh_holdtime_cmd);
+	install_element(CONFIG_NODE, &evpn_mh_redirect_off_cmd);
+	install_element(CONFIG_NODE, &evpn_mh_startup_delay_cmd);
 	install_element(CONFIG_NODE, &default_vrf_vni_mapping_cmd);
 	install_element(CONFIG_NODE, &no_default_vrf_vni_mapping_cmd);
 	install_element(VRF_NODE, &vrf_vni_mapping_cmd);

@@ -97,7 +97,21 @@ enum bgp_show_adj_route_type {
 #define BGP_NLRI_PARSE_ERROR_FLOWSPEC_NLRI_SIZELIMIT -12
 #define BGP_NLRI_PARSE_ERROR_FLOWSPEC_BAD_FORMAT -13
 #define BGP_NLRI_PARSE_ERROR_ADDRESS_FAMILY -14
+#define BGP_NLRI_PARSE_ERROR_EVPN_TYPE1_SIZE -15
 #define BGP_NLRI_PARSE_ERROR -32
+
+/* MAC-IP/type-2 path_info in the global routing table is linked to the
+ * destination ES
+ */
+struct bgp_path_es_info {
+	/* back pointer to the route */
+	struct bgp_path_info *pi;
+	vni_t vni;
+	/* destination ES */
+	struct bgp_evpn_es *es;
+	/* memory used for linking the path to the destination ES */
+	struct listnode es_listnode;
+};
 
 /* Ancillary information to struct bgp_path_info,
  * used for uncommonly used data (aggregation, MPLS, etc.)
@@ -185,6 +199,8 @@ struct bgp_path_info_extra {
 	struct list *bgp_fs_pbr;
 	/* presence of FS pbr iprule based entry */
 	struct list *bgp_fs_iprule;
+	/* Destination Ethernet Segment links for EVPN MH */
+	struct bgp_path_es_info *es_info;
 };
 
 struct bgp_path_info {
@@ -301,7 +317,7 @@ struct bgp_static {
 	mpls_label_t label;
 
 	/* EVPN */
-	struct eth_segment_id *eth_s_id;
+	esi_t *eth_s_id;
 	struct ethaddr *router_mac;
 	uint16_t encap_tunneltype;
 	struct prefix gatewayIp;
@@ -681,4 +697,6 @@ extern int bgp_show_table_rd(struct vty *vty, struct bgp *bgp, safi_t safi,
 			     enum bgp_show_type type, void *output_arg,
 			     bool use_json);
 extern int bgp_best_path_select_defer(struct bgp *bgp, afi_t afi, safi_t safi);
+extern int bgp_evpn_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
+			     struct bgp_path_info *exist, int *paths_eq);
 #endif /* _QUAGGA_BGP_ROUTE_H */
