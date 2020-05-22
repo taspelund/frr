@@ -1231,21 +1231,15 @@ static void bgp_evpn_es_vtep_re_eval_active(struct bgp *bgp,
 		/* send remote ES to zebra */
 		bgp_zebra_send_remote_es_vtep(bgp, es_vtep, new_active);
 
-		/* If VTEP becomes active update the NHG first and then
-		 * the exploded routes. If VTEP becomes inactive update
-		 * routes first. This ordering is done to avoid deleting
-		 * the NHG while there are dependent routes against
-		 * it.
+		/* The NHG is updated first for efficient failover handling.
+		 * Note the NHG can be de-activated while there are bgp
+		 * routes referencing it. Zebra is capable of handling that
+		 * elegantly by holding the NHG till all routes using it are
+		 * removed.
 		 */
-		if (new_active) {
-			bgp_evpn_l3nhg_update_on_vtep_chg(es_vtep->es);
-			bgp_evpn_es_path_all_update(es_vtep,
-					true /*active*/);
-		} else {
-			bgp_evpn_es_path_all_update(es_vtep,
-					false /*active*/);
-			bgp_evpn_l3nhg_update_on_vtep_chg(es_vtep->es);
-		}
+		bgp_evpn_l3nhg_update_on_vtep_chg(es_vtep->es);
+		bgp_evpn_es_path_all_update(es_vtep,
+				new_active);
 
 		/* queue up the es for background consistency checks */
 		bgp_evpn_es_cons_checks_pend_add(es_vtep->es);
