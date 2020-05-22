@@ -2531,7 +2531,7 @@ bool bgp_evpn_path_es_use_nhg(struct bgp *bgp_vrf,
 		return true;
 
 	/* this needs to be set the v6NHG if v6route */
-	if (evp->family == AF_INET6)
+	if (is_evpn_prefix_ipaddr_v6(evp))
 		*nhg_p = es_vrf->v6_nhg_id;
 	else
 		*nhg_p = es_vrf->nhg_id;
