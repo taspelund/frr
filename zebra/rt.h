@@ -56,6 +56,9 @@ extern enum zebra_dplane_result kernel_lsp_update(
 
 enum zebra_dplane_result kernel_pw_update(struct zebra_dplane_ctx *ctx);
 
+enum zebra_dplane_result kernel_br_port_update_ctx(
+	struct zebra_dplane_ctx *ctx);
+
 enum zebra_dplane_result kernel_address_update_ctx(
 	struct zebra_dplane_ctx *ctx);
 
@@ -91,6 +94,11 @@ extern void neigh_read_for_vlan(struct zebra_ns *zns, struct interface *ifp);
 extern void neigh_read_specific_ip(struct ipaddr *ip,
 				   struct interface *vlan_if);
 extern void route_read(struct zebra_ns *zns);
+extern int kernel_upd_mac_nh(uint32_t nh_id, struct in_addr vtep_ip);
+extern int kernel_del_mac_nh(uint32_t nh_id);
+extern int kernel_upd_mac_nhg(uint32_t nhg_id, uint32_t nh_cnt,
+		struct nh_grp *nh_ids);
+extern int kernel_del_mac_nhg(uint32_t nhg_id);
 
 #ifdef __cplusplus
 }

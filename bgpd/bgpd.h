@@ -165,6 +165,9 @@ struct bgp_master {
 	/* How big should we set the socket buffer size */
 	uint32_t socket_buffer;
 
+	/* EVPN multihoming */
+	struct bgp_evpn_mh_info *mh_info;
+
 	bool terminating;	/* global flag that sigint terminate seen */
 	QOBJ_FIELDS
 };
@@ -297,6 +300,10 @@ enum bgp_link_bw_handling {
 	/* Do wECMP with default weight for paths not having LB */
 	BGP_LINK_BW_DEFWT_4_MISSING
 };
+
+RB_HEAD(bgp_es_vrf_rb_head, bgp_evpn_es_vrf);
+RB_PROTOTYPE(bgp_es_vrf_rb_head, bgp_evpn_es_vrf, rb_node,
+		bgp_es_vrf_rb_cmp);
 
 /* BGP instance structure.  */
 struct bgp {
@@ -633,6 +640,9 @@ struct bgp {
 	/* SVI associated with the L3-VNI corresponding to this vrf */
 	ifindex_t l3vni_svi_ifindex;
 
+	/* RB tree of ES-VRFs */
+	struct bgp_es_vrf_rb_head es_vrf_rb_tree;
+
 	/* vrf flags */
 	uint32_t vrf_flags;
 #define BGP_VRF_AUTO                        (1 << 0)
@@ -665,9 +675,6 @@ struct bgp {
 	struct vpn_policy vpn_policy[AFI_MAX];
 
 	struct bgp_pbr_config *bgp_pbr_cfg;
-
-	/* local esi hash table */
-	struct hash *esihash;
 
 	/* Count of peers in established state */
 	uint32_t established_peers;

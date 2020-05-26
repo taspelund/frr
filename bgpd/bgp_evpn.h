@@ -77,23 +77,36 @@ static inline int advertise_type5_routes(struct bgp *bgp_vrf,
 }
 
 /* Flag if the route's parent is a EVPN route. */
-static inline int is_route_parent_evpn(struct bgp_path_info *ri)
+static inline struct bgp_path_info *get_route_parent_evpn(
+		struct bgp_path_info *ri)
 {
 	struct bgp_path_info *parent_ri;
-	struct bgp_table *table;
-	struct bgp_node *rn;
 
 	/* If not imported (or doesn't have a parent), bail. */
 	if (ri->sub_type != BGP_ROUTE_IMPORTED ||
 	    !ri->extra ||
 	    !ri->extra->parent)
-		return 0;
+		return NULL;
 
 	/* Determine parent recursively */
 	for (parent_ri = ri->extra->parent;
 	     parent_ri->extra && parent_ri->extra->parent;
 	     parent_ri = parent_ri->extra->parent)
 		;
+
+	return parent_ri;
+}
+
+/* Flag if the route's parent is a EVPN route. */
+static inline int is_route_parent_evpn(struct bgp_path_info *ri)
+{
+	struct bgp_path_info *parent_ri;
+	struct bgp_table *table;
+	struct bgp_node *rn;
+
+	parent_ri = get_route_parent_evpn(ri);
+	if (!parent_ri)
+		return 0;
 
 	/* See if of family L2VPN/EVPN */
 	rn = parent_ri->net;
@@ -176,7 +189,7 @@ extern int bgp_evpn_local_macip_del(struct bgp *bgp, vni_t vni,
 					int state);
 extern int bgp_evpn_local_macip_add(struct bgp *bgp, vni_t vni,
 				    struct ethaddr *mac, struct ipaddr *ip,
-				    uint8_t flags, uint32_t seq);
+				    uint8_t flags, uint32_t seq, esi_t *esi);
 extern int bgp_evpn_local_l3vni_add(vni_t vni, vrf_id_t vrf_id,
 				    struct ethaddr *rmac,
 				    struct ethaddr *vrr_rmac,
@@ -188,10 +201,6 @@ extern int bgp_evpn_local_vni_add(struct bgp *bgp, vni_t vni,
 				  struct in_addr originator_ip,
 				  vrf_id_t tenant_vrf_id,
 				  struct in_addr mcast_grp);
-extern int bgp_evpn_local_es_add(struct bgp *bgp, esi_t *esi,
-				 struct ipaddr *originator_ip);
-extern int bgp_evpn_local_es_del(struct bgp *bgp, esi_t *esi,
-				 struct ipaddr *originator_ip);
 extern void bgp_evpn_flood_control_change(struct bgp *bgp);
 extern void bgp_evpn_cleanup_on_disable(struct bgp *bgp);
 extern void bgp_evpn_cleanup(struct bgp *bgp);

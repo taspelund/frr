@@ -16,6 +16,7 @@ vtysh_scan += \
 	$(top_srcdir)/zebra/zebra_pw.c \
 	$(top_srcdir)/zebra/zebra_routemap.c \
 	$(top_srcdir)/zebra/zebra_vty.c \
+	$(top_srcdir)/zebra/zebra_evpn_mh.c \
 	$(top_srcdir)/zebra/zserv.c \
 	$(top_srcdir)/zebra/zebra_gr.c \
 	# end
@@ -72,6 +73,9 @@ zebra_zebra_SOURCES = \
 	zebra/rtread_sysctl.c \
 	zebra/rule_netlink.c \
 	zebra/rule_socket.c \
+	zebra/zebra_evpn.c \
+	zebra/zebra_evpn_mac.c \
+	zebra/zebra_evpn_neigh.c \
 	zebra/zebra_mlag.c \
 	zebra/zebra_mlag_vty.c \
 	zebra/zebra_l2.c \
@@ -97,6 +101,7 @@ zebra_zebra_SOURCES = \
 	zebra/zebra_vrf.c \
 	zebra/zebra_vty.c \
 	zebra/zebra_vxlan.c \
+	zebra/zebra_evpn_mh.c \
 	zebra/zserv.c \
 	zebra/zebra_netns_id.c \
 	zebra/zebra_netns_notify.c \
@@ -123,6 +128,9 @@ zebra/zebra_routemap.$(OBJEXT): zebra/zebra_routemap_clippy.c
 zebra/rtadv_clippy.c: $(CLIPPY_DEPS)
 zebra/rtadv.$(OBJEXT): zebra/rtadv_clippy.c
 
+zebra/zebra_evpn_mh_clippy.c: $(CLIPPY_DEPS)
+zebra/zebra_evpn_mh.$(OBJEXT): zebra/zebra_evpn_mh_clippy.c
+
 noinst_HEADERS += \
 	zebra/connected.h \
 	zebra/debug.h \
@@ -142,6 +150,10 @@ noinst_HEADERS += \
 	zebra/rt_netlink.h \
 	zebra/rtadv.h \
 	zebra/rule_netlink.h \
+	zebra/zebra_evpn.h \
+	zebra/zebra_evpn_mac.h \
+	zebra/zebra_evpn_neigh.h \
+	zebra/zebra_evpn_vxlan.h \
 	zebra/zebra_mlag.h \
 	zebra/zebra_mlag_vty.h \
 	zebra/zebra_fpm_private.h \
@@ -163,6 +175,7 @@ noinst_HEADERS += \
 	zebra/zebra_vrf.h \
 	zebra/zebra_vxlan.h \
 	zebra/zebra_vxlan_private.h \
+	zebra/zebra_evpn_mh.h \
 	zebra/zserv.h \
 	zebra/zebra_netns_id.h \
 	zebra/zebra_netns_notify.h \

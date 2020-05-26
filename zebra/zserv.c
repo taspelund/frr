@@ -565,6 +565,7 @@ static void zserv_client_free(struct zserv *client)
 	/* Close file descriptor. */
 	if (client->sock) {
 		unsigned long nroutes;
+		unsigned long nnhgs;
 
 		close(client->sock);
 
@@ -574,6 +575,13 @@ static void zserv_client_free(struct zserv *client)
 			zlog_notice(
 				"client %d disconnected %lu %s routes removed from the rib",
 				client->sock, nroutes,
+				zebra_route_string(client->proto));
+
+			/* Not worrying about instance for now */
+			nnhgs = zebra_nhg_score_proto(client->proto);
+			zlog_notice(
+				"client %d disconnected %lu %s nhgs removed from the rib",
+				client->sock, nnhgs,
 				zebra_route_string(client->proto));
 		}
 		client->sock = -1;
@@ -962,6 +970,12 @@ static void zebra_show_client_detail(struct vty *vty, struct zserv *client)
 	vty_out(vty, "L3-VNI delete notifications: %u\n", client->l3vnidel_cnt);
 	vty_out(vty, "MAC-IP add notifications: %u\n", client->macipadd_cnt);
 	vty_out(vty, "MAC-IP delete notifications: %u\n", client->macipdel_cnt);
+	vty_out(vty, "ES add notifications: %u\n", client->local_es_add_cnt);
+	vty_out(vty, "ES delete notifications: %u\n", client->local_es_del_cnt);
+	vty_out(vty, "ES-EVI add notifications: %u\n",
+			client->local_es_evi_add_cnt);
+	vty_out(vty, "ES-EVI delete notifications: %u\n",
+			client->local_es_evi_del_cnt);
 
 	TAILQ_FOREACH (info, &client->gr_info_queue, gr_info) {
 		vty_out(vty, "VRF : %s\n", vrf_id_to_name(info->vrf_id));

@@ -153,6 +153,10 @@ typedef enum {
 	ZEBRA_ADVERTISE_ALL_VNI,
 	ZEBRA_LOCAL_ES_ADD,
 	ZEBRA_LOCAL_ES_DEL,
+	ZEBRA_REMOTE_ES_VTEP_ADD,
+	ZEBRA_REMOTE_ES_VTEP_DEL,
+	ZEBRA_LOCAL_ES_EVI_ADD,
+	ZEBRA_LOCAL_ES_EVI_DEL,
 	ZEBRA_VNI_ADD,
 	ZEBRA_VNI_DEL,
 	ZEBRA_L3VNI_ADD,
@@ -195,6 +199,9 @@ typedef enum {
 	ZEBRA_MLAG_CLIENT_REGISTER,
 	ZEBRA_MLAG_CLIENT_UNREGISTER,
 	ZEBRA_MLAG_FORWARD_MSG,
+	ZEBRA_NHG_ADD,
+	ZEBRA_NHG_DEL,
+	ZEBRA_NHG_NOTIFY_OWNER,
 	ZEBRA_ERROR,
 	ZEBRA_CLIENT_CAPABILITIES
 } zebra_message_types_t;
@@ -311,6 +318,8 @@ struct zclient {
 	int (*fec_update)(int, struct zclient *, uint16_t);
 	int (*local_es_add)(ZAPI_CALLBACK_ARGS);
 	int (*local_es_del)(ZAPI_CALLBACK_ARGS);
+	int (*local_es_evi_add)(ZAPI_CALLBACK_ARGS);
+	int (*local_es_evi_del)(ZAPI_CALLBACK_ARGS);
 	int (*local_vni_add)(ZAPI_CALLBACK_ARGS);
 	int (*local_vni_del)(ZAPI_CALLBACK_ARGS);
 	int (*local_l3vni_add)(ZAPI_CALLBACK_ARGS);
@@ -331,6 +340,7 @@ struct zclient {
 	int (*mlag_process_up)(void);
 	int (*mlag_process_down)(void);
 	int (*mlag_handle_msg)(struct stream *msg, int len);
+	int (*nhg_notify_owner)(ZAPI_CALLBACK_ARGS);
 	int (*handle_error)(enum zebra_error_types error);
 };
 
@@ -343,6 +353,7 @@ struct zclient {
 #define ZAPI_MESSAGE_SRCPFX   0x20
 /* Backup nexthops are present */
 #define ZAPI_MESSAGE_BACKUP_NEXTHOPS 0x40
+#define ZAPI_MESSAGE_NHG      0x80
 
 /*
  * This should only be used by a DAEMON that needs to communicate
@@ -462,6 +473,8 @@ struct zapi_route {
 	uint16_t backup_nexthop_num;
 	struct zapi_nexthop backup_nexthops[MULTIPATH_NUM];
 
+	uint32_t nhgid;
+
 	uint8_t distance;
 
 	uint32_t metric;
@@ -515,6 +528,13 @@ enum zapi_route_notify_owner {
 	ZAPI_ROUTE_INSTALLED,
 	ZAPI_ROUTE_REMOVED,
 	ZAPI_ROUTE_REMOVE_FAIL,
+};
+
+enum zapi_nhg_notify_owner {
+	ZAPI_NHG_FAIL_INSTALL,
+	ZAPI_NHG_INSTALLED,
+	ZAPI_NHG_REMOVED,
+	ZAPI_NHG_REMOVE_FAIL,
 };
 
 enum zapi_rule_notify_owner {
@@ -581,6 +601,17 @@ zapi_rule_notify_owner2str(enum zapi_rule_notify_owner note)
 #define ZEBRA_MACIP_TYPE_ROUTER_FLAG           0x04 /* Router Flag - proxy NA */
 #define ZEBRA_MACIP_TYPE_OVERRIDE_FLAG         0x08 /* Override Flag */
 #define ZEBRA_MACIP_TYPE_SVI_IP                0x10 /* SVI MAC-IP */
+#define ZEBRA_MACIP_TYPE_PROXY_ADVERT          0x20 /* Not locally active */
+#define ZEBRA_MACIP_TYPE_SYNC_PATH             0x40 /* sync path */
+/* XXX - flags is an u8; that needs to be changed to u32 if you need
+ * to allocate past 0x80
+ */
+
+/* Zebra ES VTEP flags (ZEBRA_REMOTE_ES_VTEP_ADD) */
+/* ESR has been rxed from the VTEP. Only VTEPs that have advertised the
+ * Type-4 route can participate in DF election.
+ */
+#define ZAPI_ES_VTEP_FLAG_ESR_RXED (1 << 0)
 
 enum zebra_neigh_state { ZEBRA_NEIGH_INACTIVE = 0, ZEBRA_NEIGH_ACTIVE = 1 };
 
@@ -590,6 +621,22 @@ struct zclient_options {
 };
 
 extern struct zclient_options zclient_options_default;
+
+/*
+ * We reserve the top 4 bits for l2-NHG, everything else
+ * is for zebra/proto l3-NHG.
+ *
+ * Each client is going to get it's own nexthop group space
+ * and we'll separate them, we'll figure out where to start based upon
+ * the route_types.h
+ */
+#define ZEBRA_NHG_PROTO_UPPER                                                  \
+	((uint32_t)250000000) /* Bottom 28 bits then rounded down */
+#define ZEBRA_NHG_PROTO_SPACING (ZEBRA_NHG_PROTO_UPPER / ZEBRA_ROUTE_MAX)
+#define ZEBRA_NHG_PROTO_LOWER                                                  \
+	(ZEBRA_NHG_PROTO_SPACING * (ZEBRA_ROUTE_CONNECT + 1))
+
+extern uint32_t zclient_get_nhg_start(uint32_t proto);
 
 extern struct zclient *zclient_new(struct thread_master *m,
 				   struct zclient_options *opt);
@@ -762,7 +809,11 @@ extern int zclient_send_rnh(struct zclient *zclient, int command,
 int zapi_nexthop_encode(struct stream *s, const struct zapi_nexthop *api_nh,
 			uint32_t api_flags);
 extern int zapi_route_encode(uint8_t, struct stream *, struct zapi_route *);
-extern int zapi_route_decode(struct stream *, struct zapi_route *);
+extern int zapi_route_decode(struct stream *s, struct zapi_route *api);
+extern int zapi_nexthop_decode(struct stream *s, struct zapi_nexthop *api_nh,
+			       uint32_t api_flags);
+bool zapi_nhg_notify_decode(struct stream *s, uint32_t *id,
+			    enum zapi_nhg_notify_owner *note);
 bool zapi_route_notify_decode(struct stream *s, struct prefix *p,
 			      uint32_t *tableid,
 			      enum zapi_route_notify_owner *note);
@@ -773,6 +824,11 @@ bool zapi_rule_notify_decode(struct stream *s, uint32_t *seqno,
 bool zapi_ipset_notify_decode(struct stream *s,
 			      uint32_t *unique,
 			     enum zapi_ipset_notify_owner *note);
+
+extern void zclient_nhg_add(struct zclient *zclient,
+			    uint32_t id, size_t nhops,
+			    struct zapi_nexthop *znh);
+extern void zclient_nhg_del(struct zclient *zclient, uint32_t id);
 
 #define ZEBRA_IPSET_NAME_SIZE   32
 
