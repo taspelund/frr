@@ -93,6 +93,7 @@ func_frr()
     exec_cmd $jexec evpn vtysh -c "show evpn $json"
     exec_cmd $jexec evpn.es.detail vtysh -c "show evpn es detail $json"
     exec_cmd $jexec evpn.es_evi.detail vtysh -c "show evpn es-evi detail $json"
+    exec_cmd $jexec evpn.l2_nh vtysh -c "show evpn l2-nh $json"
     exec_cmd evpn.mac.vni vtysh -c "show evpn mac vni all"
     exec_cmd evpn.arp_cache.vni vtysh -c "show evpn arp-cache vni all"
     exec_cmd $jexec evpn.rmac.vni vtysh -c "show evpn rmac vni all $json"
