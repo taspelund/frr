@@ -1,10 +1,7 @@
 [Unit]
 Description=FRRouting
 Documentation=https://frrouting.readthedocs.io/en/latest/setup.html
-Wants=network.target
-After=network-pre.target systemd-sysctl.service
-Before=network.target
-OnFailure=heartbeat-failed@%n.service
+After=networking.service
 
 [Service]
 Nice=-5
@@ -17,13 +14,10 @@ WatchdogSec=60s
 RestartSec=5
 Restart=on-abnormal
 LimitNOFILE=1024
-LimitAS=infinity
-LimitDATA=infinity
-Environment=ASAN_OPTIONS=detect_leaks=0
 ExecStart=/usr/lib/frr/frrinit.sh start
 ExecStop=/usr/lib/frr/frrinit.sh stop
 ExecStopPost=/usr/lib/cumulus/on-failure-run-support %N
 ExecReload=/usr/lib/frr/frrinit.sh reload
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=network-online.target
