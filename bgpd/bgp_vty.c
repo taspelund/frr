@@ -17779,8 +17779,7 @@ DEFUN (extcommunity_list_standard,
 	argv_find(argv, argc, "WORD", &idx);
 	cl_number_or_name = argv[idx]->arg;
 
-	argv_find(argv, argc, "(1-4294967295)", &idx);
-	if (idx)
+	if (argv_find(argv, argc, "(1-4294967295)", &idx))
 		seq = argv[idx]->arg;
 
 	direct = argv_find(argv, argc, "permit", &idx) ? COMMUNITY_PERMIT
@@ -17846,8 +17845,7 @@ DEFUN (extcommunity_list_name_expanded,
 	argv_find(argv, argc, "WORD", &idx);
 	cl_number_or_name = argv[idx]->arg;
 
-	argv_find(argv, argc, "(1-4294967295)", &idx);
-	if (idx)
+	if (argv_find(argv, argc, "(1-4294967295)", &idx))
 		seq = argv[idx]->arg;
 
 	direct = argv_find(argv, argc, "permit", &idx) ? COMMUNITY_PERMIT
@@ -17909,8 +17907,7 @@ DEFUN (no_extcommunity_list_standard_all,
 		zlog_warn("Deprecated option: ‘no ip extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>' being used");
 	}
 
-	argv_find(argv, argc, "(1-4294967295)", &idx);
-	if (idx)
+	if(argv_find(argv, argc, "(1-4294967295)", &idx))
 		seq = argv[idx]->arg;
 
 	idx = 0;
@@ -18004,8 +18001,7 @@ DEFUN (no_extcommunity_list_expanded_all,
 		zlog_warn("Deprecated option: ‘no ip extcommunity-list <(1-99)|(100-500)|standard|expanded> <deny|permit> <LINE|AA:NN>' being used");
 	}
 
-	argv_find(argv, argc, "(1-4294967295)", &idx);
-	if (idx)
+	if (argv_find(argv, argc, "(1-4294967295)", &idx))
 		seq = argv[idx]->arg;
 
 	idx = 0;
