@@ -2516,6 +2516,9 @@ static void peer_group2peer_config_copy(struct peer_group *group,
 		}
 	}
 
+	/* Update GR flags for the peer. */
+	bgp_peer_gr_flags_update(peer);
+
 	bgp_bfd_peer_group2peer_copy(conf, peer);
 }
 
