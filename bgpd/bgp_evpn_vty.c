@@ -351,7 +351,7 @@ static void bgp_evpn_show_route_header(struct vty *vty, struct bgp *bgp,
 		"* valid, > best, i - internal\n");
 	vty_out(vty, "Origin codes: i - IGP, e - EGP, ? - incomplete\n");
 	vty_out(vty,
-		"EVPN type-1 prefix: [4]:[ESI]:[EthTag]:[IPlen]:[VTEP-IP]\n");
+		"EVPN type-1 prefix: [1]:[ESI]:[EthTag]:[IPlen]:[VTEP-IP]\n");
 	vty_out(vty,
 		"EVPN type-2 prefix: [2]:[EthTag]:[MAClen]:[MAC]:[IPlen]:[IP]\n");
 	vty_out(vty, "EVPN type-3 prefix: [3]:[EthTag]:[IPlen]:[OrigIP]\n");
