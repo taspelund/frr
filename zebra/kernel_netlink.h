@@ -32,6 +32,9 @@ extern "C" {
 
 extern void netlink_parse_rtattr(struct rtattr **tb, int max,
 				 struct rtattr *rta, int len);
+extern void netlink_parse_rtattr_flags(struct rtattr **tb, int max,
+				 struct rtattr *rta, int len,
+				 unsigned short flags);
 extern void netlink_parse_rtattr_nested(struct rtattr **tb, int max,
 					struct rtattr *rta);
 extern int addattr_l(struct nlmsghdr *n, unsigned int maxlen, int type,
