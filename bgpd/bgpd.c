@@ -2676,7 +2676,7 @@ int peer_group_listen_range_add(struct peer_group *group, struct prefix *range)
 
 	/* Update passwords for new ranges */
 	if (group->conf->password)
-		bgp_md5_set_prefix(prefix, group->conf->password);
+		bgp_md5_set_prefix(group->bgp, prefix, group->conf->password);
 
 	return 0;
 }
@@ -2724,7 +2724,7 @@ int peer_group_listen_range_del(struct peer_group *group, struct prefix *range)
 
 	/* Remove passwords for deleted ranges */
 	if (group->conf->password)
-		bgp_md5_unset_prefix(prefix);
+		bgp_md5_unset_prefix(group->bgp, prefix);
 
 	return 0;
 }
@@ -5574,9 +5574,9 @@ int peer_password_set(struct peer *peer, const char *password)
 	struct prefix *lr;
 
 	for (ALL_LIST_ELEMENTS_RO(peer->group->listen_range[AFI_IP], ln, lr))
-		bgp_md5_set_prefix(lr, password);
+		bgp_md5_set_prefix(peer->bgp, lr, password);
 	for (ALL_LIST_ELEMENTS_RO(peer->group->listen_range[AFI_IP6], ln, lr))
-		bgp_md5_set_prefix(lr, password);
+		bgp_md5_set_prefix(peer->bgp, lr, password);
 
 	return ret;
 }
@@ -5612,7 +5612,6 @@ int peer_password_unset(struct peer *peer)
 		/* Attempt to uninstall password on socket. */
 		if (!BGP_PEER_SU_UNSPEC(peer))
 			bgp_md5_unset(peer);
-
 		/* Skip peer-group mechanics for regular peers. */
 		return 0;
 	}
@@ -5647,9 +5646,9 @@ int peer_password_unset(struct peer *peer)
 	struct prefix *lr;
 
 	for (ALL_LIST_ELEMENTS_RO(peer->group->listen_range[AFI_IP], ln, lr))
-		bgp_md5_unset_prefix(lr);
+		bgp_md5_unset_prefix(peer->bgp, lr);
 	for (ALL_LIST_ELEMENTS_RO(peer->group->listen_range[AFI_IP6], ln, lr))
-		bgp_md5_unset_prefix(lr);
+		bgp_md5_unset_prefix(peer->bgp, lr);
 
 	return 0;
 }
