@@ -104,6 +104,17 @@ struct nhg_hash_entry {
  * another group.
  */
 #define NEXTHOP_GROUP_BACKUP (1 << 4)
+
+/*
+ * The NHG has been release by an upper level protocol via the
+ * `zebra_nhg_proto_del()` API.
+ *
+ * We use this flag to track this state in case the NHG is still being used
+ * by routes therefore holding their refcnts as well. Otherwise, the NHG will
+ * be removed and uninstalled.
+ *
+ */
+#define NEXTHOP_GROUP_PROTO_RELEASED (1 << 5)
 };
 
 /* Upper 4 bits of the NHG are reserved for indicating the NHG type */
