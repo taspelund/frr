@@ -3690,12 +3690,12 @@ static int netlink_neigh_update_ctx(const struct zebra_dplane_ctx *ctx,
 		char buf2[ETHER_ADDR_STRLEN];
 
 		zlog_debug(
-			"Tx %s family %s IF %s(%u) Neigh %s MAC %s flags 0x%x state 0x%x",
+			"Tx %s family %s IF %s(%u) Neigh %s MAC %s flags 0x%x state 0x%x %sext_flags 0x%x",
 			nl_msg_type_to_str(cmd), nl_family_to_str(family),
 			dplane_ctx_get_ifname(ctx), dplane_ctx_get_ifindex(ctx),
 			ipaddr2str(ip, buf, sizeof(buf)),
 			mac ? prefix_mac2str(mac, buf2, sizeof(buf2)) : "null",
-			flags, state);
+			flags, state, ext ? "ext ":"", ext_flags);
 	}
 
 	netlink_update_neigh_ctx_internal(
