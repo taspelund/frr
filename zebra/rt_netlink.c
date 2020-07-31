@@ -3677,6 +3677,7 @@ static int netlink_neigh_update_ctx(const struct zebra_dplane_ctx *ctx,
 		if (update_flags & DPLANE_NEIGH_SET_STATIC)
 			ext_flags |= NTF_E_MH_PEER_SYNC;
 
+#if 0
 		/* the ndm_state set for local entries can be REACHABLE or
 		 * STALE. if the dataplane has already establish reachability
 		 * (in the meantime) FRR must not over-write it with STALE.
@@ -3684,6 +3685,7 @@ static int netlink_neigh_update_ctx(const struct zebra_dplane_ctx *ctx,
 		 * WEAK_OVERRIDE_STATE
 		 */
 		ext_flags |= NTF_E_WEAK_OVERRIDE_STATE;
+#endif
 	}
 	if (IS_ZEBRA_DEBUG_KERNEL) {
 		char buf[INET6_ADDRSTRLEN];
