@@ -709,6 +709,20 @@ static void netlink_proc_dplane_if_protodown(struct zebra_if *zif,
 	}
 }
 
+static uint8_t netlink_parse_lacp_bypass(struct rtattr **linkinfo)
+{
+	uint8_t bypass = 0;
+	struct rtattr *mbrinfo[IFLA_BOND_SLAVE_MAX + 1];
+
+	parse_rtattr_nested(mbrinfo, IFLA_BOND_SLAVE_MAX,
+			    linkinfo[IFLA_INFO_SLAVE_DATA]);
+	if (mbrinfo[IFLA_BOND_SLAVE_AD_RX_BYPASS])
+		bypass = *(uint8_t *)RTA_DATA(
+			mbrinfo[IFLA_BOND_SLAVE_AD_RX_BYPASS]);
+
+	return bypass;
+}
+
 /*
  * Called from interface_lookup_netlink().  This function is only used
  * during bootstrap.
@@ -732,6 +746,7 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	ifindex_t link_ifindex = IFINDEX_INTERNAL;
 	ifindex_t bond_ifindex = IFINDEX_INTERNAL;
 	struct zebra_if *zif;
+	uint8_t bypass = 0;
 
 	zns = zebra_ns_lookup(ns_id);
 	ifi = NLMSG_DATA(h);
@@ -805,6 +820,7 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 		} else if (slave_kind && (strcmp(slave_kind, "bond") == 0)) {
 			zif_slave_type = ZEBRA_IF_SLAVE_BOND;
 			bond_ifindex = *(ifindex_t *)RTA_DATA(tb[IFLA_MASTER]);
+			bypass = netlink_parse_lacp_bypass(linkinfo);
 		} else
 			zif_slave_type = ZEBRA_IF_SLAVE_OTHER;
 	}
@@ -865,7 +881,7 @@ static int netlink_interface(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	if (IS_ZEBRA_IF_BRIDGE_SLAVE(ifp))
 		zebra_l2if_update_bridge_slave(ifp, bridge_ifindex);
 	else if (IS_ZEBRA_IF_BOND_SLAVE(ifp))
-		zebra_l2if_update_bond_slave(ifp, bond_ifindex);
+		zebra_l2if_update_bond_slave(ifp, bond_ifindex, bypass);
 
 	if (tb[IFLA_PROTO_DOWN]) {
 		uint8_t protodown;
@@ -1288,6 +1304,7 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 	uint8_t old_hw_addr[INTERFACE_HWADDR_MAX];
 	struct zebra_if *zif;
 	ifindex_t master_infindex = IFINDEX_INTERNAL;
+	uint8_t bypass = 0;
 
 	zns = zebra_ns_lookup(ns_id);
 	ifi = NLMSG_DATA(h);
@@ -1385,6 +1402,7 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 				zif_slave_type = ZEBRA_IF_SLAVE_BOND;
 				master_infindex = bond_ifindex =
 					*(ifindex_t *)RTA_DATA(tb[IFLA_MASTER]);
+				bypass = netlink_parse_lacp_bypass(linkinfo);
 			} else
 				zif_slave_type = ZEBRA_IF_SLAVE_OTHER;
 		}
@@ -1445,7 +1463,8 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 				zebra_l2if_update_bridge_slave(ifp,
 							       bridge_ifindex);
 			else if (IS_ZEBRA_IF_BOND_SLAVE(ifp))
-				zebra_l2if_update_bond_slave(ifp, bond_ifindex);
+				zebra_l2if_update_bond_slave(ifp, bond_ifindex,
+							     bypass);
 
 			if (tb[IFLA_PROTO_DOWN]) {
 				uint8_t protodown;
@@ -1571,8 +1590,8 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 				zebra_l2if_update_bridge_slave(ifp,
 							       bridge_ifindex);
 			else if (IS_ZEBRA_IF_BOND_SLAVE(ifp) || was_bond_slave)
-				zebra_l2if_update_bond_slave(ifp, bond_ifindex);
-
+				zebra_l2if_update_bond_slave(ifp, bond_ifindex,
+							     bypass);
 		}
 
 		zif = ifp->info;
@@ -1600,7 +1619,7 @@ int netlink_link_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 		if (IS_ZEBRA_IF_BOND(ifp))
 			zebra_l2if_update_bond(ifp, false);
 		if (IS_ZEBRA_IF_BOND_SLAVE(ifp))
-			zebra_l2if_update_bond_slave(ifp, bond_ifindex);
+			zebra_l2if_update_bond_slave(ifp, bond_ifindex, false);
 		/* Special handling for bridge or VxLAN interfaces. */
 		if (IS_ZEBRA_IF_BRIDGE(ifp))
 			zebra_l2_bridge_del(ifp);

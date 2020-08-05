@@ -551,6 +551,8 @@ void zebra_evpn_print_mac(zebra_mac_t *mac, void *ctxt, json_object *json)
 			json_object_boolean_true_add(json_mac, "peerProxy");
 		if (CHECK_FLAG(mac->flags, ZEBRA_MAC_ES_PEER_ACTIVE))
 			json_object_boolean_true_add(json_mac, "peerActive");
+		if (CHECK_FLAG(mac->flags, ZEBRA_MAC_ES_BYPASS))
+			json_object_boolean_true_add(json_mac, "bypass");
 		if (mac->hold_timer)
 			json_object_string_add(
 				json_mac, "peerActiveHold",
@@ -630,6 +632,9 @@ void zebra_evpn_print_mac(zebra_mac_t *mac, void *ctxt, json_object *json)
 		if (CHECK_FLAG(mac->flags, ZEBRA_MAC_REMOTE_DEF_GW))
 			vty_out(vty, " Remote-gateway Mac ");
 
+		if (CHECK_FLAG(mac->flags, ZEBRA_MAC_ES_BYPASS))
+			vty_out(vty, " Bypass");
+
 		vty_out(vty, "\n");
 		vty_out(vty, " Sync-info: neigh#: %u", mac->sync_neigh_cnt);
 		if (CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL_INACTIVE))
@@ -684,10 +689,11 @@ void zebra_evpn_print_mac(zebra_mac_t *mac, void *ctxt, json_object *json)
 
 static char *zebra_evpn_print_mac_flags(zebra_mac_t *mac, char *flags_buf)
 {
-	sprintf(flags_buf, "%s%s%s%s", mac->sync_neigh_cnt ? "N" : "",
+	sprintf(flags_buf, "%s%s%s%s%s", mac->sync_neigh_cnt ? "N" : "",
 		(mac->flags & ZEBRA_MAC_ES_PEER_ACTIVE) ? "P" : "",
 		(mac->flags & ZEBRA_MAC_ES_PEER_PROXY) ? "X" : "",
-		(mac->flags & ZEBRA_MAC_LOCAL_INACTIVE) ? "I" : "");
+		(mac->flags & ZEBRA_MAC_LOCAL_INACTIVE) ? "I" : "",
+		(mac->flags & ZEBRA_MAC_ES_BYPASS) ? "B" : "");
 
 	return flags_buf;
 }
@@ -749,6 +755,9 @@ void zebra_evpn_print_mac_hash(struct hash_bucket *bucket, void *ctxt)
 					    mac->rem_seq);
 			json_object_int_add(json_mac, "detectionCount",
 					    mac->dad_count);
+			if (CHECK_FLAG(mac->flags, ZEBRA_MAC_ES_BYPASS))
+				json_object_boolean_true_add(json_mac,
+							     "bypass");
 			if (CHECK_FLAG(mac->flags, ZEBRA_MAC_DUPLICATE))
 				json_object_boolean_true_add(json_mac,
 							     "isDuplicate");
@@ -1145,9 +1154,9 @@ int zebra_evpn_mac_send_add_to_client(vni_t vni, struct ethaddr *macaddr,
 	if (CHECK_FLAG(mac_flags, ZEBRA_MAC_DEF_GW))
 		SET_FLAG(flags, ZEBRA_MACIP_TYPE_GW);
 
-	return zebra_evpn_macip_send_msg_to_client(vni, macaddr, NULL, flags,
-						   seq, ZEBRA_NEIGH_ACTIVE, es,
-						   ZEBRA_MACIP_ADD);
+	return zebra_evpn_macip_send_msg_to_client(
+		vni, macaddr, NULL, flags, seq, ZEBRA_NEIGH_ACTIVE,
+		(mac_flags & ZEBRA_MAC_ES_BYPASS) ? NULL : es, ZEBRA_MACIP_ADD);
 }
 
 /*
@@ -1923,13 +1932,40 @@ int process_mac_remote_macip_add(zebra_evpn_t *zevpn, struct zebra_vrf *zvrf,
 	return 0;
 }
 
+/* When an ES changes to LACP bypass state (and viceversa) we need
+ * to re-advertise MACs with the right ESI (zero if bypass and
+ * non-zero if otherwise) this is done by internally triggering
+ * a local station move
+ */
+void zebra_evpn_add_update_local_mac_entry(zebra_mac_t *mac)
+{
+	struct zebra_vrf *zvrf;
+	struct interface *old_ifp;
+	vlanid_t old_vid;
+	bool old_static;
+	bool old_sticky;
+	bool old_local_inactive;
+
+	zvrf = zebra_vrf_get_evpn();
+	if (!zvrf)
+		return;
+
+	zebra_evpn_mac_get_access_info(mac, &old_ifp, &old_vid);
+	old_static = zebra_evpn_mac_is_static(mac);
+	old_sticky = !!(mac->flags & ZEBRA_MAC_STICKY);
+	old_local_inactive = !!(mac->flags & ZEBRA_MAC_LOCAL_INACTIVE);
+
+	zebra_evpn_add_update_local_mac(zvrf, mac->zevpn, old_ifp,
+					&mac->macaddr, old_vid, old_sticky,
+					old_local_inactive, old_static, mac);
+}
+
 int zebra_evpn_add_update_local_mac(struct zebra_vrf *zvrf, zebra_evpn_t *zevpn,
 				    struct interface *ifp,
 				    struct ethaddr *macaddr, vlanid_t vid,
 				    bool sticky, bool local_inactive,
-				    bool dp_static)
+				    bool dp_static, zebra_mac_t *mac)
 {
-	zebra_mac_t *mac;
 	char buf[ETHER_ADDR_STRLEN];
 	bool mac_sticky = false;
 	bool inform_client = false;
@@ -1945,7 +1981,8 @@ int zebra_evpn_add_update_local_mac(struct zebra_vrf *zvrf, zebra_evpn_t *zevpn,
 	bool new_static = false;
 
 	/* Check if we need to create or update or it is a NO-OP. */
-	mac = zebra_evpn_mac_lookup(zevpn, macaddr);
+	if (!mac)
+		mac = zebra_evpn_mac_lookup(zevpn, macaddr);
 	if (!mac) {
 		if (IS_ZEBRA_DEBUG_VXLAN || IS_ZEBRA_DEBUG_EVPN_MH_MAC)
 			zlog_debug(
@@ -1992,6 +2029,8 @@ int zebra_evpn_add_update_local_mac(struct zebra_vrf *zvrf, zebra_evpn_t *zevpn,
 			old_static = zebra_evpn_mac_is_static(mac);
 			if (CHECK_FLAG(mac->flags, ZEBRA_MAC_STICKY))
 				mac_sticky = true;
+			es_change = zebra_evpn_local_mac_update_fwd_info(
+				mac, ifp, vid);
 
 			/*
 			 * Update any changes and if changes are relevant to
@@ -2000,7 +2039,7 @@ int zebra_evpn_add_update_local_mac(struct zebra_vrf *zvrf, zebra_evpn_t *zevpn,
 			if (mac_sticky == sticky && old_ifp == ifp
 			    && old_vid == vid
 			    && old_local_inactive == local_inactive
-			    && dp_static == old_static) {
+			    && dp_static == old_static && !es_change) {
 				if (IS_ZEBRA_DEBUG_VXLAN)
 					zlog_debug(
 						"        Add/Update %sMAC %s intf %s(%u) VID %u -> VNI %u%s, "
@@ -2024,8 +2063,6 @@ int zebra_evpn_add_update_local_mac(struct zebra_vrf *zvrf, zebra_evpn_t *zevpn,
 				inform_client = true;
 			}
 
-			es_change = zebra_evpn_local_mac_update_fwd_info(
-				mac, ifp, vid);
 			/* If an es_change is detected we need to advertise
 			 * the route with a sequence that is one
 			 * greater. This is need to indicate a mac-move
