@@ -1455,6 +1455,9 @@ int zebra_evpn_local_neigh_update(zebra_evpn_t *zevpn, struct interface *ifp,
 				new_bgp_ready =
 					zebra_evpn_neigh_is_ready_for_bgp(n);
 
+				if (dp_static != new_static)
+					inform_dataplane = true;
+
 				/* Neigh is in freeze state and freeze action
 				 * is enabled, do not send update to client.
 				 */
@@ -1468,6 +1471,12 @@ int zebra_evpn_local_neigh_update(zebra_evpn_t *zevpn, struct interface *ifp,
 					"local", n, is_router, local_inactive,
 					old_bgp_ready, new_bgp_ready, false,
 					false, "flag-update");
+
+				if (inform_dataplane)
+					zebra_evpn_sync_neigh_dp_install(
+						n, false /* set_inactive */,
+						false /* force_clear_static */,
+						__func__);
 
 				/* if the neigh can no longer be advertised
 				 * remove it from bgp
@@ -1580,15 +1589,11 @@ int zebra_evpn_local_neigh_update(zebra_evpn_t *zevpn, struct interface *ifp,
 	else
 		UNSET_FLAG(n->flags, ZEBRA_NEIGH_ROUTER_FLAG);
 
-	/* if the dataplane thinks that this is a sync entry but
-	 * zebra doesn't we need to re-concile the diff
-	 * by re-installing the dataplane entry
-	 */
-	if (dp_static) {
-		new_static = zebra_evpn_neigh_is_static(n);
-		if (!new_static)
-			inform_dataplane = true;
-	}
+	/* if zebra and dataplane don't agree this is a sync entry
+	 * re-install in the dataplane */
+	new_static = zebra_evpn_neigh_is_static(n);
+	if (dp_static != new_static)
+		inform_dataplane = true;
 
 	/* Check old and/or new MAC detected as duplicate mark
 	 * the neigh as duplicate
