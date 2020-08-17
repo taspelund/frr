@@ -8823,7 +8823,17 @@ void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
 						(struct prefix_evpn *)
 							bgp_node_get_prefix(rn),
 						buf2, sizeof(buf2));
-					vty_out(vty, "  Imported from %s:%s, VNI %s\n", buf1, buf2, tag_buf);
+					vty_out(vty,
+						"  Imported from %s:%s, VNI %s",
+						buf1, buf2, tag_buf);
+					if (attr->es_flags & ATTR_ES_L3_NHG)
+						vty_out(vty, ", L3NHG %s",
+							(attr->es_flags
+							 & ATTR_ES_L3_NHG_ACTIVE)
+								? "active"
+								: "inactive");
+					vty_out(vty, "\n");
+
 				} else
 					vty_out(vty, "  Imported from %s:%s\n", buf1, buf2);
 			}
