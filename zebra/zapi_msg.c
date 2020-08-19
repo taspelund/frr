@@ -1975,6 +1975,15 @@ static void zread_route_del(ZAPI_HANDLER_ARGS)
 	else
 		table_id = zvrf->table_id;
 
+	if (IS_ZEBRA_DEBUG_RECV) {
+		char buf_prefix[PREFIX_STRLEN];
+
+		prefix2str(&api.prefix, buf_prefix, sizeof(buf_prefix));
+		zlog_debug("%s: p=(%u:%u)%s, msg flags=0x%x, flags=0x%x",
+			   __func__, zvrf_id(zvrf), table_id, buf_prefix,
+			   (int)api.message, api.flags);
+	}
+
 	rib_delete(afi, api.safi, zvrf_id(zvrf), api.type, api.instance,
 		   api.flags, &api.prefix, src_p, NULL, 0, table_id, api.metric,
 		   api.distance, false);
