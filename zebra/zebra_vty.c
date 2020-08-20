@@ -55,6 +55,7 @@
 #include "zebra/zebra_pbr.h"
 #include "zebra/zebra_nhg.h"
 #include "zebra/zebra_evpn_mh.h"
+#include "zebra/zebra_evpn_arp_nd.h"
 #include "zebra/interface.h"
 
 extern int allow_delete;
@@ -2450,6 +2451,20 @@ DEFUN (show_evpn_global,
 	return CMD_SUCCESS;
 }
 
+DEFUN (show_evpn_arp_redirect,
+       show_evpn_arp_nd_redirect_cmd,
+       "show evpn arp-nd-redirect[json]",
+       SHOW_STR
+       "EVPN\n"
+       "ARP/NA packet redirect\n"
+       JSON_STR)
+{
+	bool uj = use_json(argc, argv);
+
+	zebra_evpn_arp_nd_print_summary(vty, uj);
+	return CMD_SUCCESS;
+}
+
 DEFPY(show_evpn_l2_nh,
       show_evpn_l2_nh_cmd,
       "show evpn l2-nh [json$json]",
@@ -3727,6 +3742,7 @@ void zebra_vty_init(void)
 
 	install_element(VIEW_NODE, &show_frr_cmd);
 	install_element(VIEW_NODE, &show_evpn_global_cmd);
+	install_element(VIEW_NODE, &show_evpn_arp_nd_redirect_cmd);
 	install_element(VIEW_NODE, &show_evpn_vni_cmd);
 	install_element(VIEW_NODE, &show_evpn_vni_detail_cmd);
 	install_element(VIEW_NODE, &show_evpn_vni_vni_cmd);

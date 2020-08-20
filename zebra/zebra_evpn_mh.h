@@ -348,5 +348,6 @@ extern void zebra_evpn_mh_print(struct vty *vty);
 extern void zebra_evpn_mh_json(json_object *json);
 extern void zebra_evpn_l2_nh_show(struct vty *vty, bool uj);
 extern void zebra_evpn_es_bypass_update(struct zebra_evpn_es *es, bool bypass);
+extern struct zebra_evpn_access_bd *zebra_evpn_acc_vl_find(vlanid_t vid);
 
 #endif /* _ZEBRA_EVPN_MH_H */

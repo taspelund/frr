@@ -50,6 +50,7 @@
 #include "zebra/zebra_vxlan_private.h"
 #include "zebra/zebra_router.h"
 #include "zebra/zebra_evpn_mh.h"
+#include "zebra/zebra_evpn_arp_nd.h"
 #include "zebra/zebra_nhg.h"
 
 DEFINE_MTYPE_STATIC(ZEBRA, ZACC_BD, "Access Broadcast Domain");
@@ -503,7 +504,7 @@ static bool zebra_evpn_acc_vl_cmp(const void *p1, const void *p2)
 }
 
 /* Lookup VLAN based broadcast domain */
-static struct zebra_evpn_access_bd *zebra_evpn_acc_vl_find(vlanid_t vid)
+struct zebra_evpn_access_bd *zebra_evpn_acc_vl_find(vlanid_t vid)
 {
 	struct zebra_evpn_access_bd *acc_bd;
 	struct zebra_evpn_access_bd tmp;
@@ -1980,6 +1981,17 @@ static int zebra_evpn_es_df_delay_exp_cb(struct thread *t)
 	return 0;
 }
 
+/* currently there is no global config to turn on MH instead we use
+ * the addition of the first local Ethernet Segment as the trigger to
+ * init MH specific processing
+ */
+static void zebra_evpn_mh_on_first_local_es(void)
+{
+	zebra_evpn_mh_dup_addr_detect_off();
+	zebra_evpn_mh_advertise_reach_neigh_only();
+	zebra_evpn_arp_nd_failover_enable();
+}
+
 static void zebra_evpn_es_local_info_set(struct zebra_evpn_es *es,
 		struct zebra_if *zif)
 {
@@ -1990,8 +2002,7 @@ static void zebra_evpn_es_local_info_set(struct zebra_evpn_es *es,
 		zlog_debug("local es %s add; nhg %u if %s",
 				es->esi_str, es->nhg_id, zif->ifp->name);
 
-	zebra_evpn_mh_dup_addr_detect_off();
-	zebra_evpn_mh_advertise_reach_neigh_only();
+	zebra_evpn_mh_on_first_local_es();
 
 	es->flags |= ZEBRA_EVPNES_LOCAL;
 	listnode_init(&es->local_es_listnode, es);
@@ -3290,6 +3301,8 @@ void zebra_evpn_es_set_base_evpn(zebra_evpn_t *zevpn)
 			zebra_evpn_es_re_eval_send_to_client(es,
 					true /* es_evi_re_reval */);
 	}
+
+	zebra_evpn_arp_nd_udp_sock_create();
 }
 
 /* called when a vni is removed or becomes oper down or is removed from a
