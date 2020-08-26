@@ -3806,6 +3806,26 @@ DEFPY (bgp_evpn_use_es_l3nhg,
 	return CMD_SUCCESS;
 }
 
+DEFPY (bgp_evpn_ead_evi_rx,
+       bgp_evpn_ead_evi_rx_cmd,
+       "[no$no] ead-evi-rx",
+       NO_STR
+       "Activate PE only if EAD-EVI and EAD-ES are received\n")
+{
+	bgp_mh_info->ead_evi_rx = no? false :true;
+	return CMD_SUCCESS;
+}
+
+DEFPY (bgp_evpn_ead_evi_tx,
+       bgp_evpn_ead_evi_tx_cmd,
+       "[no$no] ead-evi-tx",
+       NO_STR
+       "Advertise EAD-EVI for local ESs\n")
+{
+	bgp_mh_info->ead_evi_tx = no? false :true;
+	return CMD_SUCCESS;
+}
+
 DEFPY (bgp_evpn_advertise_pip_ip_mac,
        bgp_evpn_advertise_pip_ip_mac_cmd,
        "[no$no] advertise-pip [ip <A.B.C.D> [mac <X:X:X:X:X:X|X:X:X:X:X:X/M>]]",
@@ -5878,6 +5898,20 @@ void bgp_config_write_evpn_info(struct vty *vty, struct bgp *bgp, afi_t afi,
 			vty_out(vty, "  no use-es-l3nhg\n");
 	}
 
+	if (bgp_mh_info->ead_evi_rx != BGP_EVPN_MH_EAD_EVI_RX_DEF) {
+		if (bgp_mh_info->ead_evi_rx)
+			vty_out(vty, "  ead-evi-rx\n");
+		else
+			vty_out(vty, "  no ead-evi-rx\n");
+	}
+
+	if (bgp_mh_info->ead_evi_tx != BGP_EVPN_MH_EAD_EVI_TX_DEF) {
+		if (bgp_mh_info->ead_evi_tx)
+			vty_out(vty, "  ead-evi-tx\n");
+		else
+			vty_out(vty, "  no ead-evi-tx\n");
+	}
+
 	if (!bgp->evpn_info->dup_addr_detect)
 		vty_out(vty, "  no dup-addr-detection\n");
 
@@ -6023,6 +6057,8 @@ void bgp_ethernetvpn_init(void)
 	install_element(BGP_EVPN_NODE, &bgp_evpn_flood_control_cmd);
 	install_element(BGP_EVPN_NODE, &bgp_evpn_advertise_pip_ip_mac_cmd);
 	install_element(BGP_EVPN_NODE, &bgp_evpn_use_es_l3nhg_cmd);
+	install_element(BGP_EVPN_NODE, &bgp_evpn_ead_evi_rx_cmd);
+	install_element(BGP_EVPN_NODE, &bgp_evpn_ead_evi_tx_cmd);
 
 	/* test commands */
 	install_element(BGP_EVPN_NODE, &test_es_add_cmd);

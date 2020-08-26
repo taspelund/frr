@@ -2397,6 +2397,20 @@ the traffic.
 Similarly traffic received from ES peers via the overlay cannot be forwarded
 to the server. This is split-horizon-filtering with local bias.
 
+Knobs for interop
+"""""""""""""""""
+Some vendors do not send EAD-per-EVI routes. To interop with them we
+need to relax the dependency on EAD-per-EVI routes and active a remote
+ES-PE bases on just the EAD-per-ES route.
+
+Note that by default we advertise and expect EAD-per-EVI routes.
+
+.. index:: [no$no] ead-evi-rx
+.. clicmd:: [no$no] ead-evi-rx
+
+.. index:: [no$no] ead-evi-tx
+.. clicmd:: [no$no] ead-evi-tx
+
 Fast failover
 """""""""""""
 As the primary purpose of EVPN-MH is redundancy keeping the failover efficient
