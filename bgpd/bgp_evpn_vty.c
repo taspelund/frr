@@ -3825,23 +3825,23 @@ DEFPY (bgp_evpn_use_es_l3nhg,
 	return CMD_SUCCESS;
 }
 
-DEFPY (bgp_evpn_ead_evi_rx,
-       bgp_evpn_ead_evi_rx_cmd,
-       "[no$no] ead-evi-rx",
+DEFPY (bgp_evpn_ead_evi_rx_disable,
+       bgp_evpn_ead_evi_rx_disable_cmd,
+       "[no$no] disable-ead-evi-rx",
        NO_STR
-       "Activate PE only if EAD-EVI and EAD-ES are received\n")
+       "Activate PE on EAD-ES even if EAD-EVI is not received\n")
 {
-	bgp_mh_info->ead_evi_rx = no? false :true;
+	bgp_mh_info->ead_evi_rx = no? true :false;
 	return CMD_SUCCESS;
 }
 
-DEFPY (bgp_evpn_ead_evi_tx,
-       bgp_evpn_ead_evi_tx_cmd,
-       "[no$no] ead-evi-tx",
+DEFPY (bgp_evpn_ead_evi_tx_disable,
+       bgp_evpn_ead_evi_tx_disable_cmd,
+       "[no$no] disable-ead-evi-tx",
        NO_STR
-       "Advertise EAD-EVI for local ESs\n")
+       "Don't advertise EAD-EVI for local ESs\n")
 {
-	bgp_mh_info->ead_evi_tx = no? false :true;
+	bgp_mh_info->ead_evi_tx = no? true :false;
 	return CMD_SUCCESS;
 }
 
@@ -5953,16 +5953,16 @@ void bgp_config_write_evpn_info(struct vty *vty, struct bgp *bgp, afi_t afi,
 
 	if (bgp_mh_info->ead_evi_rx != BGP_EVPN_MH_EAD_EVI_RX_DEF) {
 		if (bgp_mh_info->ead_evi_rx)
-			vty_out(vty, "  ead-evi-rx\n");
+			vty_out(vty, "  no disable-ead-evi-rx\n");
 		else
-			vty_out(vty, "  no ead-evi-rx\n");
+			vty_out(vty, "  disable-ead-evi-rx\n");
 	}
 
 	if (bgp_mh_info->ead_evi_tx != BGP_EVPN_MH_EAD_EVI_TX_DEF) {
 		if (bgp_mh_info->ead_evi_tx)
-			vty_out(vty, "  ead-evi-tx\n");
+			vty_out(vty, "  no disable-ead-evi-tx\n");
 		else
-			vty_out(vty, "  no ead-evi-tx\n");
+			vty_out(vty, "  disable-ead-evi-tx\n");
 	}
 
 	if (!bgp->evpn_info->dup_addr_detect)
@@ -6110,8 +6110,8 @@ void bgp_ethernetvpn_init(void)
 	install_element(BGP_EVPN_NODE, &bgp_evpn_flood_control_cmd);
 	install_element(BGP_EVPN_NODE, &bgp_evpn_advertise_pip_ip_mac_cmd);
 	install_element(BGP_EVPN_NODE, &bgp_evpn_use_es_l3nhg_cmd);
-	install_element(BGP_EVPN_NODE, &bgp_evpn_ead_evi_rx_cmd);
-	install_element(BGP_EVPN_NODE, &bgp_evpn_ead_evi_tx_cmd);
+	install_element(BGP_EVPN_NODE, &bgp_evpn_ead_evi_rx_disable_cmd);
+	install_element(BGP_EVPN_NODE, &bgp_evpn_ead_evi_tx_disable_cmd);
 
 	/* test commands */
 	install_element(BGP_EVPN_NODE, &test_es_add_cmd);

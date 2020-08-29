@@ -2400,16 +2400,16 @@ to the server. This is split-horizon-filtering with local bias.
 Knobs for interop
 """""""""""""""""
 Some vendors do not send EAD-per-EVI routes. To interop with them we
-need to relax the dependency on EAD-per-EVI routes and active a remote
-ES-PE bases on just the EAD-per-ES route.
+need to relax the dependency on EAD-per-EVI routes and activate a remote
+ES-PE based on just the EAD-per-ES route.
 
 Note that by default we advertise and expect EAD-per-EVI routes.
 
-.. index:: [no$no] ead-evi-rx
-.. clicmd:: [no$no] ead-evi-rx
+.. index:: [no$no] disable-ead-evi-rx
+.. clicmd:: [no$no] disable-ead-evi-rx
 
-.. index:: [no$no] ead-evi-tx
-.. clicmd:: [no$no] ead-evi-tx
+.. index:: [no$no] disable-ead-evi-tx
+.. clicmd:: [no$no] disable-ead-evi-tx
 
 Fast failover
 """""""""""""
