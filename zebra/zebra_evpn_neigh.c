@@ -303,7 +303,6 @@ int zebra_evpn_neigh_send_add_to_client(vni_t vni, struct ipaddr *ip,
 					uint32_t seq)
 {
 	uint8_t flags = 0;
-	struct zebra_evpn_es *es = NULL;
 
 	if (CHECK_FLAG(neigh_flags, ZEBRA_NEIGH_LOCAL_INACTIVE)) {
 		/* host reachability has not been verified locally */
@@ -328,11 +327,8 @@ int zebra_evpn_neigh_send_add_to_client(vni_t vni, struct ipaddr *ip,
 	if (CHECK_FLAG(neigh_flags, ZEBRA_NEIGH_SVI_IP))
 		SET_FLAG(flags, ZEBRA_MACIP_TYPE_SVI_IP);
 
-	if (zmac && !(zmac->flags & ZEBRA_MAC_ES_BYPASS))
-		es = zmac->es;
-
 	return zebra_evpn_macip_send_msg_to_client(vni, macaddr, ip, flags, seq,
-						   ZEBRA_NEIGH_ACTIVE, es,
+						   ZEBRA_NEIGH_ACTIVE, zmac->es,
 						   ZEBRA_MACIP_ADD);
 }
 

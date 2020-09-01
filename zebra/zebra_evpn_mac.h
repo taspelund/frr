@@ -79,8 +79,6 @@ struct zebra_mac_t_ {
  * to advertise it as locally attached but with a "proxy" flag
  */
 #define ZEBRA_MAC_LOCAL_INACTIVE 0x800
-/* MAC is associated with a destination ES that is in bypass mode */
-#define ZEBRA_MAC_ES_BYPASS 0x1000
 
 #define ZEBRA_MAC_ALL_LOCAL_FLAGS (ZEBRA_MAC_LOCAL | ZEBRA_MAC_LOCAL_INACTIVE)
 #define ZEBRA_MAC_ALL_PEER_FLAGS                                               \
@@ -252,11 +250,11 @@ int zebra_evpn_add_update_local_mac(struct zebra_vrf *zvrf, zebra_evpn_t *zevpn,
 				    struct ethaddr *macaddr, vlanid_t vid,
 				    bool sticky, bool local_inactive,
 				    bool dp_static, zebra_mac_t *mac);
-int zebra_evpn_del_local_mac(zebra_evpn_t *zevpn, zebra_mac_t *mac);
+int zebra_evpn_del_local_mac(zebra_evpn_t *zevpn, zebra_mac_t *mac,
+			     bool clear_static);
 int zebra_evpn_mac_gw_macip_add(struct interface *ifp, zebra_evpn_t *zevpn,
 				struct ipaddr *ip, zebra_mac_t **macp,
 				struct ethaddr *macaddr, vlanid_t vlan_id);
-void zebra_evpn_add_update_local_mac_entry(zebra_mac_t *mac);
 
 #ifdef __cplusplus
 }

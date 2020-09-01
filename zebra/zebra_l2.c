@@ -135,7 +135,8 @@ static void zebra_l2_bond_lacp_bypass_eval(struct zebra_if *bond_zif)
 		bond_zif->flags &= ~ZIF_FLAG_LACP_BYPASS;
 
 	if (bond_zif->es_info.es)
-		zebra_evpn_es_bypass_update(bond_zif->es_info.es, new_bypass);
+		zebra_evpn_es_bypass_update(bond_zif->es_info.es, bond_zif->ifp,
+					    new_bypass);
 }
 
 /* Returns true if member was newly linked to bond */

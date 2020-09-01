@@ -1881,18 +1881,51 @@ static void zebra_evpn_es_setup_evis(struct zebra_evpn_es *es)
 	}
 }
 
-static void zebra_evpn_es_local_mac_update(struct zebra_evpn_es *es,
-		bool force_clear_static)
+static void zebra_evpn_flush_local_mac(zebra_mac_t *mac, struct interface *ifp)
+{
+	struct zebra_if *zif;
+	struct interface *br_ifp;
+	vlanid_t vid;
+
+	zif = ifp->info;
+	br_ifp = zif->brslave_info.br_if;
+	if (!br_ifp)
+		return;
+
+	if (mac->zevpn->vxlan_if) {
+		zif = mac->zevpn->vxlan_if->info;
+		vid = zif->l2info.vxl.access_vlan;
+	} else {
+		vid = 0;
+	}
+
+	/* delete the local mac from the dataplane */
+	dplane_local_mac_del(ifp, br_ifp, vid, &mac->macaddr);
+	/* delete the local mac in zebra */
+	zebra_evpn_del_local_mac(mac->zevpn, mac, true);
+}
+
+static void zebra_evpn_es_flush_local_macs(struct zebra_evpn_es *es,
+					   struct interface *ifp, bool add)
 {
 	zebra_mac_t *mac;
 	struct listnode	*node;
+	char macbuf[ETHER_ADDR_STRLEN];
 
 	for (ALL_LIST_ELEMENTS_RO(es->mac_list, node, mac)) {
-		if (CHECK_FLAG(mac->flags, ZEBRA_MAC_ES_PEER_ACTIVE)) {
-			zebra_evpn_sync_mac_dp_install(
-				mac, false /* set_inactive */,
-				force_clear_static, __func__);
-		}
+		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
+			continue;
+
+		/* If ES is being attached/detached from the access port we
+		 * need to clear local activity and peer activity and start
+		 * over */
+		if (IS_ZEBRA_DEBUG_EVPN_MH_MAC)
+			zlog_debug("VNI %u mac %s update; local ES %s %s",
+				   mac->zevpn->vni,
+				   prefix_mac2str(&mac->macaddr, macbuf,
+						  sizeof(macbuf)),
+				   es->esi_str, add ? "add" : "del");
+		zebra_evpn_flush_local_mac(mac, ifp);
 	}
 }
 
@@ -2056,11 +2089,9 @@ static void zebra_evpn_es_local_info_set(struct zebra_evpn_es *es,
 	 */
 	zebra_evpn_es_setup_evis(es);
 	/* if there any local macs referring to the ES as dest we
-	 * need to set the static reference on them if the MAC is
-	 * synced from an ES peer
+	 * need to clear the contents and start over
 	 */
-	zebra_evpn_es_local_mac_update(es,
-			false /* force_clear_static */);
+	zebra_evpn_es_flush_local_macs(es, zif->ifp, true);
 
 	/* inherit EVPN protodown flags on the access port */
 	zebra_evpn_mh_update_protodown_es(es, true /*resync_dplane*/);
@@ -2086,12 +2117,6 @@ static struct zebra_evpn_es *zebra_evpn_es_local_info_clear(
 	/* remove the DF filter */
 	dplane_updated = zebra_evpn_es_run_df_election(es, __func__);
 
-	/* if there any local macs referring to the ES as dest we
-	 * need to clear the static reference on them
-	 */
-	zebra_evpn_es_local_mac_update(es,
-			true /* force_clear_static */);
-
 	/* flush the BUM filters and backup NHG */
 	if (!dplane_updated)
 		zebra_evpn_es_br_port_dplane_clear(es);
@@ -2100,6 +2125,11 @@ static struct zebra_evpn_es *zebra_evpn_es_local_info_clear(
 	zif = es->zif;
 	zif->es_info.es = NULL;
 	es->zif = NULL;
+
+	/* if there any local macs referring to the ES as dest we
+	 * need to clear the contents and start over
+	 */
+	zebra_evpn_es_flush_local_macs(es, zif->ifp, false);
 
 	/* clear all local flags associated with the ES */
 	es->flags &= ~(ZEBRA_EVPNES_OPER_UP | ZEBRA_EVPNES_BR_PORT
@@ -2334,7 +2364,6 @@ void zebra_evpn_es_mac_deref_entry(zebra_mac_t *mac)
 	struct zebra_evpn_es *es = mac->es;
 
 	mac->es = NULL;
-	mac->flags &= ~ZEBRA_MAC_ES_BYPASS;
 	if (!es)
 		return;
 
@@ -2343,29 +2372,13 @@ void zebra_evpn_es_mac_deref_entry(zebra_mac_t *mac)
 		zebra_evpn_es_free(es);
 }
 
-static bool zebra_evpn_es_mac_bypass_update(zebra_mac_t *mac,
-					    struct zebra_evpn_es *es)
-{
-	if (es && (es->flags & ZEBRA_EVPNES_BYPASS))
-		mac->flags |= ZEBRA_MAC_ES_BYPASS;
-	else
-		mac->flags &= ~ZEBRA_MAC_ES_BYPASS;
-
-	return !!(mac->flags & ZEBRA_MAC_ES_BYPASS);
-}
-
 /* Associate a MAC entry with a local or remote ES. Returns false if there
  * was no ES change.
  */
 bool zebra_evpn_es_mac_ref_entry(zebra_mac_t *mac, struct zebra_evpn_es *es)
 {
-	if (mac->es == es) {
-		bool old_bypass = !!(mac->flags & ZEBRA_MAC_ES_BYPASS);
-		bool new_bypass;
-
-		new_bypass = zebra_evpn_es_mac_bypass_update(mac, es);
-		return old_bypass != new_bypass;
-	}
+	if (mac->es == es)
+		return false;
 
 	if (mac->es)
 		zebra_evpn_es_mac_deref_entry(mac);
@@ -2376,7 +2389,6 @@ bool zebra_evpn_es_mac_ref_entry(zebra_mac_t *mac, struct zebra_evpn_es *es)
 	mac->es = es;
 	listnode_init(&mac->es_listnode, mac);
 	listnode_add(es->mac_list, &mac->es_listnode);
-	zebra_evpn_es_mac_bypass_update(mac, es);
 
 	return true;
 }
@@ -2499,29 +2511,33 @@ static void zebra_evpn_es_df_pref_update(struct zebra_if *zif,
 		zebra_evpn_es_send_add_to_client(es);
 }
 
-
-/* If bypass mode on an es changed we trigger update on all local
- * macs. This will simulate a station move (i.e. dest change) and trigger
- * a local sequence number increment
+/* If bypass mode on an es changed we set all local macs to
+ * inactive and drop the sync info
  */
-static void zebra_evpn_es_update_mac_loc_seq(struct zebra_evpn_es *es)
+static void zebra_evpn_es_bypass_update_macs(struct zebra_evpn_es *es,
+					     struct interface *ifp, bool bypass)
 {
 	zebra_mac_t *mac;
 	struct listnode *node;
 	char macbuf[ETHER_ADDR_STRLEN];
 
 	for (ALL_LIST_ELEMENTS_RO(es->mac_list, node, mac)) {
+		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
+			continue;
+
 		if (IS_ZEBRA_DEBUG_EVPN_MH_MAC)
-			zlog_debug("VNI %u mac %s bypass-update es %s",
+			zlog_debug("VNI %u mac %s %s update es %s",
 				   mac->zevpn->vni,
 				   prefix_mac2str(&mac->macaddr, macbuf,
 						  sizeof(macbuf)),
+				   bypass ? "bypass" : "non-bypass",
 				   es->esi_str);
-		zebra_evpn_add_update_local_mac_entry(mac);
+		zebra_evpn_flush_local_mac(mac, ifp);
 	}
 }
 
-void zebra_evpn_es_bypass_update(struct zebra_evpn_es *es, bool bypass)
+void zebra_evpn_es_bypass_update(struct zebra_evpn_es *es,
+				 struct interface *ifp, bool bypass)
 {
 	bool old_bypass;
 	bool dplane_updated;
@@ -2539,8 +2555,7 @@ void zebra_evpn_es_bypass_update(struct zebra_evpn_es *es, bool bypass)
 	if (es->flags & ZEBRA_EVPNES_READY_FOR_BGP)
 		zebra_evpn_es_send_add_to_client(es);
 
-	/* ES bypass change is treated as a local mac move */
-	zebra_evpn_es_update_mac_loc_seq(es);
+	zebra_evpn_es_bypass_update_macs(es, ifp, bypass);
 
 	/* re-run DF election */
 	dplane_updated = zebra_evpn_es_run_df_election(es, __func__);
@@ -2565,7 +2580,7 @@ static void zebra_evpn_es_bypass_cfg_update(struct zebra_if *zif, bool bypass)
 
 
 	if (zif->es_info.es)
-		zebra_evpn_es_bypass_update(zif->es_info.es, bypass);
+		zebra_evpn_es_bypass_update(zif->es_info.es, zif->ifp, bypass);
 }
 
 

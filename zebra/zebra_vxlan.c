@@ -4008,7 +4008,7 @@ int zebra_vxlan_dp_network_mac_del(struct interface *ifp,
 			zlog_debug("dpDel local-nw-MAC %s VNI %u",
 				prefix_mac2str(macaddr, buf, sizeof(buf)),
 				vni);
-		zebra_evpn_del_local_mac(zevpn, mac);
+		zebra_evpn_del_local_mac(zevpn, mac, false);
 	}
 
 	return 0;
@@ -4045,7 +4045,7 @@ int zebra_vxlan_local_mac_del(struct interface *ifp, struct interface *br_if,
 	if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
 		return 0;
 
-	return zebra_evpn_del_local_mac(zevpn, mac);
+	return zebra_evpn_del_local_mac(zevpn, mac, false);
 }
 
 /*
