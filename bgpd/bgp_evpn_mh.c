@@ -1364,11 +1364,11 @@ void bgp_evpn_path_es_unlink(struct bgp_path_es_info *es_info)
 
 	pi = es_info->pi;
 	if (BGP_DEBUG(evpn_mh, EVPN_MH_RT))
-		zlog_debug("vni %u path %s unlinked from es %s",
-			es_info->vni,
-			prefix2str(&pi->net->p,
-				prefix_buf, sizeof(prefix_buf)),
-			es->esi_str);
+		zlog_debug("vni %u path %s unlinked from es %s", es_info->vni,
+			   pi->net ? prefix2str(&pi->net->p, prefix_buf,
+						sizeof(prefix_buf))
+				   : "",
+			   es->esi_str);
 
 	if (es_info->vni)
 		list_delete_node(es->macip_evi_path_list,
