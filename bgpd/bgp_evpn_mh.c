@@ -1586,7 +1586,7 @@ static void bgp_evpn_es_free(struct bgp_evpn_es *es)
 	XFREE(MTYPE_BGP_EVPN_ES, es);
 }
 
-inline bool bgp_evpn_is_es_local_and_non_bypass(struct bgp_evpn_es *es)
+static inline bool bgp_evpn_is_es_local_and_non_bypass(struct bgp_evpn_es *es)
 {
 	return (es->flags & BGP_EVPNES_LOCAL)
 	       && !(es->flags & BGP_EVPNES_BYPASS);
