@@ -3471,7 +3471,8 @@ kernel_dplane_route_update(struct zebra_dplane_ctx *ctx)
 	 * same route again.
 	 */
 	if ((dplane_ctx_get_type(ctx) == dplane_ctx_get_old_type(ctx))
-	    && (dplane_ctx_get_nhe_id(ctx) == dplane_ctx_get_old_nhe_id(ctx))) {
+	    && (dplane_ctx_get_nhe_id(ctx) == dplane_ctx_get_old_nhe_id(ctx))
+	    && (dplane_ctx_get_nhe_id(ctx) >= ZEBRA_NHG_PROTO_LOWER)) {
 		struct nexthop *nexthop;
 
 		if (IS_ZEBRA_DEBUG_DPLANE_DETAIL)
