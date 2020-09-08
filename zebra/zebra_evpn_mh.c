@@ -1910,9 +1910,10 @@ static void zebra_evpn_es_flush_local_macs(struct zebra_evpn_es *es,
 {
 	zebra_mac_t *mac;
 	struct listnode	*node;
+	struct listnode *nnode;
 	char macbuf[ETHER_ADDR_STRLEN];
 
-	for (ALL_LIST_ELEMENTS_RO(es->mac_list, node, mac)) {
+	for (ALL_LIST_ELEMENTS(es->mac_list, node, nnode, mac)) {
 		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
 			continue;
 
@@ -2519,11 +2520,12 @@ static void zebra_evpn_es_bypass_update_macs(struct zebra_evpn_es *es,
 {
 	zebra_mac_t *mac;
 	struct listnode *node;
+	struct listnode *nnode;
 	char macbuf[ETHER_ADDR_STRLEN];
 	struct zebra_if *zif;
 
 	/* Flush all MACs linked to the ES */
-	for (ALL_LIST_ELEMENTS_RO(es->mac_list, node, mac)) {
+	for (ALL_LIST_ELEMENTS(es->mac_list, node, nnode, mac)) {
 		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
 			continue;
 
@@ -2544,7 +2546,7 @@ static void zebra_evpn_es_bypass_update_macs(struct zebra_evpn_es *es,
 	if (!zif->mac_list)
 		return;
 
-	for (ALL_LIST_ELEMENTS_RO(zif->mac_list, node, mac)) {
+	for (ALL_LIST_ELEMENTS(zif->mac_list, node, nnode, mac)) {
 		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
 			continue;
 
@@ -2572,6 +2574,10 @@ void zebra_evpn_es_bypass_update(struct zebra_evpn_es *es,
 		es->flags |= ZEBRA_EVPNES_BYPASS;
 	else
 		es->flags &= ~ZEBRA_EVPNES_BYPASS;
+
+	if (IS_ZEBRA_DEBUG_EVPN_MH_ES)
+		zlog_debug("bond %s es %s lacp bypass changed to %s", ifp->name,
+			   es->esi_str, bypass ? "on" : "off");
 
 	/* send bypass update to BGP */
 	if (es->flags & ZEBRA_EVPNES_READY_FOR_BGP)
