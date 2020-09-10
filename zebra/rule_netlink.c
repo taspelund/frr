@@ -124,9 +124,9 @@ static int netlink_rule_update(int cmd, struct zebra_pbr_rule *rule)
 
 	if (IS_ZEBRA_DEBUG_KERNEL)
 		zlog_debug(
-			"Tx %s family %s IF %s(%u) Pref %u Fwmark %u Src %s Dst %s dsfield %u Table %u",
+			"Tx %s family %s IF %s Pref %u Fwmark %u Src %s Dst %s dsfield %u Table %u",
 			nl_msg_type_to_str(cmd), nl_family_to_str(family),
-			rule->ifname, rule->rule.ifindex, rule->rule.priority,
+			rule->ifname, rule->rule.priority,
 			rule->rule.filter.fwmark,
 			prefix2str(&rule->rule.filter.src_ip, buf1,
 				   sizeof(buf1)),
@@ -306,11 +306,11 @@ int netlink_rule_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 			ret = netlink_rule_update(RTM_DELRULE, &rule);
 
 			zlog_debug(
-				"%s: %s leftover rule: family %s IF %s(%u) Pref %u Src %s Dst %s Table %u",
+				"%s: %s leftover rule: family %s IF %s Pref %u Src %s Dst %s Table %u",
 				__func__,
 				((ret == 0) ? "Removed" : "Failed to remove"),
 				nl_family_to_str(frh->family), rule.ifname,
-				rule.rule.ifindex, rule.rule.priority,
+				rule.rule.priority,
 				prefix2str(&rule.rule.filter.src_ip, buf1,
 					   sizeof(buf1)),
 				prefix2str(&rule.rule.filter.dst_ip, buf2,
@@ -330,10 +330,10 @@ int netlink_rule_change(struct nlmsghdr *h, ns_id_t ns_id, int startup)
 
 	if (IS_ZEBRA_DEBUG_KERNEL)
 		zlog_debug(
-			"Rx %s family %s IF %s(%u) Pref %u Src %s Dst %s Table %u",
+			"Rx %s family %s IF %s Pref %u Src %s Dst %s Table %u",
 			nl_msg_type_to_str(h->nlmsg_type),
 			nl_family_to_str(frh->family), rule.ifname,
-			rule.rule.ifindex, rule.rule.priority,
+			rule.rule.priority,
 			prefix2str(&rule.rule.filter.src_ip, buf1,
 				   sizeof(buf1)),
 			prefix2str(&rule.rule.filter.dst_ip, buf2,

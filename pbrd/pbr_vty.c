@@ -625,7 +625,7 @@ pbrms_nexthop_group_write_individual_nexthop(
 	struct pbr_nexthop_cache *pnhc;
 
 	memset(&find, 0, sizeof(find));
-	strncpy(find.name, pbrms->internal_nhg_name, sizeof(find.name));
+	strlcpy(find.name, pbrms->internal_nhg_name, sizeof(find.name));
 
 	pnhgc = hash_lookup(pbr_nhg_hash, &find);
 	assert(pnhgc);

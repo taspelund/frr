@@ -846,7 +846,7 @@ void zsend_rule_notify_owner(struct zebra_pbr_rule *rule,
 	stream_putl(s, rule->rule.seq);
 	stream_putl(s, rule->rule.priority);
 	stream_putl(s, rule->rule.unique);
-	stream_putl(s, rule->rule.ifindex);
+	stream_put(s, rule->rule.ifname, INTERFACE_NAMSIZ);
 
 	stream_putw_at(s, 0, stream_get_endp(s));
 
@@ -2667,6 +2667,7 @@ static inline void zread_rule(ZAPI_HANDLER_ARGS)
 	struct zebra_pbr_rule zpr;
 	struct stream *s;
 	uint32_t total, i;
+	char ifname[INTERFACE_NAMSIZ + 1] = {};
 
 	s = msg;
 	STREAM_GETL(s, total);
@@ -2692,21 +2693,10 @@ static inline void zread_rule(ZAPI_HANDLER_ARGS)
 		STREAM_GETC(s, zpr.rule.filter.dsfield);
 		STREAM_GETL(s, zpr.rule.filter.fwmark);
 		STREAM_GETL(s, zpr.rule.action.table);
-		STREAM_GETL(s, zpr.rule.ifindex);
+		STREAM_GET(ifname, s, INTERFACE_NAMSIZ);
 
-		if (zpr.rule.ifindex) {
-			struct interface *ifp;
-
-			ifp = if_lookup_by_index_per_ns(zvrf->zns,
-							zpr.rule.ifindex);
-			if (!ifp) {
-				zlog_debug("Failed to lookup ifindex: %u",
-					   zpr.rule.ifindex);
-				return;
-			}
-
-			strlcpy(zpr.ifname, ifp->name, sizeof(zpr.ifname));
-		}
+		strlcpy(zpr.ifname, ifname, sizeof(zpr.ifname));
+		strlcpy(zpr.rule.ifname, ifname, sizeof(zpr.ifname));
 
 		if (!is_default_prefix(&zpr.rule.filter.src_ip))
 			zpr.rule.filter.filter_bm |= PBR_FILTER_SRC_IP;
