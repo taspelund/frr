@@ -65,7 +65,7 @@ bgp_evpn_local_es_evi_do_del(struct bgp_evpn_es_evi *es_evi);
 static uint32_t bgp_evpn_es_get_active_vtep_cnt(struct bgp_evpn_es *es);
 static void bgp_evpn_l3nhg_update_on_vtep_chg(struct bgp_evpn_es *es);
 static struct bgp_evpn_es *bgp_evpn_es_new(struct bgp *bgp, const esi_t *esi);
-static void bgp_evpn_es_free(struct bgp_evpn_es *es);
+static void bgp_evpn_es_free(struct bgp_evpn_es *es, const char *caller);
 static void bgp_evpn_mac_update_on_es_local_chg(struct bgp_evpn_es *es,
 						bool is_local);
 
@@ -1384,7 +1384,7 @@ void bgp_evpn_path_es_unlink(struct bgp_path_es_info *es_info)
 	/* if there are no other references against the ES it
 	 * needs to be freed
 	 */
-	bgp_evpn_es_free(es);
+	bgp_evpn_es_free(es, __func__);
 
 	/* Note we don't free the path es_info on unlink; it will be freed up
 	 * along with the path.
@@ -1563,12 +1563,15 @@ static struct bgp_evpn_es *bgp_evpn_es_new(struct bgp *bgp, const esi_t *esi)
  * This just frees appropriate memory, caller should have taken other
  * needed actions.
  */
-static void bgp_evpn_es_free(struct bgp_evpn_es *es)
+static void bgp_evpn_es_free(struct bgp_evpn_es *es, const char *caller)
 {
 	if ((es->flags & (BGP_EVPNES_LOCAL | BGP_EVPNES_REMOTE))
 	    || listcount(es->macip_evi_path_list)
 	    || listcount(es->macip_global_path_list))
 		return;
+
+	if (BGP_DEBUG(evpn_mh, EVPN_MH_ES))
+		zlog_debug("%s: es %s free", caller, es->esi_str);
 
 	/* cleanup resources maintained against the ES */
 	list_delete(&es->es_evi_list);
@@ -1622,7 +1625,7 @@ static void bgp_evpn_es_local_info_set(struct bgp *bgp, struct bgp_evpn_es *es)
 }
 
 /* clear any local info associated with the ES */
-static void bgp_evpn_es_local_info_clear(struct bgp_evpn_es *es)
+static void bgp_evpn_es_local_info_clear(struct bgp_evpn_es *es, bool finish)
 {
 	bool old_is_local;
 	bool is_local;
@@ -1634,7 +1637,7 @@ static void bgp_evpn_es_local_info_clear(struct bgp_evpn_es *es)
 	UNSET_FLAG(es->flags, BGP_EVPNES_LOCAL);
 
 	is_local = bgp_evpn_is_es_local_and_non_bypass(es);
-	if (old_is_local != is_local)
+	if (!finish && (old_is_local != is_local))
 		bgp_evpn_mac_update_on_es_local_chg(es, is_local);
 
 	/* remove from the ES local list */
@@ -1642,7 +1645,7 @@ static void bgp_evpn_es_local_info_clear(struct bgp_evpn_es *es)
 
 	bf_release_index(bm->rd_idspace, es->rd_id);
 
-	bgp_evpn_es_free(es);
+	bgp_evpn_es_free(es, __func__);
 }
 
 /* eval remote info associated with the ES */
@@ -1653,7 +1656,7 @@ static void bgp_evpn_es_remote_info_re_eval(struct bgp_evpn_es *es)
 	} else {
 		if (CHECK_FLAG(es->flags, BGP_EVPNES_REMOTE)) {
 			UNSET_FLAG(es->flags, BGP_EVPNES_REMOTE);
-			bgp_evpn_es_free(es);
+			bgp_evpn_es_free(es, __func__);
 		}
 	}
 }
@@ -1953,7 +1956,7 @@ static void bgp_evpn_local_es_do_del(struct bgp *bgp, struct bgp_evpn_es *es)
 	/* Clear local info associated with the ES and free it up if there is
 	 * no remote reference
 	 */
-	bgp_evpn_es_local_info_clear(es);
+	bgp_evpn_es_local_info_clear(es, false);
 }
 
 bool bgp_evpn_is_esi_local_and_non_bypass(esi_t *esi)
@@ -3443,7 +3446,7 @@ int bgp_evpn_remote_es_evi_add(struct bgp *bgp, struct bgpevpn *vpn,
 	if (!es_evi) {
 		es_evi = bgp_evpn_es_evi_new(es, vpn);
 		if (!es_evi) {
-			bgp_evpn_es_free(es);
+			bgp_evpn_es_free(es, __func__);
 			return -1;
 		}
 	}
@@ -4070,15 +4073,13 @@ void bgp_evpn_mh_finish(void)
 {
 	struct bgp_evpn_es *es;
 	struct bgp_evpn_es *es_next;
-	struct bgp *bgp;
 
-	bgp = bgp_get_evpn();
-	if (bgp) {
-		RB_FOREACH_SAFE(es, bgp_es_rb_head,
-				&bgp_mh_info->es_rb_tree, es_next) {
-			/* XXX - need to force free remote ESs here */
-			bgp_evpn_local_es_do_del(bgp, es);
-		}
+	if (BGP_DEBUG(evpn_mh, EVPN_MH_RT))
+		zlog_debug("evpn mh finish");
+
+	RB_FOREACH_SAFE (es, bgp_es_rb_head, &bgp_mh_info->es_rb_tree,
+			 es_next) {
+		bgp_evpn_es_local_info_clear(es, true);
 	}
 	thread_cancel(bgp_mh_info->t_cons_check);
 	list_delete(&bgp_mh_info->local_es_list);
