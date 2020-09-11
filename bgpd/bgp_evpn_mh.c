@@ -68,6 +68,7 @@ static struct bgp_evpn_es *bgp_evpn_es_new(struct bgp *bgp, const esi_t *esi);
 static void bgp_evpn_es_free(struct bgp_evpn_es *es, const char *caller);
 static void bgp_evpn_mac_update_on_es_local_chg(struct bgp_evpn_es *es,
 						bool is_local);
+static void bgp_evpn_path_es_unlink(struct bgp_path_es_info *es_info);
 
 esi_t zero_esi_buf, *zero_esi = &zero_esi_buf;
 
@@ -1331,31 +1332,48 @@ static void bgp_evpn_es_vtep_del(struct bgp *bgp,
  * b. ES-VRF add/del - this may result in the host route being migrated to
  *    L3NHG or vice versa (flat multipath list).
  ****************************************************************************/
-void bgp_evpn_path_es_info_free(struct bgp_path_es_info *es_info)
+static void bgp_evpn_path_es_info_free(struct bgp_path_es_info *es_info)
 {
 	bgp_evpn_path_es_unlink(es_info);
 	XFREE(MTYPE_BGP_EVPN_PATH_ES_INFO, es_info);
+}
+
+void bgp_evpn_path_mh_info_free(struct bgp_path_mh_info *mh_info)
+{
+	if (mh_info->es_info)
+		bgp_evpn_path_es_info_free(mh_info->es_info);
+	XFREE(MTYPE_BGP_EVPN_PATH_MH_INFO, mh_info);
 }
 
 static struct bgp_path_es_info *bgp_evpn_path_es_info_new(
 		struct bgp_path_info *pi, vni_t vni)
 {
 	struct bgp_path_info_extra *e;
+	struct bgp_path_mh_info *mh_info;
+	struct bgp_path_es_info *es_info;
 
 	e = bgp_path_info_extra_get(pi);
 
+	/* If mh_info doesn't exist allocate it */
+	mh_info = e->mh_info;
+	if (!mh_info)
+		e->mh_info = mh_info = XCALLOC(MTYPE_BGP_EVPN_PATH_MH_INFO,
+					       sizeof(struct bgp_path_mh_info));
+
 	/* If es_info doesn't exist allocate it */
-	if (!e->es_info) {
-		e->es_info = XCALLOC(MTYPE_BGP_EVPN_PATH_ES_INFO,
+	es_info = mh_info->es_info;
+	if (!es_info) {
+		mh_info->es_info = es_info =
+			XCALLOC(MTYPE_BGP_EVPN_PATH_ES_INFO,
 				sizeof(struct bgp_path_es_info));
-		e->es_info->pi = pi;
-		e->es_info->vni = vni;
+		es_info->vni = vni;
+		es_info->pi = pi;
 	}
 
-	return e->es_info;
+	return es_info;
 }
 
-void bgp_evpn_path_es_unlink(struct bgp_path_es_info *es_info)
+static void bgp_evpn_path_es_unlink(struct bgp_path_es_info *es_info)
 {
 	struct bgp_evpn_es *es = es_info->es;
 	struct bgp_path_info *pi;
@@ -1398,7 +1416,9 @@ void bgp_evpn_path_es_link(struct bgp_path_info *pi, vni_t vni, esi_t *esi)
 	struct bgp *bgp_evpn;
 	char prefix_buf[PREFIX_STRLEN];
 
-	es_info = pi->extra ? pi->extra->es_info : NULL;
+	es_info = (pi->extra && pi->extra->mh_info)
+			  ? pi->extra->mh_info->es_info
+			  : NULL;
 	/* if the esi is zero just unlink the path from the old es */
 	if (!esi || !memcmp(esi, zero_esi, sizeof(*esi))) {
 		if (es_info)

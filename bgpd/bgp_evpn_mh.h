@@ -383,8 +383,7 @@ extern bool bgp_evpn_is_esi_local_and_non_bypass(esi_t *esi);
 extern void bgp_evpn_es_vrf_deref(struct bgp_evpn_es_evi *es_evi);
 extern void bgp_evpn_es_vrf_ref(struct bgp_evpn_es_evi *es_evi,
 		struct bgp *bgp_vrf);
-extern void bgp_evpn_path_es_info_free(struct bgp_path_es_info *es_info);
-extern void bgp_evpn_path_es_unlink(struct bgp_path_es_info *es_info);
+extern void bgp_evpn_path_mh_info_free(struct bgp_path_mh_info *mh_info);
 extern void bgp_evpn_path_es_link(struct bgp_path_info *pi, vni_t vni,
 		esi_t *esi);
 extern bool bgp_evpn_path_es_use_nhg(struct bgp *bgp_vrf,
