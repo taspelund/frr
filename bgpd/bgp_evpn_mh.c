@@ -4600,7 +4600,7 @@ void bgp_evpn_mh_init(void)
 	bgp_mh_info->install_l3nhg = false;
 	bgp_mh_info->host_routes_use_l3nhg = BGP_EVPN_MH_USE_ES_L3NHG_DEF;
 	bgp_mh_info->suppress_l3_ecomm_on_inactive_es = true;
-	bgp_mh_info->bgp_evpn_nh_setup = true;
+	bgp_mh_info->bgp_evpn_nh_setup = BGP_EVPN_MH_USE_ES_NH_AS_NEIGH_DEF;
 
 	if (bgp_mh_info->consistency_checking)
 		thread_add_timer(bm->master, bgp_evpn_run_consistency_checks,
