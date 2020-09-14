@@ -350,5 +350,6 @@ extern void zebra_evpn_l2_nh_show(struct vty *vty, bool uj);
 extern struct zebra_evpn_access_bd *zebra_evpn_acc_vl_find(vlanid_t vid);
 extern void zebra_evpn_es_bypass_update(struct zebra_evpn_es *es,
 					struct interface *ifp, bool bypass);
+extern void zebra_evpn_proc_remote_nh(ZAPI_HANDLER_ARGS);
 
 #endif /* _ZEBRA_EVPN_MH_H */

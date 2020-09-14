@@ -3005,6 +3005,8 @@ void (*const zserv_handlers[])(ZAPI_HANDLER_ARGS) = {
 	[ZEBRA_CLIENT_CAPABILITIES] = zread_client_capabilities,
 	[ZEBRA_NHG_ADD] = zread_nhg_add,
 	[ZEBRA_NHG_DEL] = zread_nhg_del,
+	[ZEBRA_EVPN_REMOTE_NH_ADD] = zebra_evpn_proc_remote_nh,
+	[ZEBRA_EVPN_REMOTE_NH_DEL] = zebra_evpn_proc_remote_nh,
 };
 
 #if defined(HANDLE_ZAPI_FUZZING)
