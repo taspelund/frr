@@ -713,8 +713,9 @@ static void rtadv_process_advert(uint8_t *msg, unsigned int len,
 	     zif->rtadv.lastadvretranstimer.tv_sec == 0)) {
 		flog_warn(
 			EC_ZEBRA_RA_PARAM_MISMATCH,
-			"%s(%u): Rx RA - our AdvRetransTimer doesn't agree with %s",
-			ifp->name, ifp->ifindex, addr_str);
+			"%s(%u): Rx RA - our AdvRetransTimer (%u) doesn't agree with %s (%u)",
+			ifp->name, ifp->ifindex, zif->rtadv.AdvRetransTimer,
+			addr_str, ntohl(radvert->nd_ra_retransmit));
 		monotime(&zif->rtadv.lastadvretranstimer);
 	}
 
