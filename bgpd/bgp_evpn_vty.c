@@ -515,6 +515,13 @@ static void display_vni(struct vty *vty, struct bgpevpn *vpn, json_object *json)
 		else
 			json_object_string_add(json, "advertiseSviMacIp",
 					       "Disabled");
+		if (!vpn->soo && bgp_evpn && bgp_evpn->evpn_info->soo)
+			json_object_string_add(
+				json, "siteOfOrigin",
+				ecommunity_ecom2str(bgp_evpn->evpn_info->soo));
+		else if (vpn->soo)
+			json_object_string_add(json, "siteOfOrigin",
+					       ecommunity_ecom2str(vpn->soo));
 	} else {
 		vty_out(vty, "VNI: %d", vpn->vni);
 		if (is_vni_live(vpn))
@@ -550,6 +557,14 @@ static void display_vni(struct vty *vty, struct bgpevpn *vpn, json_object *json)
 		else
 			vty_out(vty, "  Advertise-svi-macip : %s\n",
 				"Disabled");
+		if (!vpn->soo && bgp_evpn && bgp_evpn->evpn_info->soo)
+			vty_out(vty, "  MAC-VRF Site-of-Origin: %s\n",
+				ecommunity_com2str(bgp_evpn->evpn_info->soo));
+		else if (vpn->soo)
+			vty_out(vty, "  MAC-VRF Site-of-Origin: %s\n",
+				ecommunity_com2str(vpn->soo));
+		else
+			vty_out(vty, "  MAC-VRF Site-of-Origin: \n");
 	}
 
 	if (!json)
@@ -3556,6 +3571,10 @@ static void write_vni_config(struct vty *vty, struct bgpevpn *vpn)
 		if (vpn->advertise_svi_macip)
 			vty_out(vty, "   advertise-svi-ip\n");
 
+		if (vpn->soo)
+			vty_out(vty, "   mac-vrf soo %s\n",
+				ecommunity_com2str(vpn->soo));
+
 		if (vpn->advertise_subnet)
 			vty_out(vty, "   advertise-subnet\n");
 
@@ -3959,6 +3978,55 @@ DEFPY(bgp_evpn_advertise_svi_ip_vni,
 		evpn_set_advertise_svi_macip(bgp, vpn, 0);
 	else
 		evpn_set_advertise_svi_macip(bgp, vpn, 1);
+
+	return CMD_SUCCESS;
+}
+
+DEFPY(macvrf_soo_all, macvrf_soo_all_cmd,
+      "[no] mac-vrf soo ASN:NN_OR_IP-ADDRESS:NN$soo",
+      "EVPN MAC-VRF\n"
+      "Site-of-Origin extended community\n"
+      "VPN extended community\n")
+{
+	struct bgp *bgp_evpn = NULL;
+	struct ecommunity *ecomm_soo;
+
+	if (no)
+		ecommunity_free(&bgp_evpn->evpn_info->soo);
+	else {
+		soo = ecommunity_str2com(soo, ECOMMUNITY_SITE_ORIGIN, 0);
+		if (!ecomm_soo) {
+			vty_out(vty, "%% Malformed SoO extended community\n");
+			return CMD_WARNING;
+		}
+		bgp_evpn->evpn_info->soo = soo;
+	}
+
+	return CMD_SUCCESS;
+}
+
+DEFPY(macvrf_soo, macvrf_soo_cmd,
+      "[no] mac-vrf soo ASN:NN_OR_IP-ADDRESS:NN$soo",
+      "EVPN MAC-VRF\n"
+      "Site-of-Origin extended community\n"
+      "VPN extended community\n")
+{
+	struct bgp *bgp = VTY_GET_CONTEXT(bgp);
+	VTY_DECLVAR_CONTEXT_SUB(bgpevpn, vpn);
+
+	if (!bgp)
+		return CMD_WARNING;
+
+	if (no)
+		ecommunity_free(&vpn->soo);
+	else {
+		soo = ecommunity_str2com(soo, ECOMMUNITY_SITE_ORIGIN, 0);
+		if (!ecomm_soo) {
+			vty_out(vty, "%% Malformed SoO extended community\n");
+			return CMD_WARNING;
+		}
+		vpn->soo = soo;
+	}
 
 	return CMD_SUCCESS;
 }
@@ -7112,6 +7180,10 @@ void bgp_config_write_evpn_info(struct vty *vty, struct bgp *bgp, afi_t afi,
 	if (bgp->evpn_info->advertise_svi_macip)
 		vty_out(vty, "  advertise-svi-ip\n");
 
+	if (bgp->evpn_info->soo)
+		vty_out(vty, "  mac-vrf soo %s\n",
+			ecommunity_com2str(bgp->evpn_info->soo));
+
 	if (bgp_mh_info->host_routes_use_l3nhg !=
 			BGP_EVPN_MH_USE_ES_L3NHG_DEF) {
 		if (bgp_mh_info->host_routes_use_l3nhg)
@@ -7325,6 +7397,7 @@ void bgp_ethernetvpn_init(void)
 	install_element(BGP_EVPN_NODE, &bgp_evpn_advertise_default_gw_cmd);
 	install_element(BGP_EVPN_NODE, &no_bgp_evpn_advertise_default_gw_cmd);
 	install_element(BGP_EVPN_NODE, &bgp_evpn_advertise_svi_ip_cmd);
+	install_element(BGP_EVPN_NODE, &macvrf_soo_all_cmd);
 	install_element(BGP_EVPN_NODE, &bgp_evpn_advertise_type5_cmd);
 	install_element(BGP_EVPN_NODE, &no_bgp_evpn_advertise_type5_cmd);
 	install_element(BGP_EVPN_NODE, &bgp_evpn_default_originate_cmd);
@@ -7415,6 +7488,7 @@ void bgp_ethernetvpn_init(void)
 	install_element(BGP_EVPN_NODE, &bgp_evpn_ead_es_rt_cmd);
 	install_element(BGP_EVPN_NODE, &no_bgp_evpn_ead_es_rt_cmd);
 	install_element(BGP_EVPN_VNI_NODE, &bgp_evpn_advertise_svi_ip_vni_cmd);
+	install_element(BGP_EVPN_VNI_NODE, &macvrf_soo_cmd);
 	install_element(BGP_EVPN_VNI_NODE,
 			&bgp_evpn_advertise_default_gw_vni_cmd);
 	install_element(BGP_EVPN_VNI_NODE,

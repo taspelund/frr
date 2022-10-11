@@ -633,6 +633,12 @@ struct bgp {
 	/* EVPN enable - advertise local VNIs and their MACs etc. */
 	int advertise_all_vni;
 
+	/* MAC-VRF Site-of-Origin
+	 * - added to all routes exported from L2VNI
+	 * - routes with matching SoO filtered from import into L2VNI
+	 */
+	struct ecommunity *soo;
+
 	/* draft-ietf-idr-deprecate-as-set-confed-set
 	 * Reject aspaths with AS_SET and/or AS_CONFED_SET.
 	 */

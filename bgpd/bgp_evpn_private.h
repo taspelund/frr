@@ -111,6 +111,12 @@ struct bgpevpn {
 	/* List of local ESs */
 	struct list *local_es_evi_list;
 
+	/* MAC-VRF Site-of-Origin
+	 * - added to all routes exported from L2VNI
+	 * - routes with matching SoO filtered from import into L2VNI
+	 */
+	struct ecommunity *soo;
+
 	QOBJ_FIELDS
 };
 
