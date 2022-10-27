@@ -26,6 +26,9 @@
 #include "bgp_script.h"
 #include "bgp_debug.h"
 #include "bgp_aspath.h"
+#include "bgp_community.h"
+#include "bgp_ecommunity.h"
+#include "bgp_lcommunity.h"
 #include "frratomic.h"
 #include "frrscript.h"
 
@@ -152,6 +155,12 @@ void lua_pushattr(lua_State *L, const struct attr *attr)
 	lua_setfield(L, -2, "aspath");
 	lua_pushinteger(L, attr->local_pref);
 	lua_setfield(L, -2, "localpref");
+	lua_pushstring(L, (attr->community && attr->community->str) ? attr->community->str : "");
+	lua_setfield(L, -2, "community");
+	lua_pushstring(L, (attr->ecommunity && attr->ecommunity->str) ? attr->ecommunity->str : "");
+	lua_setfield(L, -2, "extended-community");
+	lua_pushstring(L, (attr->lcommunity && attr->lcommunity->str) ? attr->lcommunity->str : "");
+	lua_setfield(L, -2, "large-community");
 }
 
 void lua_decode_attr(lua_State *L, int idx, struct attr *attr)
@@ -167,6 +176,16 @@ void lua_decode_attr(lua_State *L, int idx, struct attr *attr)
 	lua_pop(L, 1);
 	lua_getfield(L, idx, "localpref");
 	attr->local_pref = lua_tointeger(L, -1);
+	lua_pop(L, 1);
+	/* hopefully these don't introduce a memleak */
+	lua_getfield(L, idx, "community");
+	attr->community = community_str2com(lua_tostring(L, -1));
+	lua_pop(L, 1);
+	lua_getfield(L, idx, "extended-community");
+	attr->ecommunity = ecommunity_str2com(lua_tostring(L, -1), 0 /* type */, 1 /* keyword included */);
+	lua_pop(L, 1);
+	lua_getfield(L, idx, "large-community");
+	attr->lcommunity = lcommunity_str2com(lua_tostring(L, -1));
 	lua_pop(L, 1);
 	lua_pop(L, 1);
 }
